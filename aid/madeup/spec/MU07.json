@@ -1,0 +1,34 @@
+{
+  "case_id": "MU07",
+  "po": {
+    "po_number": "250107",
+    "supplier": "S07",
+    "currency": "EUR",
+    "incoterm": "FCA Rotterdam",
+    "buyer_authorization_exceeded": true,
+    "versions": [
+      {
+        "version": 1,
+        "version_date": "2026-10-19",
+        "lines": [
+          {"line_id": "1", "item_code": "KM-0701", "description": "Klephuis DN25", "quantity": "3", "unit": "pc", "unit_price": "12.50", "price_basis": "1", "delivery_date": "2026-11-16"},
+          {"line_id": "2", "item_code": "KM-0702", "description": "Kogelkraan DN50", "quantity": "100", "unit": "pc", "unit_price": "55.00", "price_basis": "1", "delivery_date": "2026-11-16"}
+        ]
+      }
+    ]
+  },
+  "confirmation": {
+    "layout": "table_de",
+    "language": "de",
+    "document_date": "2026-10-22",
+    "version_quoted": null,
+    "incoterm": "FCA Rotterdam",
+    "lines": [
+      {"line_id": "1", "item_code": "KM-0701", "description": "Ventilgehäuse DN25", "quantity": "3", "unit": "pc", "unit_price": "14.00", "price_basis": "1", "delivery_date": "2026-11-16"},
+      {"line_id": "2", "item_code": "KM-0702", "description": "Kugelhahn DN50", "quantity": "100", "unit": "pc", "unit_price": "55.00", "price_basis": "1", "delivery_date": "2026-11-16"}
+    ],
+    "differences": [
+      {"line_id": "1", "field": "price", "kind": "different"}
+    ]
+  }
+}

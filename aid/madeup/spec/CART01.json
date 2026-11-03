@@ -1,0 +1,31 @@
+{
+  "case_id": "CART01",
+  "po": {
+    "po_number": "250201",
+    "supplier": "S21",
+    "currency": "EUR",
+    "incoterm": "DAP Rotterdam",
+    "buyer_authorization_exceeded": false,
+    "versions": [
+      {
+        "version": 1,
+        "version_date": "2026-11-03",
+        "lines": [
+          {"line_id": "1", "item_code": "KM-2101", "description": "Slangklem 12-20 mm", "quantity": "25", "unit": "pc", "unit_price": "0.95", "price_basis": "1", "delivery_date": "2026-11-10"},
+          {"line_id": "2", "item_code": "KM-2102", "description": "Kogellager 6204", "quantity": "10", "unit": "pc", "unit_price": "4.10", "price_basis": "1", "delivery_date": "2026-11-10"},
+          {"line_id": "3", "item_code": "KM-2103", "description": "Vetpatroon 400 g", "quantity": "6", "unit": "pc", "unit_price": "6.20", "price_basis": "1", "delivery_date": "2026-11-10"}
+        ]
+      }
+    ]
+  },
+  "cart": {
+    "layout": "html",
+    "capture_date": "2026-11-03",
+    "lines": [
+      {"line_id": "1", "item_code": "KM-2101", "description": "Slangklem 12-20 mm RVS", "quantity": "25", "unit": "pc", "unit_price": "0.95", "price_basis": "1", "delivery_date": null},
+      {"line_id": "2", "item_code": "KM-2102", "description": "Kogellager 6204 2RS", "quantity": "10", "unit": "pc", "unit_price": "4.10", "price_basis": "1", "delivery_date": null},
+      {"line_id": "3", "item_code": "KM-2103", "description": "Vetpatroon 400 g lithium", "quantity": "6", "unit": "pc", "unit_price": "6.20", "price_basis": "1", "delivery_date": null}
+    ],
+    "differences": []
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "name": "text_en",
+  "language": "en",
+  "detect": ["Order confirmation", "^Line\\s+\\d+:"],
+  "header": {
+    "supplier": "^(S\\d{2})$",
+    "po_reference": "^Your PO\\s+(\\d{6,8})",
+    "version_hint": "^Your PO\\s+\\d{6,8},\\s*version\\s+(\\d+)",
+    "document_date": "^Date:\\s*([0-9.\\-/]+)",
+    "currency": "^Currency:\\s*(\\w+)",
+    "incoterm": "^Delivery terms:\\s*(.+)"
+  },
+  "table": {
+    "strategy": "text",
+    "line_start": "^Line\\s+\\d+:",
+    "line_regex": "^Line (?P<line_id>\\d+): (?P<quantity>\\S+)(?: (?P<unit>\\S+))? of (?P<item_code>KM-\\d{4}(?: / KM-\\d{4})*) (?P<description>(?:(?! at [A-Z]{3} ).)+?)(?: at [A-Z]{3} (?P<unit_price>\\S+)(?: (?P<price_basis>each|per \\S+))?)?(?:, less (?P<discount_pct>\\S+) discount)?(?:, delivery (?P<delivery_date>.+?))?\\.$",
+    "item_code_regex": "KM-\\d{4}"
+  },
+  "decimal_comma": false
+}

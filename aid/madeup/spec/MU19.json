@@ -1,0 +1,33 @@
+{
+  "case_id": "MU19",
+  "po": {
+    "po_number": "250119",
+    "supplier": "S19",
+    "currency": "EUR",
+    "incoterm": "DAP Rotterdam",
+    "buyer_authorization_exceeded": false,
+    "versions": [
+      {
+        "version": 1,
+        "version_date": "2026-10-20",
+        "lines": [
+          {"line_id": "1", "item_code": "KM-1901", "description": "Klephuis DN25", "quantity": "4", "unit": "pc", "unit_price": "24.00", "price_basis": "1", "delivery_date": "2026-11-16"},
+          {"line_id": "2", "item_code": "KM-1902", "description": "Afdichtingsset DN25", "quantity": "4", "unit": "pc", "unit_price": "7.50", "price_basis": "1", "delivery_date": "2026-11-16"},
+          {"line_id": "3", "item_code": "KM-1903", "description": "Slangklem 20-32 mm", "quantity": "20", "unit": "pc", "unit_price": "0.85", "price_basis": "1", "delivery_date": "2026-11-16"}
+        ]
+      }
+    ]
+  },
+  "confirmation": {
+    "layout": "merged",
+    "language": "nl",
+    "document_date": "2026-10-22",
+    "version_quoted": null,
+    "incoterm": "DAP Rotterdam",
+    "lines": [
+      {"line_id": "1", "item_code": "KM-1901 / KM-1902", "description": "Klephuis DN25 met afdichtingsset", "quantity": "4", "unit": "pc", "unit_price": "31.50", "price_basis": "1", "delivery_date": "2026-11-16"},
+      {"line_id": "2", "item_code": "KM-1903", "description": "Slangklem 20-32 mm", "quantity": "20", "unit": "pc", "unit_price": "0.85", "price_basis": "1", "delivery_date": "2026-11-16"}
+    ],
+    "differences": []
+  }
+}

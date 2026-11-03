@@ -1,0 +1,30 @@
+{
+  "name": "table_nl",
+  "language": "nl",
+  "detect": ["Orderbevestiging", "^Pos\\s+Artikel\\s+Omschrijving"],
+  "header": {
+    "supplier": "^(S\\d{2})$",
+    "po_reference": "^Uw inkooporder\\s+(\\d{6,8})",
+    "version_hint": "^Uw inkooporder\\s+\\d{6,8},\\s*versie\\s+(\\d+)",
+    "document_date": "^Datum:\\s*([0-9.\\-/]+)",
+    "currency": "^Valuta:\\s*(\\w+)",
+    "incoterm": "^Leveringsvoorwaarden:\\s*(.+)"
+  },
+  "table": {
+    "strategy": "lines",
+    "header_row_contains": "Artikel",
+    "columns": [
+      {"title": "Pos", "field": "line_id"},
+      {"title": "Artikel", "field": "item_code"},
+      {"title": "Omschrijving", "field": "description"},
+      {"title": "Aantal", "field": "quantity"},
+      {"title": "Eenheid", "field": "unit"},
+      {"title": "Prijs", "field": "unit_price"},
+      {"title": "Per", "field": "price_basis"},
+      {"title": "Leverdatum", "field": "delivery_date"}
+    ],
+    "basis_mark": "/",
+    "item_code_regex": "KM-\\d{4}"
+  },
+  "decimal_comma": true
+}

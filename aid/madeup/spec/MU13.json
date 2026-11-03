@@ -1,0 +1,34 @@
+{
+  "case_id": "MU13",
+  "po": {
+    "po_number": "250113",
+    "supplier": "S13",
+    "currency": "EUR",
+    "incoterm": "DAP Rotterdam",
+    "buyer_authorization_exceeded": false,
+    "versions": [
+      {
+        "version": 1,
+        "version_date": "2026-10-20",
+        "lines": [
+          {"line_id": "1", "item_code": "KM-1301", "description": "O-ringset", "quantity": "25", "unit": "pc", "unit_price": "3.20", "price_basis": "1", "delivery_date": "2026-11-16"},
+          {"line_id": "2", "item_code": "KM-1302", "description": "Snelkoppeling 1/2 inch", "quantity": "8", "unit": "pc", "unit_price": "9.35", "price_basis": "1", "delivery_date": "2026-11-16"}
+        ]
+      }
+    ]
+  },
+  "confirmation": {
+    "layout": "table_de",
+    "language": "de",
+    "document_date": "2026-10-23",
+    "version_quoted": null,
+    "incoterm": "DAP Rotterdam",
+    "lines": [
+      {"line_id": "1", "item_code": "KM-1301", "description": "O-Ring-Satz", "quantity": "25", "unit": null, "unit_price": "3.20", "price_basis": "1", "delivery_date": "2026-11-16"},
+      {"line_id": "2", "item_code": "KM-1302", "description": "Schnellkupplung 1/2 Zoll", "quantity": "8", "unit": "pc", "unit_price": "9.35", "price_basis": "1", "delivery_date": "2026-11-16"}
+    ],
+    "differences": [
+      {"line_id": "1", "field": "unit", "kind": "missing on the document"}
+    ]
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "case_id": "MU02",
+  "po": {
+    "po_number": "250102",
+    "supplier": "S02",
+    "currency": "EUR",
+    "incoterm": "FCA Rotterdam",
+    "buyer_authorization_exceeded": false,
+    "versions": [
+      {
+        "version": 1,
+        "version_date": "2026-10-19",
+        "lines": [
+          {"line_id": "1", "item_code": "KM-0201", "description": "Tandwielpomp 8 cc", "quantity": "2", "unit": "pc", "unit_price": "1234.50", "price_basis": "1", "delivery_date": "2026-11-23"},
+          {"line_id": "2", "item_code": "KM-0202", "description": "Afdichtingsset pomp", "quantity": "2", "unit": "pc", "unit_price": "48.20", "price_basis": "1", "delivery_date": "2026-11-23"}
+        ]
+      }
+    ]
+  },
+  "confirmation": {
+    "layout": "text_en",
+    "language": "en",
+    "document_date": "2026-10-22",
+    "version_quoted": null,
+    "incoterm": "FCA Rotterdam",
+    "lines": [
+      {"line_id": "1", "item_code": "KM-0201", "description": "Gear pump 8 cc", "quantity": "2", "unit": "pc", "unit_price": "1234.50", "price_basis": "1", "delivery_date": "2026-11-23", "text_override": {"unit_price": "1.234,50"}},
+      {"line_id": "2", "item_code": "KM-0202", "description": "Pump seal kit", "quantity": "2", "unit": "pc", "unit_price": "48.20", "price_basis": "1", "delivery_date": "2026-11-23"}
+    ],
+    "differences": []
+  }
+}

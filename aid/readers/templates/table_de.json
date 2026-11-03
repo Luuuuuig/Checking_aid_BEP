@@ -1,0 +1,30 @@
+{
+  "name": "table_de",
+  "language": "de",
+  "detect": ["Auftragsbestätigung", "^Pos\\s+Artikel-Nr\\.\\s+Bezeichnung"],
+  "header": {
+    "supplier": "^(S\\d{2})$",
+    "po_reference": "^Ihre Bestellung\\s+(\\d{6,8})",
+    "version_hint": "^Ihre Bestellung\\s+\\d{6,8},\\s*Version\\s+(\\d+)",
+    "document_date": "^Datum:\\s*([0-9.\\-/]+)",
+    "currency": "^Währung:\\s*(\\w+)",
+    "incoterm": "^Lieferbedingungen:\\s*(.+)"
+  },
+  "table": {
+    "strategy": "lines",
+    "header_row_contains": "Artikel-Nr.",
+    "columns": [
+      {"title": "Pos", "field": "line_id"},
+      {"title": "Artikel-Nr.", "field": "item_code"},
+      {"title": "Bezeichnung", "field": "description"},
+      {"title": "Menge", "field": "quantity"},
+      {"title": "ME", "field": "unit"},
+      {"title": "Preis", "field": "unit_price"},
+      {"title": "PE", "field": "price_basis"},
+      {"title": "Rabatt", "field": "discount_pct"},
+      {"title": "Liefertermin", "field": "delivery_date"}
+    ],
+    "item_code_regex": "KM-\\d{4}"
+  },
+  "decimal_comma": true
+}

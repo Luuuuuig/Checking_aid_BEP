@@ -1,0 +1,35 @@
+{
+  "case_id": "MU17",
+  "po": {
+    "po_number": "250117",
+    "supplier": "S17",
+    "currency": "EUR",
+    "incoterm": "DAP Rotterdam",
+    "buyer_authorization_exceeded": false,
+    "versions": [
+      {
+        "version": 1,
+        "version_date": "2026-10-20",
+        "lines": [
+          {"line_id": "1", "item_code": "KM-1701", "description": "Kogellager 6204", "quantity": "20", "unit": "pc", "unit_price": "4.10", "price_basis": "1", "delivery_date": "2026-11-16"},
+          {"line_id": "2", "item_code": "KM-1702", "description": "Vetpatroon 400 g", "quantity": "12", "unit": "pc", "unit_price": "6.20", "price_basis": "1", "delivery_date": "2026-11-16"},
+          {"line_id": "3", "item_code": "KM-1703", "description": "Afdichtingsset pomp", "quantity": "2", "unit": "pc", "unit_price": "48.20", "price_basis": "1", "delivery_date": "2026-11-16"}
+        ]
+      }
+    ]
+  },
+  "confirmation": {
+    "layout": "text_en",
+    "language": "en",
+    "document_date": "2026-10-22",
+    "version_quoted": null,
+    "incoterm": "DAP Rotterdam",
+    "lines": [
+      {"line_id": "1", "item_code": "KM-1701", "description": "Ball bearing 6204", "quantity": "20", "unit": "pc", "unit_price": "4.10", "price_basis": "1", "delivery_date": "2026-11-16"},
+      {"line_id": "2", "item_code": "KM-1702", "description": "Grease cartridge 400 g", "quantity": "12", "unit": "pc", "unit_price": "6.20", "price_basis": "1", "delivery_date": "2026-11-16"}
+    ],
+    "differences": [
+      {"line_id": "3", "field": "line_presence", "kind": "missing line"}
+    ]
+  }
+}

@@ -1,0 +1,20 @@
+Beste collega,
+
+De inkoopassistent heeft inkooporder PO {{ po }} gewijzigd, omdat de
+orderbevestiging van leverancier {{ supplier }} afwijkt van de order:
+
+{% set kinds = {"po_line_price": "Prijs van de orderregel", "po_line_date": "Leverdatum van de orderregel",
+                "po_line_quantity": "Aantal van de orderregel", "article_price": "Artikelprijs"} %}
+{% for change in changes %}
+- {{ kinds.get(change.kind, change.kind) }}, {% if change.line_id %}regel {{ change.line_id }}{% else %}artikel {{ change.article_code }}{% endif %}: oude waarde {{ change.old_value or "onbekend" }}, nieuwe waarde {{ change.new_value or "geen" }}
+{% endfor %}
+
+De order ligt boven het bedrag dat de inkoper zelf mag fiatteren. Wilt u
+de gewijzigde order daarom opnieuw fiatteren?
+
+Met vriendelijke groet,
+
+Inkoop
+{% if buyer_name %}
+{{ buyer_name }}
+{% endif %}

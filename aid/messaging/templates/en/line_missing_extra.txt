@@ -1,0 +1,21 @@
+Dear Sir or Madam,
+
+Thank you for your order confirmation of our purchase order PO {{ po }}.
+When we checked it, we found lines that we ordered but that are missing
+from your confirmation, or lines on your confirmation that we did not
+order:
+
+{{ table([("Line", "line_id"), ("Item code", "item_code"), ("Description", "description"),
+          ("Our value", "po_value"), ("Your value", "doc_value")], items) }}
+
+Is this correct, or is it a mistake? If it is a mistake, could you send
+us a corrected order confirmation?
+
+Could you answer within {{ wait_days }} working {{ "day" if wait_days == 1 else "days" }} by replying to this e-mail?
+
+Kind regards,
+
+Purchasing
+{% if buyer_name %}
+{{ buyer_name }}
+{% endif %}

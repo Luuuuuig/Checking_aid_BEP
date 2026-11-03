@@ -1,0 +1,21 @@
+Geachte heer, mevrouw,
+
+Hartelijk dank voor uw orderbevestiging van onze inkooporder PO {{ po }}.
+Bij de controle vonden wij regels die wij hebben besteld maar die op uw
+bevestiging ontbreken, of regels op uw bevestiging die wij niet hebben
+besteld:
+
+{{ table([("Regel", "line_id"), ("Artikelcode", "item_code"), ("Omschrijving", "description"),
+          ("Onze waarde", "po_value"), ("Uw waarde", "doc_value")], items) }}
+
+Klopt dit, of is het een vergissing? Als het een vergissing is, wilt u
+ons dan een gecorrigeerde orderbevestiging sturen?
+
+Wilt u binnen {{ wait_days }} {{ "werkdag" if wait_days == 1 else "werkdagen" }} antwoorden door op deze e-mail te reageren?
+
+Met vriendelijke groet,
+
+Inkoop
+{% if buyer_name %}
+{{ buyer_name }}
+{% endif %}

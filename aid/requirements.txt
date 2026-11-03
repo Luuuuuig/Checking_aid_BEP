@@ -1,0 +1,14 @@
+# Python environment of the checking aid (package aid/), Python 3.13.
+# Direct packages only, not a complete transitive lock. Versions as installed on 29 October 2026.
+pydantic==2.13.5
+pdfplumber==0.11.10
+pypdfium2==5.13.0
+pillow==12.3.0
+reportlab==5.0.1
+anthropic==2.3.0
+gradio==6.31.0
+jinja2==3.1.6
+openpyxl==3.1.5
+requests==2.34.2
+beautifulsoup4==4.15.0
+lxml==6.1.3

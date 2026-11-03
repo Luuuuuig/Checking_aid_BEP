@@ -1,0 +1,276 @@
+"""The digest: one e-mail to the buyer about the cases the aid handled, with an undo link next to each write it made and a link to
+the review page for each case that waits for the buyer (design specification, section 5). A Power Automate flow outside the code
+relays it to Teams (aid/README.md, "Teams via Power Automate").
+
+build_digest gives the digest of a day from the results of its cases and the files the watched folder skipped, in the language of
+the settings, as plain text and as simple HTML with the same content. Its blocks come in this order, each left out when it is empty:
+- Behandelde zaken (Handled cases): every case, in its digest line (CaseResult.digest_line), with a line under it for each of its
+  writes: the field in words, the article, the line or the file it changed, the old and the new value, and the undo link of a write
+  made. A change prepared says "(voorbereid)" and a write that failed "(mislukt)" instead: neither changed the ERP, so neither has
+  anything to undo.
+- Wacht op u (Waiting for you): the cases in review, each with its link to the review page and a line per review item: its reason
+  by the review page's label (see below), then its field and its line when they are known.
+- Vraag gesteld aan de leverancier (Question sent to the supplier): the cases that wait for the supplier, each with the supplier and
+  the template of each question in words. A request to the approver to approve a PO again is no question.
+- Mislukt (Failed): the failed cases, each with the first line of its error.
+- Overgeslagen (Skipped): the skipped files grouped by their reason, "<file>: <reason>", the reasons in alphabetical order.
+A day without cases and without skipped files says so. A price or a quantity has the decimal comma in Dutch and the point in
+English. A case is named by its PO number, the part of its id before the first underscore ("onbekend" for "unknown"), and by its
+supplier when that is known. The reason of a review item is shown by its label on the review page, in the language
+(i18n.STRINGS of aid/review/i18n.py, through reason_label: the label of the reason, or of the reason it begins with, as the page
+labels "no answer in 3 working days"); a reason without a label, and an error, is shown by its first line as the routing or the
+pipeline wrote it, without the name the pipeline gives a write (" (rule R04, po_line_price, line 1)"), because the digest shows no
+rule code. Of the settings it shows only the address of the review page, in its links: never a threshold and never the
+authorization limit. The text writes a link as [label](link) and the HTML as an anchor, and the HTML
+passes every value through html.escape.
+
+The subject is "[Inkoopassistent] Dagoverzicht DD-MM-YYYY", in English "[Inkoopassistent] Daily digest DD-MM-YYYY": the prefix is
+the same in both languages because the Power Automate flow matches it. undo_link and review_link are the links to the review page
+(settings.review_url): <review_url>/?case=<case id> opens the page with that case selected, and &undo=<entry id> also selects that
+write in the page's list of writes to undo, which the buyer then undoes with the undo button; opening the link undoes nothing. The
+page offers the cases in review and the closed cases with a write made in the system that is not undone (aid/review/page.py).
+digest_due says when the digest is to be sent, and send_digest sends its text to the buyer through a mailer
+(aid/messaging).
+
+A result saved by an earlier version may hold what the vocabulary does not know: a kind, field or template without its words is
+shown as it is, and a message record without a template is left out, so that one such result does not stop the whole digest.
+"""
+import re
+from datetime import date, datetime, time
+from html import escape
+from pathlib import PureWindowsPath
+from typing import NamedTuple
+
+from pydantic import BaseModel
+
+from aid.comparison import Flag, Uncompared
+from aid.execution.ops import WriteOp
+from aid.execution.writer import WriteLogEntry
+from aid.messaging import QUESTIONS, Mailer, Message, SentRecord
+from aid.pipeline import CaseResult, ReviewItem
+from aid.review.i18n import STRINGS, reason_label
+from aid.routing import findings_by_id
+from aid.settings import Settings
+
+SUBJECT_PREFIX = "[Inkoopassistent]"             # the same in both languages: the Power Automate flow matches it
+DIGEST = "digest"                                # the template of the digest's message, and the start of its case id
+_AMOUNTS = ("po_line_price", "article_price", "po_line_quantity")      # the kinds whose values take the decimal sign of the language
+_WRITE_NAME = re.compile(r" \((?:write: )?rule R\d+[^)]*\)")    # the pipeline's name of a write in a reason, " (rule R04, po_line_price,
+                                                            # line 1)", and in the error of a case, " (write: rule R04, ...)"
+_WORDS = {
+    "nl": {"digest": "Dagoverzicht", "handled": "Behandelde zaken", "review": "Wacht op u", "waiting": "Vraag gesteld aan de leverancier",
+           "failed": "Mislukt", "skipped": "Overgeslagen", "nothing": "Er zijn geen zaken behandeld en geen bestanden overgeslagen.",
+           "undo": "ongedaan maken", "open": "beoordelen", "status": {"prepared": "(voorbereid)", "failed": "(mislukt)"},
+           "line": "regel", "lines": "regels", "of_document": "van het document", "unknown": "onbekend", "decimal": ",",
+           "kinds": {"po_line_price": "prijs", "po_line_date": "levertijd", "po_line_quantity": "aantal", "article_price": "artikelprijs",
+                     "attach_document": "bijlage", "detach_document": "bijlage", "set_status": "status"},
+           "fields": {"price": "prijs", "quantity": "aantal", "unit": "eenheid", "delivery_date": "levertijd",
+                      "line_presence": "ontbrekende of extra regel", "required_info": "vereiste gegevens"},
+           "questions": {"quantity_unit": "aantal of eenheid", "line_missing_extra": "ontbrekende of extra regel",
+                         "missing_info": "ontbrekende gegevens"}},
+    "en": {"digest": "Daily digest", "handled": "Handled cases", "review": "Waiting for you", "waiting": "Question sent to the supplier",
+           "failed": "Failed", "skipped": "Skipped", "nothing": "No cases were handled and no files were skipped.",
+           "undo": "undo", "open": "review", "status": {"prepared": "(prepared)", "failed": "(failed)"},
+           "line": "line", "lines": "lines", "of_document": "of the document", "unknown": "unknown", "decimal": ".",
+           "kinds": {"po_line_price": "price", "po_line_date": "delivery date", "po_line_quantity": "quantity", "article_price": "article price",
+                     "attach_document": "attachment", "detach_document": "attachment", "set_status": "status"},
+           "fields": {"price": "price", "quantity": "quantity", "unit": "unit", "delivery_date": "delivery date",
+                      "line_presence": "missing or extra line", "required_info": "required information"},
+           "questions": {"quantity_unit": "quantity or unit", "line_missing_extra": "missing or extra line",
+                         "missing_info": "missing information"}}}
+
+
+class Digest(BaseModel):
+    subject: str
+    text: str                                    # plain text, the body of the e-mail
+    html: str                                    # the same content as simple HTML
+    period: str                                  # the day of the digest in ISO form, "2026-11-18"
+
+
+class _Link(NamedTuple):
+    label: str
+    url: str
+
+
+_Line = list[str | _Link]                       # a line of the digest: its texts and its links
+
+
+class _Item(NamedTuple):
+    """A line of a block and the lines under it."""
+    line: _Line
+    under: list[_Line]
+
+
+def undo_link(settings: Settings, case_id: str, entry_id: str) -> str:
+    """The link to the review page that selects the case and, among its writes to undo, the write-log entry; the buyer undoes it
+    with the page's undo button."""
+    return f"{_review_url(settings)}/?case={case_id}&undo={entry_id}"
+
+
+def review_link(settings: Settings, case_id: str) -> str:
+    """The link to the review page that selects the case."""
+    return f"{_review_url(settings)}/?case={case_id}"
+
+
+def _review_url(settings: Settings) -> str:
+    """settings.review_url without a trailing slash, as the links add their own."""
+    return settings.review_url.rstrip("/")
+
+
+def digest_due(now: datetime, last_sent: datetime | None, settings: Settings) -> bool:
+    """Whether the digest is to be sent at now. Per case (settings.digest "per_case") it always is. Daily it is when now's time of
+    day is at or past settings.digest_time ("HH:MM") and no digest was sent on now's date: last_sent is None or falls on an earlier
+    date, taken on now's clock (in now's time zone; a time without a zone is local time)."""
+    if settings.digest == "per_case":
+        return True
+    if now.time() < time.fromisoformat(settings.digest_time):
+        return False
+    return last_sent is None or last_sent.astimezone(now.tzinfo).date() < now.date()
+
+
+def build_digest(results: list[CaseResult], skipped: list[tuple[str, str]], settings: Settings, period: date) -> Digest:
+    """The digest of the day `period` from the results of its cases and the skipped files, (name, reason) pairs, in the language of
+    the settings (see the module docstring)."""
+    words = _WORDS[settings.language]
+    title = f"{words['digest']} {period:%d-%m-%Y}"
+    blocks = [(words["handled"], [_handled(result, settings, words) for result in results]),
+              (words["review"], [_in_review(result, settings, words) for result in results if result.status == "review"]),
+              (words["waiting"], [_waiting(result, words) for result in results if result.status == "waiting"]),
+              (words["failed"], [_failed(result, words) for result in results if result.status == "failed"]),
+              (words["skipped"], [_Item([f"{name}: {reason}"], []) for name, reason in sorted(skipped, key=lambda skip: skip[1])])]
+    blocks = [(heading, items) for heading, items in blocks if items]
+    return Digest(subject=f"{SUBJECT_PREFIX} {title}", text=_text(title, blocks, words), html=_html(title, blocks, words, settings.language),
+                  period=period.isoformat())
+
+
+def send_digest(d: Digest, mailer: Mailer, settings: Settings) -> SentRecord:
+    """Send the text of the digest to the buyer (settings.buyer_email, no one in copy) under its subject through the mailer, as a
+    message of the template "digest" and the case "digest-<period>", and return the mailer's record of it. The HTML is not sent:
+    it stays in the Digest for the caller."""
+    return mailer.send(Message(to=[settings.buyer_email], cc=[], subject=d.subject, body=d.text, template=DIGEST,
+                               case_id=f"{DIGEST}-{d.period}"))
+
+
+# --- the lines of the blocks ---
+
+def _handled(result: CaseResult, settings: Settings, words: dict) -> _Item:
+    """A handled case: its digest line, and a line per write under it."""
+    return _Item([result.digest_line], [_write(entry, result.case_id, settings, words) for entry in result.write_entries])
+
+
+def _write(entry: WriteLogEntry, case_id: str, settings: Settings, words: dict) -> _Line:
+    """A write: the field in words and what it changed, then the old and the new value when it has either (an attached file has
+    neither), then its undo link when it was made, else whether it was prepared or failed."""
+    op = entry.op
+    text = " ".join(part for part in (words["kinds"].get(op.kind, op.kind), _changed(op, words)) if part)
+    if entry.previous is not None or entry.new is not None:
+        text += f": {_value(entry.previous, op.kind, words)} → {_value(entry.new, op.kind, words)}"
+    if entry.status == "done":
+        return [f"{text} ", _Link(words["undo"], undo_link(settings, case_id, entry.entry_id))]
+    return [f"{text} {words['status'].get(entry.status, entry.status)}"]
+
+
+def _changed(op: WriteOp, words: dict) -> str:
+    """What a write changed besides its field: the article, else the PO line ("regel 1"), else the file it attached or detached."""
+    if op.article_code:
+        return op.article_code
+    if op.line_id:
+        return f"{words['line']} {op.line_id}"
+    return PureWindowsPath(op.document).name if op.document else ""     # PureWindowsPath cuts at either kind of separator
+
+
+def _value(value: str | None, kind: str, words: dict) -> str:
+    """A value of a write, "onbekend" when there is none (the old price of an article the aid has not read); a price or a quantity
+    with the decimal sign of the language."""
+    if value is None:
+        return words["unknown"]
+    return value.replace(".", words["decimal"]) if kind in _AMOUNTS else value
+
+
+def _in_review(result: CaseResult, settings: Settings, words: dict) -> _Item:
+    """A case in review: the case and its review link, and a line per review item under it."""
+    findings = findings_by_id(result.findings) if result.findings is not None else {}
+    return _Item([f"{_case(result, words)}: ", _Link(words["open"], review_link(settings, result.case_id))],
+                 [[_review_item(item, findings, words, settings.language)] for item in result.review_items])
+
+
+def _review_item(item: ReviewItem, findings: dict[str, Flag | Uncompared], words: dict, language: str) -> str:
+    """A review item: its reason by the review page's label in the language, else its first line, then its field and the lines of
+    its finding when they are known: the PO's lines, or the document's when the PO has none (an extra line)."""
+    known = [words["fields"].get(item.field, item.field)] if item.field is not None else []
+    finding = findings.get(item.finding_id) if item.finding_id is not None else None
+    if finding is not None and finding.po_line_ids:
+        known.append(_lines(finding.po_line_ids, words))
+    elif finding is not None and finding.doc_line_ids:
+        known.append(f"{_lines(finding.doc_line_ids, words)} {words['of_document']}")
+    label = reason_label(next(iter((item.reason or "").splitlines()), ""), STRINGS[language])    # as the page labels the reason
+    return (label or _shown(item.reason)) + (f" ({', '.join(known)})" if known else "")
+
+
+def _waiting(result: CaseResult, words: dict) -> _Item:
+    """A case that waits for the supplier: the case, with the template of each of its questions in words."""
+    templates = [message.get("template") for message in result.messages]
+    asked = [words["questions"].get(template, template) for template in templates if template in QUESTIONS]
+    return _Item([_case(result, words) + (f": {', '.join(asked)}" if asked else "")], [])
+
+
+def _failed(result: CaseResult, words: dict) -> _Item:
+    """A failed case: the case, with the first line of its error."""
+    error = _shown(result.error)
+    return _Item([_case(result, words) + (f": {error}" if error else "")], [])
+
+
+def _case(result: CaseResult, words: dict) -> str:
+    """A case as the blocks name it: "PO 250101", or "PO 250101 (S01)" when its supplier is known."""
+    po_number = result.case_id.partition("_")[0]
+    return f"PO {words['unknown'] if po_number == 'unknown' else po_number}" + (f" ({result.supplier})" if result.supplier else "")
+
+
+def _lines(line_ids: list[str], words: dict) -> str:
+    """Lines by their ids: "regel 1", or "regels 2, 3"."""
+    return f"{words['lines'] if len(line_ids) > 1 else words['line']} {', '.join(line_ids)}"
+
+
+def _shown(text: str | None) -> str:
+    """The first line of a reason or an error, without the name of a write that the pipeline puts in it, which names its rule."""
+    return _WRITE_NAME.sub("", next(iter((text or "").splitlines()), ""))
+
+
+# --- the text and the HTML ---
+
+def _text(title: str, blocks: list[tuple[str, list[_Item]]], words: dict) -> str:
+    """The digest as plain text: the title, then each block after a blank line, its heading and a line "- ..." per item, with the
+    lines under the item indented; a link is written [label](link)."""
+    lines = [title]
+    for heading, items in blocks:
+        lines += ["", heading]
+        for item in items:
+            lines.append(f"- {_plain(item.line)}")
+            lines += [f"    - {_plain(line)}" for line in item.under]
+    if not blocks:
+        lines += ["", words["nothing"]]
+    return "\n".join(lines) + "\n"
+
+
+def _html(title: str, blocks: list[tuple[str, list[_Item]]], words: dict, language: str) -> str:
+    """The digest as simple HTML: the title as the page's heading, each block as a heading and a list, the lines under an item as a
+    list in it, and each link as an anchor; every value passes through html.escape."""
+    parts = ["<!DOCTYPE html>", f'<html lang="{language}">', f'<head><meta charset="utf-8"><title>{escape(title)}</title></head>',
+             "<body>", f"<h1>{escape(title)}</h1>"]
+    for heading, items in blocks:
+        parts += [f"<h2>{escape(heading)}</h2>", "<ul>"]
+        for item in items:
+            under = "".join(f"<li>{_marked(line)}</li>" for line in item.under)
+            parts.append(f"<li>{_marked(item.line)}" + (f"<ul>{under}</ul>" if under else "") + "</li>")
+        parts.append("</ul>")
+    if not blocks:
+        parts.append(f"<p>{escape(words['nothing'])}</p>")
+    return "\n".join([*parts, "</body>", "</html>"]) + "\n"
+
+
+def _plain(line: _Line) -> str:
+    return "".join(f"[{part.label}]({part.url})" if isinstance(part, _Link) else part for part in line)
+
+
+def _marked(line: _Line) -> str:
+    return "".join(f'<a href="{escape(part.url)}">{escape(part.label)}</a>' if isinstance(part, _Link) else escape(part) for part in line)

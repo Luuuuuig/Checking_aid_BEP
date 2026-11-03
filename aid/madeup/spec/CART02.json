@@ -1,0 +1,33 @@
+{
+  "case_id": "CART02",
+  "po": {
+    "po_number": "250202",
+    "supplier": "S22",
+    "currency": "EUR",
+    "incoterm": "DAP Rotterdam",
+    "buyer_authorization_exceeded": false,
+    "versions": [
+      {
+        "version": 1,
+        "version_date": "2026-11-04",
+        "lines": [
+          {"line_id": "1", "item_code": "KM-2001", "description": "Hydraulische slang 10 mm, 2 m", "quantity": "5", "unit": "pc", "unit_price": "12.50", "price_basis": "1", "delivery_date": "2026-11-12"},
+          {"line_id": "2", "item_code": "KM-2002", "description": "Kogelkraan DN25", "quantity": "3", "unit": "pc", "unit_price": "40.00", "price_basis": "1", "delivery_date": "2026-11-12"},
+          {"line_id": "3", "item_code": "KM-2003", "description": "O-ringset", "quantity": "10", "unit": "pc", "unit_price": "3.20", "price_basis": "1", "delivery_date": "2026-11-12"}
+        ]
+      }
+    ]
+  },
+  "cart": {
+    "layout": "png",
+    "capture_date": "2026-11-04",
+    "lines": [
+      {"line_id": "1", "item_code": "KM-2001", "description": "Hydraulische slang 10 mm x 2 m", "quantity": "5", "unit": "pc", "unit_price": "12.50", "price_basis": "1", "delivery_date": null},
+      {"line_id": "2", "item_code": "KM-2002", "description": "Kogelkraan DN25 messing", "quantity": "3", "unit": "pc", "unit_price": "41.00", "price_basis": "1", "delivery_date": null}
+    ],
+    "differences": [
+      {"line_id": "2", "field": "price", "kind": "different"},
+      {"line_id": "3", "field": "line_presence", "kind": "not in cart"}
+    ]
+  }
+}

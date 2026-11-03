@@ -1,0 +1,34 @@
+{
+  "case_id": "MU12",
+  "po": {
+    "po_number": "250112",
+    "supplier": "S12",
+    "currency": "EUR",
+    "incoterm": "FCA Rotterdam",
+    "buyer_authorization_exceeded": false,
+    "versions": [
+      {
+        "version": 1,
+        "version_date": "2026-10-20",
+        "lines": [
+          {"line_id": "1", "item_code": "KM-1201", "description": "Hydraulische slang 10 mm", "quantity": "50", "unit": "m", "unit_price": "4.80", "price_basis": "1", "delivery_date": "2026-11-16"},
+          {"line_id": "2", "item_code": "KM-1202", "description": "Persfitting 12 mm", "quantity": "20", "unit": "pc", "unit_price": "2.35", "price_basis": "1", "delivery_date": "2026-11-16"}
+        ]
+      }
+    ]
+  },
+  "confirmation": {
+    "layout": "text_en",
+    "language": "en",
+    "document_date": "2026-10-22",
+    "version_quoted": null,
+    "incoterm": "FCA Rotterdam",
+    "lines": [
+      {"line_id": "1", "item_code": "KM-1201", "description": "Hydraulic hose 10 mm", "quantity": "50", "unit": "pc", "unit_price": "4.80", "price_basis": "1", "delivery_date": "2026-11-16"},
+      {"line_id": "2", "item_code": "KM-1202", "description": "Press fitting 12 mm", "quantity": "20", "unit": "pc", "unit_price": "2.35", "price_basis": "1", "delivery_date": "2026-11-16"}
+    ],
+    "differences": [
+      {"line_id": "1", "field": "unit", "kind": "different"}
+    ]
+  }
+}

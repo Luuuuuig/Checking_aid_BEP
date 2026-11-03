@@ -1,0 +1,4 @@
+po_number,line_id,item_code,description,quantity,unit,unit_price,price_basis,delivery_date
+250202,1,KM-2001,"Hydraulische slang 10 mm, 2 m",5,st,12.50,1,2026-11-12
+250202,2,KM-2002,Kogelkraan DN25,3,st,40.00,1,2026-11-12
+250202,3,KM-2003,O-ringset,10,st,3.20,1,2026-11-12

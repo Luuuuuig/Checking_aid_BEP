@@ -1,0 +1,2 @@
+# Extra package for the tests of the checking aid (aid/tests).
+pytest==9.2.0

@@ -1,0 +1,20 @@
+Geachte heer, mevrouw,
+
+Hartelijk dank voor uw orderbevestiging van onze inkooporder PO {{ po }}.
+Bij de controle vonden wij dat er informatie ontbreekt die wij nodig
+hebben, bijvoorbeeld de Incoterm (de leveringsvoorwaarde), of dat die
+informatie afwijkt van onze order:
+
+{{ table([("Regel", "line_id"), ("Artikelcode", "item_code"), ("Omschrijving", "description"),
+          ("Onze waarde", "po_value"), ("Uw waarde", "doc_value")], items) }}
+
+Wilt u ons de ontbrekende of de juiste informatie sturen?
+
+Wilt u binnen {{ wait_days }} {{ "werkdag" if wait_days == 1 else "werkdagen" }} antwoorden door op deze e-mail te reageren?
+
+Met vriendelijke groet,
+
+Inkoop
+{% if buyer_name %}
+{{ buyer_name }}
+{% endif %}

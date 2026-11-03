@@ -1,0 +1,14 @@
+{
+  "header": {
+    "po_reference": "Inkooporder\\s*(\\d{6,8})",
+    "version_hint": "Versie\\s*(\\d+)",
+    "document_date": "Datum\\s*([0-9.\\-/]+)",
+    "supplier": "Leverancier:\\s*(.+)",
+    "incoterm": "Levering:\\s*([A-Z]{3}.*)",
+    "currency": "Valuta:\\s*(\\w+)"
+  },
+  "table": {
+    "columns": ["line_id", "item_code", "description", "quantity", "unit", "unit_price", "price_basis", "delivery_date"],
+    "header_row_contains": "Artikel"
+  }
+}

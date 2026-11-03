@@ -1,0 +1,34 @@
+{
+  "case_id": "MU15",
+  "po": {
+    "po_number": "250115",
+    "supplier": "S15",
+    "currency": "EUR",
+    "incoterm": "CPT Rotterdam",
+    "buyer_authorization_exceeded": false,
+    "versions": [
+      {
+        "version": 1,
+        "version_date": "2026-10-20",
+        "lines": [
+          {"line_id": "1", "item_code": "KM-1501", "description": "Tandwielpomp 8 cc", "quantity": "1", "unit": "pc", "unit_price": "980.00", "price_basis": "1", "delivery_date": "2026-11-16"},
+          {"line_id": "2", "item_code": "KM-1502", "description": "Filterelement 10 micron", "quantity": "4", "unit": "pc", "unit_price": "27.90", "price_basis": "1", "delivery_date": "2026-11-16"}
+        ]
+      }
+    ]
+  },
+  "confirmation": {
+    "layout": "table_de",
+    "language": "de",
+    "document_date": "2026-10-22",
+    "version_quoted": null,
+    "incoterm": "CPT Rotterdam",
+    "lines": [
+      {"line_id": "1", "item_code": "KM-1501", "description": "Zahnradpumpe 8 ccm", "quantity": "1", "unit": "pc", "unit_price": "980.00", "price_basis": "1", "delivery_date": "2026-11-30/2026-12-04"},
+      {"line_id": "2", "item_code": "KM-1502", "description": "Filterelement 10 Mikron", "quantity": "4", "unit": "pc", "unit_price": "27.90", "price_basis": "1", "delivery_date": "2026-11-16/2026-11-20"}
+    ],
+    "differences": [
+      {"line_id": "1", "field": "delivery_date", "kind": "later"}
+    ]
+  }
+}

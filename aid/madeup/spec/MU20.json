@@ -1,0 +1,34 @@
+{
+  "case_id": "MU20",
+  "po": {
+    "po_number": "250120",
+    "supplier": "S20",
+    "currency": "EUR",
+    "incoterm": "DAP Rotterdam",
+    "buyer_authorization_exceeded": false,
+    "versions": [
+      {
+        "version": 1,
+        "version_date": "2026-10-20",
+        "lines": [
+          {"line_id": "1", "item_code": "KM-2201", "description": "Drukschakelaar 0-6 bar", "quantity": "2", "unit": "pc", "unit_price": "38.75", "price_basis": "1", "delivery_date": "2026-11-16"},
+          {"line_id": "2", "item_code": "KM-2202", "description": "Knie 90 graden 22 mm", "quantity": "15", "unit": "pc", "unit_price": "1.90", "price_basis": "1", "delivery_date": "2026-11-16"}
+        ]
+      }
+    ]
+  },
+  "confirmation": {
+    "layout": "text_en",
+    "language": "en",
+    "document_date": "2026-10-22",
+    "version_quoted": null,
+    "incoterm": null,
+    "lines": [
+      {"line_id": "1", "item_code": "KM-2201", "description": "Pressure switch 0-6 bar", "quantity": "2", "unit": "pc", "unit_price": "38.75", "price_basis": "1", "delivery_date": "2026-11-16"},
+      {"line_id": "2", "item_code": "KM-2202", "description": "Elbow 90 degrees 22 mm", "quantity": "15", "unit": "pc", "unit_price": "1.90", "price_basis": "1", "delivery_date": "2026-11-16"}
+    ],
+    "differences": [
+      {"line_id": "", "field": "required_info", "kind": "missing on the document"}
+    ]
+  }
+}

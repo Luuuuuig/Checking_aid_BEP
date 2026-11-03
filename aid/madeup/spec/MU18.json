@@ -1,0 +1,35 @@
+{
+  "case_id": "MU18",
+  "po": {
+    "po_number": "250118",
+    "supplier": "S18",
+    "currency": "EUR",
+    "incoterm": "FCA Rotterdam",
+    "buyer_authorization_exceeded": false,
+    "versions": [
+      {
+        "version": 1,
+        "version_date": "2026-10-20",
+        "lines": [
+          {"line_id": "1", "item_code": "KM-1801", "description": "Kogelkraan DN15", "quantity": "10", "unit": "pc", "unit_price": "18.40", "price_basis": "1", "delivery_date": "2026-11-16"},
+          {"line_id": "2", "item_code": "KM-1802", "description": "Slangklem 20-32 mm", "quantity": "20", "unit": "pc", "unit_price": "0.85", "price_basis": "1", "delivery_date": "2026-11-16"}
+        ]
+      }
+    ]
+  },
+  "confirmation": {
+    "layout": "text_en",
+    "language": "en",
+    "document_date": "2026-10-22",
+    "version_quoted": null,
+    "incoterm": "FCA Rotterdam",
+    "lines": [
+      {"line_id": "1", "item_code": "KM-1801", "description": "Ball valve DN15", "quantity": "10", "unit": "pc", "unit_price": "18.40", "price_basis": "1", "delivery_date": "2026-11-16"},
+      {"line_id": "2", "item_code": "KM-1802", "description": "Hose clamp 20-32 mm", "quantity": "20", "unit": "pc", "unit_price": "0.85", "price_basis": "1", "delivery_date": "2026-11-16"},
+      {"line_id": "3", "item_code": "KM-1803", "description": "Hose clamp 12-20 mm", "quantity": "20", "unit": "pc", "unit_price": "0.80", "price_basis": "1", "delivery_date": "2026-11-16"}
+    ],
+    "differences": [
+      {"line_id": "3", "field": "line_presence", "kind": "extra line"}
+    ]
+  }
+}

@@ -1,0 +1,20 @@
+Dear colleague,
+
+The purchasing assistant has changed purchase order PO {{ po }}, because
+the order confirmation of supplier {{ supplier }} differs from the order:
+
+{% set kinds = {"po_line_price": "Price of the PO line", "po_line_date": "Delivery date of the PO line",
+                "po_line_quantity": "Quantity of the PO line", "article_price": "Article price"} %}
+{% for change in changes %}
+- {{ kinds.get(change.kind, change.kind) }}, {% if change.line_id %}line {{ change.line_id }}{% else %}article {{ change.article_code }}{% endif %}: old value {{ change.old_value or "unknown" }}, new value {{ change.new_value or "none" }}
+{% endfor %}
+
+The order is above the amount that the buyer may approve alone. Could you
+therefore approve the changed order again?
+
+Kind regards,
+
+Purchasing
+{% if buyer_name %}
+{{ buyer_name }}
+{% endif %}

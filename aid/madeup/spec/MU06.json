@@ -1,0 +1,34 @@
+{
+  "case_id": "MU06",
+  "po": {
+    "po_number": "250106",
+    "supplier": "S06",
+    "currency": "EUR",
+    "incoterm": "DAP Rotterdam",
+    "buyer_authorization_exceeded": false,
+    "versions": [
+      {
+        "version": 1,
+        "version_date": "2026-10-19",
+        "lines": [
+          {"line_id": "1", "item_code": "KM-0601", "description": "Magneetventiel 24 V", "quantity": "3", "unit": "pc", "unit_price": "64.00", "price_basis": "1", "delivery_date": "2026-11-16"},
+          {"line_id": "2", "item_code": "KM-0602", "description": "Drukschakelaar 0-6 bar", "quantity": "2", "unit": "pc", "unit_price": "38.75", "price_basis": "1", "delivery_date": "2026-11-16"},
+          {"line_id": "3", "item_code": "KM-0603", "description": "Vetpatroon 400 g", "quantity": "12", "unit": "pc", "unit_price": "6.20", "price_basis": "1", "delivery_date": "2026-11-16"}
+        ]
+      }
+    ]
+  },
+  "confirmation": {
+    "layout": "total_only",
+    "language": "nl",
+    "document_date": "2026-10-21",
+    "version_quoted": null,
+    "incoterm": "DAP Rotterdam",
+    "lines": [
+      {"line_id": "1", "item_code": "KM-0601", "description": "Magneetventiel 24 V", "quantity": "3", "unit": "pc", "unit_price": null, "price_basis": null, "delivery_date": "2026-11-16", "line_total": "192.00"},
+      {"line_id": "2", "item_code": "KM-0602", "description": "Drukschakelaar 0-6 bar", "quantity": "2", "unit": "pc", "unit_price": null, "price_basis": null, "delivery_date": "2026-11-16", "line_total": "77.50"},
+      {"line_id": "3", "item_code": "KM-0603", "description": "Vetpatroon 400 g", "quantity": "12", "unit": "pc", "unit_price": null, "price_basis": null, "delivery_date": "2026-11-16", "line_total": "74.40"}
+    ],
+    "differences": []
+  }
+}

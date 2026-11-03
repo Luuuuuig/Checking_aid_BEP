@@ -1,0 +1,20 @@
+Dear Sir or Madam,
+
+Thank you for your order confirmation of our purchase order PO {{ po }}.
+When we checked it, we found that information we need is missing, for
+example the Incoterm (the delivery terms), or that the information
+differs from our order:
+
+{{ table([("Line", "line_id"), ("Item code", "item_code"), ("Description", "description"),
+          ("Our value", "po_value"), ("Your value", "doc_value")], items) }}
+
+Could you send us the missing or the correct information?
+
+Could you answer within {{ wait_days }} working {{ "day" if wait_days == 1 else "days" }} by replying to this e-mail?
+
+Kind regards,
+
+Purchasing
+{% if buyer_name %}
+{{ buyer_name }}
+{% endif %}

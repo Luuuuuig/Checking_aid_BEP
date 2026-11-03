@@ -1,0 +1,43 @@
+{
+  "case_id": "MU03",
+  "po": {
+    "po_number": "250103",
+    "supplier": "S03",
+    "currency": "EUR",
+    "incoterm": "DAP Rotterdam",
+    "buyer_authorization_exceeded": false,
+    "versions": [
+      {
+        "version": 1,
+        "version_date": "2026-10-12",
+        "lines": [
+          {"line_id": "1", "item_code": "KM-0301", "description": "Kogelkraan DN15", "quantity": "10", "unit": "pc", "unit_price": "18.40", "price_basis": "1", "delivery_date": "2026-11-16"},
+          {"line_id": "2", "item_code": "KM-0302", "description": "Manometer 0-10 bar", "quantity": "4", "unit": "pc", "unit_price": "22.10", "price_basis": "1", "delivery_date": "2026-11-16"},
+          {"line_id": "3", "item_code": "KM-0303", "description": "Terugslagklep DN20", "quantity": "5", "unit": "pc", "unit_price": "31.00", "price_basis": "1", "delivery_date": "2026-11-16"}
+        ]
+      },
+      {
+        "version": 2,
+        "version_date": "2026-10-26",
+        "lines": [
+          {"line_id": "1", "item_code": "KM-0301", "description": "Kogelkraan DN15", "quantity": "10", "unit": "pc", "unit_price": "18.40", "price_basis": "1", "delivery_date": "2026-11-16"},
+          {"line_id": "2", "item_code": "KM-0302", "description": "Manometer 0-10 bar", "quantity": "6", "unit": "pc", "unit_price": "22.10", "price_basis": "1", "delivery_date": "2026-11-16"},
+          {"line_id": "3", "item_code": "KM-0303", "description": "Terugslagklep DN20", "quantity": "5", "unit": "pc", "unit_price": "31.00", "price_basis": "1", "delivery_date": "2026-11-16"}
+        ]
+      }
+    ]
+  },
+  "confirmation": {
+    "layout": "table_nl",
+    "language": "nl",
+    "document_date": "2026-10-14",
+    "version_quoted": 1,
+    "incoterm": "DAP Rotterdam",
+    "lines": [
+      {"line_id": "1", "item_code": "KM-0301", "description": "Kogelkraan DN15", "quantity": "10", "unit": "pc", "unit_price": "18.40", "price_basis": "1", "delivery_date": "2026-11-16"},
+      {"line_id": "2", "item_code": "KM-0302", "description": "Manometer 0-10 bar", "quantity": "4", "unit": "pc", "unit_price": "22.10", "price_basis": "1", "delivery_date": "2026-11-16"},
+      {"line_id": "3", "item_code": "KM-0303", "description": "Terugslagklep DN20", "quantity": "5", "unit": "pc", "unit_price": "31.00", "price_basis": "1", "delivery_date": "2026-11-16"}
+    ],
+    "differences": []
+  }
+}
