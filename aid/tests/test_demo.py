@@ -4,6 +4,8 @@ import csv
 from aid import demo
 from aid.demo import RECORDED_DIR, main
 from aid.readers.llm_client import RecordedClient
+from aid.runner import run_loop
+from aid.runner import build_deps
 from aid.review.app import list_open_cases
 from aid.settings import load_settings
 from aid.tests.conftest import read_csv
@@ -63,3 +65,23 @@ def test_the_anthropic_reader_is_wired_like_the_notebook(tmp_path, monkeypatch):
     out = tmp_path / "demo"
     assert main(["--out", str(out), "--reader", "anthropic"]) == 0
     assert {row["case_id"]: row["status"] for row in read_csv(out / "summary.csv")} == RECORDED_STATUS
+
+
+def test_a_prepared_folder_lets_the_loop_open_a_case_by_itself(tmp_path, capsys):
+    """--prepare-only files the purchase orders and runs nothing; a confirmation dropped into the inbox is then a new case for the
+    loop, not a duplicate."""
+    import os
+    import shutil
+    from aid.demo import MADEUP_OUT
+    out = tmp_path / "live"
+    assert main(["--out", str(out), "--prepare-only"]) == 0
+    assert not (out / "summary.csv").exists() and (out / "inbox").is_dir()
+    assert "no case run" in capsys.readouterr().out
+    settings = load_settings(out / "settings.json")
+    assert settings.po_store_root.exists() and len(list(settings.po_store_root.iterdir())) >= 21
+    shutil.copy(MADEUP_OUT / "MU03_conf.pdf", out / "inbox")
+    deps = build_deps(settings, dict(os.environ))
+    assert run_loop(deps, out / "STOP", poll_seconds=0, max_passes=1) == 1
+    assert (out / "inbox" / "processed" / "MU03_conf.pdf").exists()
+    folders = [p.name for p in settings.cases_root.iterdir() if p.name.startswith("250103_")]
+    assert len(folders) == 1 and (settings.cases_root / folders[0] / "steps" / "08_result.json").exists()

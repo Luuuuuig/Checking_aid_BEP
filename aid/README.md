@@ -2,6 +2,8 @@
 
 `aid` is the Python package of the checking aid of the Bachelor End Project. It reads a supplier's order confirmation, or a captured webshop cart page, compares it with the purchase order by fixed rules, carries out the routine corrections, asks the supplier the standard questions, and hands the buyer only the cases its rules cannot settle. What it does and why is in the [design specification](../docs/superpowers/specs/2026-10-26-checking-aid-design.md); the build, task by task, is in the [implementation plan](../docs/superpowers/plans/2026-10-26-checking-aid-implementation.md).
 
+How to use the aid day to day, run it on the company side, maintain it and solve problems: [MANUAL.md](MANUAL.md) (with a one-page Dutch guide for the buyer at its end).
+
 ## Install and test
 
 Python 3.13. From the repository root:
@@ -26,13 +28,15 @@ The first command writes `demo/settings.json` (the example settings with the par
 
 The second command serves the review page on http://127.0.0.1:7860 (the host only; `--share` is refused with company settings): the cases in review, each with its two documents, the three lists, the four decisions per item and the article tick, the close button and the undo, in Dutch with a switch to English. Closing a case writes its prepared changes and its questions (`demo/cases/outbox/*.eml`) and its dispositions; the undo reverses a written change.
 
-The runner is the loop both hosts run. Copy a made-up confirmation from `aid/madeup/out/` (for example `MU01_conf.pdf`) into `demo/inbox/` and run
+The runner is the loop both hosts run, and the way the aid works by itself: a confirmation that arrives is the trigger. To watch it, prepare a second folder without running any case (a document a folder has seen once counts as a duplicate afterwards, so the `demo` folder above would skip the made-up confirmations), start the loop, and drop a confirmation into its inbox from another terminal:
 
 ```bash
-python3 -m aid.runner --settings demo/settings.json --poll-seconds 5 --max-passes 3
+python3 -m aid.demo --out live --prepare-only
+python3 -m aid.runner --settings live/settings.json --poll-seconds 5
+cp aid/madeup/out/MU03_conf.pdf aid/madeup/out/MU07_conf.pdf live/inbox/      # in a second terminal
 ```
 
-It opens a case per new document, runs it, escalates the questions whose wait is over and, when the digest is due (`digest_time` in the settings; set `"digest": "per_case"` to get one after every pass with a case), writes the digest to `demo/cases/digests/` (an .eml through the outbox when a mailer is set). The other commands take made-up inputs the same way: the price-list import (`python3 -m aid.pricelist --file <list.csv> --supplier S01 --current <current_prices.csv> --prepared demo/cases/prepared --settings demo/settings.json`), the necessity check (`python3 -m aid.evalscripts.necessity --cases aid/madeup/out --spec aid/madeup/spec --recorded aid/tests/fixtures/recorded --out demo/necessity.csv`) and the freeze record (`python3 -m aid.freeze --settings demo/settings.json --out demo/freeze.json`).
+Within one pass the two files move to `live/inbox/processed/`, two case folders appear under `live/cases/` (PO 250103 closed with its prepared changes, PO 250107 for review), the questions whose wait is over are escalated, and when the digest is due (`digest_time` in the settings; set `"digest": "per_case"` to get one after every pass with a case) the digest is written to `live/cases/digests/` and, as an .eml, to `live/cases/outbox/`. Create the file `live/STOP` to end the loop. On the company side the mailbox rule does the copying. The other commands take made-up inputs the same way: the price-list import (`python3 -m aid.pricelist --file <list.csv> --supplier S01 --current <current_prices.csv> --prepared demo/cases/prepared --settings demo/settings.json`), the necessity check (`python3 -m aid.evalscripts.necessity --cases aid/madeup/out --spec aid/madeup/spec --recorded aid/tests/fixtures/recorded --out demo/necessity.csv`) and the freeze record (`python3 -m aid.freeze --settings demo/settings.json --out demo/freeze.json`).
 
 With your own Anthropic key, the demo can read the made-up documents live through the development client: put the key in the environment (`export ANTHROPIC_API_KEY=...` on macOS or Linux, `$env:ANTHROPIC_API_KEY="..."` in PowerShell; never in a file of the repository or the demo folder) and run `python3 -m aid.demo --out demo3 --reader anthropic`. Every confirmation and the cart screenshot then go to the service, the decider is asked where the rules call for it, and the audit of each case names the model; a run over the 22 cases costs a small amount. This option is for made-up documents only: a company document goes to the Microsoft client of Task 7b and to no other service, so the runner (the company-side command) has no such option.
 

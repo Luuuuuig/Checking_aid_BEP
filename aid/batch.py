@@ -42,7 +42,7 @@ from aid.readers.cart import is_cart_page, read_cart_html
 from aid.readers.llm_client import LlmResponse, RecordedClient
 from aid.readers.supplier_llm import read_supplier_document
 from aid.schema import Document
-from aid.settings import load_settings
+from aid.settings import Settings, load_settings
 from aid.sources.upload import open_upload_case
 
 SUMMARY_COLUMNS = ("case_id", "status", "version", "flags", "uncompared", "actions", "writes", "messages", "review_items", "error")
@@ -55,12 +55,7 @@ def main(argv: list[str] | None = None, reader: Callable | None = None, decider:
     pass its own reader and decider in place of --reader's (the demo does, for a live client over made-up documents)."""
     args = _arguments(argv)
     settings = load_settings(args.settings)
-    store = PoStore(settings.po_store_root, settings.authorization_limit)
-    for pdf in sorted(args.po_dir.glob("*_po_v*.pdf")):
-        store.add(pdf)
-    columns = settings.export_columns or {field: field for field in EXPORT_FIELDS}
-    for export in sorted(args.po_dir.glob("*_export.csv")):
-        store.from_export(export, columns)
+    store = file_po_dir(settings, args.po_dir)
     deps = Deps(settings=settings, store=store, reader=reader or _reader(args), decider=decider or NoDecider(),
                 writer=PreparedWriter(settings.cases_root / "prepared"), mailer=None, clock=_now)
     cases, counts = _cases(args.cases), Counter()
@@ -78,6 +73,18 @@ def main(argv: list[str] | None = None, reader: Callable | None = None, decider:
     print(f"{len(cases)} cases, " + ", ".join(f"{counts[status]} {status}" for status in ("closed", "review", "waiting", "failed"))
           + f"; summary in {args.out}")
     return 1 if counts["failed"] else 0
+
+
+def file_po_dir(settings: Settings, po_dir: Path) -> PoStore:
+    """The PO store of the settings with every *_po_v*.pdf of po_dir filed into it, then every *_export.csv (with the settings' column
+    map, or the identity map of the export fields); a file the store holds already is not filed twice."""
+    store = PoStore(settings.po_store_root, settings.authorization_limit)
+    for pdf in sorted(Path(po_dir).glob("*_po_v*.pdf")):
+        store.add(pdf)
+    columns = settings.export_columns or {field: field for field in EXPORT_FIELDS}
+    for export in sorted(Path(po_dir).glob("*_export.csv")):
+        store.from_export(export, columns)
+    return store
 
 
 def _now() -> datetime:

@@ -19,6 +19,9 @@ recorded replays the recorded LLM answers of the test fixtures instead, so every
 environment variable ANTHROPIC_API_KEY, calls the service for every document and the decider, and is for the made-up documents of
 this demo only; company documents go to the Microsoft client of Task 7b and to no other service.
 
+--prepare-only writes the folder and files the purchase orders but runs no case: the folder to watch the runner loop work by
+itself, because a document a folder has seen once counts as a duplicate afterwards and opens no second case.
+
 After the run: python3 -m aid.review --settings <out>/settings.json opens the review page on 127.0.0.1:7860, and
 python3 -m aid.runner --settings <out>/settings.json --poll-seconds 5 --max-passes 3 runs the loop over <out>/inbox. Nothing is
 sent and nothing is written to any system: the writer prepares changes and the mailer writes files.
@@ -61,6 +64,10 @@ def main(argv: list[str] | None = None) -> int:
     settings_path = write_settings(out)
     cases_path = write_cases(out)
     (out / "inbox").mkdir(exist_ok=True)
+    if args.prepare_only:
+        batch.file_po_dir(load_settings(settings_path), MADEUP_OUT)
+        print(prepared_text(out))
+        return 0
     batch_argv = ["--cases", str(cases_path), "--po-dir", str(MADEUP_OUT), "--settings", str(settings_path), "--out", str(out / "summary.csv")]
     if args.reader == "anthropic":
         if not os.environ.get(ANTHROPIC_KEY):
@@ -117,6 +124,17 @@ def write_cases(out: Path) -> Path:
     return path
 
 
+def prepared_text(out: Path) -> str:
+    """What a prepared folder holds and how to see the aid work by itself on it."""
+    return "\n".join([f"Demo folder prepared, no case run: {out}",
+                       "The PO store holds the made-up purchase orders; the inbox is empty; no confirmation has been seen yet.",
+                       f"Start the loop:  python3 -m aid.runner --settings {out / 'settings.json'} --poll-seconds 5",
+                       f"Then copy a made-up confirmation from {MADEUP_OUT} (for example MU03_conf.pdf) into {out / 'inbox'}: the loop opens the "
+                       "case by itself, runs it and writes the digest to cases/digests/ when it is due "
+                       "(set \"digest\": \"per_case\" in settings.json to get one after every pass with a case).",
+                       f"Stop the loop by creating the file {out / 'STOP'}."])
+
+
 def summary_text(out: Path, reader: str) -> str:
     """What the run gave and what to do next, from <out>/summary.csv."""
     with open(out / "summary.csv", encoding="utf-8", newline="") as f:
@@ -143,6 +161,9 @@ def _arguments(argv: list[str] | None) -> argparse.Namespace:
                         help="the template parser (default, no AI), the LLM reader over the recorded answers of the tests, or the LLM reader "
                              "over the Anthropic client with the key in ANTHROPIC_API_KEY (made-up documents only)")
     parser.add_argument("--force", action="store_true", help="run into a folder that exists and is not empty")
+    parser.add_argument("--prepare-only", action="store_true",
+                        help="write the settings and the case list and file the purchase orders, but run no case: the folder for "
+                             "watching the loop work by itself (a document the folder has seen once counts as a duplicate afterwards)")
     return parser.parse_args(argv)
 
 
