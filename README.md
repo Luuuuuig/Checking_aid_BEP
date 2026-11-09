@@ -4,7 +4,7 @@ A tool that checks a supplier's order confirmation, or the webshop cart before o
 
 ## Install and test
 
-Python 3.13. From the repository root:
+Python 3.11 or newer (developed on 3.13). From the repository root:
 
 ```bash
 python3 -m pip install -r aid/requirements.txt -r aid/requirements-dev.txt

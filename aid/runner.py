@@ -677,7 +677,8 @@ def _save_state(root: Path, state: dict) -> None:
 
 def _log(root: Path, now: datetime, what: str, error: Exception | str) -> None:
     """Add a line to runner.log: the time, the case id or the stage, and the error."""
-    line = f"{now.isoformat()} {what}: {error if isinstance(error, str) else f'{type(error).__name__}: {' '.join(str(error).split())}'}"
+    shown = error if isinstance(error, str) else f"{type(error).__name__}: {' '.join(str(error).split())}"
+    line = f"{now.isoformat()} {what}: {shown}"
     try:
         with open(root / LOG_FILE, "a", encoding="utf-8") as f:
             f.write(line + "\n")
