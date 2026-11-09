@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<title>Inkoopassistent: instellingen (settings)</title>
+<style>
+  body { font: 14px/1.5 Arial, sans-serif; margin: 2em; max-width: 44em; color: #202020; }
+  label { display: block; margin-top: 1em; font-weight: bold; }
+  input, textarea { width: 100%; box-sizing: border-box; font: inherit; padding: 4px; }
+  textarea { height: 7em; }
+  .hint { color: #555555; font-weight: normal; }
+  #note { margin-top: 1em; white-space: pre-line; }
+  #note.problem { color: #b3261e; }
+</style>
+</head>
+<body>
+<h1>Inkoopassistent: voorcontrole winkelwagen (pre-check of the cart)</h1>
+<p>De extensie stuurt de winkelwagen naar de inkoopassistent op deze computer en toont het antwoord boven de pagina.
+(The extension sends the cart page to the purchasing aid on this computer and shows its answer above the page.)</p>
+
+<label for="address">Adres van de inkoopassistent (address of the aid)</label>
+<input id="address" type="url" placeholder="http://127.0.0.1:7870">
+
+<label for="token">Token (capture_token in settings.json)</label>
+<input id="token" type="password" autocomplete="off">
+<span class="hint">Blijft in dit browserprofiel op deze computer (kept in this browser profile on this computer).</span>
+
+<label for="domains">Webshops, een adres per regel (shop addresses, one per line)
+<span class="hint">: het begin van het adres van de winkel, met https:// of http://</span></label>
+<textarea id="domains" spellcheck="false"></textarea>
+
+<p><button id="save" type="button">Opslaan (save)</button></p>
+<div id="note" role="status"></div>
+<script src="options.js"></script>
+</body>
+</html>

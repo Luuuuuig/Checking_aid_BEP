@@ -6,7 +6,8 @@ and the clock of the machine. The page is served on 127.0.0.1 only. --share open
 only: it is refused, with exit status 2 and the reason of refuse_share, when the settings hold company values, because the
 company's data are for internal use only. A settings file that is missing or not valid ends the command with exit status 2 and a
 message that names the file and the fields, never a value. The Colab notebook asks refuse_share as well before it opens its link;
-refuse_share imports without gradio, which build_app imports when it builds the page.
+refuse_share imports without gradio, which build_app imports when it builds the page. The page's settings tab writes into the
+settings file of the command; on a page opened with --share it offers nothing.
 """
 import argparse
 import os
@@ -29,11 +30,11 @@ MADE_UP_DOMAINS = ("example.com", "example.org")   # the domains of the made-up 
 
 def company_values(settings: Settings) -> list[str]:
     """What in the settings marks them as the company's, by the names of the settings and never their values; [] for settings of
-    the made-up set. A company value is: exact_base_url, authorization_limit, smtp_host or smtp_user set; exact_endpoints or
-    exact_fields not empty; an address of supplier_emails, or buyer_email, aid_email or approver_email, outside example.com and
-    example.org (a domain under them counts as theirs). The folders are no mark: the made-up set may be kept anywhere (in Colab,
-    in Drive)."""
-    found = [f"{name} is set" for name in ("exact_base_url", "authorization_limit", "smtp_host", "smtp_user")
+    the made-up set. A company value is: exact_base_url, authorization_limit, smtp_host or smtp_user set; ms_tenant_id or
+    mail_folder set, since the cases may then come from the work mailbox; exact_endpoints or exact_fields not empty; an address of
+    supplier_emails, or buyer_email, aid_email or approver_email, outside example.com and example.org (a domain under them counts
+    as theirs). The folders are no mark: the made-up set may be kept anywhere (in Colab, in Drive)."""
+    found = [f"{name} is set" for name in ("exact_base_url", "authorization_limit", "smtp_host", "smtp_user", "ms_tenant_id", "mail_folder")
              if getattr(settings, name) is not None]
     found += [f"{name} is not empty" for name in ("exact_endpoints", "exact_fields") if getattr(settings, name)]
     if not all(_made_up(address) for address in settings.supplier_emails.values()):
@@ -88,7 +89,7 @@ def main(argv: list[str] | None = None) -> int:
     deps = Deps(settings=settings, store=PoStore(settings.po_store_root, settings.authorization_limit), reader=read_with_parser,
                 decider=NoDecider(), writer=PreparedWriter(cases / "prepared"), mailer=FileMailer(cases / "outbox", sender=settings.aid_email),
                 clock=datetime.now)
-    build_app(deps).launch(server_name="127.0.0.1", share=args.share)
+    build_app(deps, settings_file=args.settings, share=args.share).launch(server_name="127.0.0.1", share=args.share)
     return 0
 
 

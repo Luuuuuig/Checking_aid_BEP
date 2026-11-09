@@ -17,14 +17,16 @@ and needs no AI; the two scans then fail, which is expected, because they need t
 recorded replays the recorded LLM answers of the test fixtures instead, so every document is read, still without any call.
 --reader anthropic reads with the LLM reader over the Anthropic client, the development client of the plan: it needs the key in the
 environment variable ANTHROPIC_API_KEY, calls the service for every document and the decider, and is for the made-up documents of
-this demo only; company documents go to the Microsoft client of Task 7b and to no other service.
+this demo only; company documents go to Microsoft 365 Copilot (aid/readers/copilot_client.py) and to no other service.
 
 --prepare-only writes the folder and files the purchase orders but runs no case: the folder to watch the runner loop work by
 itself, because a document a folder has seen once counts as a duplicate afterwards and opens no second case.
 
 After the run: python3 -m aid.review --settings <out>/settings.json opens the review page on 127.0.0.1:7860, and
 python3 -m aid.runner --settings <out>/settings.json --poll-seconds 5 --max-passes 3 runs the loop over <out>/inbox. Nothing is
-sent and nothing is written to any system: the writer prepares changes and the mailer writes files.
+sent and nothing is written to any system: the writer prepares changes and the mailer writes files. The settings hold a made-up
+capture token, so python3 -m aid.capture_server --settings <out>/settings.json --testshop serves the pre-check in the browser with
+the made-up cart pages as a test shop (aid/extension/README.md).
 """
 from __future__ import annotations
 
@@ -50,6 +52,9 @@ SPEC_DIR = PACKAGE / "madeup" / "spec"
 RECORDED_DIR = PACKAGE / "tests" / "fixtures" / "recorded"
 EXAMPLE_SETTINGS = PACKAGE / "settings.example.json"
 LEAD_TIME_DAYS = 10                                  # the lead time given to every made-up supplier
+DEMO_TOKEN = "made-up-token-for-the-test-shop"    # the capture token of the demo settings, made up; the extension's options hold it too
+TESTSHOP_PAGE = "http://127.0.0.1:7870/testshop/CART02.html"     # the made-up cart page CART02 in the capture server's test shop
+EXTENSION_README = "aid/extension/README.md"
 ANTHROPIC_KEY = "ANTHROPIC_API_KEY"                  # the environment variable the Anthropic SDK reads; never written to a file
 
 
@@ -104,6 +109,7 @@ def write_settings(out: Path) -> Path:
     data = json.loads(EXAMPLE_SETTINGS.read_text(encoding="utf-8"))
     data.update({"reader": "parser", "cases_root": "cases", "po_store_root": "po_store", "watched_folder": "inbox",
                  "first_cases_review": 0,             # every made-up supplier has one case: the new-supplier rule would send all to review
+                 "capture_token": DEMO_TOKEN,         # made up, for the test shop of the capture server; a real token stays out of files
                  "supplier_lead_times": {spec.po.supplier: LEAD_TIME_DAYS for spec in load_specs(SPEC_DIR)}})
     path = out / "settings.json"
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
@@ -124,6 +130,12 @@ def write_cases(out: Path) -> Path:
     return path
 
 
+def capture_text(out: Path) -> list[str]:
+    """How to try the pre-check in the browser on the demo folder: the capture server with its test shop and the extension."""
+    return [f"Pre-check in the browser: python3 -m aid.capture_server --settings {out / 'settings.json'} --testshop  then load the "
+            f"extension as {EXTENSION_README} describes (token {DEMO_TOKEN}) and open {TESTSHOP_PAGE}"]
+
+
 def prepared_text(out: Path) -> str:
     """What a prepared folder holds and how to see the aid work by itself on it."""
     return "\n".join([f"Demo folder prepared, no case run: {out}",
@@ -132,7 +144,7 @@ def prepared_text(out: Path) -> str:
                        f"Then copy a made-up confirmation from {MADEUP_OUT} (for example MU03_conf.pdf) into {out / 'inbox'}: the loop opens the "
                        "case by itself, runs it and writes the digest to cases/digests/ when it is due "
                        "(set \"digest\": \"per_case\" in settings.json to get one after every pass with a case).",
-                       f"Stop the loop by creating the file {out / 'STOP'}."])
+                       f"Stop the loop by creating the file {out / 'STOP'}.", *capture_text(out)])
 
 
 def summary_text(out: Path, reader: str) -> str:
@@ -150,7 +162,8 @@ def summary_text(out: Path, reader: str) -> str:
               "cases/<case>/audit.json, cases/prepared/prepared_changes.csv",
               f"Review page (Dutch, with an English switch): python3 -m aid.review --settings {out / 'settings.json'}  then open http://127.0.0.1:7860",
               f"Runner loop: copy a made-up confirmation from {MADEUP_OUT} into {out / 'inbox'}, then "
-              f"python3 -m aid.runner --settings {out / 'settings.json'} --poll-seconds 5 --max-passes 3  (the digest lands in cases/digests/)"]
+              f"python3 -m aid.runner --settings {out / 'settings.json'} --poll-seconds 5 --max-passes 3  (the digest lands in cases/digests/)",
+              *capture_text(out)]
     return "\n".join(lines)
 
 

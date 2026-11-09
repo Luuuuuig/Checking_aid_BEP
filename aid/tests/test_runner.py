@@ -4,17 +4,22 @@ import shutil
 from datetime import datetime
 
 import pytest
+import requests
 
 import aid.runner
 from aid.case import open_case
-from aid.decider import NoDecider
+from aid.connections.microsoft import MicrosoftAccount
+from aid.connections.secrets import SecretStore
+from aid.decider import LlmDecider, NoDecider
 from aid.execution.exact_api import ExactApiWriter
 from aid.execution.writer import PreparedWriter, RetryingWriter, WriterError
 from aid.messaging import FileMailer, MailerError, SmtpMailer
 from aid.pipeline import read_with_parser, record_dispositions, run_case
+from aid.readers.copilot_client import CopilotClient
 from aid.runner import build_deps, main, run_loop
 from aid.settings import load_settings
 from aid.tests.conftest import SETTINGS, deps
+from aid.tests.fakes import ACCESS_TOKEN, CLIENT_ID, COPILOT, TENANT_ID, USERNAME, FakeApp, FakeResponse, copilot_session
 
 
 def test_run_loop_handles_the_inbox_and_obeys_the_stop_file(tmp_path, madeup_out):
@@ -166,7 +171,8 @@ def test_dot_files_and_folders_are_ignored(tmp_path, madeup_out):
     assert not (cases / "runner.log").exists()
 
 
-@pytest.mark.parametrize("content", ['{"last_sent": nu', '{"last_sent": null, "reported": []}', '[]'])
+@pytest.mark.parametrize("content", ['{"last_sent": nu', '{"last_sent": null, "reported": []}', '[]',
+                                     '{"last_sent": null, "reported": [], "skipped": [], "copilot": {"since": "2026-11-12T08:00:00", "error": "x"}}'])
 def test_a_state_file_that_cannot_be_used_starts_a_fresh_state(tmp_path, madeup_out, content):
     d = loop_deps(tmp_path, madeup_out)
     d.settings.cases_root.mkdir(parents=True); (d.settings.cases_root / "digest_state.json").write_text(content, encoding="utf-8")
@@ -284,12 +290,15 @@ def test_build_deps_without_the_mailbox_password_files_the_messages(tmp_path):
     assert isinstance(build_deps(settings, {}).mailer, FileMailer)
 
 
-def test_the_llm_reader_is_refused_until_the_microsoft_client_exists(tmp_path, capsys):
-    settings, path = settings_file(tmp_path, reader="llm")
-    with pytest.raises(ValueError, match="Task 7b"):
-        build_deps(settings, {})
+@pytest.mark.parametrize("ids", [{}, {"ms_tenant_id": TENANT_ID}, {"ms_client_id": CLIENT_ID}])
+def test_the_llm_reader_is_refused_without_the_tenant_and_the_client(tmp_path, capsys, ids):
+    settings, path = settings_file(tmp_path, reader="llm", **ids)
+    refusal = ("reader 'llm' needs the Copilot sign-in: fill the tenant and the client on the Settings tab and sign in for Copilot")
+    with pytest.raises(ValueError) as raised:
+        build_deps(settings, {}, account=copilot_account(tmp_path))
+    assert str(raised.value) == refusal
     assert main(["--settings", str(path), "--max-passes", "1", "--poll-seconds", "0"]) == 2
-    assert "Task 7b" in capsys.readouterr().err
+    assert capsys.readouterr().err.splitlines()[-1] == f"aid.runner: {refusal}"
     assert not (tmp_path / "inbox").exists()
 
 
@@ -437,3 +446,431 @@ def test_a_reply_to_a_cut_off_case_is_filed_and_the_case_finished_in_review(tmp_
     assert (case.root / "messages" / "replies" / "antwoord.eml").exists()
     finished = case.read_step("result")
     assert finished["status"] == "review" and [i["reason"] for i in finished["review_items"]] == ["run cut off after writes: check the write log"]
+
+
+# --- the AI service: Microsoft 365 Copilot (Task 27) ---
+
+def copilot_account(tmp_path, app: FakeApp | None = None) -> MicrosoftAccount:
+    """The account of the fake sign-in, signed in unless another application is given."""
+    return MicrosoftAccount(TENANT_ID, CLIENT_ID, SecretStore(tmp_path / "secrets"), app=app or FakeApp(accounts=[USERNAME]))
+
+
+def copilot_deps(tmp_path, madeup_out, session, app: FakeApp | None = None, waits: list | None = None, clock=None):
+    """loop_deps with the reader and the decider that build_deps makes for reader "llm" over the fake sign-in and the session; the
+    client's waits for a Retry-After are noted in `waits` instead of waited."""
+    d = loop_deps(tmp_path, madeup_out, clock=clock)
+    (tmp_path / "settings").mkdir(exist_ok=True)
+    settings, _ = settings_file(tmp_path / "settings", reader="llm", ms_tenant_id=TENANT_ID, ms_client_id=CLIENT_ID)
+    built = build_deps(settings, {}, account=copilot_account(tmp_path, app), session=session)
+    built.decider.client.sleep = (waits if waits is not None else []).append
+    return d.model_copy(update={"reader": built.reader, "decider": built.decider})
+
+
+class Unreachable(FakeApp):
+    """A sign-in whose renewal of the token cannot reach Microsoft, as msal raises it when no cached token is left."""
+
+    def acquire_token_silent_with_error(self, scopes, account, **kwargs):
+        self.calls.append(("acquire_token_silent_with_error", list(scopes), {}))
+        if self.offline:
+            raise requests.ConnectionError("made-up detail: login.microsoftonline.com unreachable")
+        return super().acquire_token_silent_with_error(scopes, account, **kwargs)
+
+    offline = True
+
+
+def test_reader_llm_builds_the_copilot_reader_and_decider_over_the_sign_in_of_the_settings(tmp_path, madeup_out):
+    from aid.tests.helpers import answer_from_spec
+    (tmp_path / "settings").mkdir()
+    settings, _ = settings_file(tmp_path / "settings", reader="llm", ms_tenant_id=TENANT_ID, ms_client_id=CLIENT_ID)
+    signed, session = copilot_account(tmp_path), copilot_session(answer_from_spec("MU01"))
+    d = build_deps(settings, {}, account=signed, session=session)
+    assert isinstance(d.decider, LlmDecider) and isinstance(d.decider.client, CopilotClient)
+    copilot = d.decider.client
+    assert (copilot.account, copilot.session, copilot.time_zone, d.decider.name) == (signed, session, "Europe/Amsterdam", "model:microsoft-365-copilot")
+    cart = d.reader(madeup_out / "CART01.html", "cart")                     # the cart reader, which needs no model
+    assert cart.reader == "cart_html" and session.calls == []
+    doc, response = d.reader(madeup_out / "MU01_conf.pdf", "confirmation")
+    assert doc.reader == "llm:microsoft-365-copilot:v1" and response.request_id == "made-up-conversation-0001"
+    assert [call["url"] for call in session.calls] == [COPILOT, f"{COPILOT}/made-up-conversation-0001/chat"]
+    assert isinstance(build_deps(settings.model_copy(update={"reader": "parser"}), {}, account=signed).decider, NoDecider)
+
+
+def test_the_reader_and_the_decider_share_one_copilot_client(tmp_path, madeup_out):
+    """A retry of the reader waits through the decider's client, so the two are one client."""
+    from aid.tests.helpers import answer_from_spec
+    (tmp_path / "settings").mkdir()
+    settings, _ = settings_file(tmp_path / "settings", reader="llm", ms_tenant_id=TENANT_ID, ms_client_id=CLIENT_ID)
+    session = copilot_session(FakeResponse(503, headers={"Retry-After": "3"}), answer_from_spec("MU01"))
+    d, waits = build_deps(settings, {}, account=copilot_account(tmp_path), session=session), []
+    d.decider.client.sleep = waits.append
+    doc, _ = d.reader(madeup_out / "MU01_conf.pdf", "confirmation")
+    assert waits == [3] and len(doc.lines) == 3
+
+
+def test_reader_llm_makes_the_account_of_the_settings_with_the_store_of_the_pc(tmp_path, monkeypatch):
+    (tmp_path / "settings").mkdir()
+    settings, _ = settings_file(tmp_path / "settings", reader="llm", ms_tenant_id=TENANT_ID, ms_client_id=CLIENT_ID)
+    monkeypatch.setattr(aid.runner, "default_secrets_dir", lambda: tmp_path / "store")
+    d = build_deps(settings, {})
+    made = d.decider.client.account
+    assert (made.tenant_id, made.client_id, made.store.directory) == (TENANT_ID, CLIENT_ID, (tmp_path / "store").resolve())
+
+
+def test_a_copilot_error_during_a_case_leaves_it_without_a_result_for_the_next_pass(tmp_path, madeup_out):
+    """Copilot answers 503 twice in the first pass: the case keeps no result and no audit record, one line in runner.log names the
+    error and never the token, and the next pass reads the case through Copilot."""
+    from aid.tests.helpers import answer_from_spec
+    busy = FakeResponse(503, headers={"Retry-After": "1"})
+    session = copilot_session(answer_from_spec("MU01"), created=[busy, busy, FakeResponse(201, json_data={"id": "made-up-conversation-0001"})])
+    d = copilot_deps(tmp_path, madeup_out, session)
+    case = opened(d, madeup_out, "MU01", "250101")
+    assert run_loop(d, tmp_path / "STOP", poll_seconds=0, max_passes=1) == 1
+    root = d.settings.cases_root
+    assert not (case.root / "steps" / "08_result.json").exists() and not (case.root / "audit.json").exists()
+    assert not (case.root / "dispositions.csv").exists()
+    [line] = (root / "runner.log").read_text(encoding="utf-8").splitlines()
+    assert line.endswith(f"{case.case_id}: CopilotError: Copilot refused: 503 no code") and ACCESS_TOKEN not in line
+    assert json.loads((root / "digest_state.json").read_text(encoding="utf-8"))["reported"] == []
+    assert run_loop(d, tmp_path / "STOP", poll_seconds=0, max_passes=1) == 1
+    result = case.read_step("result")
+    assert result["status"] != "failed" and (case.root / "dispositions.csv").exists()
+    audit = json.loads((case.root / "audit.json").read_text(encoding="utf-8"))
+    assert [(call["kind"], call["model"], call["request_id"]) for call in audit["calls"]] == [
+        ("reader", "microsoft-365-copilot", "made-up-conversation-0001")]
+    assert {model["role"]: model["name"] for model in audit["model"]} == {"reader": "microsoft-365-copilot", "decider": "microsoft-365-copilot"}
+    assert ACCESS_TOKEN not in (root / "runner.log").read_text(encoding="utf-8") + (case.root / "audit.json").read_text(encoding="utf-8")
+
+
+def test_a_network_failure_while_the_token_is_renewed_leaves_the_case_for_the_next_pass(tmp_path, madeup_out):
+    """The PC wakes before its network: the renewal of the token cannot reach Microsoft. The case keeps no result, and the next pass,
+    with the network back, reads it through Copilot."""
+    from aid.tests.helpers import answer_from_spec
+    app, session = Unreachable(accounts=[USERNAME]), copilot_session(answer_from_spec("MU01"))
+    d = copilot_deps(tmp_path, madeup_out, session, app=app)
+    case = opened(d, madeup_out, "MU01", "250101")
+    assert run_loop(d, tmp_path / "STOP", poll_seconds=0, max_passes=1) == 1
+    assert not (case.root / "steps" / "08_result.json").exists() and session.calls == []
+    [line] = (d.settings.cases_root / "runner.log").read_text(encoding="utf-8").splitlines()
+    assert line.endswith(f"{case.case_id}: CopilotError: Copilot could not be reached: ConnectionError")
+    assert "login.microsoftonline.com" not in line
+    app.offline = False
+    run_loop(d, tmp_path / "STOP", poll_seconds=0, max_passes=1)
+    assert case.read_step("result")["status"] != "failed" and len(session.calls) == 2
+
+
+def test_after_a_service_failure_the_other_cases_of_the_pass_wait_for_the_next_pass(tmp_path, madeup_out):
+    """Copilot asks the aid to wait (429) on every request: the first case asks twice, as the client does, and the three others of
+    the pass are not sent at all. One line in runner.log; the next pass, with Copilot back, reads all four."""
+    from aid.tests.helpers import answer_from_spec
+    busy = FakeResponse(429, headers={"Retry-After": "30"})
+    session, waits = copilot_session(answer_from_spec("MU01"), created=[busy, busy, FakeResponse(201, json_data={"id": "made-up-conversation-0001"})]), []
+    d = copilot_deps(tmp_path, madeup_out, session, waits=waits)
+    cases = [opened(d, madeup_out, name, f"25010{n}") for n, name in enumerate(("MU01", "MU02", "MU03", "MU04"), 1)]
+    run_loop(d, tmp_path / "STOP", poll_seconds=0, max_passes=1)
+    assert [call["url"] for call in session.calls] == [COPILOT, COPILOT] and waits == [30]
+    assert not any((case.root / "steps" / "08_result.json").exists() for case in cases)
+    [line] = (d.settings.cases_root / "runner.log").read_text(encoding="utf-8").splitlines()
+    assert line.endswith(f"{cases[0].case_id}: CopilotError: Copilot refused: 429 no code")
+    state = json.loads((d.settings.cases_root / "digest_state.json").read_text(encoding="utf-8"))
+    assert {key: state["copilot"][key] for key in ("error", "waiting")} == {"error": "Copilot refused: 429 no code", "waiting": 4}
+    run_loop(d, tmp_path / "STOP", poll_seconds=0, max_passes=1)
+    assert all((case.root / "steps" / "08_result.json").exists() for case in cases)
+    assert "copilot" not in json.loads((d.settings.cases_root / "digest_state.json").read_text(encoding="utf-8"))
+
+
+def test_a_conversation_copilot_ends_for_one_case_does_not_hold_back_the_others(tmp_path, madeup_out):
+    """Copilot ends the conversation of the first case (its own refusal of that document): that case keeps no result, and the pass
+    goes on with the next case, which is read."""
+    from aid.tests.fakes import copilot_answer, sent_text
+    from aid.tests.helpers import answer_from_spec
+    ended = lambda request: copilot_answer("Sorry, I can't chat about this.", sent_text(request), state="disengagedForRai")  # noqa: E731
+    session = copilot_session(ended, answer_from_spec("MU02"))
+    d = copilot_deps(tmp_path, madeup_out, session)
+    first, second = opened(d, madeup_out, "MU01", "250101"), opened(d, madeup_out, "MU02", "250102")
+    run_loop(d, tmp_path / "STOP", poll_seconds=0, max_passes=1)
+    assert not (first.root / "steps" / "08_result.json").exists() and (second.root / "steps" / "08_result.json").exists()
+    [line] = (d.settings.cases_root / "runner.log").read_text(encoding="utf-8").splitlines()
+    assert line.endswith(f"{first.case_id}: CopilotError: Copilot ended the conversation: disengagedForRai")
+    state = json.loads((d.settings.cases_root / "digest_state.json").read_text(encoding="utf-8"))
+    assert "copilot" not in state and state["copilot_cases"] == {first.case_id: {"refused": 1, "failed": 0, "read_after": True}}
+
+
+def test_the_digest_names_copilot_and_the_cases_that_wait_for_it(tmp_path, madeup_out):
+    session = copilot_session(created=FakeResponse(403, json_data={"error": {"code": "Forbidden", "message": "made-up"}}))
+    d = copilot_deps(tmp_path, madeup_out, session, clock=AFTER_DIGEST_TIME)
+    opened(d, madeup_out, "MU01", "250101"), opened(d, madeup_out, "MU02", "250102")
+    run_loop(d, tmp_path / "STOP", poll_seconds=0, max_passes=1)
+    text = (d.settings.cases_root / "digests" / "2026-11-12.txt").read_text(encoding="utf-8")
+    assert "Copilot werkt niet (Copilot refused: 403 Forbidden): 2 zaken wachten erop" in text and "made-up" not in text
+    assert "Copilot werkt niet" in (d.settings.cases_root / "digests" / "2026-11-12.html").read_text(encoding="utf-8")
+
+
+def failing_for(po_number: str, answer: str):
+    """A chat that answers 500 for the document of the PO and the answer for any other document."""
+    from aid.tests.fakes import copilot_answer, sent_text
+
+    def chat(request):
+        if any(po_number in entry["text"] for entry in json.loads(request["data"]).get("additionalContext", [])):
+            return FakeResponse(500)
+        return copilot_answer(answer, sent_text(request))
+    return chat
+
+
+def test_a_case_that_keeps_failing_goes_last_and_is_finished_as_failed_after_its_third_failure(tmp_path, madeup_out):
+    """MU01's chat always answers 500. Pass 1 asks MU01 first: the failure stops the pass. Pass 2 asks MU01 last, so MU02 is read
+    first; MU01 fails a second time. Pass 3 fails MU01 a third time, after Copilot read another case: it is finished as failed."""
+    from aid.tests.helpers import answer_from_spec
+    session = copilot_session(failing_for("250101", answer_from_spec("MU02")))
+    d = copilot_deps(tmp_path, madeup_out, session)
+    first, second = opened(d, madeup_out, "MU01", "250101"), opened(d, madeup_out, "MU02", "250102")
+    chats = lambda: [c for c in session.calls if c["url"].endswith("/chat")]  # noqa: E731
+    run_loop(d, tmp_path / "STOP", poll_seconds=0, max_passes=1)
+    assert len(chats()) == 1 and not (second.root / "steps" / "08_result.json").exists()
+    run_loop(d, tmp_path / "STOP", poll_seconds=0, max_passes=1)
+    assert "250102" in chats()[1]["data"].decode() and second.read_step("result")["status"] != "failed"
+    assert not (first.root / "steps" / "08_result.json").exists()
+    run_loop(d, tmp_path / "STOP", poll_seconds=0, max_passes=1)
+    result = first.read_step("result")
+    assert result["status"] == "failed" and result["error"] == "ReaderError: Copilot could not read this document: Copilot refused: 500 no code"
+    assert len(chats()) == 4 and (first.root / "dispositions.csv").exists()
+    state = json.loads((d.settings.cases_root / "digest_state.json").read_text(encoding="utf-8"))
+    assert first.case_id in state["reported"] and "copilot_cases" not in state and "copilot" not in state
+    assert "finished as failed" in (d.settings.cases_root / "runner.log").read_text(encoding="utf-8")
+
+
+def test_a_document_copilot_refuses_three_times_is_finished_as_failed(tmp_path, madeup_out):
+    from aid.tests.fakes import copilot_answer, sent_text
+    ended = lambda request: copilot_answer("Sorry.", sent_text(request), state="disengagedForRai")  # noqa: E731
+    d = copilot_deps(tmp_path, madeup_out, copilot_session(ended))
+    case = opened(d, madeup_out, "MU01", "250101")
+    run_loop(d, tmp_path / "STOP", poll_seconds=0, max_passes=2)
+    assert not (case.root / "steps" / "08_result.json").exists()
+    run_loop(d, tmp_path / "STOP", poll_seconds=0, max_passes=1)
+    assert case.read_step("result")["error"] == "ReaderError: Copilot could not read this document: Copilot ended the conversation: disengagedForRai"
+
+
+def test_an_outage_never_finishes_a_case(tmp_path, madeup_out):
+    """Copilot refuses every request (403) for five passes: nothing is read, so no failure counts toward the cap; the two cases take
+    turns at being asked first."""
+    session = copilot_session(created=FakeResponse(403, json_data={"error": {"code": "Forbidden"}}))
+    d = copilot_deps(tmp_path, madeup_out, session)
+    cases = [opened(d, madeup_out, "MU01", "250101"), opened(d, madeup_out, "MU02", "250102")]
+    run_loop(d, tmp_path / "STOP", poll_seconds=0, max_passes=5)
+    assert not any((case.root / "steps" / "08_result.json").exists() for case in cases) and len(session.calls) == 5
+    state = json.loads((d.settings.cases_root / "digest_state.json").read_text(encoding="utf-8"))
+    assert state["copilot"]["waiting"] == 2 and all(not record["read_after"] for record in state["copilot_cases"].values())
+
+
+def test_a_400_on_the_create_call_stops_the_pass(tmp_path, madeup_out):
+    session = copilot_session(created=FakeResponse(400, json_data={"error": {"code": "BadRequest"}}))
+    d = copilot_deps(tmp_path, madeup_out, session)
+    for n, name in enumerate(("MU01", "MU02", "MU03"), 1):
+        opened(d, madeup_out, name, f"25010{n}")
+    run_loop(d, tmp_path / "STOP", poll_seconds=0, max_passes=2)
+    assert len(session.calls) == 2 and len((d.settings.cases_root / "runner.log").read_text(encoding="utf-8").splitlines()) == 2
+
+
+def test_a_refused_document_is_a_line_of_its_own_and_not_copilot_down(tmp_path, madeup_out):
+    """MU01's conversation is ended and MU02 is read in the same pass: the digest names the document Copilot could not read, and
+    does not say that Copilot does not work."""
+    from aid.tests.fakes import copilot_answer, sent_text
+    from aid.tests.helpers import answer_from_spec
+    ended = lambda request: copilot_answer("Sorry.", sent_text(request), state="disengagedForRai")  # noqa: E731
+    d = copilot_deps(tmp_path, madeup_out, copilot_session(ended, answer_from_spec("MU02")), clock=AFTER_DIGEST_TIME)
+    opened(d, madeup_out, "MU01", "250101"), opened(d, madeup_out, "MU02", "250102")
+    run_loop(d, tmp_path / "STOP", poll_seconds=0, max_passes=1)
+    text = (d.settings.cases_root / "digests" / "2026-11-12.txt").read_text(encoding="utf-8")
+    assert "Copilot kon 1 document niet lezen; nieuwe poging bij de volgende ronde" in text and "Copilot werkt niet" not in text
+
+
+def per_case_copilot(tmp_path, madeup_out, session, now: list, app: FakeApp | None = None):
+    """copilot_deps in the per-case mode, with a clock that the test moves on and a file mailer: (the Deps, the mailer's folder)."""
+    out = tmp_path / "prepared"
+    d = copilot_deps(tmp_path, madeup_out, session, app=app)
+    return d.model_copy(update={"settings": d.settings.model_copy(update={"digest": "per_case"}), "clock": lambda: now[0],
+                                "mailer": FileMailer(out, clock=lambda: now[0])}), out
+
+
+def test_in_the_per_case_mode_a_failing_copilot_makes_one_digest_until_it_works_again(tmp_path, madeup_out):
+    from datetime import timedelta
+    from aid.tests.helpers import answer_from_spec
+    down = FakeResponse(403, json_data={"error": {"code": "Forbidden"}})
+    up = FakeResponse(201, json_data={"id": "made-up-conversation-0001", "state": "active"})
+    session = copilot_session(answer_from_spec("MU01"), created=[down, down, down, up, down])
+    now = [datetime(2026, 11, 12, 9, 0)]
+    d, out = per_case_copilot(tmp_path, madeup_out, session, now)
+    opened(d, madeup_out, "MU01", "250101")
+    for _ in range(3):                                                       # three passes, one minute apart: one digest names it
+        run_loop(d, tmp_path / "STOP", poll_seconds=0, max_passes=1)
+        now[0] += timedelta(minutes=1)
+    assert len(digests_in(out)) == 1 and "Copilot werkt niet" in digests_in(out)[0].read_text(encoding="utf-8")
+    run_loop(d, tmp_path / "STOP", poll_seconds=0, max_passes=1)            # Copilot reads the case: the line goes
+    now[0] += timedelta(minutes=1)
+    state = json.loads((d.settings.cases_root / "digest_state.json").read_text(encoding="utf-8"))
+    assert "copilot" not in state
+    opened(d, madeup_out, "MU02", "250102")
+    run_loop(d, tmp_path / "STOP", poll_seconds=0, max_passes=1)            # it fails again: one more digest names it
+    named = [path for path in digests_in(out) if "Copilot werkt niet" in path.read_text(encoding="utf-8")]
+    assert len(named) == 2
+
+
+def test_in_the_per_case_mode_a_lapse_after_a_refused_document_makes_its_digest(tmp_path, madeup_out):
+    from datetime import timedelta
+    from aid.tests.fakes import copilot_answer, sent_text
+    ended = lambda request: copilot_answer("Sorry.", sent_text(request), state="disengagedForRai")  # noqa: E731
+    app = FakeApp(accounts=[USERNAME])
+    now = [datetime(2026, 11, 12, 9, 0)]
+    d, out = per_case_copilot(tmp_path, madeup_out, copilot_session(ended), now, app=app)
+    opened(d, madeup_out, "MU01", "250101")
+    run_loop(d, tmp_path / "STOP", poll_seconds=0, max_passes=1)
+    now[0] += timedelta(minutes=1)
+    app.silent = None                                                        # the sign-in lapses
+    opened(d, madeup_out, "MU02", "250102")
+    run_loop(d, tmp_path / "STOP", poll_seconds=0, max_passes=1)
+    assert any("Copilot werkt niet (the Microsoft sign-in has lapsed" in path.read_text(encoding="utf-8") for path in digests_in(out))
+
+
+def test_a_state_file_that_cannot_be_written_never_stops_the_runner(tmp_path, madeup_out, monkeypatch):
+    """While Copilot fails, the runner notes it in the state; a state file that cannot be written is logged once and the loop goes on."""
+    write = aid.runner._write_json
+
+    def refused(path, data):
+        if path.name == "digest_state.json":
+            raise PermissionError("made-up: the file is held by another process")
+        write(path, data)
+    monkeypatch.setattr(aid.runner, "_write_json", refused)
+    session = copilot_session(created=FakeResponse(403, json_data={"error": {"code": "Forbidden"}}))
+    d = copilot_deps(tmp_path, madeup_out, session)
+    opened(d, madeup_out, "MU01", "250101")
+    assert run_loop(d, tmp_path / "STOP", poll_seconds=0, max_passes=3) == 3
+    log = (d.settings.cases_root / "runner.log").read_text(encoding="utf-8").splitlines()
+    assert len([line for line in log if "digest_state.json: PermissionError" in line]) == 1
+
+
+def test_a_lapsed_sign_in_during_a_case_leaves_it_without_a_result_and_is_logged_once(tmp_path, madeup_out):
+    session = copilot_session("{}")
+    d = copilot_deps(tmp_path, madeup_out, session, app=FakeApp())                # nobody is signed in
+    case = opened(d, madeup_out, "MU01", "250101")
+    assert run_loop(d, tmp_path / "STOP", poll_seconds=0, max_passes=3) == 3
+    assert not (case.root / "steps" / "08_result.json").exists() and session.calls == []
+    [line] = (d.settings.cases_root / "runner.log").read_text(encoding="utf-8").splitlines()
+    assert f"{case.case_id}: SignInNeeded: no Microsoft account is signed in" in line
+
+
+def test_a_copilot_error_of_the_decider_during_a_case_leaves_it_without_a_result(tmp_path, madeup_out):
+    """MU03's PO has two versions. The reader gives a reading that quotes no version, has no date and whose lines match neither
+    version, so that the decider is asked which version it answers: Copilot refuses, and the case keeps no result."""
+    from aid.schema import DocValue
+    from aid.tests.helpers import document_from_spec
+    session = copilot_session(FakeResponse(503), FakeResponse(503))
+    d = copilot_deps(tmp_path, madeup_out, session)
+    doc = document_from_spec("MU03")
+    doc = doc.model_copy(update={"version_hint": DocValue(), "document_date": DocValue(),
+                                 "lines": [line.model_copy(update={"item_code": DocValue(value="XX-0000", text="XX-0000")}) for line in doc.lines]})
+    d = d.model_copy(update={"reader": lambda path, kind: doc})
+    case = opened(d, madeup_out, "MU03", "250103")
+    run_loop(d, tmp_path / "STOP", poll_seconds=0, max_passes=1)
+    assert not (case.root / "steps" / "08_result.json").exists() and (case.root / "steps" / "02_read_document.json").exists()
+    [line] = (d.settings.cases_root / "runner.log").read_text(encoding="utf-8").splitlines()
+    assert line.endswith(f"{case.case_id}: CopilotError: Copilot refused: 503 no code")
+    assert [call["url"] for call in session.calls] == [COPILOT] + [f"{COPILOT}/made-up-conversation-0001/chat"] * 2
+
+
+def test_a_copilot_error_while_the_scan_classifies_leaves_the_file_in_the_inbox(tmp_path, madeup_out):
+    """The decider of the scan is the Copilot decider as well: a scan that Copilot cannot class now stays in the inbox, as any file
+    that raised does, and is tried again at the next pass, logged once."""
+    session = copilot_session(created=FakeResponse(403, json_data={"error": {"code": "Forbidden", "message": "made-up"}}))
+    d = copilot_deps(tmp_path, madeup_out, session)
+    shutil.copy(madeup_out / "MU05_conf.pdf", d.settings.watched_folder)
+    run_loop(d, tmp_path / "STOP", poll_seconds=0, max_passes=2)
+    assert (d.settings.watched_folder / "MU05_conf.pdf").exists() and [call["url"] for call in session.calls] == [COPILOT, COPILOT]
+    assert len((d.settings.cases_root / "runner.log").read_text(encoding="utf-8").splitlines()) == 1
+    state = json.loads((d.settings.cases_root / "digest_state.json").read_text(encoding="utf-8"))
+    assert state["skipped"] == [["MU05_conf.pdf", "error: Copilot refused: 403 Forbidden"]]
+
+
+# --- the third review round ---
+
+class LapsesAfter(FakeApp):
+    """A sign-in whose renewal Microsoft refuses (invalid_grant) from the `after`-th silent request on."""
+    after = 10 ** 6
+
+    def acquire_token_silent_with_error(self, scopes, account, **kwargs):
+        self.calls.append(("acquire_token_silent_with_error", list(scopes), {}))
+        asked = len([call for call in self.calls if call[0] == "acquire_token_silent_with_error"])
+        return {"error": "invalid_grant"} if asked >= self.after else {"access_token": ACCESS_TOKEN, "token_type": "Bearer"}
+
+
+def test_a_lapse_after_another_case_was_read_stops_the_pass_and_never_counts_toward_the_cap(tmp_path, madeup_out):
+    """MU01's chat answers 504 in pass 1 (its chat failed once). Pass 2 reads MU02, then the sign-in lapses before MU01's turn, and
+    stays lapsed in pass 3: MU01 is not finished, its failures stay one, and the digest's note says Copilot does not work."""
+    from aid.tests.fakes import copilot_answer, sent_text
+    from aid.tests.helpers import answer_from_spec
+    flaky = {"left": 1}
+
+    def chat(request):
+        texts = " ".join(entry["text"] for entry in json.loads(request["data"]).get("additionalContext", []))
+        if "250101" in texts and flaky["left"]:
+            return FakeResponse(504)
+        return copilot_answer(answer_from_spec("MU01" if "250101" in texts else "MU02"), sent_text(request))
+    app, session = LapsesAfter(accounts=[USERNAME]), copilot_session(chat)
+    d = copilot_deps(tmp_path, madeup_out, session, app=app)
+    first, second = opened(d, madeup_out, "MU01", "250101"), opened(d, madeup_out, "MU02", "250102")
+    run_loop(d, tmp_path / "STOP", poll_seconds=0, max_passes=1)
+    flaky["left"] = 0
+    app.after = len([call for call in app.calls if call[0] == "acquire_token_silent_with_error"]) + 2      # MU02's token, then the lapse
+    run_loop(d, tmp_path / "STOP", poll_seconds=0, max_passes=2)
+    state = json.loads((d.settings.cases_root / "digest_state.json").read_text(encoding="utf-8"))
+    assert (second.root / "steps" / "08_result.json").exists() and not (first.root / "steps" / "08_result.json").exists()
+    assert state["copilot_cases"][first.case_id] == {"refused": 0, "failed": 1, "read_after": True}
+    assert state["copilot"]["error"].startswith("the Microsoft sign-in has lapsed (invalid_grant)")
+
+
+def test_a_400_on_create_stops_the_pass_whatever_the_cases_failed_before(tmp_path, madeup_out):
+    """MU01 and MU02 fail their chats (500) until each has two failures after MU03 was read; then the create call is refused with a
+    400: one create call, the pass stops, nothing is finished and nothing counts."""
+    from aid.tests.fakes import copilot_answer, sent_text
+    from aid.tests.helpers import answer_from_spec
+    mode = {"create": None, "poison": {"250101", "250102"}}
+
+    def created(request):
+        return mode["create"] or FakeResponse(201, json_data={"id": "made-up-conversation-0001", "state": "active"})
+
+    def chat(request):
+        texts = " ".join(entry["text"] for entry in json.loads(request["data"]).get("additionalContext", []))
+        name = next(name for name, po in (("MU01", "250101"), ("MU02", "250102"), ("MU03", "250103")) if po in texts)
+        if any(po in texts for po in mode["poison"]):
+            return FakeResponse(500)
+        return copilot_answer(answer_from_spec(name), sent_text(request))
+    session = copilot_session(chat, created=created)
+    d = copilot_deps(tmp_path, madeup_out, session)
+    cases = [opened(d, madeup_out, name, po) for name, po in (("MU01", "250101"), ("MU02", "250102"), ("MU03", "250103"))]
+    run_loop(d, tmp_path / "STOP", poll_seconds=0, max_passes=3)
+    root = d.settings.cases_root
+    before = json.loads((root / "digest_state.json").read_text(encoding="utf-8"))["copilot_cases"]
+    assert [record["failed"] for record in before.values()] == [2, 2] and all(record["read_after"] for record in before.values())
+    mode["create"], mode["poison"] = FakeResponse(400, json_data={"error": {"code": "BadRequest"}}), set()
+    calls = len(session.calls)
+    run_loop(d, tmp_path / "STOP", poll_seconds=0, max_passes=1)
+    state = json.loads((root / "digest_state.json").read_text(encoding="utf-8"))
+    assert [call["url"] for call in session.calls[calls:]] == [COPILOT]
+    assert not (cases[0].root / "steps" / "08_result.json").exists() and not (cases[1].root / "steps" / "08_result.json").exists()
+    assert [record["failed"] for record in state["copilot_cases"].values()] == [2, 2]
+    assert state["copilot"]["error"] == "Copilot refused: 400 BadRequest"
+
+
+def test_a_due_digest_with_a_state_file_that_cannot_be_written_goes_out_once(tmp_path, madeup_out, monkeypatch):
+    """Four passes after the digest time, the state file refused each time: one digest, and one line in the log for the file."""
+    write = aid.runner._write_json
+
+    def refused(path, data):
+        if path.name == "digest_state.json":
+            raise PermissionError("made-up: the file is held by another process")
+        write(path, data)
+    monkeypatch.setattr(aid.runner, "_write_json", refused)
+    out = tmp_path / "prepared"
+    d = loop_deps(tmp_path, madeup_out, clock=AFTER_DIGEST_TIME, mailer=FileMailer(out, sender="aid@example.com", clock=lambda: AFTER_DIGEST_TIME))
+    assert run_loop(d, tmp_path / "STOP", poll_seconds=0, max_passes=4) == 4
+    assert len(digests_in(out)) == 1
+    log = (d.settings.cases_root / "runner.log").read_text(encoding="utf-8").splitlines()
+    assert len(log) == 1 and "digest_state.json: PermissionError" in log[0]

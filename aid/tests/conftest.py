@@ -37,6 +37,36 @@ def run_from_repository_root():
     os.chdir(previous)
 
 
+class ReachedMicrosoft(BaseException):
+    """A test made a real msal application, which asks Microsoft about the tenant. A BaseException, so that no `except Exception`
+    of the code under test can hide it."""
+
+
+@pytest.fixture(autouse=True)
+def no_keyring(monkeypatch, request):
+    """No test reaches the keychain or the libsecret keyring of this PC, its real folder of secrets, or Microsoft. msal-extensions'
+    encrypted persistence is made unavailable, so that a SecretStore made in a test keeps its secrets in a plain owner-only file, as
+    on a system without a keyring (on Windows the store takes DPAPI, which only encrypts the test's own file); default_secrets_dir()
+    gives a folder under the test's tmp_path, wherever the runner and the review page use it; and msal's PublicClientApplication
+    raises ReachedMicrosoft, so that a test that needs one gives its own fake."""
+    import msal
+    import msal_extensions
+
+    def unavailable(location):
+        raise RuntimeError("no keyring in the tests")
+
+    def secrets_dir() -> Path:
+        return request.getfixturevalue("tmp_path") / "default-secrets"
+
+    def no_microsoft(*args, **kwargs):
+        raise ReachedMicrosoft("a test made msal's PublicClientApplication, which asks Microsoft about the tenant")
+
+    monkeypatch.setattr(msal_extensions, "build_encrypted_persistence", unavailable)
+    for module in ("aid.connections.secrets", "aid.runner", "aid.review.page"):
+        monkeypatch.setattr(f"{module}.default_secrets_dir", secrets_dir)
+    monkeypatch.setattr(msal, "PublicClientApplication", no_microsoft)
+
+
 @pytest.fixture(scope="session")
 def madeup_out(tmp_path_factory):
     """The made-up document set (aid/madeup), generated once per test session; returns the folder with the files. deps() files the

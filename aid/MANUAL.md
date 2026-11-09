@@ -1,20 +1,20 @@
 # Using and maintaining the checking aid
 
 The design, the implementation plan and the evaluation protocol are in the thesis repository (Luuuuuig/Bachelor-End-Project, folder `docs/`).
-This manual is written for the state of the code on 5 November 2026 (the thesis repository's work branch at 75207cc); where the code changes, the code is right and this manual must follow. The aid README (`aid/README.md`) has the install and the "Try it out" steps on the made-up set.
+This manual was written for the state of the code at commit 75207cc of the thesis repository's work branch and updated for Task 25 (the pre-check in the browser) on 8 November 2026; where the code changes, the code is right and this manual must follow. The aid README (`aid/README.md`) has the install and the "Try it out" steps on the made-up set.
 
 ## 1. What the aid does
 
 The checking aid is a Python program that checks orders for the buyer, Arno. It does two checks.
 
 - **The post-check.** A supplier sends an order confirmation. The aid compares it with the purchase order (PO): every line, the price, the quantity, the unit, the delivery date, missing or extra lines and the required information (the Incoterm).
-- **The pre-check.** Before ordering in a webshop, the buyer saves the cart page. The aid compares the cart with the PO: price, quantity, unit and whether each line is in the cart.
+- **The pre-check.** Before ordering in a webshop, a browser extension sends the cart page the buyer has open to the aid's capture server on the same computer. The aid compares the cart with the PO at once (price, quantity, unit and whether each line is in the cart) and the extension shows the result in a banner above the page, before the buyer presses order. A cart page saved from the browser can still go through the batch command instead (section 2.5).
 
 **The flow of a confirmation.**
 
-1. A mailbox rule saves the e-mails for the aid into a folder, the inbox.
+1. The e-mails for the aid arrive in a folder, the inbox. After a sign-in with the buyer's own Microsoft account on the settings tab of the review page, the runner reads one folder of the work mailbox itself and saves each new e-mail there (section 3.14); without a sign-in, a mailbox rule saves them there, as before (section 3.3).
 2. The runner looks at the inbox every 60 seconds. It files PO PDFs as versions of their PO. For each order confirmation it opens a case. Other documents (packing slips, invoices, quotations) are skipped and listed in the digest.
-3. The aid reads the confirmation, picks the PO version it answers, pairs its lines with the PO lines and compares the values by fixed rules.
+3. The aid reads the confirmation, picks the PO version it answers, pairs its lines with the PO lines and compares the values by fixed rules. It reads with the AI service, Microsoft 365 Copilot, used with the buyer's own work sign-in (section 3.15), or without AI with the template parser (section 3.12). Copilot reads the text layer of a PDF only: a document without one (a scan) is not read, and its case goes to the buyer, listed as failed in the digest.
 4. The routing decides per finding: the aid makes the change itself (AUTO), asks the supplier a standard question (ASK), or hands the item to the buyer (REVIEW).
 5. The aid makes the routine changes, sends the questions and records everything in the case folder.
 6. Once a day the buyer gets a digest: what the aid did, with an undo link next to each change it made in the system, and a link to the review page for each case that waits for him.
@@ -36,13 +36,14 @@ The checking aid is a Python program that checks orders for the buyer, Arno. It 
 | R01 | When nothing waits for the buyer or the supplier, the aid attaches the confirmation to the PO and sets its status from Besteld to Bevestigd. When a question or a review item is open, it attaches the confirmation only, if it made other changes. |
 | R00 | A finding that no rule covers comes to the buyer. |
 
-On a cart, every question of R06, R07 and R08 comes to the buyer instead ("cart: for the buyer"), and nothing is attached and no status is set. For a supplier in `messages_off_suppliers` the questions come to the buyer instead ("messages off for this supplier").
+On a cart, every question of R06, R07 and R08 comes to the buyer instead ("cart: for the buyer"), and nothing is attached and no status is set. R04 works on a cart as on a confirmation: a small price difference is written on the PO line's price and on the article price (or prepared, while no route to Exact exists), before the order is placed, and the banner says so. For a supplier in `messages_off_suppliers` the questions come to the buyer instead ("messages off for this supplier").
 
 **What the aid never does.**
 
 - It never creates, releases or sends a PO, and never pays anything.
 - It changes nothing but the PO line's price, delivery date and quantity, the article's purchase price, the attached confirmation and the confirmation status.
 - It sends a supplier only the three standard questions, always with the buyer in copy, and the approver only the request to approve a PO again.
+- It only reads the folder of the work mailbox it is connected to: it never moves, flags or deletes a message there. When it sends through that mailbox, each message is first a draft there, which then goes to Sent Items (section 3.14).
 - It never says "no difference" when it could not compare a value.
 - It never makes a change without a line in the write log that holds the old value, so that the change can be undone.
 - In the Bachelor End Project it never writes to the live system: only to the copy of the test account, or as prepared changes.
@@ -52,7 +53,7 @@ On a cart, every question of R06, R07 and R08 comes to the buyer instead ("cart:
 
 ### 2.1 The daily digest
 
-The digest is an e-mail from the aid's mailbox to the buyer. Its subject is "[Inkoopassistent] Dagoverzicht DD-MM-YYYY" (in English "[Inkoopassistent] Daily digest DD-MM-YYYY"). It comes once a day, at the first pass of the runner at or after `digest_time` (16:30 by default), or, when `digest` is `per_case`, after every pass that has a case or a skipped file to report. If the company allows a Power Automate flow, the same text also arrives in Teams (section 3.9).
+The digest is an e-mail to the buyer, from the aid's mailbox, or from the work mailbox when the aid sends through it (section 3.14). Its subject is "[Inkoopassistent] Dagoverzicht DD-MM-YYYY" (in English "[Inkoopassistent] Daily digest DD-MM-YYYY"). It comes once a day, at the first pass of the runner at or after `digest_time` (16:30 by default), or, when `digest` is `per_case`, after every pass that has a case or a skipped file to report. If the company allows a Power Automate flow, the same text also arrives in Teams (section 3.9).
 
 The digest has up to five blocks. An empty block is left out.
 
@@ -64,7 +65,7 @@ The digest has up to five blocks. An empty block is left out.
 | Mislukt | Failed | The cases the aid could not finish, with the first line of the error. Tell the researcher. |
 | Overgeslagen | Skipped | Files in the inbox that opened no case, with the reason (for example "invoice", "duplicate", "more than one PO number"). |
 
-A day without anything says "Er zijn geen zaken behandeld en geen bestanden overgeslagen." A pre-check case begins with the word "voorcontrole". Prices use the decimal comma in Dutch.
+A day without anything says "Er zijn geen zaken behandeld en geen bestanden overgeslagen." Under the title, before the blocks, a line says "Postvak niet verbonden" while the mailbox's sign-in has lapsed (section 5), and a line "Copilot werkt niet (<the error>): <n> zaken wachten erop" while Copilot fails, with the number of cases waiting for it (section 3.15). A pre-check case begins with the word "voorcontrole". Prices use the decimal comma in Dutch.
 
 **The links.** "beoordelen" opens the review page with that case selected. "ongedaan maken" opens the page with that case and that change selected; nothing is undone until you press the undo button on the page. The links work only in a browser on the computer where the review page runs (section 3.8).
 
@@ -117,7 +118,7 @@ What a close writes, for the record: each change in the write log of the case an
 
 ### 2.3 The supplier questions and the wait
 
-The aid asks only three standard questions: about a quantity or unit ("aantal of eenheid"), about a missing or extra line ("ontbrekende of extra regel"), and about missing information ("ontbrekende gegevens"). Each is an e-mail from the aid's mailbox to the supplier, the buyer in copy, with the subject "Vraag over orderbevestiging PO <number>" and a table of the lines (line, item code, description, our value, your value). It asks for an answer by reply within the wait, `ask_wait_working_days`, three working days by default.
+The aid asks only three standard questions: about a quantity or unit ("aantal of eenheid"), about a missing or extra line ("ontbrekende of extra regel"), and about missing information ("ontbrekende gegevens"). Each is an e-mail to the supplier, from the aid's mailbox or from the work mailbox (section 3.14), the buyer in copy, with the subject "Vraag over orderbevestiging PO <number>" and a table of the lines (line, item code, description, our value, your value). It asks for an answer by reply within the wait, `ask_wait_working_days`, three working days by default.
 
 - **The supplier replies** to the e-mail: the aid files the reply into the case, and the case comes back to you with the item "supplier answered: read the reply". The page shows this reason as "Andere reden" (Another reason), and the digest shows the English text. The page does not show the reply itself: read it in your mailbox (you were in copy, so a reply to all reaches you). If the answer needs a change, make it by hand, then choose "Bevestigen" or "Houden" on the item and close the case.
 - **The e-mail bounces**: the case comes back at once with "Bericht kwam terug" (Message bounced).
@@ -150,7 +151,7 @@ The page shows each reason by its label. The digest uses the same labels.
 | write failed: ... | Schrijfactie mislukt | Write failed | The change could not be made or prepared. |
 | not applied: an earlier write failed ... | Niet uitgevoerd: een eerdere schrijfactie is mislukt | Not applied: an earlier write failed | The aid stopped writing on this PO after a failed change. |
 | no address for the supplier | Geen e-mailadres van de leverancier | No e-mail address of the supplier | The question was not sent: the settings hold no address for this supplier. |
-| message not sent | Bericht niet verzonden | Message not sent | The mail server did not take the message. |
+| message not sent | Bericht niet verzonden | Message not sent | The mail server did not take the message, or the Microsoft sign-in of the work mailbox has lapsed (section 3.14): send it by hand. |
 | message bounced | Bericht kwam terug | Message bounced | The supplier's address did not accept the question. |
 | no answer in N working days | Geen antwoord binnen de wachttijd | No answer within the wait | The supplier did not answer in time. |
 | supplier answered: read the reply | Andere reden | Another reason | The supplier replied (section 2.3). |
@@ -181,9 +182,22 @@ The kind of difference, and why a value could not be compared:
 | no PO unit | Geen eenheid op de inkooporder | No unit on the purchase order | The PO has no unit to compare with. |
 | any other | Andere reden | Another reason | A reason without a label. |
 
-### 2.5 The pre-check today
+### 2.5 The pre-check in the browser
 
-Today the pre-check works on a cart page saved from the browser as a web page (HTML), together with the PO side from an ERP export, run through the batch command (section 6). The watched folder does not take cart pages. A cart saved as a screenshot (PNG) needs the AI reader, which is not available for company documents yet. On a cart, every difference comes to the buyer; "Leverancier vragen" is not offered, because the buyer corrects the cart or the PO before ordering. A capture straight from the browser, with the PO number, is not built. aid/sources/capture.py can open a cart case from a saved page and a PO number, but no command or page calls it yet, and no browser tool exists. Until then a cart goes through the batch command.
+**The extension.** A small extension for Edge or Chrome (`aid/extension`, loaded as its README describes) watches the pages of the webshops listed in its options. When a page holds a cart table (a table with an item column, a quantity column and a price column), it sends a copy of the page to the aid's capture server on the same computer, once per change of the cart: when the page opens, and again about a second after a quantity or a line changes. The server opens a cart case, checks it like any other case and answers at once. The case lands in the case folders like any other: on the review page when it waits for the buyer, and in the next digest under the pre-check ("voorcontrole"), which the runner makes when it runs on the same folder (section 3.13).
+
+**The banner.** The answer appears in one banner at the top of the page. Its title is fixed, in Dutch with the English in brackets; the lines under it come from the aid in the language of the settings.
+
+- **Green**, "Winkelwagen komt overeen met de inkooporder": the cart agrees with its PO, or the only differences were small price differences that the aid settled itself (R04). Those lines are listed under the title. While no route to Exact exists every change is prepared, and the line reads "regel 2 (KM-2102): prijs op de inkooporder: wijziging voorbereid van 4.10 naar 4.15, zie de zaak (prijs binnen de drempel)"; once changes are written to Exact it reads "regel 2 (KM-2102): prijs op de inkooporder bijgewerkt van 4.10 naar 4.15 (prijs binnen de drempel)". A case the buyer closed on the review page is green only when every difference is settled as it stands now: a line the buyer decided counts by the buyer's latest decision (taking the cart's value, with its change prepared or made and not undone, whoever made it; a change left to apply by hand does not count; keeping the PO's value leaves the difference), and a line the buyer did not decide by the change the aid's rules wrote or prepared; a line whose change was undone on the review page counts as a difference again ("wijziging ongedaan gemaakt").
+- **Amber**, "Let op: de winkelwagen wijkt af van de inkooporder": one line per difference, in the order of the lines, for example "regel 2 (KM-2002): prijs 41.00 in de winkelwagen, 40.00 op de inkooporder (prijsverschil boven de drempel)", "regel 3 (KM-2003): kon niet in de winkelwagen worden geplaatst" or "regel 4 (KM-2004): extra regel, niet op de inkooporder". A reason about the whole case is a line of its own, for example "eerste zaken van deze leverancier gaan naar de inkoper". A small price difference that the aid wrote or prepared (R04) shows as such, with the text of the green banner, and is not counted as a difference: do not correct it again. A reason the aid has no wording for reads "zie de zaak voor de reden". When the buyer decided on a line on the review page, the line says so ("besluit van de inkoper: waarde van de inkooporder gehouden"). Correct the cart, or the PO, before ordering.
+- **Grey**, "Geen inkooporder gevonden": the cart names no PO the aid knows, and its item codes match none.
+- **Red**, "Voorcontrole mislukt" when the check failed (the case's run failed, or the server met an error, with "the pre-check failed; see capture.log"), "Inkoopassistent niet bereikbaar" when the capture server does not run, "Inkoopassistent weigert de pagina" with the server's reason when it refused the page (a wrong token, or "no cart table in ..." for a page the cart reader cannot read). When the extension was updated while the page was open, the title is "Voorcontrole mislukt" with the line "Herlaad de pagina (reload the page)" under it: no check ran and no case exists; reloading the page is all it needs.
+
+Under the title a sentence sums the case up ("Inkooporder 250202: 1 regel komt overeen, 1 verschil en 1 regel niet in de winkelwagen"); the lines follow, and under them the link "Bekijk de zaak". The link selects the case on the review page only while the case waits for the buyer (in review) or holds a change made in Exact that can be undone; any other case, a green or a failed one, or an amber one the buyer already closed, is read in its case folder.
+
+**A reload opens no new case.** The same page sent again, byte for byte, is answered from its case on any day; the same cart in a page whose invisible parts changed (a time stamp, an advertisement) is answered from the case it opened that day. No second case is opened. A changed cart (another quantity, a line more or less) is a new case. A case that failed is never reused.
+
+**The fallback.** A cart page saved from the browser as a web page (HTML) can still go through the batch command with its PO number (section 6), as before the extension existed. The watched folder does not take cart pages. A cart saved as a screenshot (PNG) cannot be read: Copilot, the AI service, reads the text layer of a document only (section 3.15), so save the cart page as HTML. On a cart, every difference comes to the buyer; "Leverancier vragen" is not offered, because the buyer corrects the cart or the PO before ordering.
 
 ## 3. Running it
 
@@ -211,12 +225,15 @@ The folder layout, with the folder settings of the example (`cases_root` "cases"
   po_store/<PO>/v<n>/    po.pdf and po.json, one folder per PO version
   cases/
     <case>/              one folder per case, named <PO number>_<YYYYMMDDTHHMMSS> or unknown_<...>
+    captures/            the cart pages the extension sent; nocart_<...> a page without a cart table
     prepared/            prepared_changes.csv, the changes to apply by hand
     outbox/              messages written as .eml files instead of sent
     digests/             <day>.html of each digest
     pricelists/<day>/    the write log of a price-list import (when --settings gives the folder)
     runner.log           the runner's errors
+    capture.log          the capture server's errors and refused requests
     digest_state.json    what the next digest reports
+    mailbox_state.json   the connection to the work mailbox, when one is made (section 3.14)
     review_items.jsonl   the files the scan skipped that the buyer must look at
 ```
 
@@ -233,11 +250,12 @@ write_log.jsonl    one line per change made, prepared or failed, and per undo
 dispositions.csv   the decisions in the evaluation's form
 decisions.jsonl    the buyer's choices on the review page
 audit.json         the audit record
+capture.json       a cart case of the capture server: the page's sha256, the digest of its cart, the shop's host, the saved page
 ```
 
 ### 3.2 The settings file
 
-Copy `aid/settings.example.json` to `<root>/settings.json` and fill it in. A key the aid does not know stops it, so a typing error is never silently ignored. An error names the field, never its value. The settings file with the real values never goes into a repository. The Exact token and the mailbox password are not settings: they are the environment variables `AID_EXACT_TOKEN` and `AID_MAIL_PASSWORD`, and never go into any file.
+Copy `aid/settings.example.json` to `<root>/settings.json` and fill it in. A key the aid does not know stops it, so a typing error is never silently ignored. An error names the field, never its value. The settings file with the real values never goes into a repository. The Exact token and the mailbox password are not settings: they are the environment variables `AID_EXACT_TOKEN` and `AID_MAIL_PASSWORD`, and never go into any file. The tokens of the Microsoft sign-in are no settings either: they are kept in a protected store on the PC (section 3.14). The file holds company data (the authorization limit, the suppliers' addresses): keep `<root>` in a folder that only the runner's user can read. On Linux and macOS a save on the settings tab keeps the file's permissions; on Windows the saved file takes the access its folder gives, whatever access the file had before.
 
 | Setting | Default | Meaning | Company-specific |
 |---|---|---|---|
@@ -255,7 +273,7 @@ Copy `aid/settings.example.json` to `<root>/settings.json` and fill it in. A key
 | `authorization_limit` | `null` | R10: the authorization limit; a PO total above it needs the approver again. `null` switches R10 off. | yes, never in a repository |
 | `buyer_email` | (required) | The buyer's address: the digest, and the copy of every question. | yes |
 | `buyer_name` | `""` | The name printed under the signature of the questions and of the re-approval request ("Inkoop" in Dutch, "Purchasing" in English); empty: the signature alone. | yes |
-| `aid_email` | (required) | The aid's own mailbox, the sender of every message. | yes |
+| `aid_email` | (required) | The aid's own mailbox: the sender of every message sent through SMTP or written as a file. A message sent through the work mailbox (section 3.14) comes from that mailbox instead. | yes |
 | `approver_email` | (required) | The approver who gets the request to approve a PO again. | yes |
 | `supplier_emails` | `{}` | Supplier (as the PO names it) → the address for the aid's questions. | yes |
 | `po_number_pattern` | `(?i:PO\|Inkooporder\|Bestelling\|Bestellung\|Order)[\s:#-]*(\d{6,8})` | The regular expression that finds a PO number in an e-mail or on a document; its first group is the number. | adjust if the PO numbers differ |
@@ -263,8 +281,8 @@ Copy `aid/settings.example.json` to `<root>/settings.json` and fill it in. A key
 | `po_store_root` | (required) | The folder of the PO versions, for example `"po_store"`. | |
 | `watched_folder` | (required) | The inbox, for example `"inbox"`. | |
 | `supplier_lead_times` | `{}` | Supplier → lead time in days, from the ERP. A supplier without one gets every later date as a review item. | yes |
-| `reader` | `"llm"` | `"llm"` or `"parser"`. The runner accepts only `"parser"` until Task 7b (section 3.12). Set it to `"parser"`. | |
-| `model` | the id of the development model | The model of the AI reader. The runner does not use it; the freeze record shows it. | |
+| `reader` | `"llm"` | How the documents are read: `"llm"`, by Microsoft 365 Copilot with the work sign-in (section 3.15), which needs `ms_tenant_id` and `ms_client_id` (the runner refuses `"llm"` without them); or `"parser"`, by the template parser, without AI (section 3.12). The settings tab sets it ("Documenten lezen met"). | |
+| `model` | the id of the development model | The model of the development AI client on the made-up set. The runner does not use it, as Copilot names no model; the freeze record shows it. | |
 | `effort` | `"medium"` | `"low"`, `"medium"` or `"high"`, for the development AI client on the made-up set only. | |
 | `exact_base_url` | `null` | The address of the Exact API (https). `null`: the aid only prepares its changes. | yes |
 | `exact_endpoints` | `{}` | The path of each endpoint: `po_line`, `article`, `attachment`, `status` (section 3.10). | yes |
@@ -272,10 +290,17 @@ Copy `aid/settings.example.json` to `<root>/settings.json` and fill it in. A key
 | `smtp_host` | `null` | The mail server of the aid's mailbox. `null`: messages are written as files. | yes |
 | `smtp_port` | `587` | Its port (STARTTLS). | yes |
 | `smtp_user` | `null` | The login of the aid's mailbox. | yes |
+| `ms_tenant_id` | `null` | The Directory (tenant) ID of the app registration in Microsoft Entra ID (a GUID, or the tenant's domain name), for the Microsoft sign-in (section 3.14). An identifier, no secret. | yes |
+| `ms_client_id` | `null` | The Application (client) ID of the app registration (a GUID). An identifier, no secret. | yes |
+| `mailbox` | `null` | The address of the mailbox the aid reads and sends from. `null`: the signed-in account's own mailbox. Another mailbox needs the shared permissions and access in Exchange (section 3.14). | yes |
+| `mail_folder` | `null` | The id of the folder of that mailbox that the runner reads at every pass, as Microsoft gives it; the settings tab fills it in. `null`: no mailbox is read, and the inbox is filled by a mailbox rule. | yes |
+| `mail_folder_name` | `null` | The folder's display name, shown on the settings tab only. | yes |
+| `send_via` | `"auto"` | How the runner's messages go out: `"microsoft"` (through the mailbox of the sign-in), `"smtp"` (through the SMTP settings above), `"file"` (written as files, sent by no one) or `"auto"`: the mailbox when `mail_folder` is set and an account is signed in at the time of the message, else SMTP when it is set up, else files. While the sign-in has lapsed, `"auto"` and `"microsoft"` send no question at all: it becomes "message not sent" on the review page, and the digest is written into `cases/outbox/` (section 3.14). | |
 | `export_columns` | `{}` | For the pre-check: the aid's field name → the column name of the ERP export (section 6). Empty: the columns are named after the fields. | yes |
-| `review_url` | `"http://localhost:7860"` | The address of the review page, used only in the digest's links. | |
+| `review_url` | `"http://localhost:7860"` | The address of the review page, used in the digest's links and in the banner's link. | |
+| `capture_token` | `null` | The token the browser extension sends to the capture server (section 3.13); the extension's options hold the same value. Empty or `null`: the server does not start. | yes, never in a repository |
 
-`buyer_email`, `aid_email`, `approver_email`, `cases_root`, `po_store_root` and `watched_folder` have no default and must be given. Numbers that are amounts are written as text: `"2.0"`, `"25.00"`.
+`buyer_email`, `aid_email`, `approver_email`, `cases_root`, `po_store_root` and `watched_folder` have no default and must be given. Numbers that are amounts are written as text: `"2.0"`, `"25.00"`. The six settings of the work mailbox are filled in and saved on the settings tab of the review page (section 3.14); with them empty or `null` the aid works as before. The runner reads the settings file again at the start of a pass when the file has changed; a file that is not valid then is logged in `runner.log` (stage `settings`, the fields only) and the settings in use are kept.
 
 ### 3.3 The mailbox rule
 
@@ -288,6 +313,8 @@ The mailbox rule is set up by Remy; its details follow his answer. It must:
 
 Whole e-mails are best: the aid then reads the PO number from the subject and body too, and it can file a reply only by its headers. A `.pdf` or `.png` saved on its own is also handled; any other file is skipped as "unsupported file type". In the Bachelor End Project the documents of the test-account cases are to be re-sent to the researcher's company mailbox. The rule that files them into `inbox/` is not set up yet; it waits on Remy's answer.
 
+Instead of this rule, the runner can read a folder of the work mailbox itself after a Microsoft sign-in (section 3.14); it saves the e-mails into `inbox/` in the same form.
+
 ### 3.4 Starting the runner and keeping it running
 
 ```bash
@@ -298,7 +325,7 @@ python3 -m aid.runner --settings <root>/settings.json [--poll-seconds N] [--max-
 - `--poll-seconds`: seconds between passes, default 60.
 - `--max-passes`: stop after this many passes; leave it out in production.
 
-Each pass: handle the inbox, run every new case, end the waits that are over, and make the digest when it is due. The command runs until the STOP file exists, then prints the number of passes and ends with exit code 0. It ends at once with exit code 2 when the settings file cannot be read or is not valid, when `reader` is `"llm"`, or when the writer refuses the Exact settings (for example an address that is not https).
+Each pass: handle the inbox, run every new case, end the waits that are over, and make the digest when it is due. The command runs until the STOP file exists, then prints the number of passes and ends with exit code 0. It ends at once with exit code 2 when the settings file cannot be read or is not valid, when `reader` is `"llm"` without `ms_tenant_id` and `ms_client_id`, or when the writer refuses the Exact settings (for example an address that is not https).
 
 How it is kept running (a scheduled task at start-up, or a service) is the operator's choice on the host. Whatever starts it must:
 
@@ -306,6 +333,7 @@ How it is kept running (a scheduled task at start-up, or a service) is the opera
 - give the full path of the settings file;
 - put `AID_EXACT_TOKEN` (when `exact_base_url` is set) and `AID_MAIL_PASSWORD` (when `smtp_host` and `smtp_user` are set) in the environment of the process, from the company's secret store, before the start;
 - start it again if it ends with a code other than 0;
+- with the work mailbox connected (section 3.14) or with `"reader": "llm"` (Copilot, section 3.15), run it as the same Windows user who signs in on the review page, not as a service account or SYSTEM: the sign-in's tokens are encrypted for that user, and the mailbox and Copilot use the same tokens;
 - run one runner per `<root>`, never two.
 
 The runner uses the host's clock, so `digest_time` is the host's local time.
@@ -316,9 +344,11 @@ Create an empty file `STOP` next to the settings file. The runner ends before it
 
 ### 3.6 The logs and the audit record
 
-`cases/runner.log` has one line per problem: the time, the case id or the stage (`scan`, `scan <file>`, `escalation`, `digest`, `cases root`, `digest_state.json`), and the error. A case that keeps failing is logged once per run of the loop, and once more when it later succeeds. The pass goes on after an error.
+`cases/runner.log` has one line per problem: the time, the case id or the stage (`scan`, `scan <file>`, `escalation`, `digest`, `cases root`, `digest_state.json`, `mailbox`, `settings`), and the error. A case that keeps failing is logged once per run of the loop, and once more when it later succeeds. The pass goes on after an error.
 
-`cases/digest_state.json` holds `last_sent` (the time of the last digest, or null), `reported` (the cases the next digest reports) and `skipped` (the skipped files it lists). When it cannot be read, a fresh one is started and the log says so.
+`cases/capture.log` is the capture server's: one line per refused request (the status and the reason; a page without a cart table names its kept copy `captures/nocart_<...>`), per error outside a case's run (with its traceback; the banner shows "Voorcontrole mislukt" with "the pre-check failed; see capture.log") and per connection that ended badly (a client that stalled past the 60-second timeout, a request the server could not parse). A case whose run failed is not in it: its error is in the case folder, as for any failed case (section 5). The token is never in it. The server also prints one line per capture on its console: the time, the shop's host, the case id and the verdict.
+
+`cases/digest_state.json` holds `last_sent` (the time of the last digest, or null), `reported` (the cases the next digest reports), `skipped` (the skipped files it lists), `mailbox_lapsed` while the Microsoft sign-in has lapsed (section 5, "Postvak niet verbonden"), `copilot` while Copilot fails as a whole (the error and the number of cases waiting for it), and `copilot_cases` while Copilot has failed a case (the cases, with their refusals and failures, in the order they are tried last; section 3.15). When it cannot be read, a fresh one is started and the log says so.
 
 `cases/<case>/audit.json` is the audit record, for the researcher, IT and the thesis; the buyer never sees it. It holds the inputs by sha256, the model (none in parser mode), the settings with the authorization limit only as "set" or "unset", every step's output with its seconds, every rule decision with the settings it read, every write and message, the errors, and the timings. The review page adds a list `close`, the mailbox a list `answers`, and the escalation a list `escalations`.
 
@@ -328,19 +358,19 @@ Create an empty file `STOP` next to the settings file. The runner ends before it
 python3 -m aid.review --settings <root>/settings.json [--share]
 ```
 
-It runs on its own, beside the runner, and serves the page on 127.0.0.1 of the host only: open it in a browser on that machine. It uses port 7860 when that port is free. If it is taken (for example by a review page that is still running), the page starts on the next free port, up to 7959, and prints its address. Stop the old page first, or set `review_url` to the printed address, so that the digest's links work. `--share` opens a public link and is for the made-up set only: with company settings (an Exact address, endpoints or fields, an authorization limit, an SMTP server or login, or an address outside example.com and example.org) it is refused with exit code 2. An unreadable settings file also gives exit code 2.
+It runs on its own, beside the runner, and serves the page on 127.0.0.1 of the host only: open it in a browser on that machine. It uses port 7860 when that port is free. If it is taken (for example by a review page that is still running), the page starts on the next free port, up to 7959, and prints its address. Stop the old page first, or set `review_url` to the printed address, so that the digest's links work. `--share` opens a public link and is for the made-up set only: with company settings (an Exact address, endpoints or fields, an authorization limit, an SMTP server or login, or an address outside example.com and example.org) it is refused with exit code 2. An unreadable settings file also gives exit code 2. The page has two tabs: "Beoordelen", the review of the cases, and "Instellingen", the connection of the work mailbox (section 3.14) and of the AI service (section 3.15), which writes into the settings file the page was started with. On a page opened with `--share` the settings tab says only "Niet beschikbaar op een openbare link" and offers nothing, and `--share` is refused altogether while the settings name a tenant (`ms_tenant_id`) or a folder of the work mailbox (`mail_folder`), since the cases may then come from company e-mails.
 
-As the command builds the page today, its writer is the prepared writer and its mailer writes files: a close prepares its changes in `cases/prepared/prepared_changes.csv` and writes its questions as `.eml` files in `cases/outbox/`, even when the runner itself writes to Exact or sends by SMTP. Wiring the Exact writer and the SMTP mailer into the page is not built yet; until then the researcher sends those questions and applies those changes by hand.
+As the command builds the page today, its writer is the prepared writer and its mailer writes files: a close prepares its changes in `cases/prepared/prepared_changes.csv` and writes its questions as `.eml` files in `cases/outbox/`, even when the runner itself writes to Exact or sends by SMTP or through the work mailbox. Wiring the Exact writer and the SMTP mailer into the page is not built yet; until then the researcher sends those questions and applies those changes by hand.
 
 ### 3.8 Where the digest goes
 
-The runner always writes the HTML version to `cases/digests/<YYYY-MM-DD>.html` (a second digest on the same day replaces it). The text goes to `buyer_email` through the aid's mailbox when SMTP is set up, and otherwise as an `.eml` file into `cases/outbox/`.
+The runner always writes the HTML version to `cases/digests/<YYYY-MM-DD>.html` (a second digest on the same day replaces it). The text goes to `buyer_email` the way `send_via` says (section 3.2): through the work mailbox while its sign-in works (section 3.14), through the aid's mailbox when SMTP is set up, and otherwise as an `.eml` file into `cases/outbox/`. A digest that the work mailbox cannot send because the sign-in has lapsed is written into `cases/outbox/` too, and counts as made.
 
 ### 3.9 Teams via Power Automate
 
 A Power Automate flow outside the code can relay the digest to the buyer in Teams, so that no AI service is connected to Teams. The runner sets up no flow.
 
-- Trigger: "When a new email arrives" (Office 365 Outlook connector) in the mailbox that receives the digest, with the sender `aid_email` and a subject that starts with `[Inkoopassistent]`. The prefix is the same in both languages.
+- Trigger: "When a new email arrives" (Office 365 Outlook connector) in the mailbox that receives the digest, with a subject that starts with `[Inkoopassistent]` and the sender the digest really has: `aid_email` when the aid sends through SMTP, the address of the work mailbox when it sends through that mailbox (section 3.14; with `mailbox` empty, the signed-in account's own address). The prefix is the same in both languages. A digest written into `cases/outbox/` is not sent, and reaches no flow.
 - Action: "Post message in a chat or channel" (Microsoft Teams connector, by the Flow bot in a chat with the buyer) with the e-mail's text, or "Post card in a chat or channel" with a card built from the HTML version in `cases/digests/<day>.html`. The e-mail itself carries only the text.
 
 If the flow is not allowed, the e-mail is the notification.
@@ -381,17 +411,121 @@ print(undo_case(settings.cases_root / "<case id>", deps.writer, datetime.now()))
 
 Set `smtp_host`, `smtp_port` (587) and `smtp_user`, and put the password in `AID_MAIL_PASSWORD` before the runner starts. The runner checks for the variable once, at the start: without it, it writes every message as a file into `cases/outbox/` and sends nothing, without a warning. The mailer uses STARTTLS and checks the server's certificate. It sends from `aid_email`. An error names its kind, never the password, the login or a recipient. Each message carries a Message-ID, by which a reply is filed. In the Bachelor End Project the questions go to the researcher's address only, never to a real supplier: `supplier_emails` holds that address.
 
-### 3.12 The AI service
+### 3.12 Reading without AI: the parser
 
-The runner reads with the template parser only (`"reader": "parser"`). It refuses `"llm"` because the Microsoft client of Task 7b does not exist yet, and company documents never go to another AI service. In parser mode:
+The runner reads with Microsoft 365 Copilot (`"reader": "llm"`, section 3.15) or with the template parser (`"reader": "parser"`). Company documents never go to another AI service. In parser mode:
 
 - a document without a text layer (a scan, a photo) cannot be classified: it is skipped as "no text layer; class unknown" and listed in the digest;
 - a document with text but no known keyword is skipped as "other";
 - a confirmation is read only if a parser template fits its layout (section 4.1); otherwise the case fails.
 
-Task 7b needs from the company: the endpoint of the Azure OpenAI service (or another Copilot-family route) in the company's Microsoft tenant, and a way to authenticate (an API key in the secret store, or an Entra ID sign-in). The client then reads its credential from the environment or the secret store, never from the settings file. The settings will gain a field for the endpoint.
+Not built yet: the template of Exact's real PO PDF and the templates of the real suppliers' layouts (Task 5b). Until then the PO reader knows only the made-up layout, so a real PO PDF stays in the inbox as an error.
 
-Also not built yet: the template of Exact's real PO PDF and the templates of the real suppliers' layouts (Task 5b). Until then the PO reader knows only the made-up layout, so a real PO PDF stays in the inbox as an error.
+### 3.13 The capture server
+
+The capture server answers the browser extension (section 2.5). It runs beside the runner and the review page, on the computer where the buyer's browser runs. It reads every cart with the cart reader and asks no model, also with `"reader": "llm"`: the pre-check stays fast, needs no Copilot sign-in, and what the rules cannot settle goes to the buyer.
+
+```bash
+python3 -m aid.capture_server --settings <root>/settings.json [--host 127.0.0.1] [--port 7870] [--testshop]
+```
+
+- `--settings` (required): the settings file, the same one the runner uses, so that the cases land under the same `cases_root`.
+- `--host`: the address it listens on, default 127.0.0.1 (this computer only). Leave it so.
+- `--port`: default 7870.
+- `--testshop`: also serve the made-up cart pages of `aid/madeup/out` under `/testshop/` (for example `http://127.0.0.1:7870/testshop/CART02.html`), for trying it out with the demo's settings. Leave it out on the company side.
+
+It prints the address it listens on and runs until Ctrl-C. How it is kept running is the operator's choice, as for the runner (section 3.4).
+
+**The PO side.** The server looks for a cart's PO only in the PO store, and it files nothing itself. For a cart the PO side is the ERP export, because no PO PDF exists before ordering: file the export first with the batch, its `--po-dir` holding the `*_export.csv` (a cases file with only its header row is enough; section 6). Until the cart's PO is in the store, the banner is grey ("Geen inkooporder gevonden") and the case opens as `unknown_<...>`.
+
+**The digest.** The server runs its cases itself and never writes the runner's digest state. The runner, at each pass on the same `cases_root`, reports every case of the capture server that has its result once, so that it appears in the next digest under "voorcontrole". Without a runner on that folder, capture cases are in no digest.
+
+**A case in progress.** While the server runs a case, a new one or one it resumes because an earlier run of it was cut off, the case folder holds a file `.running` (the process id and the start). The runner leaves such a case alone, checking with the time of the check itself, and a start up to ten minutes ahead of its own clock counts as running too (the two processes' clocks may differ); a `.running` file older than ten minutes is a run that crashed, and the runner resumes the case as it resumes any case without a result.
+
+**The token.** Set `capture_token` in `settings.json` to a long random value and put the same value in the extension's options. The extension sends it with every page; a request without it, or with another value, is refused. The value is company-specific and never goes into a repository. The extension keeps it in the browser profile's local extension storage on that computer.
+
+**The extension's options.** The address of the server (default `http://127.0.0.1:7870`; change it only with `--host` or `--port`), the token, and the webshops, one address per line. Saving asks the browser for access to those shops; a shop taken off the list loses that access. An address on `http://127.0.0.1` or `http://localhost` needs no entry: the test shop is always on, and the options page says so. Open tabs of a shop just added need a reload.
+
+**What the process needs.** The server builds its writer and mailer as the runner does: when the settings set the Exact writer (`exact_base_url`), `AID_EXACT_TOKEN` must be in its environment, and when they set SMTP, `AID_MAIL_PASSWORD`, exactly as for the runner. The banner's link is `review_url` with the case, and the review page listens on 127.0.0.1 of its own computer only: start the review page (section 3.7) on the computer where the browser and the capture server run and, when it printed another port, set `review_url` to that address.
+
+**What it logs and keeps.** Each page sent is saved under `cases/captures/` (a page answered by an earlier case is not kept twice, and a page whose pre-check failed before a case was opened is removed). The extension empties in the copy every password field and every field whose name, id or autocomplete holds, in any case and also with its punctuation removed, one of: pass, wachtwoord, card, kaart, cc-, ccnum, cardnumber, creditcard, cvc, cvv, csc, securitycode, iban, rekening. A select so matched has no option chosen in the copy. A field named otherwise keeps its typed value in the copy. Errors go to `cases/capture.log`, one line per capture to the console (section 3.6). A page larger than 5 MB is refused.
+
+**Exit code 2.** The server does not start, and ends with exit code 2 and a line "aid.capture_server: ...", when the settings file cannot be read or is not valid, when `capture_token` is empty, when the writer refuses the Exact settings, when the port is outside 0 to 65535, or when the address cannot be used (the port is taken by another program, for example a capture server that still runs).
+
+### 3.14 Connecting the work mailbox
+
+Instead of a mailbox rule (section 3.3), the aid can read the work mailbox itself. After a sign-in with the buyer's own Microsoft work account on the settings tab of the review page, the runner reads one folder of that mailbox at every pass, through Microsoft Graph, and saves each new e-mail as an `.eml` file into `inbox/`, before it handles the inbox: a confirmation that arrives opens its case in the same pass. The messages that are in the folder when it is connected are left alone; every message that comes into the folder after that is read, also one that an Outlook rule or a drag moves there, whenever it was received. One limit: when the reading was broken for a while (the runner stopped for days, so that Microsoft no longer knows where the aid left off), the aid reads again what was received since its last read, and an older message moved into the folder while the reading was broken is not read; move it out of the folder and in again. The runner only reads the folder: it never moves, flags or deletes a message. The aid's own e-mails that come back into the folder (the digest, the buyer's copy of a question) are passed over. Without a sign-in everything works as before.
+
+**What must reach the folder.** The folder takes the place of the rule of section 3.3, so it must receive the same mail: the e-mails with Exact's PO PDFs, the suppliers' e-mails with their confirmations, and the replies to the aid's questions. A reply arrives in the inbox of the mailbox the question was sent from, so give that mailbox an Outlook rule that moves it into the folder, for example on the subject words "Vraag over orderbevestiging PO" (in English "Question about order confirmation PO"), which a reply keeps after its "RE:". With "Verzenden via" on the SMTP server, the questions go out from the aid's own mailbox (`aid_email`) and the replies arrive there; an Outlook rule cannot move mail into another mailbox, so let that mailbox forward the replies to the work mailbox, or keep the mailbox rule of section 3.3 for it. For the rest, use rules on the sender of Exact's PO e-mails and on the suppliers' sender addresses or domains, or choose "Postvak IN" itself as the folder. Subject words such as "orderbevestiging" or "order confirmation" are examples only: suppliers also write "Opdrachtbevestiging", "Auftragsbestätigung" or "Order acknowledgement", or answer the PO e-mail with the confirmation attached. An e-mail that never reaches the folder is never checked, and nothing reports it; a reply that never reaches it is not filed, and its case waits until its wait ends.
+
+**The app registration.** The sign-in needs an app registration in Microsoft Entra ID. A user can make one in a few minutes when the company allows users to register applications:
+
+1. Open entra.microsoft.com and sign in with the work account.
+2. Open App registrations and choose New registration.
+3. Name it "Inkoopassistent", choose "Accounts in this organizational directory only" and register it.
+4. Under Authentication, add the platform "Mobile and desktop applications" with the redirect URI `http://localhost`, and set "Allow public client flows" to Yes. Save.
+5. Under API permissions, add Microsoft Graph, Delegated permissions: `Mail.Read`, `Mail.ReadWrite`, `Mail.Send` and `User.Read`, and, to read and send from another mailbox than your own (below), also `Mail.Read.Shared`, `Mail.ReadWrite.Shared` and `Mail.Send.Shared`. `Mail.ReadWrite` lets the aid create the draft that each of its messages is sent from (Microsoft does not say that a message sent at once keeps the aid's Message-ID, by which a reply is filed); it changes no other message.
+6. On the Overview, copy the Directory (tenant) ID and the Application (client) ID into the settings tab. A portal in Dutch calls them "Map-id (tenant)" and "Toepassings-id (client)", as the tab does.
+
+No client secret and no certificate is made: the app is a public client, and the person signs in with their own account. The two IDs are identifiers, not secrets.
+
+**When the portal refuses.** If New registration is greyed out or refused, the account may not register applications: the company decides that, with a setting of Entra ID. Ask IT to make the registration with the settings above, or keep to the mailbox rule of section 3.3. If the sign-in asks for an administrator's approval of the permissions, the company does not let users approve apps themselves: an administrator approves them once.
+
+**Connecting.** Start the review page on the PC where the runner runs (section 3.7), as the same Windows user as the runner (below), and open the tab "Instellingen".
+
+1. Fill in the Map-id (tenant) and the Toepassings-id (client).
+2. Press "Aanmelden bij Microsoft". A browser window with Microsoft's sign-in page opens on the PC where the page runs: sign in with the work account and accept the permissions. The tab waits for it for at most five minutes. If no window opens, press "Aanmelden met een code": the tab shows an address and a code; open the address on any device, enter the code and sign in, and the tab waits until that is done.
+3. The tab shows "Aangemeld als" with the account, and the folders of the mailbox. Only the folders at the top of the mailbox are listed, beside "Postvak IN", not the folders inside them.
+4. Leave "Postvak" empty for your own mailbox.
+5. Choose the folder and press "Verbinding testen": the tab shows how many messages the folder holds and when the newest arrived, never a subject or a sender.
+6. Leave "Verzenden via" on "Automatisch", which sends each message through the mailbox while you are signed in and a folder is chosen, and through the SMTP server or as files when no folder is chosen or no one is signed in (after "Afmelden"); or choose another way. While the sign-in has lapsed, nothing is sent (see "Sending").
+7. Press "Opslaan". The six settings are written into the settings file, every other setting kept as it was, and the runner takes them over at its next pass: "De controle neemt dit over bij de volgende ronde". Under "Stand van de controle" the tab shows "Nog niet verbonden" until the runner's next pass has connected the folder, then since when the folder is connected, when it was last read and how many messages were saved, or "nog niet gelezen" when that pass could not read the folder (a sign-in to repeat, or a folder the account may not read yet). The line under the sign-in buttons shows who is signed in, read from the PC without asking Microsoft; whether the sign-in still works shows when you press "Verbinding testen" or "Mappen ophalen": "Aanmelding van ... verlopen" if it has lapsed.
+
+**Sending.** With "Automatisch" (once signed in with a folder chosen) or "Het postvak van de aanmelding", the runner's supplier questions, re-approval requests and digest go out from that mailbox, From its address. Each message is first made as a draft in the mailbox and then sent, so that it ends in Sent Items; a draft whose sending failed may stay in the Drafts folder. Who is signed in is looked at for each message, so a sign-in on the tab counts from the next message on, without a restart. A question asked on the review page itself is still written as a file into `cases/outbox/` (section 3.7). While the sign-in has lapsed (the account is still on the PC, but Microsoft no longer accepts it), the supplier questions and re-approval requests are not sent: each case comes to you on the review page with "Bericht niet verzonden", for you to send the message by hand, and no other way is tried, since a reply to another sender would never reach the folder and so never its case. The digest is then written into `cases/outbox/` (section 3.8). Only after "Afmelden" do the messages under "Automatisch" go through SMTP or as files.
+
+**A test with your own mailbox.** Make a folder for the test at the top of your own mailbox (beside "Postvak IN", not inside it), choose it on the tab and save. After the next pass, drag a made-up confirmation e-mail into the folder, or let an Outlook rule move it there. At the next pass (within a minute) it is saved into `inbox/` and its case opens. Use another made-up confirmation for each test: a document the aid has handled once is skipped as "duplicate". To test a reply, answer a question the aid sent to your own address and let the reply reach the folder (see "What must reach the folder").
+
+**Another mailbox.** To read another mailbox, such as the purchasing department's, fill in its address under "Postvak", press "Mappen ophalen", choose its folder and save; the tab refuses a folder listed for another mailbox than the one in the field. Another mailbox or folder starts a new connection from that moment, and the aid sends from that mailbox too. This needs two things: the app registration's shared permissions of step 5, which the aid asks for when a mailbox is filled in (sign in again after filling it in), and the signed-in account's access in Exchange to read that mailbox and to send from it, which IT grants.
+
+**Where the tokens are kept.** The sign-in's tokens are kept on the PC only: on Windows in `%LOCALAPPDATA%\Inkoopassistent`, encrypted with Windows' data protection (DPAPI), so that only this Windows user on this PC can read them; elsewhere in `~/.config/inkoopassistent`, encrypted where the system offers a keychain, else in files that only their owner can read. The review page and the runner share them, so both must run as the same Windows user: a runner started as a service account or as SYSTEM looks in another folder, cannot read the page's tokens, and keeps reporting "Postvak niet verbonden" however often the buyer signs in. Copilot (section 3.15) uses the same tokens, one store per Windows user: such a runner cannot ask Copilot either, every case waits with `SignInNeeded`, and the digest says "Copilot werkt niet". The folder remembers the kind of store it was made with, and a process that cannot use that kind is refused: the runner then logs `mailbox: StoreRefused: ...` once in a run and goes on with `inbox/` (section 5). The tokens are never written to the settings file, the repository, a case folder, the audit or a log, and the aid refuses to keep them in a folder inside a git repository.
+
+**Signing out.** "Afmelden" removes the account and its tokens from the PC, and empties the folder list on the tab. Pressed alone, it leaves the folder in the settings file: the runner keeps trying to read the mailbox, handles `inbox/` as before, logs "mailbox: not connected" at most once an hour, and every digest says "Postvak niet verbonden" (section 5); with "Automatisch" its messages go through SMTP or as files. Press "Opslaan" after "Afmelden" to disconnect the mailbox completely: the folder is saved empty, the runner stops reading the mailbox and forgets the connection, and the line goes from the digest. To connect again later, sign in, choose the folder again and save: the connection starts from that moment, as a new one does, and the mail that came into the folder meanwhile is left alone. Saving another folder forgets the connection of the one before in the same way. "Afmelden" ends the sign-in for Copilot too (section 3.15): with "Documenten lezen met" on "Copilot", no case is read and the digest says "Copilot werkt niet" until "Aanmelden voor Copilot" is pressed again or the reader is set to "zonder AI (parser)".
+
+### 3.15 The AI service: Microsoft 365 Copilot
+
+The AI service of the aid is Microsoft 365 Copilot, used with the buyer's own work sign-in of section 3.14 through the Copilot Chat API of Microsoft Graph. With `"reader": "llm"` Copilot reads the confirmations, and it answers the questions the rules leave open: which PO version a document answers, which PO line a line answers, and what kind of document an attachment without a keyword is. The licence covers its use, so the audit record shows no tokens and no cost; it names the conversation of each call by its id. The pre-check in the browser (section 3.13) never asks Copilot: the capture server reads the cart page with the cart reader, whatever `reader` says.
+
+**What Copilot needs.**
+
+- A Microsoft 365 Copilot licence on the account that signs in.
+- Seven delegated permissions of Microsoft Graph on the app registration of section 3.14, together: `Sites.Read.All`, `Mail.Read`, `People.Read.All`, `OnlineMeetingTranscript.Read.All`, `Chat.Read`, `ChannelMessage.Read.All` and `ExternalItem.Read.All`. The Chat API asks for all seven, even though the aid sends it only the document's text.
+- An administrator's consent for four of them: `People.Read.All`, `OnlineMeetingTranscript.Read.All`, `ChannelMessage.Read.All` and `ExternalItem.Read.All`.
+
+**The app registration.** On entra.microsoft.com, open the app registration of section 3.14:
+
+1. Under API permissions, choose Add a permission, Microsoft Graph, Delegated permissions, and add the seven permissions above (`Mail.Read` is there already).
+2. Press "Grant admin consent for" the organisation. Only an administrator can press it: ask IT to press it once, for the four permissions that need it. Without that consent the sign-in for Copilot, or Copilot itself, refuses.
+
+**Connecting.** On the tab "Instellingen" of the review page, under "De AI-dienst: Microsoft 365 Copilot", with the "Map-id (tenant)" and the "Toepassings-id (client)" filled in:
+
+1. Press "Aanmelden voor Copilot". A browser window with Microsoft's sign-in page opens on the PC where the page runs and asks for the permissions of the mailbox and of Copilot together, and for the shared permissions as well when "Postvak" holds another mailbox (section 3.14). Sign in with the work account. The tab says that it waits, for at most five minutes.
+2. Press "Copilot testen". The aid sends Copilot one message, "Answer with the word OK only.", and the tab shows "Copilot antwoordt: OK" (the first 20 characters of the answer), or the error, for example "Copilot refused: 403 Forbidden" (section 5).
+3. Under "Documenten lezen met", choose "Copilot". The tab writes `"reader": "llm"` into the settings file at once, and the runner takes it over at its next pass. The tab always lists Copilot, but refuses it until the two IDs are saved ("Opslaan"), because the runner refuses `"llm"` without them: it then says so and keeps the reader that is in the file.
+
+**What Copilot is sent.** For a confirmation with a text layer, the aid sends the text of each page, every line starting with its page and line number ("p1 r12: ..."), the instructions of the reading prompt and the schema of the answer. The file itself is not sent and is not put in OneDrive. Copilot reads the text layer only: a scan or a screenshot cannot be read, and its case fails at reading with "Copilot reads the text layer only: this document has no text layer" and is listed under "Mislukt" in the digest, for the buyer to check by hand. A PDF with a scanned page (an image without text) among pages with text is not read in part either: its case fails with "Copilot reads the text layer only: page <n> has no text layer", so that the lines of that page never come out as missing lines. A blank page, with neither text nor an image, is left out. A cart page saved as HTML is read by the cart reader, which needs no AI.
+
+**Grounding and the check.** Web grounding is switched off for every message, so Copilot does not search the web. Enterprise grounding cannot be switched off: Copilot may draw on the user's Microsoft 365 data as its semantic index allows, the mail, chats, meetings, sites and files the account can reach in the organisation. The aid therefore checks every value against the text of the page: a value whose text does not stand on the line it cites (or on the line just before or after it) is marked uncertain and comes to the buyer (R09), so a value Copilot takes from elsewhere is never used as certain.
+
+**A preview of Microsoft.** The Chat API is a preview, in Graph's beta endpoint, which Microsoft does not support for use in production applications. It may change or stop working without notice; then switch back to the parser as below. Microsoft states that using the Chat API is agreeing to its Microsoft 365 Copilot APIs Terms of Use (preview): pressing "Copilot testen" or running the runner with `"reader": "llm"` accepts them, so the company should agree to them first.
+
+**When Copilot fails.** A refusal of Copilot, an outage, a network failure while the sign-in's token is renewed (`Copilot could not be reached: ConnectionError`), or a sign-in that has lapsed, while a case runs, is no failure of the case: the case stays without a result, `runner.log` names the error once under the case id (for example `CopilotError: Copilot refused: 503 no code`, never a token), and a later pass runs it again, after the cases Copilot has not failed, so that a case that keeps failing never holds back the others. A request that Copilot answers with 429, 503 or 504 is sent once more after the wait it asks for, at most 30 seconds.
+
+- **Copilot fails as a whole**: the sign-in has lapsed, the token cannot be had, or the conversation cannot be created, always; or the chat fails while no other case was read since the case's first failure. The other cases of that pass are not sent to Copilot and wait for the next pass too, so that a Copilot that is down or asks the aid to wait is not asked once per case. The digest says "Copilot werkt niet (<the error>): <n> zaken wachten erop" until a pass reads a case through Copilot again. Failures in this state never finish a case.
+- **Copilot fails one document**: a conversation that Copilot ends itself ("Copilot ended the conversation: disengagedForRai", its own refusal of that content), a 400 or 413 of the chat that carries the document, or any other failure of that chat after Copilot read another case. The pass goes on with the other cases, and the digest names these documents in a line of their own: "Copilot kon 1 document niet lezen; nieuwe poging bij de volgende ronde". After three refusals of the document, or three failures of its chat in all once Copilot has read another case after the first one, the case is finished as failed with "Copilot could not read this document: <the error>" and listed under "Mislukt", for the buyer to check that document by hand.
+
+An unreadable document (no text layer) is no failure of Copilot: its case is listed as failed, as above.
+
+**Back to the parser.** Choose "zonder AI (parser)" under "Documenten lezen met", or set `"reader": "parser"` in the settings file. The runner takes it over at its next pass and reads with the template parser again (section 3.12).
 
 ## 4. Maintaining it
 
@@ -427,7 +561,7 @@ Or run the batch (section 6) with a one-line `cases.csv` and look at `steps/02_r
 
 ### 4.2 Changing thresholds
 
-Edit `settings.json` and restart the runner and the review page (create `STOP`, wait for the runner to end, delete `STOP`, start both again). The settings are read once at start. The thresholds are `price_pct`, `price_abs`, `lead_time_tolerance_days`, `ask_wait_working_days` and `first_cases_review`; the supplier lists are `review_suppliers` and `messages_off_suppliers`. Each case's audit record keeps the settings it ran with. During the evaluation the settings must not change (section 4.8).
+Edit `settings.json`. The runner reads the file again at the start of its next pass when the file has changed (a file that is not valid is logged in `runner.log` and the settings in use are kept); restart the review page, which reads the settings once at start, apart from its settings tab. The thresholds are `price_pct`, `price_abs`, `lead_time_tolerance_days`, `ask_wait_working_days` and `first_cases_review`; the supplier lists are `review_suppliers` and `messages_off_suppliers`. Each case's audit record keeps the settings it ran with. During the evaluation the settings must not change (section 4.8).
 
 ### 4.3 The price-list import and its undo
 
@@ -501,15 +635,21 @@ It writes the freeze record (default `freeze_<date>.json` in the current folder)
 
 During the evaluation nothing of this may change: no `git pull`, no change to `settings.json` (its hash is recorded), no new template or prompt, no package update. Freeze from a clean working tree. If something must change, record a new freeze and note the deviation as the evaluation protocol says.
 
+### 4.9 Known limitations of the pre-check in the browser
+
+- **A cart changed after a small price difference repeats the change.** When the aid accepted a small price difference on a cart (R04) and the buyer then changes the cart, the new case makes the same write, or prepares the same change, again. The PO the aid knows in the Bachelor End Project is an ERP export, which does not learn the aid's own writes; reading the PO through the Exact API would.
+- **Closed cart cases count for the first cases of a supplier.** A cart case that closes counts toward `first_cases_review` of its supplier, like a closed confirmation, so a few pre-checks can end the first-cases review of that supplier.
+- **The capture server and the runner share the cases.** Both may use the same `cases_root` on one computer. The runner never runs a case again that has a result, and it leaves a case alone while the server's `.running` file in it is younger than ten minutes. A run of the server that takes longer than that (a slow Exact route, for example) can therefore be run a second time by the runner, and a case whose run crashed waits up to ten minutes before the runner finishes it.
+
 ## 5. Troubleshooting
 
 **A case failed.** It is in the digest under "Mislukt" with the first line of its error, and not on the review page. Look in the case folder: `steps/08_result.json` (status `failed`, field `error`, which names the change it failed at, if any), `audit.json` (`errors`, with the step and, for an unexpected error, the traceback), and the last step file in `steps/`, which shows how far it got. A confirmation whose layout no template fits fails at reading. Fix the cause, then use the batch to try the document again (section 4.4).
 
-**A document was not recognised.** See the "Overgeslagen" block of the digest and `cases/review_items.jsonl`. The class comes from keywords on the first page: "orderbevestiging", "order confirmation", "auftragsbestätigung" and similar make it a confirmation; a title line beginning with "Inkooporder", "Purchase order" or "Bestellung" a PO; "pakbon", "factuur", "offerte" and similar the other classes. Without a keyword the document is "other"; without a text layer it is "no text layer; class unknown" (only the AI reader of Task 7b can classify those). The PO number comes from `po_number_pattern` in the e-mail and on the first page. Two different numbers: "more than one PO number", skipped and listed. None: the aid tries to find the PO by its item codes, and else opens the case without a PO, which goes to review as "no version selected". If the company's PO numbers do not fit the pattern (6 to 8 digits after a keyword), change the pattern. A file that raised an error stays in the inbox, is tried again at every pass and is logged once in `runner.log` as `scan <file>`.
+**A document was not recognised.** See the "Overgeslagen" block of the digest and `cases/review_items.jsonl`. The class comes from keywords on the first page: "orderbevestiging", "order confirmation", "auftragsbestätigung" and similar make it a confirmation; a title line beginning with "Inkooporder", "Purchase order" or "Bestellung" a PO; "pakbon", "factuur", "offerte" and similar the other classes. Without a keyword the document is "other"; without a text layer it is "no text layer; class unknown" (with `"reader": "llm"` Copilot is asked to class those from the file name and the e-mail's text). The PO number comes from `po_number_pattern` in the e-mail and on the first page. Two different numbers: "more than one PO number", skipped and listed. None: the aid tries to find the PO by its item codes, and else opens the case without a PO, which goes to review as "no version selected". If the company's PO numbers do not fit the pattern (6 to 8 digits after a keyword), change the pattern. A file that raised an error stays in the inbox, is tried again at every pass and is logged once in `runner.log` as `scan <file>`.
 
 **A write was refused.** The Exact writer raised a WriterError (no token, a status that is not 2xx, a value that reads back different, no connection). After two attempts the change is prepared instead: it is in `prepared_changes.csv`, the write-log entry has the `error`, and the case is in review with "prepared change: apply by hand", while every later change of that case is "not applied: an earlier write failed". Check the token, the route and the endpoints, then apply the prepared change by hand and let the buyer close the case.
 
-**A question was not sent.** The case is in review with "no address for the supplier" (add the supplier to `supplier_emails`) or "message not sent" (the mail server refused it; see the case's `audit.json`, `messages`). If questions appear as files in `cases/outbox/` instead of being sent, SMTP is not set, or `AID_MAIL_PASSWORD` was missing when the runner started. Questions asked from the review page are always written to `cases/outbox/` today (section 3.7).
+**A question was not sent.** The case is in review with "no address for the supplier" (add the supplier to `supplier_emails`) or "message not sent" (the mail server refused it, or, through the work mailbox, the Microsoft sign-in has lapsed: sign in again on the tab "Instellingen" and send the message by hand; see the case's `audit.json`, `messages`). If questions appear as files in `cases/outbox/` instead of being sent, SMTP is not set, or `AID_MAIL_PASSWORD` was missing when the runner started. Questions asked from the review page are always written to `cases/outbox/` today (section 3.7).
 
 **A reply was not filed.** A reply is filed only when its `In-Reply-To` or `References` header names the Message-ID of a question the aid sent (recorded in the case's `messages/sent.jsonl`). A reply written as a new e-mail, or a forward that drops these headers, is not filed: it is handled like any other e-mail. The mailbox rule must save the reply as a whole `.eml` file. A reply to a re-approval request is never filed to a case.
 
@@ -517,7 +657,13 @@ During the evaluation nothing of this may change: no `git pull`, no change to `s
 
 **The digest did not come.** The daily digest is made at the first pass at or after `digest_time` (host time), once a day. If `last_sent` in `cases/digest_state.json` is today, it was made already. Look for `cases/digests/<day>.html` and, without SMTP, an `.eml` in `cases/outbox/`. A failed digest is logged in `runner.log` as `digest` and made again at the next pass. In `per_case` mode a pass without cases or skipped files makes no digest. The runner must be running at that time.
 
-**The runner stopped.** If it printed "stopped by .../STOP", the STOP file exists: delete it and start again. Exit code 2 with "aid.runner: ..." means the settings file cannot be read or is not valid (the message names the fields), or `reader` is not `"parser"`. Otherwise see `cases/runner.log` and the log of the scheduled task or service on the host.
+**"Postvak niet verbonden" in the digest.** The runner could not read the work mailbox because the Microsoft sign-in has lapsed or the account was signed out; `runner.log` says `mailbox: not connected` at most once an hour. The tab still names the account, and says "Aanmelding van ... verlopen" when you press "Verbinding testen" or "Mappen ophalen". Meanwhile the runner handles `inbox/` as usual, a digest it cannot send through the mailbox is written into `cases/outbox/`, and a supplier question or re-approval request is not sent: its case comes to the review page with "Bericht niet verzonden", for you to send by hand (no other way is tried, section 3.14). Open the tab "Instellingen" of the review page on the PC where the runner runs, as the runner's Windows user, and press "Aanmelden bij Microsoft" (or "Aanmelden met een code"). At its next pass the runner reads the mailbox again from where it stopped and logs `mailbox: signed in again`, its next messages go through the mailbox again, and the line is gone from the next digest. If the line stays however often you sign in, the runner runs as another Windows user than the page (section 3.14). After "Afmelden" without "Opslaan" the line stays on purpose (section 3.14). Other problems of the mailbox are in `runner.log` under `mailbox`, once in a run of the runner and again after the folder or the mailbox changes: `mail folder not found` (the folder was deleted: choose a folder on the tab and save), `HTTP 429` or `HTTP 503` (Microsoft asked the aid to wait: the next pass asks again), `HTTP 403` (the account has no access to that mailbox in Exchange or, for another mailbox than its own, the app registration lacks the shared permissions or the sign-in was made before the mailbox was filled in: section 3.14), `unexpected link host` (the state file named a link outside Microsoft Graph: it is dropped, and the next pass connects again), `MicrosoftUnreachable: ConnectionError` or `Timeout` (no network to Microsoft: the next pass tries again, and a lapse noted before stays noted), `StoreRefused: ...` (the runner may not use the store of the tokens: it runs as another user, or in another kind of session, than the review page that made the store, for example a scheduled task without the desktop's keychain or keyring, or the store's folder lies inside a git repository; start both the same way, or delete the store's folder named in the line and sign in again from a page started like the runner). The runner goes on with `inbox/` in each case.
+
+**The banner is red or does not appear.** "Inkoopassistent niet bereikbaar": the capture server does not run, or the extension's address is not the server's. "Inkoopassistent weigert de pagina": the reason follows; "missing or wrong token" means the token of the options is not `capture_token`, and "no cart table in ..." means the extension saw a cart table that the cart reader cannot read: the page is kept as `cases/captures/nocart_<...>`, the page to extend the cart reader with, and `cases/capture.log` names it. "Voorcontrole mislukt": with "the pre-check failed; see capture.log" the server met an error, whose traceback is in `cases/capture.log`; with "Herlaad de pagina" the extension was updated while the page was open, no case exists, and a reload is all it needs; otherwise the case's run failed, and its folder says why, as under "A case failed". No banner at all: the shop is not in the extension's list, its access was not granted (the options page names it), its tab was open before the shop was added (reload it), or the page holds no table the extension recognises as a cart. Such a page is never sent, so nothing is kept: save it by hand (Ctrl+S) to extend the cart reader with it.
+
+**"Copilot refused: 403" on the settings tab or in `runner.log`.** Copilot does not let the account use the Chat API. Check, in this order: the account has a Microsoft 365 Copilot licence; the app registration has the seven permissions of section 3.15; an administrator has pressed "Grant admin consent" for the four that need it; and the account signed in for Copilot after those permissions were added (press "Aanmelden voor Copilot" again). The code after the status is Graph's own (for example `Forbidden`); the aid never shows Graph's message. Other statuses: `429`, `503` and `504` (Copilot is busy: the case is tried again at the next pass), `400` (Copilot did not take the request; keep `runner.log` and the case folder for the researcher; a 400 when the conversation is created means the API itself changed). "Copilot gave no answer" fails the reading of that case. "Copilot ended the conversation: disengagedForRai" means Copilot refused that document's content itself; see section 3.15, "When Copilot fails". The digest names a failing Copilot in one line, "Copilot werkt niet", with the number of cases waiting for it, and the documents Copilot could not read while it read others in another, "Copilot kon ... niet lezen"; such a document is finished as failed after its third failure. A `SignInNeeded` under a case id means the sign-in has lapsed, or that the runner runs as another Windows user than the review page and cannot read its tokens (section 3.4): press "Aanmelden voor Copilot" as the runner's Windows user; the case is read at the next pass after that. To work without Copilot meanwhile, switch back to the parser (section 3.15).
+
+**The runner stopped.** If it printed "stopped by .../STOP", the STOP file exists: delete it and start again. Exit code 2 with "aid.runner: ..." means the settings file cannot be read or is not valid (the message names the fields), or `reader` is `"llm"` without the tenant and the client ("reader 'llm' needs the Copilot sign-in": fill them in on the settings tab, save and sign in for Copilot). Otherwise see `cases/runner.log` and the log of the scheduled task or service on the host.
 
 ## 6. The evaluation commands
 
@@ -537,7 +683,7 @@ python3 -m aid.batch --cases <cases.csv> --po-dir <folder> --settings <file> --r
 python3 -m aid.evalscripts.necessity --cases <folder> --spec <folder> --recorded <folder> [--out <file>]
 ```
 
-It has the parser and the AI reader read every `*_conf.pdf`, scores both against the specs and prints the decision (`keep_llm` or `parser_only`). The default output is `aid/evalscripts/results/necessity_<date>.csv`. As the command stands it replays recorded answers; a run on the made-up set is development evidence, not the check. The check on the development cases runs on the company side and needs the Microsoft client of Task 7b.
+It has the parser and the AI reader read every `*_conf.pdf`, scores both against the specs and prints the decision (`keep_llm` or `parser_only`). The default output is `aid/evalscripts/results/necessity_<date>.csv`. As the command stands it replays recorded answers; a run on the made-up set is development evidence, not the check. The command replays recorded answers only: the recorded fixtures of the made-up set, or answers recorded with the development client on made-up documents. Recording Copilot's answers is not built yet (the record command of `aid/readers/supplier_llm.py` uses the development client only), so the check on the development cases, which are company documents, waits for it.
 
 **The freeze record**: `python3 -m aid.freeze --settings <file> [--out <file>]` (section 4.8).
 
@@ -566,5 +712,11 @@ Druk daarna op "Zaak afsluiten". Als alles is bevestigd of gehouden, voegt de as
 **Ongedaan maken.** Klik in het dagoverzicht op "ongedaan maken", of kies op de pagina een schrijfactie onder "Schrijfactie". Druk dan op "Ongedaan maken". Pas na die knop wordt de wijziging teruggedraaid. Nu nog is dat een voorbereide wijziging: de onderzoeker draait die met de hand terug in Exact. Zolang alle wijzigingen "(voorbereid)" zijn, staat er geen "ongedaan maken" in het dagoverzicht.
 
 **De vraag aan de leverancier en de wachttijd.** De leverancier krijgt standaard drie werkdagen om te antwoorden (de instelling kan anders zijn) (zaterdag en zondag tellen niet mee, feestdagen wel). Antwoordt de leverancier, komt de bounce terug, of komt er geen antwoord, dan staat de zaak weer bij "Wacht op u". Het antwoord zelf leest u in uw mailbox, want u stond in de kopie. Pas zo nodig de order met de hand aan, kies dan "Bevestigen" of "Houden" en sluit de zaak af.
+
+**Het postvak koppelen.** Op het tabblad "Instellingen" van de beoordelingspagina meldt u zich aan met uw Microsoft-werkaccount: "Aanmelden bij Microsoft" opent een browservenster op de pc waar de pagina draait. Kies daarna de map van uw postvak; dat moet een map bovenaan het postvak zijn, naast "Postvak IN", want mappen daarbinnen staan niet in de lijst. In die map moeten de e-mails met de inkooporders, de orderbevestigingen en de antwoorden op de vragen van de assistent komen: de antwoorden bijvoorbeeld met een Outlook-regel op "Vraag over orderbevestiging PO", de rest met regels op de afzenders van Exact en van de leveranciers, of kies "Postvak IN" zelf. Een e-mail die niet in de map komt, wordt niet gecontroleerd. Druk op "Verbinding testen" en dan op "Opslaan". Vanaf dat moment leest de controle die map zelf, bij elke ronde: wat er al in stond laat zij liggen, en zij verplaatst of verwijdert niets. Lag de controle lang stil, dan leest zij daarna wat sinds haar laatste ronde is ontvangen; een ouder bericht dat u in die tijd naar de map verplaatste, verplaatst u eruit en er weer in. Staat in het dagoverzicht "Postvak niet verbonden: meld je opnieuw aan op het tabblad Instellingen", meld u daar dan opnieuw aan. Zolang de aanmelding verlopen is, verstuurt de assistent geen vragen: die komen op de beoordelingspagina als "Bericht niet verzonden", zodat u ze zelf verstuurt. "Afmelden" alleen laat de map staan, zodat die regel in elk dagoverzicht blijft staan; druk daarna op "Opslaan" om de koppeling helemaal weg te halen. "Afmelden" meldt u ook af voor Copilot: leest de assistent met Copilot, dan wachten alle zaken tot u weer op "Aanmelden voor Copilot" drukt of bij "Documenten lezen met" "zonder AI (parser)" kiest. Koppelt u later opnieuw, dan begint de koppeling op dat moment en blijft wat er intussen in de map kwam liggen.
+
+**De voorcontrole in de browser.** Op de webshops die in de extensie staan, verschijnt boven de winkelwagen een balk van de inkoopassistent, ongeveer een seconde nadat de pagina opent of de winkelwagen verandert. Groen: de winkelwagen komt overeen met de inkooporder (kleine prijsverschillen heeft de assistent zelf verwerkt; die regels staan eronder). Oranje: er zijn verschillen, met een regel per verschil; pas de winkelwagen of de inkooporder aan voordat u bestelt. Een regel met "wijziging voorbereid" of "bijgewerkt" heeft de assistent al verwerkt; die hoeft u niet te corrigeren. Grijs: er is geen inkooporder gevonden. Rood: de controle is mislukt of de assistent is niet bereikbaar; geef dat door aan de onderzoeker. Staat er "Herlaad de pagina", dan is de extensie bijgewerkt: laad de pagina opnieuw. Met "Bekijk de zaak" opent u de zaak op de beoordelingspagina zolang die op u wacht. Opnieuw laden van dezelfde pagina opent geen nieuwe zaak.
+
+**Copilot.** De assistent leest de orderbevestigingen met Microsoft 365 Copilot via uw eigen werkaccount, waarvoor u zich op het tabblad "Instellingen" aanmeldt met "Aanmelden voor Copilot"; een gescand document zonder tekst kan Copilot niet lezen, en die zaak ziet u in het dagoverzicht bij "Mislukt". Staat in het dagoverzicht "Copilot werkt niet", meld u dan opnieuw aan met "Aanmelden voor Copilot", druk op "Copilot testen" en geef het door aan de onderzoeker als het niet lukt. Staat er "Copilot kon 1 document niet lezen", dan probeert de assistent het bij de volgende ronde opnieuw; lukt het na drie keer niet, dan staat die zaak bij "Mislukt" en controleert u dat document zelf.
 
 **Wie belt u?** Bij een vraag, een fout, een zaak bij "Mislukt" of een pagina die niet opent: bel of mail de onderzoeker, Yijie.

@@ -30,6 +30,13 @@
   "smtp_host": null,
   "smtp_port": 587,
   "smtp_user": null,
+  "ms_tenant_id": null,
+  "ms_client_id": null,
+  "mailbox": null,
+  "mail_folder": null,
+  "mail_folder_name": null,
+  "send_via": "auto",
   "export_columns": {},
-  "review_url": "http://localhost:7860"
+  "review_url": "http://localhost:7860",
+  "capture_token": null
 }

@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "Inkoopassistent: voorcontrole winkelwagen",
+  "version": "0.1.0",
+  "description": "Sends the webshop cart page to the purchasing aid on this computer and shows its pre-check above the page.",
+  "permissions": ["storage", "scripting"],
+  "optional_host_permissions": ["https://*/*", "http://*/*"],
+  "background": {"service_worker": "background.js"},
+  "content_scripts": [
+    {"matches": ["http://127.0.0.1/*", "http://localhost/*"], "js": ["content.js"], "run_at": "document_idle"}
+  ],
+  "options_page": "options.html"
+}

@@ -6,6 +6,8 @@ from email import message_from_bytes, policy
 from html import escape
 from typing import get_args
 
+import pytest
+
 from aid.comparison import Field, Findings, Flag, Uncompared
 from aid.execution.ops import OpKind, WriteOp
 from aid.execution.writer import WriteLogEntry
@@ -335,3 +337,44 @@ def test_the_undo_link_selects_its_case_and_write_on_the_review_page(tmp_path, m
     assert selection_from_query(d.settings.cases_root, query) == (c.case_id, entry_id)
     query = dict(parse_qsl(urlsplit(review_link(d.settings, c.case_id)).query))
     assert selection_from_query(d.settings.cases_root, query) == (c.case_id, None)
+
+
+@pytest.mark.parametrize("language, line", [("nl", "Postvak niet verbonden: meld je opnieuw aan op het tabblad Instellingen"),
+                                            ("en", "Mailbox not connected: sign in again on the Settings tab")])
+def test_a_lapsed_mailbox_is_one_line_under_the_title_before_the_blocks(language, line):
+    settings = SETTINGS.model_copy(update={"language": language})
+    lapsed = build_digest([case_result("250101_20261118T090000", "closed")], [], settings, date(2026, 11, 18), mailbox_lapsed=True)
+    assert lapsed.text.splitlines()[1:3] == ["", line] and lapsed.text.count(line) == 1
+    assert lapsed.html.index("</h1>") < lapsed.html.index(f"<p>{line}</p>") < lapsed.html.index("<h2>")
+    assert line not in build_digest([], [], settings, date(2026, 11, 18)).text
+
+
+@pytest.mark.parametrize("language, waiting, line", [
+    ("nl", 2, "Copilot werkt niet (Copilot refused: 403 Forbidden): 2 zaken wachten erop; meld je aan voor Copilot of test Copilot op "
+              "het tabblad Instellingen"),
+    ("nl", 1, "Copilot werkt niet (Copilot refused: 403 Forbidden): 1 zaak wacht erop; meld je aan voor Copilot of test Copilot op "
+              "het tabblad Instellingen"),
+    ("en", 3, "Copilot is not working (Copilot refused: 403 Forbidden): 3 cases wait for it; sign in for Copilot or test Copilot on "
+              "the Settings tab")])
+def test_copilot_that_fails_is_one_line_under_the_title_with_the_cases_waiting(language, waiting, line):
+    settings = SETTINGS.model_copy(update={"language": language})
+    d = build_digest([], [], settings, date(2026, 11, 18), mailbox_lapsed=True, copilot_down=("Copilot refused: 403 Forbidden", waiting))
+    assert d.text.splitlines()[2:4][-1] == line and d.text.count(line) == 1
+    assert d.html.index("</h1>") < d.html.index(f"<p>{escape(line)}</p>")
+    assert "Copilot" not in build_digest([], [], settings, date(2026, 11, 18)).text
+    marked = build_digest([], [], settings, date(2026, 11, 18), copilot_down=("Copilot ended the conversation: <b>", 1)).html
+    assert "<b>" not in marked and "&lt;b&gt;" in marked
+
+
+@pytest.mark.parametrize("language, refused, line", [
+    ("nl", 1, "Copilot kon 1 document niet lezen; nieuwe poging bij de volgende ronde"),
+    ("nl", 2, "Copilot kon 2 documenten niet lezen; nieuwe poging bij de volgende ronde"),
+    ("en", 1, "Copilot could not read 1 document; it is tried again at the next pass"),
+    ("en", 3, "Copilot could not read 3 documents; they are tried again at the next pass")])
+def test_the_documents_copilot_could_not_read_are_a_line_of_their_own(language, refused, line):
+    settings = SETTINGS.model_copy(update={"language": language})
+    d = build_digest([], [], settings, date(2026, 11, 18), copilot_refused=refused)
+    assert d.text.splitlines()[2] == line and "Copilot werkt niet" not in d.text and "not working" not in d.text
+    both = build_digest([], [], settings, date(2026, 11, 18), copilot_down=("Copilot refused: 403 Forbidden", 2), copilot_refused=refused)
+    assert both.text.splitlines()[3] == line
+    assert "Copilot" not in build_digest([], [], settings, date(2026, 11, 18), copilot_refused=0).text

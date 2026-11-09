@@ -16,6 +16,8 @@ a MailerError that names the class of the error, never the password, the login o
 fails the message as well; a refused Cc (the buyer's copy) does not, because the supplier has the question, and the record counts it
 (refused_cc). Each e-mail has a Message-ID made of the message id and the sender's domain, which a reply's In-Reply-To names, the
 header Auto-Submitted: auto-generated, and the template and the case id in the headers X-Aid-Template and X-Aid-Case.
+MicrosoftMailer (microsoft_mailer.py) sends through the work mailbox with the user's Microsoft sign-in, and its record keeps the
+Message-ID that Exchange gave the message (internet_message_id), whose part before the "@" is then the record's message id.
 
 The messages of a case are kept in <case root>/messages/:
 
@@ -55,7 +57,7 @@ from pathlib import Path
 from typing import NamedTuple, Protocol, get_args
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from aid.case import Case
 from aid.execution.ops import WriteOp
@@ -88,12 +90,15 @@ class Message(BaseModel):
 
 
 class SentRecord(BaseModel):
-    message_id: str                              # the mailer's id of the message: a UUID in 32 hex digits
+    message_id: str                              # the mailer's id of the message, the part of its Message-ID before the "@": a UUID in
+                                                 # 32 hex digits, or that part of the id Exchange gave it (internet_message_id)
     to: list[str]
     subject: str
     sent_at: str                                 # when it was sent, in ISO form to the second
     template: str
     refused_cc: int = 0                          # the Cc addresses (the buyer's copy) the server refused; a refused To fails the send
+    # The whole Message-ID as Exchange gives it (MicrosoftMailer); None for the other mailers, and then left out of a record's JSON.
+    internet_message_id: str | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class Mailer(Protocol):

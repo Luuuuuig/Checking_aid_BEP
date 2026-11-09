@@ -14,6 +14,13 @@ the settings, as plain text and as simple HTML with the same content. Its blocks
   the template of each question in words. A request to the approver to approve a PO again is no question.
 - Mislukt (Failed): the failed cases, each with the first line of its error.
 - Overgeslagen (Skipped): the skipped files grouped by their reason, "<file>: <reason>", the reasons in alphabetical order.
+While the runner cannot read the work mailbox because the Microsoft sign-in has lapsed (aid/runner.py), one line under the title,
+before the blocks, says so: "Postvak niet verbonden: meld je opnieuw aan op het tabblad Instellingen" ("Mailbox not connected: sign
+in again on the Settings tab"). While Microsoft 365 Copilot, the AI service, fails (it refused, could not be reached, or its sign-in
+has lapsed), a line after it names the error and the number of cases waiting for Copilot: "Copilot werkt niet (<error>): 2 zaken
+wachten erop; meld je aan voor Copilot of test Copilot op het tabblad Instellingen". The documents that Copilot could not read
+while it read others (it refused them, or failed them after reading another case) are a line of their own: "Copilot kon 1 document
+niet lezen; nieuwe poging bij de volgende ronde".
 A day without cases and without skipped files says so. A price or a quantity has the decimal comma in Dutch and the point in
 English. A case is named by its PO number, the part of its id before the first underscore ("onbekend" for "unknown"), and by its
 supplier when that is known. The reason of a review item is shown by its label on the review page, in the language
@@ -60,6 +67,11 @@ _WRITE_NAME = re.compile(r" \((?:write: )?rule R\d+[^)]*\)")    # the pipeline's
 _WORDS = {
     "nl": {"digest": "Dagoverzicht", "handled": "Behandelde zaken", "review": "Wacht op u", "waiting": "Vraag gesteld aan de leverancier",
            "failed": "Mislukt", "skipped": "Overgeslagen", "nothing": "Er zijn geen zaken behandeld en geen bestanden overgeslagen.",
+           "mailbox": "Postvak niet verbonden: meld je opnieuw aan op het tabblad Instellingen",
+           "copilot": "Copilot werkt niet ({error}): {waiting}; meld je aan voor Copilot of test Copilot op het tabblad Instellingen",
+           "copilot_one": "1 zaak wacht erop", "copilot_many": "{n} zaken wachten erop",
+           "copilot_refused": "Copilot kon {documents} niet lezen; nieuwe poging bij de volgende ronde",
+           "document_one": "1 document", "documents_many": "{n} documenten",
            "undo": "ongedaan maken", "open": "beoordelen", "status": {"prepared": "(voorbereid)", "failed": "(mislukt)"},
            "line": "regel", "lines": "regels", "of_document": "van het document", "unknown": "onbekend", "decimal": ",",
            "kinds": {"po_line_price": "prijs", "po_line_date": "levertijd", "po_line_quantity": "aantal", "article_price": "artikelprijs",
@@ -70,6 +82,11 @@ _WORDS = {
                          "missing_info": "ontbrekende gegevens"}},
     "en": {"digest": "Daily digest", "handled": "Handled cases", "review": "Waiting for you", "waiting": "Question sent to the supplier",
            "failed": "Failed", "skipped": "Skipped", "nothing": "No cases were handled and no files were skipped.",
+           "mailbox": "Mailbox not connected: sign in again on the Settings tab",
+           "copilot": "Copilot is not working ({error}): {waiting}; sign in for Copilot or test Copilot on the Settings tab",
+           "copilot_one": "1 case waits for it", "copilot_many": "{n} cases wait for it",
+           "copilot_refused": "Copilot could not read {documents}; {again} tried again at the next pass",
+           "document_one": "1 document", "documents_many": "{n} documents",
            "undo": "undo", "open": "review", "status": {"prepared": "(prepared)", "failed": "(failed)"},
            "line": "line", "lines": "lines", "of_document": "of the document", "unknown": "unknown", "decimal": ".",
            "kinds": {"po_line_price": "price", "po_line_date": "delivery date", "po_line_quantity": "quantity", "article_price": "article price",
@@ -128,10 +145,22 @@ def digest_due(now: datetime, last_sent: datetime | None, settings: Settings) ->
     return last_sent is None or last_sent.astimezone(now.tzinfo).date() < now.date()
 
 
-def build_digest(results: list[CaseResult], skipped: list[tuple[str, str]], settings: Settings, period: date) -> Digest:
+def build_digest(results: list[CaseResult], skipped: list[tuple[str, str]], settings: Settings, period: date,
+                 mailbox_lapsed: bool = False, copilot_down: tuple[str, int] | None = None, copilot_refused: int = 0) -> Digest:
     """The digest of the day `period` from the results of its cases and the skipped files, (name, reason) pairs, in the language of
-    the settings (see the module docstring)."""
+    the settings (see the module docstring), with the line on the work mailbox when its sign-in has lapsed, the line on Copilot,
+    (its error, the number of cases waiting for it), when it fails, and the line on the documents Copilot could not read while it
+    read others, their number."""
     words = _WORDS[settings.language]
+    notes = [words["mailbox"]] if mailbox_lapsed else []
+    if copilot_down is not None:
+        error, waiting = copilot_down
+        cases = words["copilot_one"] if waiting == 1 else words["copilot_many"].format(n=waiting)
+        notes.append(words["copilot"].format(error=error, waiting=cases))
+    if copilot_refused:
+        documents = words["document_one"] if copilot_refused == 1 else words["documents_many"].format(n=copilot_refused)
+        again = "it is" if copilot_refused == 1 else "they are"
+        notes.append(words["copilot_refused"].format(documents=documents, again=again))
     title = f"{words['digest']} {period:%d-%m-%Y}"
     blocks = [(words["handled"], [_handled(result, settings, words) for result in results]),
               (words["review"], [_in_review(result, settings, words) for result in results if result.status == "review"]),
@@ -139,8 +168,8 @@ def build_digest(results: list[CaseResult], skipped: list[tuple[str, str]], sett
               (words["failed"], [_failed(result, words) for result in results if result.status == "failed"]),
               (words["skipped"], [_Item([f"{name}: {reason}"], []) for name, reason in sorted(skipped, key=lambda skip: skip[1])])]
     blocks = [(heading, items) for heading, items in blocks if items]
-    return Digest(subject=f"{SUBJECT_PREFIX} {title}", text=_text(title, blocks, words), html=_html(title, blocks, words, settings.language),
-                  period=period.isoformat())
+    return Digest(subject=f"{SUBJECT_PREFIX} {title}", text=_text(title, notes, blocks, words),
+                  html=_html(title, notes, blocks, words, settings.language), period=period.isoformat())
 
 
 def send_digest(d: Digest, mailer: Mailer, settings: Settings) -> SentRecord:
@@ -238,10 +267,10 @@ def _shown(text: str | None) -> str:
 
 # --- the text and the HTML ---
 
-def _text(title: str, blocks: list[tuple[str, list[_Item]]], words: dict) -> str:
-    """The digest as plain text: the title, then each block after a blank line, its heading and a line "- ..." per item, with the
-    lines under the item indented; a link is written [label](link)."""
-    lines = [title]
+def _text(title: str, notes: list[str], blocks: list[tuple[str, list[_Item]]], words: dict) -> str:
+    """The digest as plain text: the title, the notes after a blank line, then each block after a blank line, its heading and a line
+    "- ..." per item, with the lines under the item indented; a link is written [label](link)."""
+    lines = [title] + (["", *notes] if notes else [])
     for heading, items in blocks:
         lines += ["", heading]
         for item in items:
@@ -252,11 +281,11 @@ def _text(title: str, blocks: list[tuple[str, list[_Item]]], words: dict) -> str
     return "\n".join(lines) + "\n"
 
 
-def _html(title: str, blocks: list[tuple[str, list[_Item]]], words: dict, language: str) -> str:
-    """The digest as simple HTML: the title as the page's heading, each block as a heading and a list, the lines under an item as a
-    list in it, and each link as an anchor; every value passes through html.escape."""
+def _html(title: str, notes: list[str], blocks: list[tuple[str, list[_Item]]], words: dict, language: str) -> str:
+    """The digest as simple HTML: the title as the page's heading, each note as a paragraph, each block as a heading and a list, the
+    lines under an item as a list in it, and each link as an anchor; every value passes through html.escape."""
     parts = ["<!DOCTYPE html>", f'<html lang="{language}">', f'<head><meta charset="utf-8"><title>{escape(title)}</title></head>',
-             "<body>", f"<h1>{escape(title)}</h1>"]
+             "<body>", f"<h1>{escape(title)}</h1>", *(f"<p>{escape(note)}</p>" for note in notes)]
     for heading, items in blocks:
         parts += [f"<h2>{escape(heading)}</h2>", "<ul>"]
         for item in items:

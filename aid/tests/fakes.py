@@ -4,9 +4,21 @@ entries and case results that the digest and the review page show.
 The documents are the fakes of aid/tests/test_versioning.py, with a description on a line and a PO of its own added, so that
 the tests of every step build their documents the same way. A line's description and delivery date are given by name, so that
 no value can go to the wrong field. No fake calls a model.
+
+The Microsoft sign-in and Microsoft Graph have fakes too: FakeApp stands in for msal's PublicClientApplication and FakeSession for
+the requests session that Graph is called through, so that no test reaches Microsoft or the network. The tenant and client IDs,
+the account and the token are made up. copilot_session is that session as the Copilot Chat API answers the Copilot client
+(aid/readers/copilot_client.py), with made-up answers.
 """
-from collections.abc import Sequence
+import base64
+import hashlib
+import json
+from collections.abc import Callable, Sequence
 from pathlib import Path
+from urllib.parse import unquote
+
+import msal
+from requests.structures import CaseInsensitiveDict
 
 from aid.decider import Decision, DecisionAnswer
 from aid.execution.ops import OpKind, WriteOp
@@ -87,3 +99,183 @@ def case_result(case_id: str, status: Status, writes: Sequence[WriteLogEntry] = 
     line = _digest_line(None if po_number == "unknown" else po_number, supplier, status, entries, language, "confirmation")
     return CaseResult(case_id=case_id, status=status, version=None, findings=None, actions=[], write_entries=entries, messages=[],
                       review_items=[], digest_line=line, supplier=supplier)
+
+
+# --- the Microsoft sign-in and Microsoft Graph ---
+
+TENANT_ID = "00000000-0000-0000-0000-000000000001"   # made up
+CLIENT_ID = "00000000-0000-0000-0000-000000000002"   # made up
+USERNAME = "buyer@example.com"                      # the signed-in account of the fakes
+ACCESS_TOKEN = "made-up-access-token-0001"          # the tests check that it shows nowhere
+GRAPH = "https://graph.microsoft.com/v1.0"
+_UNSET = object()
+
+
+def account_entry(username: str) -> dict:
+    """An account as msal's get_accounts gives it."""
+    return {"username": username, "home_account_id": f"{username}.home", "environment": "login.microsoftonline.com"}
+
+
+def signed_in(username: str = USERNAME) -> dict:
+    """The answer of msal to a sign-in that succeeded for the account."""
+    return {"access_token": ACCESS_TOKEN, "token_type": "Bearer", "expires_in": 3600, "id_token_claims": {"preferred_username": username}}
+
+
+def sign_in_event(username: str) -> dict:
+    """What msal adds to its token cache after a sign-in of the account (made up; the id token is not signed). Each account has a
+    user id of its own, so that the cache keeps two accounts apart."""
+    def part(data: dict) -> str:
+        return base64.urlsafe_b64encode(json.dumps(data).encode()).decode().rstrip("=")
+    uid = hashlib.sha256(username.encode()).hexdigest()[:16]
+    claims = {"preferred_username": username, "oid": uid, "tid": "t1", "iss": "https://login.microsoftonline.com/t1/v2.0", "aud": "c1", "sub": uid}
+    return {"client_id": "c1", "scope": ["User.Read"], "token_endpoint": "https://login.microsoftonline.com/t1/oauth2/v2.0/token",
+            "response": {"access_token": "made-up-access", "refresh_token": "made-up-refresh", "expires_in": 3600, "token_type": "Bearer",
+                         "client_info": part({"uid": uid, "utid": "t1"}), "id_token": f"{part({'alg': 'none'})}.{part(claims)}."}}
+
+
+class FakeApp:
+    """A stand-in for msal's PublicClientApplication. It holds the accounts it is given, answers a sign-in (the browser or the
+    device code) with `result` (a sign-in of USERNAME unless given), after which the account is among its accounts, and a silent
+    request (acquire_token_silent_with_error) with `silent`: ACCESS_TOKEN unless given, an error such as {"error": "invalid_grant"}
+    when Microsoft refuses the refresh, or None when msal has nothing. Every call is recorded in `calls` as (name, scopes, keyword
+    arguments). Bound to a token cache (bind, as the tests' accounts do with their store's), it keeps its accounts in that cache
+    too, as msal keeps them in the cache it is given, so that the account's name is read from the cache."""
+
+    def __init__(self, accounts: Sequence[str] = (), result: dict | None = None, silent=_UNSET, flow: dict | None = None):
+        self.token_cache = None
+        self.accounts = [account_entry(username) for username in accounts]
+        self.result = result if result is not None else signed_in()
+        self.silent = {"access_token": ACCESS_TOKEN, "token_type": "Bearer"} if silent is _UNSET else silent
+        self.flow = flow or {"user_code": "ABCD-1234", "verification_uri": "https://microsoft.com/devicelogin", "expires_in": 900,
+                             "message": "To sign in, use a web browser to open the page and enter the code ABCD-1234."}
+        self.calls: list[tuple] = []
+
+    def get_accounts(self, username: str | None = None) -> list[dict]:
+        self.calls.append(("get_accounts", None, {}))
+        return [dict(account) for account in self.accounts if username in (None, account["username"])]
+
+    def acquire_token_interactive(self, scopes, **kwargs) -> dict:
+        self.calls.append(("acquire_token_interactive", list(scopes), kwargs))
+        return self._sign_in()
+
+    def initiate_device_flow(self, scopes=None, **kwargs) -> dict:
+        self.calls.append(("initiate_device_flow", list(scopes or []), kwargs))
+        return dict(self.flow)
+
+    def acquire_token_by_device_flow(self, flow, **kwargs) -> dict:
+        self.calls.append(("acquire_token_by_device_flow", None, {"flow": flow, **kwargs}))
+        return self._sign_in()
+
+    def acquire_token_silent_with_error(self, scopes, account, **kwargs):
+        self.calls.append(("acquire_token_silent_with_error", list(scopes), {"account": account, **kwargs}))
+        return dict(self.silent) if self.silent is not None else None
+
+    def remove_account(self, account: dict) -> None:
+        self.calls.append(("remove_account", None, {"account": account}))
+        self.accounts = [kept for kept in self.accounts if kept["home_account_id"] != account["home_account_id"]]
+        if self.token_cache is not None:
+            for cached in list(self.token_cache.search(msal.TokenCache.CredentialType.ACCOUNT)):
+                if cached.get("username") == account["username"]:
+                    self.token_cache.remove_account(cached)
+
+    def bind(self, token_cache) -> "FakeApp":
+        """Keep the accounts in the token cache too, from now on (see the class docstring)."""
+        self.token_cache = token_cache
+        for account in self.accounts:
+            token_cache.add(sign_in_event(account["username"]))
+        return self
+
+    def _sign_in(self) -> dict:
+        username = (self.result.get("id_token_claims") or {}).get("preferred_username")
+        if "access_token" in self.result and username and username not in [account["username"] for account in self.accounts]:
+            self.accounts.append(account_entry(username))
+            if self.token_cache is not None:
+                self.token_cache.add(sign_in_event(username))
+        return dict(self.result)
+
+
+class FakeResponse:
+    """A response of Graph as requests gives it: the status code, the headers (in any case), and the body as JSON or as bytes."""
+
+    def __init__(self, status_code: int = 200, json_data=None, content: bytes = b"", headers: dict | None = None):
+        self.status_code, self._json, self.headers = status_code, json_data, CaseInsensitiveDict(headers or {})
+        self.content = json.dumps(json_data).encode() if json_data is not None else content
+
+    @property
+    def ok(self) -> bool:
+        return self.status_code < 400
+
+    @property
+    def text(self) -> str:
+        return self.content.decode("utf-8", errors="replace")
+
+    def json(self):
+        if self._json is None:
+            raise ValueError("the response holds no JSON")
+        return self._json
+
+
+Answer = FakeResponse | Callable[[dict], FakeResponse]
+
+
+class FakeSession:
+    """A requests-like session for Graph. `answers` maps (method, URL) to the responses for it, given in turn and the last one again
+    when they run out; a response may be a function of the request, which it is given as recorded. A URL is compared with its
+    %-escapes decoded, so that a test writes it as Graph reads it, except a URL given with a %-escape of its own (a link of Graph's,
+    whose state token may hold "%2B"), which must be asked exactly as given. Every request is recorded in `calls` as {"method",
+    "url", "headers", "data", "timeout"}. A request without an answer fails the test, so that nothing is asked that the test did not
+    foresee."""
+
+    def __init__(self, answers: dict[tuple[str, str], Answer | list[Answer]] | None = None):
+        self.answers = {(method, url if "%" in url else unquote(url)): list(given) if isinstance(given, list) else [given]
+                        for (method, url), given in (answers or {}).items()}
+        self.calls: list[dict] = []
+
+    def get(self, url, headers=None, timeout=None, **kwargs) -> FakeResponse:
+        return self._answer("GET", url, headers, None, timeout)
+
+    def post(self, url, headers=None, data=None, timeout=None, **kwargs) -> FakeResponse:
+        return self._answer("POST", url, headers, data, timeout)
+
+    def _answer(self, method: str, url: str, headers, data, timeout) -> FakeResponse:
+        request = {"method": method, "url": url, "headers": dict(headers or {}), "data": data, "timeout": timeout}
+        self.calls.append(request)
+        queue = self.answers.get((method, url)) or self.answers.get((method, unquote(url)))
+        if queue is None:
+            raise AssertionError(f"the fake session has no answer for {method} {unquote(url)}")
+        answer = queue.pop(0) if len(queue) > 1 else queue[0]
+        return answer(request) if callable(answer) else answer
+
+
+# --- Microsoft 365 Copilot ---
+
+COPILOT = "https://graph.microsoft.com/beta/copilot/conversations"
+CONVERSATION = "made-up-conversation-0001"          # the id of the conversation the fake Copilot makes
+RESPONSE_MESSAGE = "#microsoft.graph.copilotConversationResponseMessage"
+
+
+def copilot_answer(text: str | None, sent: str, conversation: str = CONVERSATION, state: str = "active") -> FakeResponse:
+    """The answer of the Copilot Chat API to a chat, in the shape of the examples of Microsoft's chat page: the conversation in its
+    state, with two messages of the type copilotConversationResponseMessage, the first recapping the message that was sent, the
+    second holding the answer's text; without a text (None), the recap alone."""
+    messages = [{"@odata.type": RESPONSE_MESSAGE, "id": "made-up-recap-message", "text": sent, "attributions": []}]
+    if text is not None:
+        messages.append({"@odata.type": RESPONSE_MESSAGE, "id": "made-up-response-message", "text": text, "attributions": []})
+    return FakeResponse(200, json_data={"id": conversation, "state": state, "turnCount": 1, "messages": messages})
+
+
+def sent_text(request: dict) -> str:
+    """The text of the message of a chat request as recorded by FakeSession."""
+    return json.loads(request["data"])["message"]["text"]
+
+
+def copilot_session(*answers: str | Answer, created: Answer | list[Answer] | None = None,
+                    conversation: str = CONVERSATION) -> FakeSession:
+    """Graph for the Copilot client: creating a conversation gives the conversation `conversation` (or the responses `created`, in
+    turn), and each chat in it gives the `answers` in turn, the last one again when they run out; a text is the text of the answer
+    after the recap of the message sent (copilot_answer), anything else is given as it is."""
+    def answering(text: str) -> Callable[[dict], FakeResponse]:
+        return lambda request: copilot_answer(text, sent_text(request), conversation)
+    made = created if created is not None else FakeResponse(201, json_data={"id": conversation, "state": "active", "turnCount": 0})
+    chats = [answering(answer) if isinstance(answer, str) else answer for answer in answers]
+    return FakeSession({("POST", COPILOT): made} | ({("POST", f"{COPILOT}/{conversation}/chat"): chats} if chats else {}))

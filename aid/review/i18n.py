@@ -5,7 +5,9 @@ A key with a prefix labels a value of the aid: "field:<field>" a field of the co
 review item, the detail of a flag or the reason of an uncompared item). A reason key that ends in " *" labels every reason that
 begins with the text before the asterisk, for the reasons that name a write or a number of days. The page shows these labels and
 never the texts themselves, so that no rule code and no setting value reaches it. reason_label gives the label of a reason, for
-the page and for the digest (aid/notify.py), which imports these strings and not gradio.
+the page and for the digest (aid/notify.py), which imports these strings and not gradio. The keys that begin with "settings" are the
+strings of the settings tab, "settings_via:<value>" labelling a value of the setting send_via and "settings_reader:<value>" a value of
+the setting reader.
 """
 
 STRINGS: dict[str, dict[str, str]] = {
@@ -52,6 +54,71 @@ STRINGS: dict[str, dict[str, str]] = {
         "question_open": "Vraag aan de leverancier staat open",
         "decisions_damaged": "De besluiten van deze zaak kunnen niet worden gelezen ({file}).",
         "choose_write": "Kies eerst een schrijfactie.",
+        "review_tab": "Beoordelen",
+        "settings_tab": "Instellingen",
+        "settings_share": "Niet beschikbaar op een openbare link",
+        "settings_no_file": "Niet beschikbaar: de pagina is gestart zonder instellingenbestand",
+        "settings_intro": ("Met een aanmelding bij Microsoft leest de controle zelf een map van het postvak en verstuurt zij haar e-mails "
+                           "vanuit dat postvak. Zonder aanmelding werkt zij zoals voorheen met de bewaakte map."),
+        "settings_tenant": "Map-id (tenant)",
+        "settings_client": "Toepassings-id (client)",
+        "settings_sign_in": "Aanmelden bij Microsoft",
+        "settings_sign_in_code": "Aanmelden met een code",
+        "settings_browser_note": ("Aanmelden bij Microsoft opent een browservenster met de aanmeldpagina van Microsoft op de pc waar deze "
+                                  "pagina draait. Opent er geen venster, kies dan Aanmelden met een code."),
+        "settings_waiting": ("Er opent nu een venster van Microsoft: meld u daar aan. Deze pagina wacht er hoogstens vijf minuten op; "
+                             "een tweede druk op de knop wacht tot dan."),
+        "settings_browser_timeout": ("Er is binnen vijf minuten niet aangemeld. Opende er geen venster, kies dan Aanmelden met een "
+                                     "code."),
+        "settings_code": "Ga naar {address} en voer de code {code} in. Deze pagina wacht tot de aanmelding klaar is.",
+        "settings_signed_in": "Aangemeld als {account}",
+        "settings_not_signed_in": "Niet aangemeld",
+        "settings_lapsed": "Aanmelding van {account} verlopen: meld u opnieuw aan",
+        "settings_store_refused": "De beveiligde opslag op deze pc is geweigerd",
+        "settings_sign_out": "Afmelden",
+        "settings_signed_out": "Afgemeld.",
+        "settings_sign_in_failed": "Aanmelden is niet gelukt ({code}).",
+        "settings_ids_needed": "Vul eerst een geldige map-id (tenant) en toepassings-id (client) in.",
+        "settings_mailbox": "Postvak (leeg: uw eigen postvak)",
+        "settings_folder": "Map",
+        "settings_folders": "Mappen ophalen",
+        "settings_folders_loaded": "Mappen opgehaald: {count}.",
+        "settings_folder_needed": "Kies eerst een map.",
+        "settings_folders_first": "Druk eerst op Mappen ophalen voor dit postvak en kies een map.",
+        "settings_test": "Verbinding testen",
+        "settings_tested": "Berichten in de map: {count}; nieuwste ontvangen: {newest}.",
+        "settings_tested_empty": "De map is leeg.",
+        "settings_graph_failed": "Microsoft gaf geen bruikbaar antwoord ({code}).",
+        "settings_failed": "Dit is niet gelukt ({code}).",
+        "settings_send_via": "Verzenden via",
+        "settings_via:auto": ("Automatisch: het postvak als u bent aangemeld en een map is gekozen (is de aanmelding verlopen, dan "
+                              "wordt niets verzonden), anders de SMTP-server of bestanden"),
+        "settings_via:file": "Bestanden: niets verzenden",
+        "settings_via:smtp": "De SMTP-server van de instellingen",
+        "settings_via:microsoft": "Het postvak van de aanmelding",
+        "settings_save": "Opslaan",
+        "settings_saved": "De controle neemt dit over bij de volgende ronde",
+        "settings_not_saved": "Niet opgeslagen: controleer {fields}.",
+        "settings_trigger": "Stand van de controle",
+        "settings_trigger_off": "De controle leest geen postvak: zij werkt met de bewaakte map.",
+        "settings_trigger_pending": "Nog niet verbonden: de controle maakt de verbinding bij de volgende ronde.",
+        "settings_trigger_on": "Verbonden sinds {since}; laatst gelezen: {last}; opgeslagen berichten: {saved}.",
+        "settings_trigger_unread": "Verbonden sinds {since}; nog niet gelezen.",
+        "settings_ai": "De AI-dienst: Microsoft 365 Copilot",
+        "settings_ai_needs": ("Copilot heeft nodig: een licentie voor Microsoft 365 Copilot op het account; de zeven machtigingen "
+                              "Sites.Read.All, Mail.Read, People.Read.All, OnlineMeetingTranscript.Read.All, Chat.Read, "
+                              "ChannelMessage.Read.All en ExternalItem.Read.All op de app-registratie; en voor vier daarvan "
+                              "(People.Read.All, OnlineMeetingTranscript.Read.All, ChannelMessage.Read.All en ExternalItem.Read.All) "
+                              "eenmalig de toestemming van een beheerder."),
+        "settings_ai_sign_in": "Aanmelden voor Copilot",
+        "settings_ai_signed_in": "Aangemeld voor het postvak en voor Copilot.",
+        "settings_ai_test": "Copilot testen",
+        "settings_ai_answer": "Copilot antwoordt: {answer}",
+        "settings_ai_failed": "Copilot testen is niet gelukt: {error}",
+        "settings_ai_reader": "Documenten lezen met",
+        "settings_reader:llm": "Copilot",
+        "settings_reader:parser": "zonder AI (parser)",
+        "settings_ai_ids_needed": "Sla eerst de map-id en de toepassings-id op; daarna kan Copilot de documenten lezen.",
         "item_one": "1 punt",
         "items_many": "{n} punten",
         "unknown_po": "onbekend",
@@ -163,6 +230,70 @@ STRINGS: dict[str, dict[str, str]] = {
         "question_open": "A question to the supplier is open",
         "decisions_damaged": "The decisions of this case cannot be read ({file}).",
         "choose_write": "Choose a write first.",
+        "review_tab": "Review",
+        "settings_tab": "Settings",
+        "settings_share": "Not available on a public link",
+        "settings_no_file": "Not available: the page was started without a settings file",
+        "settings_intro": ("With a Microsoft sign-in the check reads a folder of the mailbox itself and sends its e-mails from that "
+                           "mailbox. Without a sign-in it works as before, from the watched folder."),
+        "settings_tenant": "Directory (tenant) ID",
+        "settings_client": "Application (client) ID",
+        "settings_sign_in": "Sign in with Microsoft",
+        "settings_sign_in_code": "Sign in with a code",
+        "settings_browser_note": ("Sign in with Microsoft opens a browser window with Microsoft's sign-in page on the PC where this page "
+                                  "runs. If no window opens, choose Sign in with a code."),
+        "settings_waiting": ("A window of Microsoft opens now: sign in there. This page waits for it for at most five minutes; a "
+                             "second press of the button waits until then."),
+        "settings_browser_timeout": "No sign-in within five minutes. If no window opened, choose Sign in with a code.",
+        "settings_code": "Go to {address} and enter the code {code}. This page waits until the sign-in is done.",
+        "settings_signed_in": "Signed in as {account}",
+        "settings_not_signed_in": "Not signed in",
+        "settings_lapsed": "The sign-in of {account} has lapsed: sign in again",
+        "settings_store_refused": "The protected store on this PC was refused",
+        "settings_sign_out": "Sign out",
+        "settings_signed_out": "Signed out.",
+        "settings_sign_in_failed": "The sign-in did not succeed ({code}).",
+        "settings_ids_needed": "Fill in a valid tenant ID and client ID first.",
+        "settings_mailbox": "Mailbox (empty: your own)",
+        "settings_folder": "Folder",
+        "settings_folders": "Load the folders",
+        "settings_folders_loaded": "Folders loaded: {count}.",
+        "settings_folder_needed": "Choose a folder first.",
+        "settings_folders_first": "Press Load the folders for this mailbox first and choose a folder.",
+        "settings_test": "Test the connection",
+        "settings_tested": "Messages in the folder: {count}; newest received: {newest}.",
+        "settings_tested_empty": "The folder is empty.",
+        "settings_graph_failed": "Microsoft gave no usable answer ({code}).",
+        "settings_failed": "This did not work ({code}).",
+        "settings_send_via": "Send through",
+        "settings_via:auto": ("Automatic: the mailbox when you are signed in and a folder is chosen (while the sign-in has lapsed, "
+                              "nothing is sent), else the SMTP server or files"),
+        "settings_via:file": "Files: send nothing",
+        "settings_via:smtp": "The SMTP server of the settings",
+        "settings_via:microsoft": "The mailbox of the sign-in",
+        "settings_save": "Save",
+        "settings_saved": "The check takes this over at the next pass",
+        "settings_not_saved": "Not saved: check {fields}.",
+        "settings_trigger": "State of the check",
+        "settings_trigger_off": "The check reads no mailbox: it works from the watched folder.",
+        "settings_trigger_pending": "Not connected yet: the check connects at its next pass.",
+        "settings_trigger_on": "Connected since {since}; last read: {last}; messages saved: {saved}.",
+        "settings_trigger_unread": "Connected since {since}; not read yet.",
+        "settings_ai": "The AI service: Microsoft 365 Copilot",
+        "settings_ai_needs": ("Copilot needs: a Microsoft 365 Copilot licence on the account; the seven permissions "
+                              "Sites.Read.All, Mail.Read, People.Read.All, OnlineMeetingTranscript.Read.All, Chat.Read, "
+                              "ChannelMessage.Read.All and ExternalItem.Read.All on the app registration; and for four of them "
+                              "(People.Read.All, OnlineMeetingTranscript.Read.All, ChannelMessage.Read.All and ExternalItem.Read.All) "
+                              "an administrator's consent, once."),
+        "settings_ai_sign_in": "Sign in for Copilot",
+        "settings_ai_signed_in": "Signed in for the mailbox and for Copilot.",
+        "settings_ai_test": "Test Copilot",
+        "settings_ai_answer": "Copilot answers: {answer}",
+        "settings_ai_failed": "The test of Copilot did not succeed: {error}",
+        "settings_ai_reader": "Read documents with",
+        "settings_reader:llm": "Copilot",
+        "settings_reader:parser": "without AI (parser)",
+        "settings_ai_ids_needed": "Save the tenant ID and the client ID first; then Copilot can read the documents.",
         "item_one": "1 item",
         "items_many": "{n} items",
         "unknown_po": "unknown",
