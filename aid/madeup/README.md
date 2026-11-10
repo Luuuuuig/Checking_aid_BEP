@@ -12,6 +12,18 @@ python3 -m aid.madeup.generate --spec aid/madeup/spec --out aid/madeup/out
 
 The command draws every case into `out/` and writes `references.csv` next to the spec folder. If a spec's values contradict the differences it declares, it stops before writing anything. The output is the same byte for byte on every run: reportlab runs in its invariant mode, and the scans and the screenshot are rendered the same way each time. The tests generate the set into a temporary folder (the session fixture `madeup_out` in `aid/tests/conftest.py`). `out/` is committed so that the bake-off and readers have the files.
 
+## The try-out files
+
+`tryout/` holds made-up files in forms the set does not have, for trying out what is set up on the company side. They belong to no case and have no reference answer.
+
+```bash
+python3 -m aid.madeup.generate --tryout aid/madeup/tryout
+```
+
+The command writes the try-out files and nothing else: `out/` and `references.csv` are left as they are. `tryout/` is committed, and a test checks that the generator writes the same text.
+
+- `EXPORT_nl.csv` is an export of open purchase order lines as a Dutch ERP overview saved as CSV, for the export reader (`aid/readers/po_export.py`). It is cut at semicolons, writes its numbers as 1.234,50 and its days as 24-11-2026, and has a title row and a blank row above its column titles (Inkooporder, Leverancier, Artikel, Omschrijving, Aantal, Eenheid, Prijs, Per, Leverdatum, Bedrag). The PO number and the supplier stand on the first row of each order only, the lines have no line number, Bedrag is a column the aid does not read, and the last row is a total. It holds PO 250301 of supplier S21 (KM-3101 to KM-3103) and PO 250302 of supplier S22 (KM-3201 and KM-3202); these numbers and item codes belong to no case of the set. It is read with the column map `TRYOUT_EXPORT_COLUMNS` of `generate.py`, the decimal comma and the fill-down of the PO number (the settings `export_columns`, `export_decimal_comma` and `export_fill_down`).
+
 ## The cases
 
 | Case | Layout | Language | Difference | PO | Item codes |

@@ -1,0 +1,9 @@
+Openstaande inkooporderregels (verzonnen voorbeeld);;;;;;;;;
+;;;;;;;;;
+Inkooporder;Leverancier;Artikel;Omschrijving;Aantal;Eenheid;Prijs;Per;Leverdatum;Bedrag
+250301;S21;KM-3101;Slangklem 16-27 mm;1.000;st;12,50;100;24-11-2026;125,00
+;;KM-3102;Hydrauliekslang 12 mm;25;m;4,80;1;24-11-2026;120,00
+;;KM-3103;Kogelkraan DN20;4;st;38,75;1;01-12-2026;155,00
+250302;S22;KM-3201;O-ring 30 x 3 mm;200;st;0,125;1;26-11-2026;25,00
+;;KM-3202;Tandwielpomp 11 cc;2;st;1.234,50;1;26-11-2026;2.469,00
+Totaal;;;;;;;;;2.894,00

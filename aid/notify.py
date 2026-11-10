@@ -15,12 +15,14 @@ the settings, as plain text and as simple HTML with the same content. Its blocks
 - Mislukt (Failed): the failed cases, each with the first line of its error.
 - Overgeslagen (Skipped): the skipped files grouped by their reason, "<file>: <reason>", the reasons in alphabetical order.
 While the runner cannot read the work mailbox because the Microsoft sign-in has lapsed (aid/runner.py), one line under the title,
-before the blocks, says so: "Postvak niet verbonden: meld je opnieuw aan op het tabblad Instellingen" ("Mailbox not connected: sign
-in again on the Settings tab"). While Microsoft 365 Copilot, the AI service, fails (it refused, could not be reached, or its sign-in
-has lapsed), a line after it names the error and the number of cases waiting for Copilot: "Copilot werkt niet (<error>): 2 zaken
-wachten erop; meld je aan voor Copilot of test Copilot op het tabblad Instellingen". The documents that Copilot could not read
-while it read others (it refused them, or failed them after reading another case) are a line of their own: "Copilot kon 1 document
-niet lezen; nieuwe poging bij de volgende ronde".
+before the blocks, says so: "Postvak niet verbonden: meld je opnieuw aan op het tabblad Instellingen, onderaan bij Koppelingen"
+("Mailbox not connected: sign in again on the Settings tab, at its bottom under Connections"). While Microsoft 365 Copilot, the AI
+service, fails (it refused, could not be reached, or its sign-in has lapsed), a line after it names the error and the number of
+cases waiting for Copilot: "Copilot werkt niet (<error>): 2 zaken wachten erop; meld je aan voor Copilot of test Copilot op het
+tabblad Instellingen, onderaan bij Koppelingen". Both lines name the place of the buttons, because the settings tab keeps them
+folded away under "Koppelingen" at its bottom (aid/review/page.py). The documents that Copilot could not read while it read
+others (it refused them, or failed them after reading another case) are a line of their own: "Copilot kon 1 document niet lezen;
+nieuwe poging bij de volgende ronde".
 A day without cases and without skipped files says so. A price or a quantity has the decimal comma in Dutch and the point in
 English. A case is named by its PO number, the part of its id before the first underscore ("onbekend" for "unknown"), and by its
 supplier when that is known. The reason of a review item is shown by its label on the review page, in the language
@@ -67,8 +69,9 @@ _WRITE_NAME = re.compile(r" \((?:write: )?rule R\d+[^)]*\)")    # the pipeline's
 _WORDS = {
     "nl": {"digest": "Dagoverzicht", "handled": "Behandelde zaken", "review": "Wacht op u", "waiting": "Vraag gesteld aan de leverancier",
            "failed": "Mislukt", "skipped": "Overgeslagen", "nothing": "Er zijn geen zaken behandeld en geen bestanden overgeslagen.",
-           "mailbox": "Postvak niet verbonden: meld je opnieuw aan op het tabblad Instellingen",
-           "copilot": "Copilot werkt niet ({error}): {waiting}; meld je aan voor Copilot of test Copilot op het tabblad Instellingen",
+           "mailbox": "Postvak niet verbonden: meld je opnieuw aan op het tabblad Instellingen, onderaan bij Koppelingen",
+           "copilot": ("Copilot werkt niet ({error}): {waiting}; meld je aan voor Copilot of test Copilot op het tabblad Instellingen, "
+                       "onderaan bij Koppelingen"),
            "copilot_one": "1 zaak wacht erop", "copilot_many": "{n} zaken wachten erop",
            "copilot_refused": "Copilot kon {documents} niet lezen; nieuwe poging bij de volgende ronde",
            "document_one": "1 document", "documents_many": "{n} documenten",
@@ -82,8 +85,9 @@ _WORDS = {
                          "missing_info": "ontbrekende gegevens"}},
     "en": {"digest": "Daily digest", "handled": "Handled cases", "review": "Waiting for you", "waiting": "Question sent to the supplier",
            "failed": "Failed", "skipped": "Skipped", "nothing": "No cases were handled and no files were skipped.",
-           "mailbox": "Mailbox not connected: sign in again on the Settings tab",
-           "copilot": "Copilot is not working ({error}): {waiting}; sign in for Copilot or test Copilot on the Settings tab",
+           "mailbox": "Mailbox not connected: sign in again on the Settings tab, at its bottom under Connections",
+           "copilot": ("Copilot is not working ({error}): {waiting}; sign in for Copilot or test Copilot on the Settings tab, at its "
+                       "bottom under Connections"),
            "copilot_one": "1 case waits for it", "copilot_many": "{n} cases wait for it",
            "copilot_refused": "Copilot could not read {documents}; {again} tried again at the next pass",
            "document_one": "1 document", "documents_many": "{n} documents",

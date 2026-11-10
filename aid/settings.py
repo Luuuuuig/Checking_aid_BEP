@@ -4,23 +4,32 @@ aid/settings.example.json shows every setting with its default. The real setting
 real addresses and the authorization limit, is kept outside the repository.
 
 load_settings refuses a file that does not validate with a ValueError that names each field and its problem, never the value the
-file holds, so that a mistyped authorization amount is not printed to a console or a service log. update_settings_file writes
-values into a settings file, as the settings tab of the review page does, keeping every other key and the order of the keys, the
-file's indentation and, on Linux and macOS, its permissions (on Windows the new file takes the access its folder gives, so the
-settings file belongs in a folder that only the runner's user can read); the file is validated first, values that do not
-validate are refused with SettingsInvalid, which also lists the fields, and the file is replaced through a temporary file and a
-rename, so that a runner that reads it meanwhile reads either the old file or the new one.
+file holds, so that a mistyped authorization amount is not printed to a console or a service log; read_settings reads the same
+way and raises SettingsInvalid, which also lists the fields, for the settings tab of the review page, which names them by their
+labels. update_settings_file writes values into a settings file, as that tab does. It holds one lock of the process from reading
+the file to the rename, so that two saves pressed at the same moment both land, and it can build its values from the settings the
+file holds at that moment. It writes only the keys whose value differs from the file's: the text of such a value is replaced
+where it stands, a key the file lacks is added at its end, and every other character of the file is kept, so that every other
+key keeps its bytes, the order of the keys, the file's indentation, its line ends and a byte order mark stay, and a save that
+changes nothing leaves the file and its modification time alone. On Linux and macOS the file keeps its permissions (on Windows
+the new file takes the access its folder gives, so the settings file belongs in a folder that only the runner's user can read).
+The file is validated first, values that do not validate are refused with SettingsInvalid, and the file is replaced through a
+temporary file with a name of its own beside it and a rename, so that a runner that reads it meanwhile reads either the old file
+or the new one; a write that fails removes the temporary file and leaves the file as it was.
 
 The six settings of the work mailbox (ms_tenant_id, ms_client_id, mailbox, mail_folder, mail_folder_name, send_via) are optional:
 with them empty or null the aid works as before, from the watched folder. An empty text counts as null. The tenant and the client
 are the IDs of the app registration in Microsoft Entra ID, which are identifiers and no secrets: the client a GUID, the tenant a GUID
 or its domain name. send_via "microsoft" needs both.
 """
+import codecs
 import json
 import os
 import re
 import stat
-from collections.abc import Mapping
+import tempfile
+import threading
+from collections.abc import Callable, Mapping
 from decimal import Decimal
 from pathlib import Path
 from typing import Literal
@@ -30,6 +39,8 @@ from pydantic import BaseModel, ConfigDict, ValidationError, ValidationInfo, fie
 _GUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 _DOMAIN = re.compile(r"(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}")
 _ADDRESS = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s.]+")
+_WRITING = threading.Lock()                      # one save of a settings file at a time in this process (update_settings_file)
+_BLANK = " \t\n\r"                               # the white space of JSON
 
 
 class Settings(BaseModel):
@@ -79,7 +90,13 @@ class Settings(BaseModel):
     mail_folder_name: str | None = None          # the folder's display name, shown on the settings tab
     # auto: microsoft when signed in and mail_folder is set, else smtp when the SMTP settings and the password are there, else file
     send_via: Literal["auto", "file", "smtp", "microsoft"] = "auto"
+    # The export of PO lines that gives a cart pre-check its PO side (aid/readers/po_export.py): the aid's field name -> the column
+    # title of the file. It must name po_number and item_code and may name line_id, description, quantity, unit, unit_price,
+    # price_basis, discount_pct, net_price, delivery_date and supplier, the last only for a column that holds the supplier as the
+    # supplier lists above name it. Empty: each column is named after its field.
     export_columns: dict[str, str] = {}
+    export_decimal_comma: bool = False           # numbers the export writes as text use the decimal comma: 1.234,50
+    export_fill_down: bool = False               # the export prints the PO number once for each PO, on its first line or above it
     review_url: str = "http://localhost:7860"
     # The token the browser extension sends to the capture server (aid/capture_server.py) in the header X-Aid-Token. It is
     # company-specific: set it in the real settings.json only, never in a repository. None (or empty) keeps the server from starting.
@@ -132,6 +149,11 @@ def is_tenant_id(text: str) -> bool:
     return bool(_GUID.fullmatch(text) or _DOMAIN.fullmatch(text))
 
 
+def is_address(text: str) -> bool:
+    """Whether the text is an e-mail address by the rule the settings check one with (mailbox): one @, no spaces, a dot after it."""
+    return bool(_ADDRESS.fullmatch(text))
+
+
 def is_client_id(text: str) -> bool:
     """Whether the text is a client as ms_client_id takes one: a GUID."""
     return bool(_GUID.fullmatch(text))
@@ -140,39 +162,66 @@ def is_client_id(text: str) -> bool:
 def load_settings(path: Path) -> Settings:
     """Read a settings file. Relative paths in it resolve against the folder that holds the file. A file that does not validate
     raises ValueError naming each field and its problem, without the values (pydantic's error, which quotes them, is left out)."""
-    path = Path(path).resolve()
     try:
-        return _validated(json.loads(path.read_text(encoding="utf-8-sig")), path)     # also reads a file saved with a BOM
+        return read_settings(path)
     except SettingsInvalid as error:
         raise ValueError(str(error)) from None
 
 
-def update_settings_file(path: Path, values: Mapping[str, object]) -> Settings:
-    """Write the values into the settings file at path and return the settings it then holds. Every other key keeps its value and
-    its place, a key already in the file keeps its place, and a key the file lacks is added at its end. The new content is validated
-    as load_settings reads it before it is written to .<name>.tmp beside the file, which is then renamed over it. The file keeps its
-    indentation (a file on one line stays on one line) and, on Linux and macOS, its permissions: the temporary file is made with
-    them, so that a file only its owner may read is never readable by others there. On Windows a mode sets no more than the
-    read-only flag, and the new file takes the access its folder gives (see the module docstring). JSON is written again from the
-    values, so a number keeps its value, not
-    always its text ("2.50" in a file becomes 2.5; the amounts of the settings are texts). Content that does not validate raises
-    SettingsInvalid as load_settings does, naming the fields and never the values, and the file is left as it was."""
+def read_settings(path: Path) -> Settings:
+    """Read a settings file as load_settings does, for a caller that names the fields at fault itself: content that does not
+    validate raises SettingsInvalid, with the text of load_settings' error and the fields in `fields` ("the file" for content that
+    is no JSON object). A file that cannot be opened raises OSError, and one that is no JSON another ValueError."""
     path = Path(path).resolve()
-    raw = path.read_text(encoding="utf-8-sig")
-    data = json.loads(raw)
-    if not isinstance(data, dict):
-        raise SettingsInvalid(f"settings file {path.name} is not valid: it holds no JSON object", [])
-    data.update(values)
-    settings = _validated(data, path)
-    mode, temporary = stat.S_IMODE(path.stat().st_mode), path.with_name(f".{path.name}.tmp")
-    try:
-        with os.fdopen(os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode), "w", encoding="utf-8") as f:
-            f.write(json.dumps(data, indent=_indent(raw), ensure_ascii=False) + ("\n" if raw.endswith("\n") else ""))
-        os.chmod(temporary, mode)
-        os.replace(temporary, path)
-    except BaseException:
-        temporary.unlink(missing_ok=True)
-        raise
+    return _validated(json.loads(path.read_bytes().decode("utf-8-sig")), path)        # also reads a file saved with a BOM
+
+
+def update_settings_file(path: Path, values: Mapping[str, object] | Callable[[Settings], Mapping[str, object]]) -> Settings:
+    """Write values into the settings file at path and return the settings it then holds. `values` is a mapping, or a function
+    that is given the settings the file holds and returns the mapping: the function is called inside the lock that this function
+    holds from reading the file to the rename, so that values built from the file (a list with one name more) never lose what
+    another save wrote a moment before; a file that does not validate as it is raises SettingsInvalid before the function is called.
+
+    Only the keys whose value differs from the file's are written (compared as JSON, so 7 differs from "7" and from 7.0): the text
+    of such a value is replaced where it stands, a list or an object in the file's indentation, and a key the file lacks is added
+    at its end, in the order of the mapping. Every other character of the file is kept: every other key keeps its bytes (also a
+    number written as 5000.00 or a letter written as an escape), and so do the order of the keys, the indentation (a file on one
+    line stays on one line), the line ends and a byte order mark. When no value differs, nothing is written and the file keeps its
+    modification time. The new content is validated as load_settings reads it before it is written to a temporary file with a
+    name of its own beside the file (.<name>.<random>.tmp), which is then renamed over it. On Linux and macOS the file keeps its
+    permissions: the temporary file is made for its owner only and given the file's mode before the rename, so that a file only
+    its owner may read is never readable by others there. On Windows a mode sets no more than the read-only flag, and the new
+    file takes the access its folder gives (see the module docstring). Content that does not validate raises SettingsInvalid as
+    load_settings does, naming the fields and never the values, and the file is left as it was. A write that fails leaves the
+    file as it was too: its temporary file is removed and the error is raised."""
+    path = Path(path).resolve()
+    with _WRITING:
+        content = path.read_bytes()
+        raw = content.decode("utf-8-sig")
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            raise SettingsInvalid(f"settings file {path.name} is not valid: it holds no JSON object", [])
+        if callable(values):
+            values = values(_validated(data, path))
+        changed = {key: value for key, value in values.items() if key not in data or _json(data[key]) != _json(value)}
+        data.update(changed)
+        settings = _validated(data, path)
+        if not changed:
+            return settings
+        text = _spliced(raw, changed)
+        if _json(json.loads(text)) != _json(data):               # never: the file would not hold what was validated
+            raise ValueError(f"settings file {path.name}: the changed text does not hold the changed values")
+        mark = codecs.BOM_UTF8 if content.startswith(codecs.BOM_UTF8) else b""
+        mode = stat.S_IMODE(path.stat().st_mode)
+        handle, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)       # for its owner only
+        try:
+            with os.fdopen(handle, "wb") as f:
+                f.write(mark + text.encode("utf-8"))
+            os.chmod(temporary, mode)
+            os.replace(temporary, path)
+        except BaseException:
+            Path(temporary).unlink(missing_ok=True)
+            raise
     return settings
 
 
@@ -199,3 +248,56 @@ def _indent(raw: str) -> int | str | None:
             lead = line[:len(line) - len(stripped)]
             return lead if "\t" in lead else len(lead)
     return None
+
+
+def _json(value) -> str:
+    """A value as JSON text, by which two values are compared as a settings file holds them: 7, "7" and 7.0 differ, and so do two
+    objects whose keys stand in another order."""
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _spliced(raw: str, changed: Mapping[str, object]) -> str:
+    """The text of a JSON object with the value of each key of `changed` replaced where it stands, and each key the object lacks
+    added after its last member; every other character of raw is kept. A value is written as json.dumps writes it, a list or an
+    object over several lines in the indentation and with the line ends of the file, on one line in a file on one line."""
+    indent = _indent(raw)
+    lead = "" if indent is None else indent if isinstance(indent, str) else " " * indent
+    newline = "\r\n" if "\r\n" in raw else "\n"
+
+    def written(value) -> str:
+        return json.dumps(value, ensure_ascii=False, indent=indent).replace("\n", newline + lead)
+
+    spans, last, close = _members(raw)
+    pieces = [(*spans[key], written(value)) for key, value in changed.items() if key in spans]
+    added = [f"{json.dumps(key, ensure_ascii=False)}: {written(value)}" for key, value in changed.items() if key not in spans]
+    if added:
+        between = f",{newline}{lead}" if indent is not None else ", "
+        at = last if last is not None else close            # after the last member, or inside an object without members
+        pieces.append((at, at, (between if last is not None else "") + between.join(added)))
+    for start, end, text in sorted(pieces, reverse=True):    # from the end of the file, so that the places before it stay
+        raw = raw[:start] + text + raw[end:]
+    return raw
+
+
+def _members(raw: str) -> tuple[dict[str, tuple[int, int]], int | None, int]:
+    """Where the values of a JSON object stand in its text: the first and the past-the-last index of the value of each key (of
+    the last one, for a key given twice, as json.loads reads it), the end of the last value (None for an object without members)
+    and the index of the closing brace. The text is one that json.loads read as an object."""
+    decoder = json.JSONDecoder()
+
+    def skip(index: int) -> int:
+        while raw[index] in _BLANK:
+            index += 1
+        return index
+
+    spans, last = {}, None
+    index = skip(skip(0) + 1)                                # past the opening brace
+    while raw[index] != "}":
+        key, index = decoder.raw_decode(raw, index)
+        start = skip(skip(index) + 1)                        # past the colon
+        _, last = decoder.raw_decode(raw, start)
+        spans[key] = (start, last)
+        index = skip(last)
+        if raw[index] == ",":
+            index = skip(index + 1)
+    return spans, last, index

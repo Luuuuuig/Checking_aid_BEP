@@ -15,22 +15,60 @@ the digest's undo link, also selects that write in the list of writes to undo. O
 write with the undo button. A case the page does not offer, or a write it does not offer for undo, selects nothing. All this is on
 the tab "Beoordelen".
 
-The settings tab ("Instellingen") connects the work mailbox through the buyer's own Microsoft sign-in (aid/connections/): the
-Directory (tenant) ID and the Application (client) ID of the app registration; "Aanmelden bij Microsoft", which opens Microsoft's
-sign-in page in a browser window on the PC where the page runs, as the tab says, and says that it waits for it, and "Aanmelden met
-een code", which shows a code and an address and then waits until the code has been entered; the signed-in account, read from the
-token cache only, so that opening the tab asks Microsoft nothing, and "Afmelden"; the mailbox (empty: the account's own; another
-mailbox signs in with the shared scopes); the folder, chosen from the mailbox's folders once signed in ("Mappen ophalen" lists them
-again, for another mailbox, and a folder listed for another mailbox than the one in the field is not saved); "Verbinding testen",
-which shows how many messages the folder holds and when the newest arrived, never a subject or a sender, or that the sign-in has
-lapsed (as "Mappen ophalen" does); how the aid sends (send_via); and the state of the trigger, from mailbox_state.json
-(aid/sources/microsoft_mail.py), its times in the local time of the PC. "Opslaan" validates the six settings and writes them into
-the settings file with update_settings_file (aid/settings.py), and the runner takes them over at its next pass; a save that turns
-the trigger off or names another folder removes the stored connection (forget_connection), so that a folder connected again later
-is read from that moment. The tab never shows a token, and an error by its code ("invalid_grant"), its status ("HTTP 404"), its
-class, a refused field by its label, a browser sign-in that timed out and a store the PC refuses by a fixed line, the latter
-without its folder. On a page opened on a public share link the tab says only "Niet beschikbaar op een openbare link" and offers nothing,
-and on a page built without its settings file (the Colab notebook) it offers nothing either.
+The settings tab ("Instellingen") shows the buyer's settings first, as a form (aid/review/buyer_settings.py has what it shows and
+writes): in four groups, each field with its label and a help text that says what the rule does, without a rule code or a
+setting's name: "Wat de assistent zelf mag afhandelen" (the two price thresholds, the days a delivery date may pass the supplier's
+lead time, the first cases of a supplier that always come to the buyer), "Vragen aan leveranciers" (the wait for an answer, the
+name under the messages), "Dagoverzicht en taal" (daily at a time or after every case, the time, the buyer's address, the language)
+and "Fiattering" (the approver's address, and a line that the limit itself is set at the installation), under one "Opslaan". Under
+it "Leveranciers": a table of every supplier the four supplier settings name, and a form for one supplier, chosen from a dropdown,
+which fills the form, or added with its choice "Leverancier toevoegen", with "Leverancier opslaan" and "Leverancier verwijderen".
+
+The form shows the file, and a save writes only what the buyer changed. The eleven fields, the table and the dropdown are filled
+from the settings file when the page loads and each time the settings tab is selected (buyer_opened), so that a change made in the
+file by hand or from another browser tab shows. Two states of the page keep what the forms were filled with: the eleven texts,
+and the supplier form with the supplier it was filled for. "Opslaan" writes the fields whose text differs from the text the form
+was filled with, and no other: a field the buyer changed wins over a change made in the file meanwhile, a field he did not touch
+is never written and not checked, and with no field changed nothing is written and the file keeps its modification time. A
+refused field writes nothing and is named by its label with its problem ("1.000" for a thousand is refused: a percentage and an
+amount take two decimals at most). After a save the fields show the values as the file now holds them. A supplier save builds
+the four supplier settings from the file as update_settings_file reads it inside its lock (aid/settings.py), so that two saves
+pressed at the same moment both land, and changes of a listed supplier only the values the buyer changed; a listed supplier's name
+is used as the file has it (also when another browser tab took the supplier out of the file meanwhile, so that the save adds it
+again under that name), a typed name trimmed. Three saves of a supplier write nothing and say why: a typed name that is
+listed already (the buyer is told to choose that supplier in the list), a new supplier with a name and nothing else, and a listed
+one with nothing changed. When the page no longer knows what a form was filled with (the page was started again while a browser
+tab stayed open), it fills the form again from the file and writes nothing. The note of a supplier save is no output of the
+dropdown's change, which a save causes itself: only the buyer's own choice in the dropdown (its input event) clears it.
+
+When the settings file cannot be read (it is missing, locked, no JSON, or holds a value the settings refuse), the tab shows one
+fixed line at its top that says so, naming the fields (a field of the tab by its label, any other setting by its name) and never a
+value; the form then shows the settings in use, those the page's own actions run with, and every save of the tab (the main one,
+the suppliers', the mailbox's and the reader's) refuses with that line and writes nothing. The page's own actions (a close, an undo) use the settings a save wrote at once, and the
+settings of the file whenever the file changed on disk, looked at by its modification time when the review tab opens or shows a
+case, before a close or an undo, and each time the settings tab reads the file (_Live); a file that became invalid keeps the
+settings in use. The authorization limit, the folders, the Exact route, the SMTP server, the tokens and the reserved
+precheck_suppliers are not on the tab: they are set at the installation.
+
+Below, folded away under "Koppelingen: het Microsoft-postvak en de AI-dienst" (the heading names no installation, because a sign-in
+that has lapsed sends the buyer there, as the digest's two lines say), the settings tab connects the work mailbox through the
+buyer's own Microsoft sign-in (aid/connections/): the Directory (tenant) ID and the Application (client) ID
+of the app registration; "Aanmelden bij Microsoft", which opens Microsoft's sign-in page in a browser window on the PC where the page
+runs, as the tab says, and says that it waits for it, and "Aanmelden met een code", which shows a code and an address and then waits
+until the code has been entered; the signed-in account, read from the token cache only, so that opening the tab asks Microsoft
+nothing, and "Afmelden"; the mailbox (empty: the account's own; another mailbox signs in with the shared scopes); the folder, chosen
+from the mailbox's folders once signed in ("Mappen ophalen" lists them again, for another mailbox, and a folder listed for another
+mailbox than the one in the field is not saved); "Verbinding testen", which shows how many messages the folder holds and when the
+newest arrived, never a subject or a sender, or that the sign-in has lapsed (as "Mappen ophalen" does); how the aid sends (send_via);
+and the state of the trigger, from mailbox_state.json (aid/sources/microsoft_mail.py), its times in the local time of the PC.
+"Opslaan" validates the six settings and writes them into the settings file with update_settings_file (aid/settings.py), and the
+runner takes them over at its next pass (this part is filled when the page loads, and its save gives all six to
+update_settings_file, which writes those that differ from the file's); a save that turns the trigger off or names another folder
+removes the stored connection (forget_connection), so that a folder connected again later is read from that moment. The tab never shows a token, and an error by
+its code ("invalid_grant"), its status ("HTTP 404"), its class, a refused field by its label, a browser sign-in that timed out and a
+store the PC refuses by a fixed line, the latter without its folder. On a page opened on a public share link the tab says only "Niet
+beschikbaar op een openbare link" and offers nothing, and on a page built without its settings file (the Colab notebook) it offers
+nothing either.
 
 The AI section of the settings tab is Microsoft 365 Copilot (aid/readers/copilot_client.py), under a short text of what Copilot
 needs: "Aanmelden voor Copilot" signs in in the browser as "Aanmelden bij Microsoft" does, saying first that it waits, with the
@@ -43,6 +81,7 @@ six settings, Copilot only once the tenant and the client are saved.
 import asyncio
 import io
 import re
+import threading
 import warnings
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
@@ -61,19 +100,34 @@ from aid.readers.copilot_client import CopilotClient, CopilotError
 from aid.readers.llm_client import ReaderError
 from aid.review.app import (DECISIONS_FILE, CaseSummary, Decision, FlagRow, _decisions, _list_cases, _saved_result, decide,
                             load_case_view)
+from aid.review.buyer_settings import (BUYER_FIELDS, SUPPLIER_FIELDS, changed_fields, parse, shown, supplier_changes, supplier_names,
+                                       supplier_rows, supplier_shown, supplier_update, without_supplier)
 from aid.review.close import _records, close_case, undo
 from aid.review.i18n import STRINGS, reason_label
-from aid.settings import Settings, SettingsInvalid, is_client_id, is_tenant_id, load_settings, update_settings_file
+from aid.settings import Settings, SettingsInvalid, is_client_id, is_tenant_id, load_settings, read_settings, update_settings_file
 from aid.sources.microsoft_mail import GraphError, connection_of, folder_summary, forget_connection, list_folders, trigger_on
 
 _REVIEW_ITEM = re.compile(r"RI\d+")              # the ids of the review items (aid/pipeline.py)
 SEND_VIA = get_args(Settings.model_fields["send_via"].annotation)     # the values of send_via, in the order the tab offers them
 READERS = get_args(Settings.model_fields["reader"].annotation)        # the values of reader: "llm" (Copilot) and "parser"
 COPILOT_TEST = "Answer with the word OK only."                         # the message of "Copilot testen"
-# The label on the tab of each setting the tab writes, by which a refused field is named, never by its value.
+# The label on the tab of each setting the tab writes, by which a refused field is named, never by its value: the six of the mailbox,
+# the reader, the eleven of the buyer's form, the four supplier settings by the heading of the suppliers, and the three fields of
+# the supplier form (the keys of with_supplier's problems).
 FIELD_LABELS = {"ms_tenant_id": "settings_tenant", "ms_client_id": "settings_client", "mailbox": "settings_mailbox",
                 "mail_folder": "settings_folder", "mail_folder_name": "settings_folder", "send_via": "settings_send_via",
-                "reader": "settings_ai_reader"}
+                "reader": "settings_ai_reader"} | {field: f"settings_field:{field}" for field in BUYER_FIELDS} | {
+                field: "settings_suppliers" for field in SUPPLIER_FIELDS} | {
+                "supplier_name": "settings_supplier_name", "supplier_email": "settings_supplier_email",
+                "supplier_lead_time": "settings_supplier_lead_time"}
+NEW_SUPPLIER = "(new supplier)"                  # the value of "Leverancier toevoegen" in the dropdown of suppliers
+# The supplier form as "Leverancier toevoegen" fills it: what a new supplier's values are compared with.
+NEW_FORM = {"name": NEW_SUPPLIER, "email": "", "lead_time": "", "review": False, "off": False}
+# The groups of the buyer's form, top to bottom, each with its fields in the order of the page.
+BUYER_GROUPS = (("handled", ("price_pct", "price_abs", "lead_time_tolerance_days", "first_cases_review")),
+                ("questions", ("ask_wait_working_days", "buyer_name")),
+                ("digest", ("digest", "digest_time", "buyer_email", "language")),
+                ("approval", ("approver_email",)))
 _COLUMNS = ("item", "field", "line", "po_value", "doc_value", "reason", "po_source", "doc_source")
 
 
@@ -239,6 +293,57 @@ def import_gradio():
     return gradio
 
 
+class _Live:
+    """The Deps the page's own actions use: those the page was built with, carrying the settings of its settings file once that file
+    changed. now() looks at the file's modification time and reads a changed file again. A file that cannot be read keeps the
+    settings in use: one that does not validate is not read again until it changes once more, and one that cannot be opened (missing,
+    or held by another program for a moment) is tried again at the next look. take() puts the settings a save of the settings tab
+    wrote into the Deps at once, and settings() gives the settings in use, which the settings tab shows when its file cannot be
+    read. The Deps the page was given are never changed: a new copy carries the new settings."""
+
+    def __init__(self, deps: Deps, file: Path | None):
+        self.deps, self.file, self.modified = deps, file, _modified(file)
+        self.lock = threading.Lock()
+
+    def now(self) -> Deps:
+        with self.lock:
+            modified = _modified(self.file)
+            if self.file is not None and modified != self.modified:
+                try:
+                    self.deps = self.deps.model_copy(update={"settings": load_settings(self.file)})
+                except OSError:                  # not opened at this look: the settings in use are kept, and the next look tries again
+                    return self.deps
+                except ValueError:               # a file that does not validate: the settings in use are kept
+                    pass
+                self.modified = modified
+            return self.deps
+
+    def take(self, settings: Settings) -> None:
+        with self.lock:
+            self.deps, self.modified = self.deps.model_copy(update={"settings": settings}), _modified(self.file)
+
+    def settings(self) -> Settings:
+        """The settings in use: those the page's own actions run with now."""
+        return self.now().settings
+
+
+class _Refused(Exception):
+    """A save that its handler refuses while update_settings_file holds its lock, with the note the page then shows; nothing is
+    written."""
+
+    def __init__(self, note: str):
+        super().__init__(note)
+        self.note = note
+
+
+def _modified(path: Path | None) -> int | None:
+    """The modification time of the file in nanoseconds; None when there is no file, or it cannot be looked at."""
+    try:
+        return path.stat().st_mtime_ns if path is not None else None
+    except OSError:
+        return None
+
+
 class _Tab(NamedTuple):
     """What the settings tab is built with (see build_app)."""
     file: Path | None                            # the settings file it writes; None: the tab offers nothing
@@ -253,12 +358,13 @@ def build_app(deps: Deps, settings_file: Path | None = None, share: bool = False
     (offered_cases), with the case and the write of the address's query selected when the page opens (selection_from_query); the
     supplier's document and the PO version as image galleries; the three lists as tables, with the four decisions on each review
     item and the tick for the article price on a price; the banner when a change sends the PO through approval again; the close and
-    undo buttons. On "Instellingen": the settings of the work mailbox (see the module docstring), written into settings_file, and
-    nothing but a line when the page is opened on a public link (share) or without a settings file. account_factory gives the
-    Microsoft account of a tenant and a client (by default with the token cache of the store in default_secrets_dir(); the tests give
-    a fake one), and session is the requests session Graph is called through. No rule code is shown, and no setting value outside
-    the settings tab. Built inside an event loop of its own (see the module docstring). The settings tab ends with its AI section
-    (see the module docstring), whose Copilot is called through the same session."""
+    undo buttons. On "Instellingen": the buyer's settings and the suppliers, then, folded away, the settings of the work mailbox
+    (see the module docstring), written into settings_file, and nothing but a line when the page is opened on a public link (share)
+    or without a settings file. account_factory gives the Microsoft account of a tenant and a client (by default with the token
+    cache of the store in default_secrets_dir(); the tests give a fake one), and session is the requests session Graph is called
+    through. No rule code is shown, and no setting value outside the settings tab. Built inside an event loop of its own (see the
+    module docstring). The connections end with the AI section (see the module docstring), whose Copilot is called through the same
+    session."""
     gr = import_gradio()
     tab = _Tab(Path(settings_file) if settings_file is not None else None, share, account_factory or _account, session)
     try:
@@ -281,6 +387,7 @@ def _page(gr, deps: Deps, tab: _Tab):
 
     cases_root, first = deps.settings.cases_root, STRINGS["nl"]
     empty = {"flags": [], "matches": [], "uncompared": []}
+    live = _Live(deps, tab.file)                 # the Deps of the page's actions, with the settings of the file as it is now
 
     def choices(language: str) -> list[tuple[str, str]]:
         return [(_case_label(summary, STRINGS[language]), summary.case_id) for summary in offered_cases(cases_root)]
@@ -292,6 +399,7 @@ def _page(gr, deps: Deps, tab: _Tab):
     def opened(language: str, request: gr.Request) -> tuple:
         """The page opened: the cases offered, with the case of the query selected, and the write of the query to select among the
         writes to undo once the case is shown (selection_from_query)."""
+        live.now()
         params = getattr(request, "query_params", None) or {}
         case_id, entry_id = selection_from_query(cases_root, params)
         return gr.update(choices=choices(language), value=case_id), entry_id
@@ -301,6 +409,7 @@ def _page(gr, deps: Deps, tab: _Tab):
         among them), the state the decisions are shown from, and a message ("" when there is none). A decisions file that cannot be
         read empties the view and says so."""
         nothing = (gr.update(visible=False), [], [], *tables(empty, language), gr.update(choices=[], value=None), None)
+        live.now()
         if not case_id:
             return (*nothing, "")
         case = load_case(cases_root, case_id)
@@ -342,14 +451,14 @@ def _page(gr, deps: Deps, tab: _Tab):
     def close(case_id: str | None, language: str) -> tuple:
         if not case_id:
             return STRINGS[language]["no_case"], gr.update()
-        text, still_open = close_text(load_case(cases_root, case_id), deps, language)
+        text, still_open = close_text(load_case(cases_root, case_id), live.now(), language)
         return text, gr.update(choices=choices(language), value=case_id if still_open else None)
 
     def do_undo(case_id: str | None, entry_id: str | None, language: str) -> tuple:
         if not case_id or not entry_id:
             return STRINGS[language]["choose_write"], gr.update()
         case = load_case(cases_root, case_id)
-        return undo_text(case, entry_id, deps, language), gr.update(choices=_undo_choices(case, STRINGS[language]), value=None)
+        return undo_text(case, entry_id, live.now(), language), gr.update(choices=_undo_choices(case, STRINGS[language]), value=None)
 
     with gr.Blocks(analytics_enabled=False, title=first["title"]) as app:
         state = gr.State(None)
@@ -397,7 +506,7 @@ def _page(gr, deps: Deps, tab: _Tab):
                 undo_choice = gr.Dropdown(choices=[], value=None, label=first["undo_choice"], scale=4)
                 undo_button = gr.Button(first["undo"], scale=1)
         with gr.Tab(first["settings_tab"]) as settings_tab:
-            _settings_tab(gr, app, language, deps.settings, tab)
+            _settings_tab(gr, app, language, settings_tab, live, tab)
 
         view = [banner, doc_gallery, po_gallery, flags_table, matches_table, uncompared_table, undo_choice, state]
         app.load(opened, inputs=language, outputs=[case_choice, wanted])
@@ -417,10 +526,13 @@ def _page(gr, deps: Deps, tab: _Tab):
 
 # --- the settings tab ---
 
-def _settings_tab(gr, app, language, started_with: Settings, tab: _Tab) -> None:
-    """The content of the settings tab and its events, inside the tab (see the module docstring). started_with are the settings the
-    page was started with, which the tab shows when its file cannot be read. The folders listed are kept as {"mailbox": the mailbox
-    they were listed for, "folders": id -> display name}, so that a folder is never saved with another mailbox's address."""
+def _settings_tab(gr, app, language, settings_tab, live: _Live, tab: _Tab) -> None:
+    """The content of the settings tab and its events, inside the tab (see the module docstring): the buyer's settings and the
+    suppliers (_buyer_section), then the connections folded away. settings_tab is the tab itself, whose selection fills the buyer's
+    part again; live holds the Deps of the page's own actions: its settings are those the tab shows when its file cannot be read,
+    and it is given the settings each save wrote, so that the page's own actions use them at once. The folders listed are kept as
+    {"mailbox": the mailbox they were listed for, "folders": id -> display name}, so that a folder is never saved with another
+    mailbox's address."""
     first = STRINGS["nl"]
     if tab.share or tab.file is None:
         key = "settings_share" if tab.share else "settings_no_file"
@@ -428,6 +540,53 @@ def _settings_tab(gr, app, language, started_with: Settings, tab: _Tab) -> None:
         language.change(lambda language_now: STRINGS[language_now][key], inputs=language, outputs=notice)
         return
     accounts: dict[tuple[str, str], MicrosoftAccount] = {}
+
+    def unreadable(fields: list[str], strings: dict[str, str]) -> str:
+        """The one line of a settings file that cannot be read, naming the fields at fault by their labels and never a value."""
+        named = _labels([field for field in fields if field != "the file"], strings)
+        return strings["settings_file_unreadable"].format(fields=strings["settings_file_fields"].format(fields=named) if named else "")
+
+    def read(strings: dict[str, str]) -> tuple[Settings, str | None]:
+        """The settings the file holds, and None. When the file cannot be read (it is missing, locked, no JSON, or holds a value
+        the settings refuse): the settings in use, those the page's own actions run with, and the line that says so. A file the
+        tab read is also the page's own actions' from then on (live.now()), so that the settings in use are those of the last file
+        the page could read, never those of the page's start."""
+        try:
+            settings = read_settings(tab.file)
+        except SettingsInvalid as error:
+            return live.settings(), unreadable(error.fields, strings)
+        except (OSError, ValueError):
+            return live.settings(), unreadable([], strings)
+        live.now()
+        return settings, None
+
+    def write(build: Callable[[Settings], Mapping[str, object]], strings: dict[str, str]) -> tuple[Settings | None, str | None, str | None]:
+        """Write into the settings file what build makes of the settings the file holds, read inside the lock of
+        update_settings_file, so that a save never builds on a file another save is changing: (the settings the file then holds,
+        None, None). A save that is refused writes nothing and gives (None, the note, the line of a file that cannot be read or
+        None): the line when the file as it is cannot be read, the note of a _Refused that build raised, the labels of the fields
+        whose new values the settings refuse (never a value), or the class of the error of a write that failed. The settings
+        written are handed to the page's own actions at once."""
+        reached = []                                 # whether the file was read and build was given its settings
+
+        def values(held: Settings) -> Mapping[str, object]:
+            reached.append(held)
+            return build(held)
+
+        try:
+            saved = update_settings_file(tab.file, values)
+        except _Refused as refused:
+            return None, refused.note, None
+        except SettingsInvalid as error:
+            if not reached:                          # the file as it is: by the labels, never a value
+                return None, (line := unreadable(error.fields, strings)), line
+            return None, strings["settings_not_saved"].format(fields=_labels(error.fields, strings)), None
+        except (OSError, ValueError) as error:
+            if not reached:
+                return None, (line := unreadable([], strings)), line
+            return None, strings["settings_failed"].format(code=type(error).__name__), None
+        live.take(saved)
+        return saved, None, None
 
     def account_of(tenant: str | None, client: str | None) -> MicrosoftAccount | None:
         """The account of the tenant and the client, made once for the page; None when they are no valid IDs. Raises when the
@@ -455,11 +614,8 @@ def _settings_tab(gr, app, language, started_with: Settings, tab: _Tab) -> None:
         return (account, None) if account is not None else (None, strings["settings_ids_needed"])
 
     def current() -> Settings:
-        """The settings in the file, or those the page was started with when the file cannot be read."""
-        try:
-            return load_settings(tab.file)
-        except (OSError, ValueError):
-            return started_with
+        """The settings in the file, or the settings in use when the file cannot be read."""
+        return read(first)[0]
 
     def folders_shown(account: MicrosoftAccount, mailbox: str | None, strings: dict[str, str]) -> tuple:
         """The folders of the mailbox for the folder list, with the folder saved selected when it is among them: (the list, the
@@ -566,8 +722,12 @@ def _settings_tab(gr, app, language, started_with: Settings, tab: _Tab) -> None:
 
     def save_settings(tenant: str, client: str, mailbox: str, folder: str | None, send_via: str, listed: dict, language_now: str) -> tuple:
         """Validate the six settings and write them into the settings file: (a note, the state of the trigger). A folder listed for
-        another mailbox than the one in the field is not saved."""
-        strings, before, listed = STRINGS[language_now], current(), listed or {}
+        another mailbox than the one in the field is not saved, and nothing is saved into a file that cannot be read: the note is
+        then the line that says so."""
+        strings, listed = STRINGS[language_now], listed or {}
+        before, line = read(strings)
+        if line is not None:
+            return line, gr.update()
         given = {"ms_tenant_id": tenant, "ms_client_id": client, "mailbox": mailbox, "mail_folder": folder, "mail_folder_name": None,
                  "send_via": send_via}
         values = {key: (value.strip() or None) if isinstance(value, str) else value for key, value in given.items()}
@@ -576,12 +736,9 @@ def _settings_tab(gr, app, language, started_with: Settings, tab: _Tab) -> None:
         if values["mail_folder"]:
             values["mail_folder_name"] = listed.get("folders", {}).get(values["mail_folder"]) or (
                 before.mail_folder_name if before.mail_folder == values["mail_folder"] else None)
-        try:
-            saved = update_settings_file(tab.file, values)
-        except SettingsInvalid as error:                     # by the labels of the fields, never a value
-            return strings["settings_not_saved"].format(fields=_labels(error.fields, strings)), gr.update()
-        except (OSError, ValueError) as error:
-            return strings["settings_failed"].format(code=type(error).__name__), gr.update()
+        saved, refused, _ = write(lambda held: values, strings)      # a refused field by its label, never a value
+        if saved is None:
+            return refused, gr.update()
         if not trigger_on(saved) or connection_of(saved) is None:      # the trigger off, or another folder: a later connection
             try:                                                          # starts from its own moment (the runner does so too)
                 forget_connection(saved.cases_root)
@@ -600,53 +757,299 @@ def _settings_tab(gr, app, language, started_with: Settings, tab: _Tab) -> None:
                 gr.update(label=strings["settings_send_via"], choices=_via_choices(strings), value=send_via_now),
                 gr.update(value=strings["settings_save"]), f"### {strings['settings_trigger']}", _trigger_text(current(), strings), "")
 
-    intro = gr.Markdown(first["settings_intro"])
-    with gr.Row():
-        tenant = gr.Textbox(label=first["settings_tenant"])
-        client = gr.Textbox(label=first["settings_client"])
-    with gr.Row():
-        sign_in_button = gr.Button(first["settings_sign_in"], variant="primary")
-        code_button = gr.Button(first["settings_sign_in_code"])
-        sign_out_button = gr.Button(first["settings_sign_out"])
-    browser_note = gr.Markdown(first["settings_browser_note"])
-    account_shown = gr.Markdown(first["settings_not_signed_in"])
-    mailbox = gr.Textbox(label=first["settings_mailbox"])
-    with gr.Row():
-        folder = gr.Dropdown(choices=[], value=None, label=first["settings_folder"], scale=4)
-        folders_button = gr.Button(first["settings_folders"], scale=1)
-    test_button = gr.Button(first["settings_test"])
-    send_via = gr.Radio(choices=_via_choices(first), value="auto", label=first["settings_send_via"])
-    save_button = gr.Button(first["settings_save"], variant="primary")
-    note = gr.Markdown("")
-    trigger_title = gr.Markdown(f"### {first['settings_trigger']}")
-    trigger_shown = gr.Markdown("")
-    listed = gr.State({})                        # the folders listed and the mailbox they were listed for
+    _buyer_section(gr, app, language, settings_tab, read, write)
+    with gr.Accordion(first["settings_connections"], open=False) as connections:
+        intro = gr.Markdown(first["settings_intro"])
+        with gr.Row():
+            tenant = gr.Textbox(label=first["settings_tenant"])
+            client = gr.Textbox(label=first["settings_client"])
+        with gr.Row():
+            sign_in_button = gr.Button(first["settings_sign_in"], variant="primary")
+            code_button = gr.Button(first["settings_sign_in_code"])
+            sign_out_button = gr.Button(first["settings_sign_out"])
+        browser_note = gr.Markdown(first["settings_browser_note"])
+        account_shown = gr.Markdown(first["settings_not_signed_in"])
+        mailbox = gr.Textbox(label=first["settings_mailbox"])
+        with gr.Row():
+            folder = gr.Dropdown(choices=[], value=None, label=first["settings_folder"], scale=4)
+            folders_button = gr.Button(first["settings_folders"], scale=1)
+        test_button = gr.Button(first["settings_test"])
+        send_via = gr.Radio(choices=_via_choices(first), value="auto", label=first["settings_send_via"])
+        save_button = gr.Button(first["settings_save"], variant="primary")
+        note = gr.Markdown("")
+        trigger_title = gr.Markdown(f"### {first['settings_trigger']}")
+        trigger_shown = gr.Markdown("")
+        listed = gr.State({})                        # the folders listed and the mailbox they were listed for
 
-    signed = [account_shown, folder, listed, note]
-    app.load(settings_opened, inputs=language, outputs=[tenant, client, mailbox, folder, send_via, account_shown, trigger_shown, listed])
-    sign_in_button.click(sign_in_browser, inputs=[tenant, client, mailbox, language], outputs=signed)
-    code_button.click(sign_in_code, inputs=[tenant, client, mailbox, language], outputs=signed)
-    sign_out_button.click(sign_out, inputs=[tenant, client, language], outputs=signed)
-    folders_button.click(load_folders, inputs=[tenant, client, mailbox, language], outputs=[folder, listed, note])
-    test_button.click(check_connection, inputs=[tenant, client, mailbox, folder, language], outputs=note)
-    save_button.click(save_settings, inputs=[tenant, client, mailbox, folder, send_via, listed, language], outputs=[note, trigger_shown])
-    language.change(settings_relabel, inputs=[language, tenant, client, mailbox, send_via],
-                    outputs=[intro, tenant, client, sign_in_button, code_button, sign_out_button, browser_note, account_shown, mailbox,
-                             folder, folders_button, test_button, send_via, save_button, trigger_title, trigger_shown, note])
-    _ai_section(gr, app, language, tab, tenant, client, mailbox, account_shown, begin, current)
+        signed = [account_shown, folder, listed, note]
+        app.load(settings_opened, inputs=language, outputs=[tenant, client, mailbox, folder, send_via, account_shown, trigger_shown, listed])
+        sign_in_button.click(sign_in_browser, inputs=[tenant, client, mailbox, language], outputs=signed)
+        code_button.click(sign_in_code, inputs=[tenant, client, mailbox, language], outputs=signed)
+        sign_out_button.click(sign_out, inputs=[tenant, client, language], outputs=signed)
+        folders_button.click(load_folders, inputs=[tenant, client, mailbox, language], outputs=[folder, listed, note])
+        test_button.click(check_connection, inputs=[tenant, client, mailbox, folder, language], outputs=note)
+        save_button.click(save_settings, inputs=[tenant, client, mailbox, folder, send_via, listed, language], outputs=[note, trigger_shown])
+        language.change(settings_relabel, inputs=[language, tenant, client, mailbox, send_via],
+                        outputs=[intro, tenant, client, sign_in_button, code_button, sign_out_button, browser_note, account_shown, mailbox,
+                                 folder, folders_button, test_button, send_via, save_button, trigger_title, trigger_shown, note])
+        _ai_section(gr, app, language, tab, tenant, client, mailbox, account_shown, begin, read, write)
+    language.change(lambda language_now: gr.update(label=STRINGS[language_now]["settings_connections"]), inputs=language,
+                    outputs=connections)
+
+
+def _buyer_section(gr, app, language, settings_tab, read: Callable[[dict[str, str]], tuple[Settings, str | None]], write: Callable) -> None:
+    """The buyer's part of the settings tab and its events, at its top (see the module docstring): the line of a settings file that
+    cannot be read; the eleven settings of buyer_settings.BUYER_FIELDS in the groups of BUYER_GROUPS, each field with its label and
+    its help, under one save button; then the suppliers, a table and a form for one supplier. read gives the settings in the file
+    (or those in use, with the line), and write saves into it (both of _settings_tab). The fill (buyer_opened) runs when the page
+    loads and each time settings_tab is selected. Two states of the page hold what the forms were filled with: the eleven texts,
+    and the supplier form with the supplier it was filled for, so that a save writes what the buyer changed and nothing else."""
+    first = STRINGS["nl"]
+
+    def headers(strings: dict[str, str]) -> list[str]:
+        return [strings[f"settings_supplier_column:{name}"] for name in ("name", "email", "lead_time", "review", "messages_off")]
+
+    def table(settings: Settings, strings: dict[str, str]) -> dict:
+        """The table of the suppliers: their values as text, a tick as the word for yes."""
+        data = [[name, email, str(lead), strings["settings_tick"] if review else "", strings["settings_tick"] if off else ""]
+                for name, email, lead, review, off in supplier_rows(settings)]
+        return {"headers": headers(strings), "data": data}
+
+    def choices(settings: Settings, strings: dict[str, str]) -> list[tuple[str, str]]:
+        return [(strings["settings_supplier_new"], NEW_SUPPLIER)] + [(name, name) for name in supplier_names(settings)]
+
+    def dropdown(settings: Settings, strings: dict[str, str], choice: str | None) -> tuple[dict, str]:
+        """The dropdown with the suppliers of the settings, on the choice when it is one of them and else on "Leverancier
+        toevoegen": (its update, the value it then has)."""
+        value = choice if choice != NEW_SUPPLIER and choice in supplier_names(settings) else NEW_SUPPLIER
+        return gr.update(choices=choices(settings, strings), value=value), value
+
+    def supplier_form(settings: Settings, choice: str) -> tuple:
+        """The supplier form for a value of the dropdown: (the name, the address, the lead time, the two ticks, what the form is
+        filled with). A listed supplier with its values as the settings hold them and its name fixed; "Leverancier toevoegen", or
+        a name the settings do not hold: the empty form with the name open."""
+        if choice == NEW_SUPPLIER or choice not in supplier_names(settings):
+            return gr.update(value="", interactive=True), "", "", False, False, dict(NEW_FORM)
+        parts = supplier_shown(settings, choice)
+        return (gr.update(value=choice, interactive=False), parts["email"], parts["lead_time"], parts["review"], parts["off"],
+                {"name": choice} | parts)
+
+    def refused(problems: dict[str, str], strings: dict[str, str]) -> str:
+        """The refused fields of a save, each by its label with its problem, never the value given."""
+        return strings["settings_buyer_refused"].format(fields="; ".join(f"{strings[FIELD_LABELS[field]]}: {problem}"
+                                                                          for field, problem in problems.items()))
+
+    def top(line: str | None) -> str:
+        """The line at the top of the tab: that of a settings file that cannot be read, in bold, or nothing."""
+        return f"**{line}**" if line else ""
+
+    def buyer_opened(language_now: str) -> tuple:
+        """The page loaded, or the settings tab selected: the line of a file that cannot be read, the eleven settings of the file
+        and what the form is filled with, the table of the suppliers, their dropdown on "Leverancier toevoegen" and the supplier
+        form emptied. With a file that cannot be read, the settings in use."""
+        strings = STRINGS[language_now]
+        settings, line = read(strings)
+        values = shown(settings, language_now)
+        return (top(line), *[values[field] for field in BUYER_FIELDS], values, table(settings, strings),
+                dropdown(settings, strings, NEW_SUPPLIER)[0], *supplier_form(settings, NEW_SUPPLIER))
+
+    def save_buyer(price_pct, price_abs, lead_time_tolerance_days, first_cases_review, ask_wait_working_days, buyer_name, digest,
+                   digest_time, buyer_email, language_setting, approver_email, filled: dict | None, language_now: str) -> tuple:
+        """Write the fields whose text differs from the text the form was filled with, and no other: (a note, the line of a file
+        that cannot be read, the eleven fields, what they are filled with). A refused field writes nothing and is named by its
+        label, and the form keeps what was typed; nothing changed writes nothing; a file that cannot be read refuses with its
+        line. After a save, and when nothing was changed, the fields show the values as the file now holds them. A form whose
+        fill the page no longer knows (the page was started again while the browser tab stayed open) is filled again from the
+        file, and nothing is written."""
+        strings = STRINGS[language_now]
+        same = [gr.update()] * (len(BUYER_FIELDS) + 1)       # the eleven fields and what they were filled with, left as they are
+        settings, line = read(strings)
+        if line is not None:
+            return (line, top(line), *same)
+        if not isinstance(filled, dict):
+            values = shown(settings, language_now)
+            return (strings["settings_buyer_refilled"], "", *[values[field] for field in BUYER_FIELDS], values)
+        form = dict(zip(BUYER_FIELDS, (price_pct, price_abs, lead_time_tolerance_days, first_cases_review, ask_wait_working_days, buyer_name,
+                                       digest, digest_time, buyer_email, language_setting, approver_email)))
+        changed = changed_fields(form, filled)
+        if not changed:                                      # nothing typed is lost: the form shows the file as it is now
+            values = shown(settings, language_now)
+            return (strings["settings_buyer_unchanged"], "", *[values[field] for field in BUYER_FIELDS], values)
+        values, problems = parse(form, language_now, only=changed)
+        if problems:
+            return (refused(problems, strings), "", *same)
+        saved, note, line = write(lambda held: values, strings)
+        if saved is None:
+            return (note, top(line), *same)
+        values = shown(saved, language_now)
+        return (strings["settings_buyer_saved"], "", *[values[field] for field in BUYER_FIELDS], values)
+
+    def supplier_chosen(choice: str | None, language_now: str) -> tuple:
+        """The dropdown changed, by the buyer or by a save: the supplier form with the supplier's values as the file holds them
+        (its name fixed), or the empty form for "Leverancier toevoegen", and what the form is filled with."""
+        return supplier_form(read(STRINGS[language_now])[0], choice or NEW_SUPPLIER)
+
+    def supplier_picked() -> str:
+        """The buyer's own choice in the dropdown: the note of the save before it is cleared."""
+        return ""
+
+    def save_supplier(choice: str | None, name: str, email: str, lead_time: str, review: bool, off: bool, filled: dict | None,
+                      language_now: str) -> tuple:
+        """Write the supplier of the form into the four supplier settings, built from the file as it is read inside the lock of the
+        save: (a note, the line of a file that cannot be read, the table, the dropdown, the supplier form and what it is filled
+        with). Of a listed supplier only the parts the buyer changed are written, its name as the file has it; with
+        "Leverancier toevoegen" the typed name, trimmed, with every value typed. Nothing is written for a typed name that is
+        listed already, for a new supplier with a name and nothing else, for a listed one with nothing changed, or for a form
+        whose fill the page no longer knows (or that was filled for another supplier than the one chosen), which is filled
+        again."""
+        strings = STRINGS[language_now]
+        same = [gr.update()] * 8                             # the table, the dropdown, the five of the form and what it was filled with
+        settings, line = read(strings)
+        if line is not None:
+            return (line, top(line), *same)
+        new = not choice or choice == NEW_SUPPLIER
+        form = {"email": email, "lead_time": lead_time, "review": review, "off": off}
+        if new:
+            supplier, changes = (name or "").strip(), supplier_changes(form, NEW_FORM)
+            if supplier == NEW_SUPPLIER:                     # the dropdown's own value for "Leverancier toevoegen" names no supplier
+                return (refused({"supplier_name": strings["settings_problem:supplier_name"]}, strings), "", *same)
+        elif not isinstance(filled, dict) or filled.get("name") != choice:
+            return (strings["settings_buyer_refilled"], "", table(settings, strings), dropdown(settings, strings, choice)[0],
+                    *supplier_form(settings, choice))
+        else:
+            supplier, changes = choice, supplier_changes(form, filled)
+            if not changes:
+                return (strings["settings_buyer_unchanged"], "", *same)
+        read_inside = []                                     # the settings of the file as the save read them
+
+        def build(held: Settings) -> dict:
+            read_inside.append(held)
+            if new and supplier in supplier_names(held):
+                raise _Refused(strings["settings_supplier_listed"])
+            values, problems = supplier_update(held, supplier, changes, language_now, chosen=not new)      # a chosen name as the file had it
+            if problems:
+                raise _Refused(refused(problems, strings))
+            if new and not changes:
+                raise _Refused(strings["settings_supplier_empty"])
+            return values
+
+        saved, note, line = write(build, strings)
+        if saved is None and note == strings["settings_supplier_listed"]:      # the list as the file has it, to choose the supplier in
+            return (note, "", table(read_inside[-1], strings), dropdown(read_inside[-1], strings, NEW_SUPPLIER)[0], *[gr.update()] * 6)
+        if saved is None:
+            return (note, top(line), *same)
+        shown_choice, kept = dropdown(saved, strings, supplier)
+        return (strings["settings_buyer_saved"], "", table(saved, strings), shown_choice, *supplier_form(saved, kept))
+
+    def remove_supplier(choice: str | None, language_now: str) -> tuple:
+        """Take the supplier chosen out of the four settings, its name as the file has it: (a note, the line of a file that cannot
+        be read, the table, the dropdown on "Leverancier toevoegen", the supplier form emptied and what it is filled with)."""
+        strings = STRINGS[language_now]
+        same = [gr.update()] * 8
+        if not choice or choice == NEW_SUPPLIER:
+            return (strings["settings_supplier_choose"], gr.update(), *same)
+        settings, line = read(strings)
+        if line is not None:
+            return (line, top(line), *same)
+        gone = []                                            # the file no longer holds the supplier: nothing to take out
+
+        def build(held: Settings) -> dict:
+            if choice not in supplier_names(held):
+                gone.append(choice)
+                return {}
+            return without_supplier(held, choice)
+
+        saved, note, line = write(build, strings)
+        if saved is None:
+            return (note, top(line), *same)
+        return (strings["settings_buyer_unchanged" if gone else "settings_buyer_saved"], "", table(saved, strings),
+                dropdown(saved, strings, NEW_SUPPLIER)[0], *supplier_form(saved, NEW_SUPPLIER))
+
+    def buyer_relabel(language_now: str, digest_now: str | None, language_setting_now: str | None, choice_now: str | None) -> tuple:
+        """The page's language switched: the buyer's part in the other language, with what is typed and chosen kept. The note of
+        the main save is cleared; the note of a supplier save stays until the buyer's own choice in the dropdown."""
+        strings = STRINGS[language_now]
+        settings, line = read(strings)
+        fields = []
+        for field in BUYER_FIELDS:
+            update = {"label": strings[f"settings_field:{field}"], "info": strings[f"settings_help:{field}"]}
+            if field == "digest":
+                update |= {"choices": _digest_choices(strings), "value": digest_now}
+            elif field == "language":
+                update |= {"choices": _language_choices(strings), "value": language_setting_now}
+            fields.append(gr.update(**update))
+        relabelled = gr.update(label=strings["settings_supplier_choice"], choices=choices(settings, strings),
+                               value=dropdown(settings, strings, choice_now)[1])
+        return (top(line), *[f"### {strings[f'settings_group:{group}']}" for group, _ in BUYER_GROUPS], *fields, strings["settings_limit"],
+                gr.update(value=strings["settings_buyer_save"]), "", f"### {strings['settings_suppliers']}",
+                strings["settings_suppliers_help"], table(settings, strings), relabelled,
+                gr.update(label=strings["settings_supplier_name"]), gr.update(label=strings["settings_supplier_email"]),
+                gr.update(label=strings["settings_supplier_lead_time"]), gr.update(label=strings["settings_supplier_review"]),
+                gr.update(label=strings["settings_supplier_messages_off"]), gr.update(value=strings["settings_supplier_save"]),
+                gr.update(value=strings["settings_supplier_remove"]))
+
+    file_line = gr.Markdown("", elem_id="settings-file-line")
+    headings, fields = [], {}
+    for group, names in BUYER_GROUPS:
+        headings.append(gr.Markdown(f"### {first[f'settings_group:{group}']}"))
+        for field in names:
+            label, info = first[f"settings_field:{field}"], first[f"settings_help:{field}"]
+            if field == "digest":
+                fields[field] = gr.Radio(choices=_digest_choices(first), value=None, label=label, info=info)
+            elif field == "language":
+                fields[field] = gr.Radio(choices=_language_choices(first), value=None, label=label, info=info)
+            else:
+                fields[field] = gr.Textbox(label=label, info=info)
+    limit = gr.Markdown(first["settings_limit"])
+    save_button = gr.Button(first["settings_buyer_save"], variant="primary")
+    note = gr.Markdown("", elem_id="settings-buyer-note")
+    suppliers_title = gr.Markdown(f"### {first['settings_suppliers']}")
+    suppliers_help = gr.Markdown(first["settings_suppliers_help"])
+    suppliers = gr.Dataframe(value={"headers": headers(first), "data": []}, interactive=False, wrap=True)
+    supplier = gr.Dropdown(choices=[(first["settings_supplier_new"], NEW_SUPPLIER)], value=NEW_SUPPLIER, label=first["settings_supplier_choice"])
+    with gr.Row():
+        name = gr.Textbox(label=first["settings_supplier_name"])
+        email = gr.Textbox(label=first["settings_supplier_email"])
+        lead_time = gr.Textbox(label=first["settings_supplier_lead_time"])
+    with gr.Row():
+        review = gr.Checkbox(value=False, label=first["settings_supplier_review"])
+        off = gr.Checkbox(value=False, label=first["settings_supplier_messages_off"])
+    with gr.Row():
+        supplier_save = gr.Button(first["settings_supplier_save"])
+        supplier_remove = gr.Button(first["settings_supplier_remove"])
+    supplier_note = gr.Markdown("", elem_id="settings-supplier-note")
+    filled = gr.State(None)                          # the eleven texts the form was filled with
+    supplier_filled = gr.State(None)                 # the supplier form as it was filled, with the supplier it was filled for
+
+    form = [fields[field] for field in BUYER_FIELDS]
+    supplier_form_fields = [name, email, lead_time, review, off]
+    supplier_shown_again = [supplier_note, file_line, suppliers, supplier, *supplier_form_fields, supplier_filled]
+    gr.on(triggers=[app.load, settings_tab.select], fn=buyer_opened, inputs=language,
+          outputs=[file_line, *form, filled, suppliers, supplier, *supplier_form_fields, supplier_filled])
+    save_button.click(save_buyer, inputs=[*form, filled, language], outputs=[note, file_line, *form, filled])
+    # The dropdown's change (the buyer's choice, or the value a save or a removal gave it) fills the form and leaves the note of a
+    # save alone; the buyer's own choice (input) clears that note.
+    supplier.change(supplier_chosen, inputs=[supplier, language], outputs=[*supplier_form_fields, supplier_filled])
+    supplier.input(supplier_picked, outputs=supplier_note)
+    supplier_save.click(save_supplier, inputs=[supplier, *supplier_form_fields, supplier_filled, language], outputs=supplier_shown_again)
+    supplier_remove.click(remove_supplier, inputs=[supplier, language], outputs=supplier_shown_again)
+    language.change(buyer_relabel, inputs=[language, fields["digest"], fields["language"], supplier],
+                    outputs=[file_line, *headings, *form, limit, save_button, note, suppliers_title, suppliers_help, suppliers, supplier,
+                             *supplier_form_fields, supplier_save, supplier_remove])
 
 
 def _ai_section(gr, app, language, tab: _Tab, tenant, client, mailbox, account_shown,
                 begin: Callable[[str, str, dict[str, str]], tuple[MicrosoftAccount | None, str | None]],
-                current: Callable[[], Settings]) -> None:
-    """The AI section of the settings tab and its events, at its end (see the module docstring): tenant, client and mailbox are the
-    fields of the tab, account_shown the line that names the signed-in account, begin gives the account for an action or the note
-    that says why there is none, and current the settings in the file."""
+                read: Callable[[dict[str, str]], tuple[Settings, str | None]], write: Callable) -> None:
+    """The AI section of the settings tab and its events, at the end of its connections (see the module docstring): tenant, client
+    and mailbox are the fields of the tab, account_shown the line that names the signed-in account, begin gives the account for an
+    action or the note that says why there is none, and read and write are those of _settings_tab: the settings in the file (or
+    those in use, with the line of a file that cannot be read), and a save into it."""
     first = STRINGS["nl"]
 
     def ai_opened(language_now: str) -> str:
         """The tab opened: the reader of the settings file."""
-        return current().reader
+        return read(STRINGS[language_now])[0].reader
 
     def sign_in_copilot(tenant_now: str, client_now: str, mailbox_now: str, language_now: str):
         """Sign in in the browser of this PC for the mailbox and for Copilot together, saying first that the page waits for it: (the
@@ -686,16 +1089,16 @@ def _ai_section(gr, app, language, tab: _Tab, tenant, client, mailbox, account_s
 
     def save_reader(reader_now: str, language_now: str) -> tuple:
         """Write the reader chosen into the settings file, Copilot only once the tenant and the client are saved: (the reader the file
-        then holds, a note)."""
-        strings, before = STRINGS[language_now], current()
+        then holds, a note). Nothing is written into a file that cannot be read: the note is then the line that says so."""
+        strings = STRINGS[language_now]
+        before, line = read(strings)
+        if line is not None:
+            return before.reader, line
         if reader_now == "llm" and not (before.ms_tenant_id and before.ms_client_id):
             return before.reader, strings["settings_ai_ids_needed"]
-        try:
-            saved = update_settings_file(tab.file, {"reader": reader_now})
-        except SettingsInvalid as error:                     # by the labels of the fields, never a value
-            return before.reader, strings["settings_not_saved"].format(fields=_labels(error.fields, strings))
-        except (OSError, ValueError) as error:
-            return before.reader, strings["settings_failed"].format(code=type(error).__name__)
+        saved, refused, _ = write(lambda held: {"reader": reader_now}, strings)
+        if saved is None:
+            return before.reader, refused
         return saved.reader, strings["settings_saved"]
 
     def ai_relabel(language_now: str, reader_now: str | None) -> tuple:
@@ -764,8 +1167,16 @@ def _via_choices(strings: dict[str, str]) -> list[tuple[str, str]]:
 
 def _labels(fields: list[str], strings: dict[str, str]) -> str:
     """The refused fields by their labels on the tab (FIELD_LABELS), each once; a field the tab does not write by its name."""
-    shown = [strings[FIELD_LABELS[field]] if field in FIELD_LABELS else field for field in fields]
+    shown = [strings[FIELD_LABELS[name]] if (name := field.split(".")[0]) in FIELD_LABELS else field for field in fields]
     return ", ".join(dict.fromkeys(shown))
+
+
+def _digest_choices(strings: dict[str, str]) -> list[tuple[str, str]]:
+    return [(strings[f"settings_digest:{value}"], value) for value in ("daily", "per_case")]
+
+
+def _language_choices(strings: dict[str, str]) -> list[tuple[str, str]]:
+    return [(strings[f"settings_language:{value}"], value) for value in ("nl", "en")]
 
 
 def _reader_choices(strings: dict[str, str]) -> list[tuple[str, str]]:

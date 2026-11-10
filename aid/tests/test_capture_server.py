@@ -823,7 +823,7 @@ def test_main_binds_127_0_0_1_unless_host_is_given(tmp_path, monkeypatch, capsys
         def server_close(self):
             pass
 
-    def fake(settings, d, host, port, testshop):
+    def fake(settings, d, host, port, testshop, **watch):
         calls.append((host, port, testshop))
         return Stub()
     monkeypatch.setattr(server_module, "serve", fake)
@@ -887,6 +887,9 @@ def test_the_demo_settings_hold_the_made_up_token_and_the_texts_name_the_capture
     for text in (demo.prepared_text(out), demo.summary_text(out, "parser")):
         assert f"python3 -m aid.capture_server --settings {out / 'settings.json'} --testshop" in text
         assert "http://127.0.0.1:7870/testshop/CART02.html" in text and "aid/extension/README.md" in text
+    hint = demo.prepared_text(out)                         # the digest after every case: the settings tab first, the file as the other way
+    assert "\"Na elke zaak\" under \"Dagoverzicht\" on the settings tab \"Instellingen\" of the review page" in hint
+    assert f"python3 -m aid.review --settings {out / 'settings.json'}; or set \"digest\": \"per_case\" in settings.json" in hint
 
 
 @pytest.mark.parametrize("ids", [{"ms_tenant_id": "00000000-0000-0000-0000-000000000001", "ms_client_id": "00000000-0000-0000-0000-000000000002"},
@@ -907,10 +910,178 @@ def test_the_capture_server_asks_no_model_whatever_the_reader_says(tmp_path, mon
         def server_close(self):
             pass
 
-    def fake(settings, d, host, port, testshop):
+    def fake(settings, d, host, port, testshop, **watch):
         seen.update(settings=settings, deps=d)
         return Stub()
     monkeypatch.setattr(server_module, "serve", fake)
     assert main(["--settings", str(_settings_file(tmp_path, capture_token=TOKEN, reader="llm", **ids))]) == 0
     assert isinstance(seen["deps"].decider, NoDecider) and seen["deps"].reader is read_with_parser
     assert seen["settings"].reader == "llm"
+
+
+# --- the settings file read again when it changes (Task 29) ---
+
+PRICE_ABOVE = {"€ 4,10": "€ 4,25"}           # KM-2102 at 4.25 instead of 4.10: 3.7 percent, above SETTINGS' 2 percent
+
+
+@contextmanager
+def watching(tmp_path, madeup_out, rebuild=None):
+    """The capture server over a settings file of its own, which it reads again when the file changes. Its Deps are rebuilt from the
+    new settings by `rebuild`, or else as the test's Deps were built but with a writer of their own, so that Deps the server rebuilt
+    are told from Deps that only carry other settings. Yields the running server, the settings file and the Deps rebuilt so far."""
+    d = deps(tmp_path, madeup_out)
+    s = d.settings.model_copy(update={"capture_token": TOKEN, "po_store_root": tmp_path / "store"})
+    batch.file_po_dir(s, madeup_out)
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps(s.model_dump(mode="json"), indent=2), encoding="utf-8")
+    s = load_settings(path)
+    d = d.model_copy(update={"settings": s})
+    rebuilt = []
+
+    def marked(new: Settings) -> Deps:
+        made = rebuild(new) if rebuild is not None else d.model_copy(update={"settings": new, "writer": PreparedWriter(tmp_path / "rebuilt")})
+        rebuilt.append(made)
+        return made
+
+    server = serve(s, d, "127.0.0.1", 0, False, settings_file=path, rebuild=marked)
+    thread = threading.Thread(target=lambda: server.serve_forever(poll_interval=0.05), daemon=True)
+    thread.start()
+    try:
+        yield Running(f"http://127.0.0.1:{server.server_address[1]}", server, d, s), path, rebuilt
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+def touch_later(path: Path, seconds: int) -> None:
+    """Move the file's modification time on, so that a change within one tick of the clock is seen as a change."""
+    os.utime(path, ns=(path.stat().st_atime_ns, path.stat().st_mtime_ns + seconds * 1_000_000_000))
+
+
+def test_raised_thresholds_in_the_settings_file_give_the_same_server_another_verdict(tmp_path, madeup_out):
+    with watching(tmp_path, madeup_out) as (r, path, rebuilt):
+        status, first = post(r, page(madeup_out, "CART01.html", texts=PRICE_ABOVE))
+        assert status == 200 and (first["verdict"], first["status"]) == ("differences", "review") and rebuilt == []
+        data = json.loads(path.read_text(encoding="utf-8")) | {"price_pct": "5"}
+        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        touch_later(path, 1)
+        second_page = page(madeup_out, "CART01.html", texts=PRICE_ABOVE | {"<p>Uw referentie: 250201</p>": ""})   # another cart, the same difference
+        status, second = post(r, second_page)
+        assert status == 200 and (second["verdict"], second["status"]) == ("match", "closed") and second["case_id"] != first["case_id"]
+        assert r.server.settings.price_pct == Decimal("5") and r.server.deps.settings.price_pct == Decimal("5")
+        # the server called its rebuild, once, and works with the Deps it made: the change of the second cart went to their writer
+        assert len(rebuilt) == 1 and r.server.deps is rebuilt[0] and r.server.deps is not r.deps
+        assert (tmp_path / "rebuilt" / "prepared_changes.csv").is_file() and not (tmp_path / "prepared_changes.csv").exists()
+        assert post(r, second_page)[0] == 200 and len(rebuilt) == 1                          # no change of the file: no rebuild
+
+
+def test_a_cart_checked_before_the_thresholds_changed_keeps_its_outcome_until_the_cart_itself_changes(tmp_path, madeup_out):
+    """What the manual tells the buyer after a save (section 2.6): the same cart is answered from its case, a changed cart is
+    checked anew with the new settings."""
+    with watching(tmp_path, madeup_out) as (r, path, rebuilt):
+        cart = page(madeup_out, "CART01.html", texts=PRICE_ABOVE)
+        first = post(r, cart)[1]
+        path.write_text(json.dumps(json.loads(path.read_text(encoding="utf-8")) | {"price_pct": "5"}, indent=2), encoding="utf-8")
+        touch_later(path, 1)
+        again = post(r, cart)[1]
+        assert (again["case_id"], again["verdict"]) == (first["case_id"], "differences") and r.server.settings.price_pct == Decimal("5")
+        changed = post(r, page(madeup_out, "CART01.html", texts=PRICE_ABOVE | {"<p>Uw referentie: 250201</p>": ""}))[1]
+        assert changed["case_id"] != first["case_id"] and changed["verdict"] == "match"
+
+
+def test_a_rebuild_that_raises_keeps_the_settings_and_the_deps_and_logs_one_line_with_the_class_only(tmp_path, madeup_out):
+    def refused(new: Settings) -> Deps:
+        raise ValueError("made-up: the writer refuses secret-xyz-value")
+
+    with watching(tmp_path, madeup_out, rebuild=refused) as (r, path, rebuilt):
+        before, deps_before = r.server.settings, r.server.deps
+        path.write_text(json.dumps(json.loads(path.read_text(encoding="utf-8")) | {"price_pct": "5"}, indent=2), encoding="utf-8")
+        touch_later(path, 1)
+        status, answer = post(r, page(madeup_out, "CART01.html", texts=PRICE_ABOVE))
+        assert status == 200 and answer["verdict"] == "differences"                         # still 2 percent
+        assert post(r, page(madeup_out, "CART01.html", texts=PRICE_ABOVE | {"<p>Uw referentie: 250201</p>": ""}))[0] == 200
+        assert r.server.settings is before and r.server.deps is deps_before and rebuilt == []
+        log = (r.settings.cases_root / "capture.log").read_text(encoding="utf-8")
+        assert len(log.splitlines()) == 1 and "ValueError" in log and "secret-xyz-value" not in log and "made-up" not in log
+
+
+@pytest.mark.parametrize("damage, named", [(lambda path: path.unlink(), "FileNotFoundError"),
+                                           (lambda path: path.write_text('{"price_pct": "secret-xyz-value", ', encoding="utf-8"), "Expecting")])
+def test_a_changed_settings_file_that_cannot_be_read_keeps_the_settings_and_logs_one_line(tmp_path, madeup_out, damage, named):
+    with watching(tmp_path, madeup_out) as (r, path, rebuilt):
+        before, deps_before = r.server.settings, r.server.deps
+        damage(path)
+        if path.exists():
+            touch_later(path, 1)
+        status, answer = post(r, page(madeup_out, "CART01.html", texts=PRICE_ABOVE))
+        assert status == 200 and answer["verdict"] == "differences"
+        assert post(r, page(madeup_out, "CART01.html", texts=PRICE_ABOVE | {"<p>Uw referentie: 250201</p>": ""}))[0] == 200
+        assert r.server.settings is before and r.server.deps is deps_before and rebuilt == []
+        log = (r.settings.cases_root / "capture.log").read_text(encoding="utf-8")
+        assert len(log.splitlines()) == 1 and named in log and "secret-xyz-value" not in log and TOKEN not in log
+
+
+def test_a_file_that_is_not_valid_after_a_valid_change_keeps_the_settings_in_use_not_those_of_the_start(tmp_path, madeup_out):
+    with watching(tmp_path, madeup_out) as (r, path, rebuilt):
+        good = json.loads(path.read_text(encoding="utf-8")) | {"price_pct": "5"}
+        path.write_text(json.dumps(good, indent=2), encoding="utf-8")
+        touch_later(path, 1)
+        assert post(r, page(madeup_out, "CART01.html", texts=PRICE_ABOVE))[1]["verdict"] == "match"
+        in_use, deps_in_use = r.server.settings, r.server.deps
+        assert in_use.price_pct == Decimal("5") and deps_in_use is rebuilt[0]
+        path.write_text(json.dumps(good | {"price_abs": "secret-xyz-value"}, indent=2), encoding="utf-8")
+        touch_later(path, 2)
+        status, answer = post(r, page(madeup_out, "CART01.html", texts=PRICE_ABOVE | {"<p>Uw referentie: 250201</p>": ""}))
+        assert status == 200 and answer["verdict"] == "match"                               # 5 percent still, not the 2 of the start
+        assert r.server.settings is in_use and r.server.deps is deps_in_use and len(rebuilt) == 1
+
+
+def test_a_changed_token_in_the_settings_file_is_the_token_from_then_on(tmp_path, madeup_out):
+    with watching(tmp_path, madeup_out) as (r, path, rebuilt):
+        path.write_text(json.dumps(json.loads(path.read_text(encoding="utf-8")) | {"capture_token": "another-made-up-token"}, indent=2),
+                        encoding="utf-8")
+        touch_later(path, 1)
+        assert post(r, page(madeup_out, "CART01.html"))[0] == 401
+        assert post(r, page(madeup_out, "CART01.html"), token="another-made-up-token")[0] == 200
+
+
+def test_a_changed_settings_file_that_is_not_valid_keeps_the_settings_and_logs_one_line_without_a_value(tmp_path, madeup_out):
+    with watching(tmp_path, madeup_out) as (r, path, rebuilt):
+        before = r.server.settings
+        path.write_text(json.dumps(json.loads(path.read_text(encoding="utf-8")) | {"price_pct": "secret-xyz-value"}, indent=2), encoding="utf-8")
+        touch_later(path, 1)
+        status, answer = post(r, page(madeup_out, "CART01.html", texts=PRICE_ABOVE))
+        assert status == 200 and answer["verdict"] == "differences"
+        status, again = post(r, page(madeup_out, "CART01.html", texts=PRICE_ABOVE | {"<p>Uw referentie: 250201</p>": ""}))
+        assert status == 200 and r.server.settings is before
+        log = (r.settings.cases_root / "capture.log").read_text(encoding="utf-8")
+        assert len(log.splitlines()) == 1 and "price_pct" in log and "secret-xyz-value" not in log and TOKEN not in log
+
+
+def test_main_gives_the_server_its_settings_file_and_a_rebuild_as_main_builds_the_deps(tmp_path, monkeypatch):
+    from aid.decider import NoDecider
+    from aid.pipeline import read_with_parser
+    seen = {}
+
+    class Stub:
+        server_address = ("127.0.0.1", 7870)
+
+        def serve_forever(self):
+            raise KeyboardInterrupt
+
+        def server_close(self):
+            pass
+
+    def fake(settings, d, host, port, testshop, **watch):
+        seen.update(watch)
+        return Stub()
+    monkeypatch.setattr(server_module, "serve", fake)
+    path = _settings_file(tmp_path, capture_token=TOKEN, reader="parser")
+    assert main(["--settings", str(path)]) == 0
+    assert seen["settings_file"] == path
+    (tmp_path / "other").mkdir()
+    rebuilt = seen["rebuild"](load_settings(_settings_file(tmp_path / "other", capture_token=TOKEN, reader="llm",
+                                                           ms_tenant_id="00000000-0000-0000-0000-000000000001",
+                                                           ms_client_id="00000000-0000-0000-0000-000000000002")))
+    assert isinstance(rebuilt.decider, NoDecider) and rebuilt.reader is read_with_parser and rebuilt.settings.reader == "parser"

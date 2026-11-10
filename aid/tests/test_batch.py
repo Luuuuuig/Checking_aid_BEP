@@ -7,7 +7,7 @@ from datetime import datetime
 import pytest
 
 from aid.batch import SUMMARY_COLUMNS, main
-from aid.madeup.generate import MadeUpSpec, export_csv
+from aid.madeup.generate import TRYOUT_EXPORT_COLUMNS, MadeUpSpec, export_csv
 from aid.po_store import EXPORT_FIELDS, PoStore
 from aid.tests.conftest import REPO_ROOT, SETTINGS, read_csv
 
@@ -108,14 +108,15 @@ def test_the_made_up_set_through_the_batch_with_the_recorded_reader(tmp_path, ma
 
 def test_the_batch_files_each_export_with_the_column_map_of_the_settings(tmp_path, madeup_out):
     """An export whose columns have names of their own is filed with settings.export_columns before the cases run; a map that the
-    export does not fit stops the batch before any case is opened."""
+    export does not fit stops the batch before any case is opened. The file has a column for each of the twelve export fields; the
+    made-up export fills nine of them, so the cells of the discount, the net price and the supplier are blank."""
     po_dir = tmp_path / "po"
     po_dir.mkdir()
     names = {field: f"Kolom {n}" for n, field in enumerate(EXPORT_FIELDS, 1)}
     with open(po_dir / "CART01_export.csv", "w", encoding="utf-8", newline="") as f:
         rows = csv.writer(f, lineterminator="\n")
         rows.writerow(names.values())
-        rows.writerows([row[field] for field in EXPORT_FIELDS] for row in read_csv(madeup_out / "CART01_export.csv"))
+        rows.writerows([row.get(field, "") for field in EXPORT_FIELDS] for row in read_csv(madeup_out / "CART01_export.csv"))
     cases, out = write_cases(tmp_path, madeup_out, ["CART01"]), tmp_path / "summary.csv"
 
     def run(columns: dict[str, str], name: str) -> int:
@@ -130,6 +131,40 @@ def test_the_batch_files_each_export_with_the_column_map_of_the_settings(tmp_pat
     assert run(names, "named") == 0
     [row] = read_csv(out)
     assert (row["case_id"], row["status"], row["version"], row["actions"]) == ("CART01", "closed", "1", "R01 AUTO")
+
+
+def test_the_batch_passes_the_export_settings(tmp_path):
+    """The made-up Dutch export of the try-out folder (semicolons, decimal commas, the PO number on the first row of each order only)
+    is filed with the three export settings. With export_fill_down left at its default the file stops the batch before any case is
+    opened; with export_decimal_comma left at its default the 1.000 pieces of the first line are one piece."""
+    po_dir = tmp_path / "po"
+    po_dir.mkdir()
+    shutil.copy2(REPO_ROOT / "aid" / "madeup" / "tryout" / "EXPORT_nl.csv", po_dir / "NL_export.csv")
+    cases = tmp_path / "cases.csv"
+    cases.write_text("case_id,document,po_number,kind\n", encoding="utf-8")
+
+    def run(name: str, **export) -> int:
+        settings = tmp_path / f"{name}.json"
+        folders = {"cases_root": tmp_path / name / "cases", "po_store_root": tmp_path / name / "store"}
+        used = SETTINGS.model_copy(update={**folders, "export_columns": TRYOUT_EXPORT_COLUMNS, **export})
+        settings.write_text(used.model_dump_json(), encoding="utf-8")
+        return main(["--cases", str(cases), "--po-dir", str(po_dir), "--settings", str(settings), "--reader", "parser",
+                     "--out", str(tmp_path / name / "summary.csv")])
+
+    def filed(name: str) -> list[tuple]:
+        """Each version the store of the run holds for the two POs of the export, with the id, item code and quantity of its lines."""
+        versions = [v for number in ("250301", "250302") for v in PoStore(tmp_path / name / "store").versions(number)]
+        return [(v.po_number, v.version, v.supplier, v.document.reader,
+                 [(line.line_id, line.item_code.value, line.quantity.value) for line in v.document.lines]) for v in versions]
+
+    with pytest.raises(ValueError, match=r"^NL_export\.csv, row 5: an item code without a PO number$"):
+        run("defaults")
+    assert not (tmp_path / "defaults" / "store").exists() and not (tmp_path / "defaults" / "cases").exists()
+    assert run("filled", export_fill_down=True) == 0 and run("both", export_fill_down=True, export_decimal_comma=True) == 0
+    assert filed("both") == [
+        ("250301", 1, "S21", "export:NL_export.csv", [("1", "KM-3101", "1000"), ("2", "KM-3102", "25"), ("3", "KM-3103", "4")]),
+        ("250302", 1, "S22", "export:NL_export.csv", [("1", "KM-3201", "200"), ("2", "KM-3202", "2")])]
+    assert [lines[0] for *_, lines in filed("filled")] == [("1", "KM-3101", "1.000"), ("1", "KM-3201", "200")]
 
 
 def test_the_batch_files_the_po_pdfs_before_the_exports(tmp_path, madeup_out):

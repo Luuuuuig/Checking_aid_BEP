@@ -37,6 +37,8 @@
   "mail_folder_name": null,
   "send_via": "auto",
   "export_columns": {},
+  "export_decimal_comma": false,
+  "export_fill_down": false,
   "review_url": "http://localhost:7860",
   "capture_token": null
 }

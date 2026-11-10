@@ -339,8 +339,9 @@ def test_the_undo_link_selects_its_case_and_write_on_the_review_page(tmp_path, m
     assert selection_from_query(d.settings.cases_root, query) == (c.case_id, None)
 
 
-@pytest.mark.parametrize("language, line", [("nl", "Postvak niet verbonden: meld je opnieuw aan op het tabblad Instellingen"),
-                                            ("en", "Mailbox not connected: sign in again on the Settings tab")])
+@pytest.mark.parametrize("language, line", [
+    ("nl", "Postvak niet verbonden: meld je opnieuw aan op het tabblad Instellingen, onderaan bij Koppelingen"),
+    ("en", "Mailbox not connected: sign in again on the Settings tab, at its bottom under Connections")])
 def test_a_lapsed_mailbox_is_one_line_under_the_title_before_the_blocks(language, line):
     settings = SETTINGS.model_copy(update={"language": language})
     lapsed = build_digest([case_result("250101_20261118T090000", "closed")], [], settings, date(2026, 11, 18), mailbox_lapsed=True)
@@ -351,11 +352,11 @@ def test_a_lapsed_mailbox_is_one_line_under_the_title_before_the_blocks(language
 
 @pytest.mark.parametrize("language, waiting, line", [
     ("nl", 2, "Copilot werkt niet (Copilot refused: 403 Forbidden): 2 zaken wachten erop; meld je aan voor Copilot of test Copilot op "
-              "het tabblad Instellingen"),
+              "het tabblad Instellingen, onderaan bij Koppelingen"),
     ("nl", 1, "Copilot werkt niet (Copilot refused: 403 Forbidden): 1 zaak wacht erop; meld je aan voor Copilot of test Copilot op "
-              "het tabblad Instellingen"),
+              "het tabblad Instellingen, onderaan bij Koppelingen"),
     ("en", 3, "Copilot is not working (Copilot refused: 403 Forbidden): 3 cases wait for it; sign in for Copilot or test Copilot on "
-              "the Settings tab")])
+              "the Settings tab, at its bottom under Connections")])
 def test_copilot_that_fails_is_one_line_under_the_title_with_the_cases_waiting(language, waiting, line):
     settings = SETTINGS.model_copy(update={"language": language})
     d = build_digest([], [], settings, date(2026, 11, 18), mailbox_lapsed=True, copilot_down=("Copilot refused: 403 Forbidden", waiting))

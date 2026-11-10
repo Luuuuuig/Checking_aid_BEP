@@ -9,6 +9,11 @@ under the comparison rules of the scoring manual (docs/process/Scoring_Manual_Dr
 and must agree with the differences each spec declares. aid/madeup/README.md describes the cases.
 
     python3 -m aid.madeup.generate --spec aid/madeup/spec --out aid/madeup/out
+
+generate_tryout() writes the try-out files: made-up files in forms the set above does not have, for trying out what is
+set up on the company side. They belong to no case and have no reference answer, and writing them leaves the set alone.
+
+    python3 -m aid.madeup.generate --tryout aid/madeup/tryout
 """
 import argparse
 import csv
@@ -533,6 +538,50 @@ def export_csv(spec: MadeUpSpec) -> str:
     return buffer.getvalue()
 
 
+# The try-out export: an overview of open purchase order lines as an ERP could export it, in a form the exports above do not
+# have. TRYOUT_EXPORT_COLUMNS is the column map that reads it (aid/readers/po_export.py), with the decimal comma and the
+# fill-down of the PO number. Each order is (PO number, supplier, lines) and each line (item code, description, quantity, unit,
+# unit price, price basis, delivery day), in normal form.
+TRYOUT_EXPORT = "EXPORT_nl.csv"
+TRYOUT_EXPORT_COLUMNS = {"po_number": "Inkooporder", "supplier": "Leverancier", "item_code": "Artikel", "description": "Omschrijving",
+                         "quantity": "Aantal", "unit": "Eenheid", "unit_price": "Prijs", "price_basis": "Per",
+                         "delivery_date": "Leverdatum"}
+TRYOUT_ORDERS = [
+    ("250301", "S21", [("KM-3101", "Slangklem 16-27 mm", "1000", "pc", "12.50", "100", "2026-11-24"),
+                       ("KM-3102", "Hydrauliekslang 12 mm", "25", "m", "4.80", "1", "2026-11-24"),
+                       ("KM-3103", "Kogelkraan DN20", "4", "pc", "38.75", "1", "2026-12-01")]),
+    ("250302", "S22", [("KM-3201", "O-ring 30 x 3 mm", "200", "pc", "0.125", "1", "2026-11-26"),
+                       ("KM-3202", "Tandwielpomp 11 cc", "2", "pc", "1234.50", "1", "2026-11-26")]),
+]
+
+
+def tryout_export_csv() -> str:
+    """The try-out export as a spreadsheet saves a sheet as CSV in the Netherlands: semicolons, numbers with a decimal comma and a
+    point between the thousands, days as dd-mm-yyyy, and every row with the cells of the widest one. A title row and a blank row
+    stand above the row of column titles, which are Dutch. The PO number and the supplier stand on the first row of each order
+    only, the lines have no line number, a column Bedrag (quantity times price) is no field of the aid, and the last row is the
+    total of that column."""
+    titles = [*TRYOUT_EXPORT_COLUMNS.values(), "Bedrag"]
+    rows, total = [["Openstaande inkooporderregels (verzonnen voorbeeld)"], [], titles], Decimal(0)
+    for po_number, supplier, lines in TRYOUT_ORDERS:
+        for place, (item_code, description, quantity, unit, unit_price, price_basis, day) in enumerate(lines):
+            amount = (Decimal(quantity) * Decimal(unit_price) / Decimal(price_basis)).quantize(CENT, ROUND_HALF_UP)
+            total += amount
+            rows.append([po_number if place == 0 else "", supplier if place == 0 else "", item_code, description, _number(quantity, "nl"),
+                         UNIT_WORDS["nl"][unit], _number(unit_price, "nl"), price_basis, day_text(day, "nl"), _number(amount, "nl", 2)])
+    rows.append(["Totaal", *[""] * (len(titles) - 2), _number(total, "nl", 2)])
+    buffer = io.StringIO()
+    csv.writer(buffer, delimiter=";", lineterminator="\n").writerows([*row, *[""] * (len(titles) - len(row))] for row in rows)
+    return buffer.getvalue()
+
+
+def _tryout_export(out: Path) -> Path:
+    """Write the try-out export into the folder `out` and return the file."""
+    path = Path(out) / TRYOUT_EXPORT
+    path.write_bytes(tryout_export_csv().encode("utf-8"))
+    return path
+
+
 def case_files(spec: MadeUpSpec) -> list[tuple[str, bytes]]:
     """The files of one case, as (file name, content)."""
     case = spec.case_id
@@ -559,6 +608,14 @@ def generate(spec_dir: Path, out_dir: Path) -> list[Path]:
             (out_dir / name).write_bytes(content)
             written.append(out_dir / name)
     return written
+
+
+def generate_tryout(out: Path) -> list[Path]:
+    """Write the try-out files into the folder `out` (aid/madeup/tryout in the repository); returns the files written. Each file is
+    written by a helper of its own. The made-up set of generate() and its folder are not touched."""
+    out = Path(out)
+    out.mkdir(parents=True, exist_ok=True)
+    return [_tryout_export(out)]
 
 
 # ---------------------------------------------------------------- references
@@ -748,12 +805,19 @@ def write_references(specs: list[MadeUpSpec], path: Path) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """The command line: python3 -m aid.madeup.generate --spec aid/madeup/spec --out aid/madeup/out [--references FILE]."""
+    """The command line: python3 -m aid.madeup.generate --spec aid/madeup/spec --out aid/madeup/out [--references FILE], or
+    python3 -m aid.madeup.generate --tryout aid/madeup/tryout, which writes the try-out files only."""
     parser = argparse.ArgumentParser(description="Draw the made-up document set and write its references.")
     parser.add_argument("--spec", type=Path, default=Path("aid/madeup/spec"), help="folder of the case specs")
     parser.add_argument("--out", type=Path, default=Path("aid/madeup/out"), help="folder for the documents")
     parser.add_argument("--references", type=Path, help="the references file (default: references.csv next to the spec folder)")
+    parser.add_argument("--tryout", type=Path, help="write the try-out files into this folder and nothing else: the documents of "
+                                                    "--out and the references are left as they are")
     args = parser.parse_args(argv)
+    if args.tryout is not None:
+        files = generate_tryout(args.tryout)
+        print(f"try-out files in {args.tryout}: {', '.join(path.name for path in files)}")
+        return 0
     specs = load_specs(args.spec)
     files = generate(args.spec, args.out)        # checks every spec before writing anything
     references = args.references or args.spec.parent / "references.csv"

@@ -3,17 +3,18 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
 
+from aid.madeup import generate
 from aid.madeup.generate import (CART_COLUMNS, MadeUpSpec, Row, Text, basis_words, cart_rows, cart_table, cell_text, confirmation_pages,
                                  day_text, row_positions)
-from aid.po_store import EXPORT_FIELDS
 from aid.readers.supplier_llm import Reading
 from aid.schema import DocLine, DocValue, Document, SourceRef
 
 SPEC_DIR = Path(__file__).resolve().parents[1] / "madeup" / "spec"
 _LINE_FIELDS = [name for name, field in DocLine.model_fields.items() if field.annotation is DocValue]
 # The column map of the made-up ERP export (aid/madeup/generate.py, export_csv), for PoStore.from_export: it names the column of
-# each of the nine fields after the field.
-EXPORT_COLUMNS = {field: field for field in EXPORT_FIELDS}
+# each of the nine fields the export has after the field. (The three other export fields, the discount, the net price and the
+# supplier, have no column in the made-up export, and a map may only name columns that the file holds.)
+EXPORT_COLUMNS = {field: field for field in generate.EXPORT_COLUMNS}
 
 
 def document_from_spec(case_id: str, kind: Literal["confirmation", "cart"] = "confirmation", html: bool = False) -> Document:

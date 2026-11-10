@@ -72,9 +72,11 @@ import re
 import sys
 import zipfile
 import zlib
+from collections.abc import Callable
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 from openpyxl import load_workbook
 from pydantic import BaseModel
@@ -276,24 +278,6 @@ def _csv_table(path: Path) -> list[list[str]]:
         raise ValueError(f"{path.name} cannot be read as CSV ({exc})") from exc
 
 
-def _xlsx_table(path: Path) -> list[list[str]]:
-    """The rows of the first sheet of a workbook, a formula as the value it last had. The file is opened here and openpyxl reads the
-    open file, so that the handle is closed whatever fails inside openpyxl. A workbook that cannot be read raises ValueError."""
-    with open(path, "rb") as source:                          # a file that cannot be opened raises its OSError here
-        try:
-            with contextlib.closing(load_workbook(source, read_only=True, data_only=True)) as workbook:
-                if not workbook.worksheets:
-                    return []
-                sheet = workbook.worksheets[0]
-                sheet.reset_dimensions()                      # a file with a wrong dimension record would give only its first cell
-                return [[_cell_text(value) for value in row] for row in sheet.iter_rows(values_only=True)]
-        except (zipfile.BadZipFile, zlib.error, NotImplementedError, RuntimeError, KeyError, SyntaxError, OSError) as exc:
-            # Not a zip file; a zip file with bad data, a method or version zipfile does not know (NotImplementedError, a kind of
-            # RuntimeError), a member its directory marks as encrypted (RuntimeError: no password is given) or offsets that lead nowhere
-            # (the seek is an OSError); one without the parts of a workbook; bad XML.
-            raise ValueError(f"{path.name} cannot be read as an .xlsx workbook ({exc})") from exc
-
-
 def _cell_text(value: object) -> str:
     """The text of one cell value of a workbook: a datetime as its day, "2026-11-16"; a number to 8 decimals (a spreadsheet keeps 17
     digits, so a price of 38.10 can be stored as 38.09999999999999) and without a fraction of zero ("8.0" is "8"); nothing as "";
@@ -308,6 +292,28 @@ def _cell_text(value: object) -> str:
     # Text, an integer, a boolean. A cell typed as an ISO date comes back from openpyxl as a plain date, which str() writes in the same
     # form, "2026-11-16". A time or a duration cell comes back as a time or a timedelta, whose text no date reads.
     return str(value)
+
+
+def _xlsx_table(path: Path, cell: Callable[[Any], Any] = _cell_text, values_only: bool = True) -> list[list]:
+    """The rows of the first sheet of a workbook, a formula as the value it last had. Each cell is what `cell` makes of the value
+    openpyxl gives for it: by default its text (_cell_text), as the price list reads it. With `values_only` False `cell` is given the
+    cell itself instead (an openpyxl read-only cell, with its value and its number format, or an empty cell where the row holds
+    nothing): the reader of the PO export (aid/readers/po_export.py) needs to know which cells hold a number, a date or a percentage.
+    The file is opened here and openpyxl reads the open file, so that the handle is closed whatever fails inside openpyxl. A workbook
+    that cannot be read raises ValueError."""
+    with open(path, "rb") as source:                          # a file that cannot be opened raises its OSError here
+        try:
+            with contextlib.closing(load_workbook(source, read_only=True, data_only=True)) as workbook:
+                if not workbook.worksheets:
+                    return []
+                sheet = workbook.worksheets[0]
+                sheet.reset_dimensions()                      # a file with a wrong dimension record would give only its first cell
+                return [[cell(item) for item in row] for row in sheet.iter_rows(values_only=values_only)]
+        except (zipfile.BadZipFile, zlib.error, NotImplementedError, RuntimeError, KeyError, SyntaxError, OSError) as exc:
+            # Not a zip file; a zip file with bad data, a method or version zipfile does not know (NotImplementedError, a kind of
+            # RuntimeError), a member its directory marks as encrypted (RuntimeError: no password is given) or offsets that lead nowhere
+            # (the seek is an OSError); one without the parts of a workbook; bad XML.
+            raise ValueError(f"{path.name} cannot be read as an .xlsx workbook ({exc})") from exc
 
 
 # --- the command line ---

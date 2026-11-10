@@ -15,7 +15,7 @@ from aid.decider import LlmDecider
 from aid.execution.writer import PreparedWriter, RetryingWriter, WriteLog, WriteLogEntry, WriterError
 from aid.messaging import FileMailer, MailerError, SentRecord, file_reply, pending_asks, record_sent
 from aid.pipeline import DISPOSITION_COLUMNS, CaseResult, ReviewItem, escalate_pending, file_answer, read_with_parser, record_dispositions, run_case
-from aid.po_store import EXPORT_FIELDS, PoStore
+from aid.po_store import PoStore
 from aid.readers.llm_client import LlmResponse, ReaderError, RecordedClient
 from aid.readers.supplier_llm import read_supplier_document, reading_request
 from aid.routing import Action, MessageSpec
@@ -1008,7 +1008,7 @@ def test_a_cart_is_checked_against_the_po_of_its_export(tmp_path, madeup_out):
     threshold of 3 percent, the 2.5 percent difference on KM-2002 is corrected on the PO line and the article (R04); the PO line
     that is not in the cart goes to the buyer (R07). A cart gets no attachment and no status."""
     d = deps(tmp_path, madeup_out, settings=SETTINGS.model_copy(update={"price_pct": Decimal("3.0")})).model_copy(update={"reader": recorded_reader})
-    [version] = d.store.from_export(madeup_out / "CART02_export.csv", {field: field for field in EXPORT_FIELDS})
+    [version] = d.store.from_export(madeup_out / "CART02_export.csv", {})      # the empty map: each column is named after its field
     c, r = run(d, madeup_out, "CART02", "250202", kind="cart", document="CART02.png")
     assert r.status == "review" and (r.version.version, r.version.method) == (version.version, "reference") and r.supplier == "S22"
     assert [(a.rule_id, a.route, a.reason) for a in r.actions] == [("R07", "REVIEW", "could not be placed"), ("R04", "AUTO", "price within threshold")]

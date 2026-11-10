@@ -9,7 +9,8 @@ relative to the folder of cases.csv, or absolute), the PO number (blank when it 
 without a case id, a document or a kind is a failed case. The store
 is the one under po_store_root of the settings, with the authorization limit of the settings. Every *_po_v*.pdf of --po-dir is filed
 into it first, and then every *_export.csv, the ERP export that gives a cart its PO side (PoStore.from_export), with the column map
-of settings.export_columns, or with each field's column named after the field when that setting is empty; a file the store refuses
+of settings.export_columns, or with each column named after its field when that setting is empty, and with the number convention
+and the fill-down of settings.export_decimal_comma and settings.export_fill_down; a file the store refuses
 stops the batch before any case runs, and what the store holds from before stays. The reader is the parser baseline
 (--reader parser) or the LLM reader over the answers recorded in --recorded-dir (--reader recorded), which calls no model; under
 either, a cart page saved as HTML (is_cart_page of aid/readers/cart.py) is read by the cart reader, which needs no model. There is no
@@ -37,7 +38,7 @@ from aid.case import Case
 from aid.decider import Decider, NoDecider
 from aid.execution.writer import PreparedWriter
 from aid.pipeline import UNREADABLE, CaseResult, Deps, escalate_pending, read_with_parser, record_dispositions, run_case
-from aid.po_store import EXPORT_FIELDS, PoStore
+from aid.po_store import PoStore
 from aid.readers.cart import is_cart_page, read_cart_html
 from aid.readers.llm_client import LlmResponse, RecordedClient
 from aid.readers.supplier_llm import read_supplier_document
@@ -76,14 +77,14 @@ def main(argv: list[str] | None = None, reader: Callable | None = None, decider:
 
 
 def file_po_dir(settings: Settings, po_dir: Path) -> PoStore:
-    """The PO store of the settings with every *_po_v*.pdf of po_dir filed into it, then every *_export.csv (with the settings' column
-    map, or the identity map of the export fields); a file the store holds already is not filed twice."""
+    """The PO store of the settings with every *_po_v*.pdf of po_dir filed into it, then every *_export.csv, read with the three
+    export settings (the column map, which when empty means that each column is named after its field, the number convention and
+    the fill-down of the PO number); a file the store holds already is not filed twice."""
     store = PoStore(settings.po_store_root, settings.authorization_limit)
     for pdf in sorted(Path(po_dir).glob("*_po_v*.pdf")):
         store.add(pdf)
-    columns = settings.export_columns or {field: field for field in EXPORT_FIELDS}
     for export in sorted(Path(po_dir).glob("*_export.csv")):
-        store.from_export(export, columns)
+        store.from_export(export, settings.export_columns, settings.export_decimal_comma, settings.export_fill_down)
     return store
 
 

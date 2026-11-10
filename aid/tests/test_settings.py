@@ -36,6 +36,18 @@ def test_example_settings_hold_the_defaults():
     assert example.model == "<model id>"
 
 
+def test_the_example_holds_the_export_settings_with_their_defaults():
+    """The two settings of the export's form stand in the example beside export_columns, each with its default: the decimal point, and
+    a PO number on every row."""
+    values = json.loads(Path("aid/settings.example.json").read_text(encoding="utf-8"))
+    names = list(values)
+    assert names[names.index("export_columns"):][:3] == ["export_columns", "export_decimal_comma", "export_fill_down"]
+    assert (values["export_columns"], values["export_decimal_comma"], values["export_fill_down"]) == ({}, False, False)
+    example, fields = load_settings(Path("aid/settings.example.json")), Settings.model_fields
+    assert (example.export_decimal_comma, example.export_fill_down) == (False, False)
+    assert (fields["export_decimal_comma"].default, fields["export_fill_down"].default) == (False, False)
+
+
 def test_relative_paths_resolve_against_the_settings_file(tmp_path, monkeypatch):
     drive = tmp_path / "drive"; drive.mkdir()
     elsewhere = tmp_path / "elsewhere"; elsewhere.mkdir()

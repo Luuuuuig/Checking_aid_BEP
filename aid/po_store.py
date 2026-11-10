@@ -1,7 +1,8 @@
 """The PO store: every version of every purchase order the aid has been given, by PO number and version number.
 
 add() files a PO PDF, read with the PO PDF reader (aid/readers/po_pdf.py), as a version of its PO. A cart pre-check has no
-PO PDF yet, so from_export() files the POs of an ERP export instead. Each version has a folder of its own:
+PO PDF yet, so from_export() files the POs of an ERP export instead, an Excel or CSV file read with the export reader
+(aid/readers/po_export.py). Each version has a folder of its own:
 
     <root>/<PO number>/v<n>/po.pdf     the store's copy of the PDF (none for a version from an export)
     <root>/<PO number>/v<n>/po.json    the PoVersion, written last: a folder without it holds no version
@@ -17,7 +18,6 @@ is not the PO's total. above_authorization says whether the total is greater tha
 setting kept outside the repository; it is None when the total or the limit is unknown. It is worked out against the
 store's limit each time a version is read, so that a changed setting holds for the versions stored before it.
 """
-import csv
 import os
 import shutil
 from decimal import Decimal
@@ -26,10 +26,10 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from aid.case import sha256_file
+from aid.readers.po_export import EXPORT_FIELDS, read_export  # noqa: F401 (EXPORT_FIELDS is importable from here too)
+from aid.readers.po_export import is_folder_name as _folder_name      # one rule for a PO number as a folder, for the store and the reader
 from aid.readers.po_pdf import read_po_pdf
-from aid.schema import DocLine, DocValue, Document, normalize_basis, normalize_date, normalize_number, normalize_unit
-
-EXPORT_FIELDS = ("po_number", "line_id", "item_code", "description", "quantity", "unit", "unit_price", "price_basis", "delivery_date")
+from aid.schema import Document
 
 
 class PoVersion(BaseModel):
@@ -85,24 +85,24 @@ class PoStore:
                 found.append(versions[-1].po_number)
         return found
 
-    def from_export(self, csv_path: Path, columns: dict[str, str], decimal_comma: bool = False) -> list[PoVersion]:
-        """File the POs of an ERP export, a CSV file with one row per PO line, and return their versions in the order of
-        the file.
+    def from_export(self, path: Path, columns: dict[str, str], decimal_comma: bool = False, fill_down: bool = False) -> list[PoVersion]:
+        """File the POs of an ERP export, an .xlsx or .csv file with one row per PO line, and return their versions in the
+        order of the file.
 
-        `columns` maps the aid's field names (EXPORT_FIELDS) to the column names of the file. It must name po_number and
-        line_id; a field it leaves out stays missing. Each PO number gives one Document of kind "po", read by
-        "export:<file name>": each value has its text as in the file and the value the schema's normaliser makes of it (a
-        number with the decimal comma when `decimal_comma` is True), and no source. Each Document is stored as the next
-        version of its PO, with the export as its pdf_path and no date or supplier, unless the PO is stored from this
-        same file already. A map that names an unknown field, leaves out po_number or line_id, or names a column the file
-        does not have raises ValueError before anything is stored, and so does a row without a PO number or line id, or a
-        PO number that cannot be the name of a folder."""
-        csv_path = Path(csv_path).resolve()
-        documents = _export_documents(csv_path, columns, decimal_comma)
-        for doc in documents:                        # every PO number of the file, before anything is written
-            _check_folder_name(doc.po_reference.value, csv_path)
-        digest = sha256_file(csv_path)
-        return [self._file(doc, csv_path, digest, copy=False) for doc in documents]
+        The file is read by read_export (aid/readers/po_export.py), whose docstring gives the rules. `columns` maps the
+        aid's field names (EXPORT_FIELDS) to the column titles of the file; it must name po_number and item_code, a field
+        it leaves out stays missing, and an empty map means every field whose name is a column title of the file.
+        `decimal_comma` is the convention of the numbers the file writes as text, and with `fill_down` a row without a PO
+        number takes the one that stands nearest above it. Each PO number gives one Document of kind "po", read by
+        "export:<file name>": each value has its text as in the file and its normal form, and no source. Each Document
+        is stored as the next version of its PO, with the export as its pdf_path, no date, and the supplier the export
+        names for the PO, if it has a supplier column, unless the PO is stored from this same file already. A file or a
+        map that the reader refuses raises its ValueError (ExportRefused) before anything is stored: the error names the
+        column or the row, never what a cell holds."""
+        path = Path(path).resolve()
+        reading = read_export(path, columns, decimal_comma, fill_down)      # every row of the file, before anything is written
+        digest = sha256_file(path)
+        return [self._file(doc, path, digest, copy=False) for doc in reading.documents]
 
     def _file(self, doc: Document, source: Path, digest: str, copy: bool) -> PoVersion:
         """Store `doc`, read from `source`, as a version of its PO (see add); `copy` keeps a copy of the source."""
@@ -139,14 +139,11 @@ class PoStore:
         return None if total is None or self.authorization_limit is None else total > self.authorization_limit
 
 
-def _folder_name(name: str | None) -> bool:
-    """Whether a PO number can be one folder of the store, so that no PO number points outside it."""
-    return bool(name) and name not in (".", "..") and Path(name).name == name
-
-
 def _check_folder_name(po_number: str | None, source: Path) -> None:
+    """Refuse a PO number that cannot be the name of a folder on every system the aid runs on (is_folder_name of the export reader),
+    from a PDF as from an export, before anything is filed. The error names the file and not the number, a value read from it."""
     if not _folder_name(po_number):
-        raise ValueError(f"{source.name}: the PO number {po_number!r} cannot be the name of a folder")
+        raise ValueError(f"{source.name}: the PO number cannot be the name of a folder")
 
 
 def _total(doc: Document) -> Decimal | None:
@@ -162,48 +159,3 @@ def _total(doc: Document) -> Decimal | None:
 
 def _item_codes(doc: Document) -> set[str]:
     return {line.item_code.value for line in doc.lines if line.item_code.value is not None}
-
-
-# --- the ERP export ---
-
-def _export_documents(path: Path, columns: dict[str, str], decimal_comma: bool) -> list[Document]:
-    """One Document per PO number of the export, in the order of the file (see PoStore.from_export)."""
-    unknown = sorted(set(columns) - set(EXPORT_FIELDS))
-    if unknown:
-        raise ValueError(f"the export columns name {unknown}, which are not fields of a PO line ({', '.join(EXPORT_FIELDS)})")
-    for field in ("po_number", "line_id"):
-        if field not in columns:
-            raise ValueError(f"the export columns name no column for {field}")
-    with open(path, encoding="utf-8-sig", newline="") as f:      # also reads a file saved with a BOM
-        reader = csv.DictReader(f)
-        absent = [column for column in columns.values() if column not in (reader.fieldnames or [])]
-        if absent:
-            raise ValueError(f"{path.name} has no column {absent[0]!r}")
-        rows = list(reader)
-    lines: dict[str, list[DocLine]] = {}
-    for number, row in enumerate(rows, 2):                         # row 1 holds the column names
-        cells = {field: row[column] or "" for field, column in columns.items()}
-        po_number, line_id = cells.pop("po_number").strip(), cells.pop("line_id").strip()
-        if not po_number or not line_id:
-            raise ValueError(f"{path.name}, row {number}: a PO line needs a PO number and a line id")
-        values = {field: _export_value(field, text, decimal_comma) for field, text in cells.items()}
-        lines.setdefault(po_number, []).append(DocLine(line_id=line_id, **values))
-    return [Document(kind="po", po_reference=DocValue(value=po_number, text=po_number), lines=po_lines, source_file=path.name,
-                     reader=f"export:{path.name}") for po_number, po_lines in lines.items()]
-
-
-def _export_value(field: str, text: str, decimal_comma: bool) -> DocValue:
-    """The DocValue of one cell of the export: its text and its normalised value. A blank cell is DocValue()."""
-    if not text.strip():
-        return DocValue()
-    if field in ("quantity", "unit_price"):
-        value = normalize_number(text, decimal_comma=decimal_comma)
-    elif field == "unit":
-        value = normalize_unit(text)
-    elif field == "price_basis":
-        value = normalize_basis(text)
-    elif field == "delivery_date":
-        value = normalize_date(text, None)
-    else:
-        value = text.strip()                                         # item_code and description stay as written
-    return DocValue(value=value, text=text, uncertain=value is None)

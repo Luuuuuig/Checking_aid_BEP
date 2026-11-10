@@ -18,24 +18,28 @@ The routes:
 Every other path is 404. The server listens on 127.0.0.1 unless --host says otherwise. The token is compared with
 hmac.compare_digest and is never logged or echoed.
 
-The pre-check of one page (precheck): the page is saved as <cases_root>/captures/<YYYYmmddTHHMMSS>_<host>.html (the url's host reduced
-to letters, digits, dots and dashes and cut to 60 characters, else "page"; a lone surrogate saved as "?"). When a case holds a file
-with its sha256 already and its result is not failed, that case answers from its saved result, nothing new is opened and the new copy
-is removed. Else the cart reader reads the page; a page it refuses is kept as nocart_<name>, the page that extends the reader. When a
-capture case of the same day holds the same cart (its capture.json holds the same cart digest: the PO reference the page states and,
-per line, the item code, the quantity, the unit and the unit price, each in normal form or else as printed) and its result is not
-failed, that case answers and the new copy is removed, so that a reload of a page whose invisible parts changed opens no new case.
-Else the PO is found (find_po): the PO number the page states, when the store holds that PO, else the one PoStore.find_by_lines gives
-(several: among those whose latest version names the page's supplier, the one with the newest version date, a version without a date
-last, else the first; none: the case opens with an unknown PO). The case is opened with open_capture_case (a case of the same PO in
-the same second is opened a second later, up to five times, without waiting), capture.json is written into its folder (the page's
-sha256, the cart digest, the url's host and the saved page's path; the pipeline ignores it), and the case is run with run_case over
-the Deps the server was given and its dispositions recorded. main builds them with the runner's build_deps for the reader "parser",
-whatever the settings' reader says: the cart reader reads the page and no model is asked, not even Copilot with reader "llm", so that
-the pre-check stays fast and what the rules cannot settle goes to the buyer. While it runs, and while the server resumes a case it
-found without a result (_result), the case folder holds .running (the process id and the start), which keeps the runner's passes off
-the case (aid/runner.py; the runner reports a capture case in its digest once it has its result). The server holds no reading,
-comparing or routing logic of its own.
+The pre-check of one page (precheck): the page is saved as <cases_root>/captures/<YYYYmmddTHHMMSS>_<host>.html (the url's host
+reduced to letters, digits, dots and dashes and cut to 60 characters, else "page"; a lone surrogate saved as "?"). When a case holds
+a file with its sha256 already and its result is not failed, that case answers from its saved result, nothing new is opened and the
+new copy is removed. Else the cart reader reads the page; a page it refuses is kept as nocart_<name>, the page that extends the
+reader. When a capture case of the same day holds the same cart (its capture.json holds the same cart digest: the PO reference the
+page states and, per line, the item code, the quantity, the unit and the unit price, each in normal form or else as printed) and its
+result is not failed, that case answers and the new copy is removed, so that a reload of a page whose invisible parts changed opens
+no new case. Else the PO is found (find_po): the PO number the page states, when the store holds that PO, else the one
+PoStore.find_by_lines gives (several: among those whose latest version names the page's supplier, the one with the newest version
+date, a version without a date last, else the first; none: the case opens with an unknown PO). The case is opened with
+open_capture_case (a case of the same PO in the same second is opened a second later, up to five times, without waiting),
+capture.json is written into its folder (the page's sha256, the cart digest, the url's host and the saved page's path; the pipeline
+ignores it), and the case is run with run_case over the Deps the server was given and its dispositions recorded. main builds them
+with the runner's build_deps for the reader "parser", whatever the settings' reader says: the cart reader reads the page and no model
+is asked, not even Copilot with reader "llm", so that the pre-check stays fast and what the rules cannot settle goes to the buyer.
+The server knows its settings file: before each pre-check, when the file's modification time changed, it reads the file again and
+builds its Deps again as main built them (precheck_deps), and uses the new settings, the token included, from then on, so that the
+pre-check never works with other thresholds than the runner's post-check once the buyer changed them on the settings tab of the
+review page. A changed file that does not validate keeps the settings in use and is one line in capture.log that names the fields,
+never a value. While it runs, and while the server resumes a case it found without a result (_result), the case folder holds .running
+(the process id and the start), which keeps the runner's passes off the case (aid/runner.py; the runner reports a capture case in its
+digest once it has its result). The server holds no reading, comparing or routing logic of its own.
 
 The answer (CaptureAnswer). Its lines are one entry per flag, match and uncompared item of the findings, and one entry of kind
 "review" without a line for each reason about the whole case: a review item without a finding (an unknown PO total, a run cut off
@@ -72,6 +76,7 @@ import re
 import sys
 import threading
 import traceback
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -631,6 +636,7 @@ class _Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         if urlsplit(self.path).path != "/capture":
             return self._json(404, {"error": "not found"})
+        self.server.refresh()                    # a changed settings file is read before its token is checked
         token, expected = self.headers.get(TOKEN_HEADER, ""), self.server.settings.capture_token or ""
         if not expected or not hmac.compare_digest(token.encode("utf-8"), expected.encode("utf-8")):
             return self._refuse(401, "missing or wrong token")
@@ -706,11 +712,39 @@ class _CaptureServer(ThreadingHTTPServer):
     # socket.create_server leaves it out there for the same reason.
     allow_reuse_address = os.name != "nt"
 
-    def __init__(self, address: tuple[str, int], settings: Settings, deps: Deps, testshop: bool):
+    def __init__(self, address: tuple[str, int], settings: Settings, deps: Deps, testshop: bool, settings_file: Path | None = None,
+                 rebuild: Callable[[Settings], Deps] | None = None):
         super().__init__(address, _Handler)
         self.settings, self.deps, self.testshop = settings, deps, testshop
+        self.settings_file, self.rebuild = settings_file, rebuild
+        self.modified = _modified(settings_file)
         self.lock = threading.Lock()             # one pre-check at a time
         self._log_lock = threading.Lock()
+
+    def refresh(self) -> None:
+        """Read the settings file again when its modification time changed since it was last read, and use its settings and the
+        Deps rebuild makes of them from then on. A file that cannot be read or does not validate, or settings that rebuild refuses,
+        keep the settings in use and are one line in capture.log: the fields and their problems, or the class of the error, never a
+        value. Such a file is not read again until it changes once more."""
+        if self.settings_file is None:
+            return
+        with self.lock:                          # not while a pre-check runs with the settings in use
+            modified = _modified(self.settings_file)
+            if modified == self.modified:
+                return
+            self.modified = modified
+            try:
+                settings = load_settings(self.settings_file)
+            except (OSError, ValueError) as error:       # load_settings names the fields at fault, never a value
+                problem = type(error).__name__ if isinstance(error, OSError) else " ".join(str(error).split())
+                self.log_error_line(f"the changed settings file is not used: {problem}; the settings in use are kept")
+                return
+            try:
+                deps = self.rebuild(settings) if self.rebuild is not None else self.deps.model_copy(update={"settings": settings})
+            except Exception as error:           # its text may quote a value of the settings
+                self.log_error_line(f"the changed settings cannot be used ({type(error).__name__}); the settings in use are kept")
+                return
+            self.settings, self.deps = settings, deps
 
     def handle_error(self, request, client_address) -> None:
         """An error outside the pre-check (a client that went away while the answer was written, among others): one line in
@@ -730,9 +764,26 @@ class _CaptureServer(ThreadingHTTPServer):
             print(line, end="", file=sys.stderr)
 
 
-def serve(settings: Settings, deps: Deps, host: str, port: int, testshop: bool) -> ThreadingHTTPServer:
-    """The capture server on host and port, bound but not yet serving: call its serve_forever (the tests do so in a thread)."""
-    return _CaptureServer((host, port), settings, deps, testshop)
+def serve(settings: Settings, deps: Deps, host: str, port: int, testshop: bool, settings_file: Path | None = None,
+          rebuild: Callable[[Settings], Deps] | None = None) -> ThreadingHTTPServer:
+    """The capture server on host and port, bound but not yet serving: call its serve_forever (the tests do so in a thread). Given
+    the settings file the settings came from, the server reads it again before a pre-check when it changed (_CaptureServer.refresh)
+    and uses rebuild to make the Deps of the new settings; without rebuild the Deps keep everything but the settings."""
+    return _CaptureServer((host, port), settings, deps, testshop, settings_file, rebuild)
+
+
+def precheck_deps(settings: Settings, environ=os.environ) -> Deps:
+    """The Deps of the pre-check as main builds them: the runner's build_deps for the reader "parser", whatever the settings' reader
+    says, so that the cart reader reads the page and no model is asked."""
+    return build_deps(settings.model_copy(update={"reader": "parser"}), environ)
+
+
+def _modified(path: Path | None) -> int | None:
+    """The modification time of the file in nanoseconds; None when there is no file, or it cannot be looked at."""
+    try:
+        return Path(path).stat().st_mtime_ns if path is not None else None
+    except OSError:
+        return None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -754,8 +805,8 @@ def main(argv: list[str] | None = None) -> int:
               file=sys.stderr)
         return 2
     try:                                         # the pre-check asks no model, whatever the settings' reader says
-        deps = build_deps(settings.model_copy(update={"reader": "parser"}), os.environ)
-        server = serve(settings, deps, args.host, args.port, args.testshop)
+        deps = precheck_deps(settings)
+        server = serve(settings, deps, args.host, args.port, args.testshop, settings_file=args.settings, rebuild=precheck_deps)
     except (OSError, ValueError, OverflowError) as exc:      # OverflowError: a port outside 0 to 65535
         print(f"aid.capture_server: {exc}", file=sys.stderr)
         return 2

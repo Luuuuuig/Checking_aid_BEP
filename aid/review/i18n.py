@@ -7,7 +7,12 @@ begins with the text before the asterisk, for the reasons that name a write or a
 never the texts themselves, so that no rule code and no setting value reaches it. reason_label gives the label of a reason, for
 the page and for the digest (aid/notify.py), which imports these strings and not gradio. The keys that begin with "settings" are the
 strings of the settings tab, "settings_via:<value>" labelling a value of the setting send_via and "settings_reader:<value>" a value of
-the setting reader.
+the setting reader. Of the buyer's part of that tab, "settings_field:<setting>" is the label of a field and "settings_help:<setting>"
+its help, which says what the rule does and no more, in the words the review tab and the banner use ("de drempel", "de marge",
+"naar u"); "settings_problem:<kind>" is what a refused field takes; "settings_file_unreadable" is the one line of a settings file
+that cannot be read, with "settings_file_fields" for the fields it names. The help of the suppliers says what the tick for no
+questions does and does not do: the aid's own questions come to the buyer, and a question the buyer chooses on the review tab is
+still sent.
 """
 
 STRINGS: dict[str, dict[str, str]] = {
@@ -119,6 +124,100 @@ STRINGS: dict[str, dict[str, str]] = {
         "settings_reader:llm": "Copilot",
         "settings_reader:parser": "zonder AI (parser)",
         "settings_ai_ids_needed": "Sla eerst de map-id en de toepassings-id op; daarna kan Copilot de documenten lezen.",
+        "settings_connections": "Koppelingen: het Microsoft-postvak en de AI-dienst",
+        "settings_file_unreadable": ("Het instellingenbestand kan niet worden gelezen{fields}. Hieronder staan de instellingen die de "
+                                     "assistent nu gebruikt. Opslaan kan pas weer als het bestand is hersteld."),
+        "settings_file_fields": ": controleer {fields}",
+        "settings_group:handled": "Wat de assistent zelf mag afhandelen",
+        "settings_group:questions": "Vragen aan leveranciers",
+        "settings_group:digest": "Dagoverzicht en taal",
+        "settings_group:approval": "Fiattering",
+        "settings_field:price_pct": "Prijsverschil: hoogstens dit percentage",
+        "settings_help:price_pct": ("De drempel voor de prijs: is een prijsverschil hoogstens dit percentage van de prijs op de "
+                                    "inkooporder en hoogstens het bedrag hieronder per regel, dan neemt de assistent de prijs van de "
+                                    "leverancier over op de inkooporder en verandert ook de prijs van het artikel; een verschil boven de "
+                                    "drempel komt naar u."),
+        "settings_field:price_abs": "Prijsverschil: hoogstens dit bedrag per regel (euro)",
+        "settings_help:price_abs": ("Het bedrag van de drempel: het verschil per stuk maal het aantal van de regel; is dat meer dan "
+                                    "dit bedrag, dan komt het verschil naar u, ook als het binnen het percentage blijft."),
+        "settings_field:lead_time_tolerance_days": "Leverdatum: dagen bovenop de levertijd",
+        "settings_help:lead_time_tolerance_days": ("De marge in dagen: een latere leverdatum neemt de assistent over tot en met de "
+                                                   "levertijd van de leverancier plus deze marge, geteld vanaf de leverdatum van de "
+                                                   "regel op de inkooporder; een nog latere datum komt naar u, en zonder bekende "
+                                                   "levertijd van de leverancier komt elke latere datum naar u. Een eerdere leverdatum "
+                                                   "neemt de assistent over, ook zonder bekende levertijd."),
+        "settings_field:first_cases_review": "Eerste zaken van een leverancier",
+        "settings_help:first_cases_review": ("Tot zoveel zaken van een leverancier zijn afgesloten, komt elke zaak van die leverancier naar u, "
+                                             "wat er ook in staat; 0 zet dit uit. Op het tabblad \"Beoordelen\" heet de reden "
+                                             "\"Nieuwe leverancier\"."),
+        "settings_field:ask_wait_working_days": "Wachttijd op een antwoord (werkdagen)",
+        "settings_help:ask_wait_working_days": ("Zoveel werkdagen wacht de assistent op het antwoord van een leverancier op een vraag; "
+                                                "komt er geen antwoord, dan komt de zaak naar u."),
+        "settings_field:buyer_name": "Uw naam onder de berichten",
+        "settings_help:buyer_name": ("Deze naam staat onder \"Inkoop\", of onder \"Purchasing\" als de taal van de assistent English is, "
+                                     "in de vragen aan leveranciers en in het verzoek aan de fiatteur; leeg: alleen \"Inkoop\" of "
+                                     "\"Purchasing\"."),
+        "settings_field:digest": "Dagoverzicht",
+        "settings_help:digest": "Eén overzicht per dag vanaf de tijd hieronder, of een overzicht na elke zaak.",
+        "settings_digest:daily": "Elke dag op een vaste tijd",
+        "settings_digest:per_case": "Na elke zaak",
+        "settings_field:digest_time": "Tijd van het dagoverzicht (UU:MM)",
+        "settings_help:digest_time": "Het dagoverzicht komt bij de eerste ronde van de assistent vanaf deze tijd.",
+        "settings_field:buyer_email": "Uw e-mailadres",
+        "settings_help:buyer_email": ("Hierheen gaat het dagoverzicht, en u staat in de kopie van elke vraag aan een leverancier en van "
+                                      "het verzoek aan de fiatteur."),
+        "settings_field:language": "Taal van de assistent",
+        "settings_help:language": ("De taal van het dagoverzicht, van de berichten aan leveranciers en aan de fiatteur, en van de balk in "
+                                   "de webshop."),
+        "settings_language:nl": "Nederlands",
+        "settings_language:en": "English",
+        "settings_field:approver_email": "E-mailadres van de fiatteur",
+        "settings_help:approver_email": ("Verandert de assistent een inkooporder boven de fiatteringsgrens, dan vraagt de assistent deze "
+                                         "persoon de order opnieuw te fiatteren."),
+        "settings_limit": "De fiatteringsgrens zelf is bij de installatie ingesteld en staat niet op deze pagina.",
+        "settings_buyer_save": "Opslaan",
+        "settings_buyer_saved": "Opgeslagen. De assistent gebruikt dit vanaf de volgende ronde, binnen een minuut.",
+        "settings_buyer_unchanged": "Er is niets gewijzigd; er is niets opgeslagen.",
+        "settings_buyer_refilled": ("Niet opgeslagen: de pagina heeft het formulier opnieuw gevuld met de instellingen van nu. Vul uw "
+                                    "wijziging opnieuw in en sla dan op."),
+        "settings_buyer_refused": "Niet opgeslagen: {fields}.",
+        "settings_suppliers": "Leveranciers",
+        "settings_suppliers_help": ("Per leverancier, met de naam zoals op de inkooporder: het e-mailadres voor de vragen van de "
+                                    "assistent (zonder adres stelt de assistent geen vragen en komt de zaak naar u), de levertijd in "
+                                    "dagen, of elke zaak naar u komt, en of de assistent deze leverancier uit zichzelf geen vragen "
+                                    "stuurt: die vragen komen dan naar u, en een vraag die u zelf op het tabblad \"Beoordelen\" kiest, "
+                                    "gaat wel naar de leverancier."),
+        "settings_supplier_column:name": "Leverancier",
+        "settings_supplier_column:email": "E-mailadres",
+        "settings_supplier_column:lead_time": "Levertijd (dagen)",
+        "settings_supplier_column:review": "Altijd naar u",
+        "settings_supplier_column:messages_off": "Geen vragen uit zichzelf",
+        "settings_tick": "ja",
+        "settings_supplier_choice": "Leverancier",
+        "settings_supplier_new": "Leverancier toevoegen",
+        "settings_supplier_name": "Naam (zoals op de inkooporder)",
+        "settings_supplier_email": "E-mailadres voor vragen",
+        "settings_supplier_lead_time": "Levertijd in dagen",
+        "settings_supplier_review": "Elke zaak van deze leverancier komt naar u",
+        "settings_supplier_messages_off": "De assistent stuurt deze leverancier uit zichzelf geen vragen",
+        "settings_supplier_save": "Leverancier opslaan",
+        "settings_supplier_remove": "Leverancier verwijderen",
+        "settings_supplier_choose": "Kies eerst een leverancier.",
+        "settings_supplier_listed": ("Niet opgeslagen: er staat al een leverancier met deze naam in de lijst. Kies die leverancier bij "
+                                     "\"Leverancier\" om hem te wijzigen."),
+        "settings_supplier_empty": "Niet opgeslagen: een leverancier heeft een e-mailadres, een levertijd of een vinkje nodig.",
+        "settings_problem:percent": "een getal van 0 tot 100",
+        "settings_problem:amount": "een getal van 0 of meer",
+        "settings_problem:decimals": "hoogstens twee decimalen (schrijf duizend als 1000, zonder punt of komma)",
+        "settings_problem:days": "een heel getal van 0 tot 365",
+        "settings_problem:cases": "een heel getal van 0 tot 1000",
+        "settings_problem:wait": "een heel getal van 1 tot 60",
+        "settings_problem:digest": "elke dag of na elke zaak",
+        "settings_problem:time": "een tijd van 00:00 tot 23:59",
+        "settings_problem:address": "een e-mailadres",
+        "settings_problem:name": "één regel van hoogstens 80 tekens",
+        "settings_problem:supplier_name": "een naam van 1 tot 80 tekens",
+        "settings_problem:language": "Nederlands of English",
         "item_one": "1 punt",
         "items_many": "{n} punten",
         "unknown_po": "onbekend",
@@ -294,6 +393,98 @@ STRINGS: dict[str, dict[str, str]] = {
         "settings_reader:llm": "Copilot",
         "settings_reader:parser": "without AI (parser)",
         "settings_ai_ids_needed": "Save the tenant ID and the client ID first; then Copilot can read the documents.",
+        "settings_connections": "Connections: the Microsoft mailbox and the AI service",
+        "settings_file_unreadable": ("The settings file cannot be read{fields}. Below are the settings the aid uses now. Saving works "
+                                     "again once the file is repaired."),
+        "settings_file_fields": ": check {fields}",
+        "settings_group:handled": "What the aid may settle by itself",
+        "settings_group:questions": "Questions to suppliers",
+        "settings_group:digest": "Digest and language",
+        "settings_group:approval": "Approval",
+        "settings_field:price_pct": "Price difference: at most this percentage",
+        "settings_help:price_pct": ("The threshold for the price: when a price difference is at most this percentage of the purchase "
+                                    "order's price and at most the amount below per line, the aid takes the supplier's price over on the "
+                                    "purchase order and changes the article's price too; a difference above the threshold comes to you."),
+        "settings_field:price_abs": "Price difference: at most this amount per line (euro)",
+        "settings_help:price_abs": ("The amount of the threshold: the difference per piece times the quantity of the line; if that is "
+                                    "more than this amount, the difference comes to you, even when it stays within the percentage."),
+        "settings_field:lead_time_tolerance_days": "Delivery date: days on top of the lead time",
+        "settings_help:lead_time_tolerance_days": ("The margin in days: a later delivery date is taken over up to and including the "
+                                                   "supplier's lead time plus this margin, counted from the delivery date of the purchase "
+                                                   "order's line; a still later date comes to you, and without a known lead time of the "
+                                                   "supplier every later date comes to you. An earlier delivery date is taken over, also "
+                                                   "without a known lead time."),
+        "settings_field:first_cases_review": "First cases of a supplier",
+        "settings_help:first_cases_review": ("Until this many cases of a supplier are closed, every case of that supplier comes to you, "
+                                             "whatever it holds; 0 turns this off. On the tab \"Review\" the reason reads \"New supplier\"."),
+        "settings_field:ask_wait_working_days": "Wait for an answer (working days)",
+        "settings_help:ask_wait_working_days": ("This many working days the aid waits for a supplier's answer to a question; without "
+                                                "an answer the case comes to you."),
+        "settings_field:buyer_name": "Your name under the messages",
+        "settings_help:buyer_name": ("This name stands under \"Purchasing\", or under \"Inkoop\" when the language of the aid is "
+                                     "Nederlands, in the questions to suppliers and in the request to the approver; empty: \"Purchasing\" "
+                                     "or \"Inkoop\" alone."),
+        "settings_field:digest": "Digest",
+        "settings_help:digest": "One digest a day from the time below, or a digest after every case.",
+        "settings_digest:daily": "Every day at a set time",
+        "settings_digest:per_case": "After every case",
+        "settings_field:digest_time": "Time of the digest (HH:MM)",
+        "settings_help:digest_time": "The digest comes at the aid's first pass from this time.",
+        "settings_field:buyer_email": "Your e-mail address",
+        "settings_help:buyer_email": ("The digest goes here, and you are in copy of every question to a supplier and of the request to "
+                                      "the approver."),
+        "settings_field:language": "Language of the aid",
+        "settings_help:language": ("The language of the digest, of the messages to suppliers and to the approver, and of the banner in the "
+                                   "webshop."),
+        "settings_language:nl": "Nederlands",
+        "settings_language:en": "English",
+        "settings_field:approver_email": "The approver's e-mail address",
+        "settings_help:approver_email": ("When the aid changes a purchase order above the authorization limit, it asks this person to "
+                                         "approve the order again."),
+        "settings_limit": "The authorization limit itself is set at the installation and is not shown on this page.",
+        "settings_buyer_save": "Save",
+        "settings_buyer_saved": "Saved. The aid uses this from its next pass, within a minute.",
+        "settings_buyer_unchanged": "Nothing was changed; nothing was saved.",
+        "settings_buyer_refilled": ("Not saved: the page has filled the form again with the settings as they are now. Enter your change "
+                                    "again and then save."),
+        "settings_buyer_refused": "Not saved: {fields}.",
+        "settings_suppliers": "Suppliers",
+        "settings_suppliers_help": ("Per supplier, with the name as the purchase order gives it: the e-mail address for the aid's "
+                                    "questions (without an address the aid asks nothing and the case comes to you), the lead time in "
+                                    "days, whether every case comes to you, and whether the aid sends this supplier no questions by "
+                                    "itself: those questions then come to you, and a question you choose yourself on the tab "
+                                    "\"Review\" is still sent to the supplier."),
+        "settings_supplier_column:name": "Supplier",
+        "settings_supplier_column:email": "E-mail address",
+        "settings_supplier_column:lead_time": "Lead time (days)",
+        "settings_supplier_column:review": "Always to you",
+        "settings_supplier_column:messages_off": "No questions by itself",
+        "settings_tick": "yes",
+        "settings_supplier_choice": "Supplier",
+        "settings_supplier_new": "Add a supplier",
+        "settings_supplier_name": "Name (as on the purchase order)",
+        "settings_supplier_email": "E-mail address for questions",
+        "settings_supplier_lead_time": "Lead time in days",
+        "settings_supplier_review": "Every case of this supplier comes to you",
+        "settings_supplier_messages_off": "The aid sends this supplier no questions by itself",
+        "settings_supplier_save": "Save the supplier",
+        "settings_supplier_remove": "Remove the supplier",
+        "settings_supplier_choose": "Choose a supplier first.",
+        "settings_supplier_listed": ("Not saved: a supplier with this name is already listed. Choose that supplier under \"Supplier\" to "
+                                     "change it."),
+        "settings_supplier_empty": "Not saved: a supplier needs an e-mail address, a lead time or a tick.",
+        "settings_problem:percent": "a number from 0 to 100",
+        "settings_problem:amount": "a number of 0 or more",
+        "settings_problem:decimals": "at most two decimals (write a thousand as 1000, without a point or a comma)",
+        "settings_problem:days": "a whole number from 0 to 365",
+        "settings_problem:cases": "a whole number from 0 to 1000",
+        "settings_problem:wait": "a whole number from 1 to 60",
+        "settings_problem:digest": "every day or after every case",
+        "settings_problem:time": "a time from 00:00 to 23:59",
+        "settings_problem:address": "an e-mail address",
+        "settings_problem:name": "one line of at most 80 characters",
+        "settings_problem:supplier_name": "a name of 1 to 80 characters",
+        "settings_problem:language": "Nederlands or English",
         "item_one": "1 item",
         "items_many": "{n} items",
         "unknown_po": "unknown",

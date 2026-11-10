@@ -143,7 +143,9 @@ def prepared_text(out: Path) -> str:
                        f"Start the loop:  python3 -m aid.runner --settings {out / 'settings.json'} --poll-seconds 5",
                        f"Then copy a made-up confirmation from {MADEUP_OUT} (for example MU03_conf.pdf) into {out / 'inbox'}: the loop opens the "
                        "case by itself, runs it and writes the digest to cases/digests/ when it is due "
-                       "(set \"digest\": \"per_case\" in settings.json to get one after every pass with a case).",
+                       "(to get one after every pass with a case, choose \"Na elke zaak\" under \"Dagoverzicht\" on the settings tab "
+                       f"\"Instellingen\" of the review page, python3 -m aid.review --settings {out / 'settings.json'}; or set "
+                       "\"digest\": \"per_case\" in settings.json).",
                        f"Stop the loop by creating the file {out / 'STOP'}.", *capture_text(out)])
 
 
