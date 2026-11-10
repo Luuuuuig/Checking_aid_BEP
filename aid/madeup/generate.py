@@ -385,6 +385,120 @@ def row_positions(pages: list[list[Row]]) -> dict[str, tuple[int, int]]:
     return {row.ref: (p, n) for p, rows in enumerate(pages, 1) for n, row in enumerate(rows, 1) if row.ref}
 
 
+# ---------------------------------------------------------------- the try-out PO: a PO in a second made-up layout
+
+# The PO of the try-out folder (generate_tryout), in a layout that differs from po_madeup in its words and its order. The PO PDF
+# reader reads it with TRYOUT_PO_LAYOUT, the layout as the setting po_layout holds it (aid/readers/po_layout.py).
+
+@dataclass(frozen=True)
+class TryoutColumn:
+    """A column of the try-out PO: its title as printed, the meaning of the title in the layout (a second word of the title is "same"),
+    and where it stands: its left edge, or with right=True the right edge that its title and its cells end at."""
+    title: str
+    meaning: str
+    x: float
+    right: bool = False
+
+
+@dataclass(frozen=True)
+class TryoutLine:
+    """An order line of the try-out PO, its values in normal form; `more` is a second row of its description."""
+    quantity: str
+    unit: Unit
+    item_code: str
+    description: str
+    delivery_date: str
+    unit_price: str
+    more: str = ""
+
+
+TRYOUT_PO_NAME = "ANDERS_po_v1.pdf"                 # "anders": in another layout than the fixed layout po_madeup
+TRYOUT_PO_NUMBER, TRYOUT_SUPPLIER = "IB-2600417", "Proefleverancier S23"
+TRYOUT_COLUMNS = [TryoutColumn("Hoeveelheid", "quantity", 55, right=True), TryoutColumn("Eenh.", "unit", 63),
+                  TryoutColumn("Artikelcode", "item_code", 95), TryoutColumn("Benaming", "description", 152),
+                  TryoutColumn("Gewenste levering", "delivery_date", 305), TryoutColumn("Stuksprijs", "unit_price", 440, right=True),
+                  TryoutColumn("Bedrag", "skip", 495, right=True)]
+TRYOUT_LINES = [TryoutLine("10", "pc", "KM-2301", "Kogelkraan DN25 messing", "2026-11-16", "12.50"),
+                TryoutLine("4", "pc", "KM-2302", "Manometer 0-250 bar, glycerine", "2026-11-16", "38.10", more="aansluiting onder, G 1/4"),
+                TryoutLine("250", "m", "KM-2303", "Hydraulische slang 10 mm", "2026-W48", "3.20"),
+                TryoutLine("1000", "pc", "KM-2304", "Zeskantbout M10 x 40 verzinkt", "2026-11-23", "0.42"),
+                TryoutLine("2", "pc", "KM-2305", "Tandwielpomp 8 cc", "2026-11-30", "1234.50"),
+                TryoutLine("25", "pc", "KM-2306", "Slangklem 20-32 mm", "2026-11-16", "0.85"),
+                TryoutLine("12", "pc", "KM-2307", "Snelkoppeling 1/2 inch", "2026-11-16", "6.40"),
+                TryoutLine("6", "pc", "KM-2308", "Afdichtingsset cilinder 50 mm", "2026-11-23", "18.75"),
+                TryoutLine("40", "m", "KM-2309", "Persluchtslang 8 mm blauw", "2026-11-23/2026-11-27", "1.15"),
+                TryoutLine("3", "pc", "KM-2310", "Drukregelventiel 3/8 inch", "2026-11-30", "54.00"),
+                TryoutLine("100", "pc", "KM-2311", "Sluitring M10 verzinkt", "2026-11-23", "0.05"),
+                TryoutLine("1", "pc", "KM-2312", "Oliefilter retour 10 micron", "2026-11-30", "27.90")]
+TRYOUT_FIRST_PAGE = 9                               # the order lines on page 1; the others stand on page 2, which has no title row
+# The layout that reads the try-out PO, as the setting po_layout holds it (aid/readers/po_layout.py). The PDF prints no version and
+# no price basis; the line amounts of its last column are not read.
+TRYOUT_PO_LAYOUT = {"po_label": "Bestelnummer", "date_label": "Besteldatum", "supplier_line": 3, "currency_label": "Valuta",
+                    "incoterm_label": "Leveringsconditie",
+                    "title_row": [word for column in TRYOUT_COLUMNS for word in column.title.split()],
+                    "columns": [meaning for column in TRYOUT_COLUMNS
+                                for meaning in [column.meaning] + ["same"] * (len(column.title.split()) - 1)],
+                    "decimal_comma": True, "prices_per_piece": True}
+
+
+def _placed(column: TryoutColumn, text: str, font: str = REGULAR) -> Text:
+    """The text in the column: from its left edge, or flush right against its right edge."""
+    return Text(column.x - stringWidth(text, font, BODY) if column.right else column.x, text, font)
+
+
+def _apart(row: Row) -> Row:
+    """The row, if its texts leave 6 points between them: pdfplumber joins characters less than 3 points apart into one word."""
+    texts = sorted(row.texts, key=lambda t: t.x)
+    for left, right in zip(texts, texts[1:]):
+        if right.x - (left.x + stringWidth(left.text, left.font, left.size)) < 6:
+            raise ValueError(f"{left.text!r} and {right.text!r} stand too close together on their row")
+    return row
+
+
+def tryout_po_pages() -> list[list[Row]]:
+    """The made-up PO of the try-out folder, in a second made-up layout that differs from po_madeup in its words and its order.
+
+    Page 1: the buyer, the title "Bestelling", the supplier alone on line 3 above a made-up address, the PO number (with letters)
+    and the date behind their labels on one row, the Incoterm and the currency on the next, then the row of column titles and the
+    first lines. The columns are Hoeveelheid, Eenh., Artikelcode, Benaming, Gewenste levering (a title of two words), Stuksprijs
+    and Bedrag (the line amount, which no field of the aid holds). The PDF prints no line numbers, no version and no price basis,
+    and the quantities, prices and amounts stand flush right under their titles. The second line's description runs over two rows.
+    One delivery is a week and one a range of days, which lies under the second word of its title and reaches under the next title.
+    Page 2 does not repeat the column titles: a row with the PO number and the page, the last lines, the total row and two closing
+    rows. Every name, address and value is made up."""
+    column_of = {column.meaning: column for column in TRYOUT_COLUMNS}
+    amounts = column_of["skip"]
+    rows, total = [], Decimal(0)                     # the rows of each line, and the sum of the line amounts
+    for line in TRYOUT_LINES:
+        amount = (Decimal(line.quantity) * Decimal(line.unit_price)).quantize(CENT, ROUND_HALF_UP)
+        total += amount
+        texts = [_number(amount, "nl", 2) if column is amounts else cell_text(line, column.meaning, "nl") for column in TRYOUT_COLUMNS]
+        rows.append([Row([_placed(column, text) for column, text in zip(TRYOUT_COLUMNS, texts)])]
+                    + ([Row([Text(column_of["description"].x, line.more)])] if line.more else []))
+    first = [Row([Text(0, "Voorbeeldbedrijf B.V.", BOLD, 12)]),
+             Row([Text(0, "Bestelling", BOLD, 14)]),
+             Row([Text(0, TRYOUT_SUPPLIER)], gap=GAP),
+             Row([Text(0, "Voorbeeldweg 12")]),
+             Row([Text(0, "1234 AB Voorbeeldstad")]),
+             Row([Text(0, f"Bestelnummer: {TRYOUT_PO_NUMBER}"), Text(250, "Besteldatum: 03-11-2026")], gap=GAP),
+             Row([Text(0, "Leveringsconditie: FCA Voorbeeldstad"), Text(250, "Valuta: EUR")]),
+             Row([_placed(column, column.title, BOLD) for column in TRYOUT_COLUMNS], gap=GAP, rule=True)]
+    first += [row for line_rows in rows[:TRYOUT_FIRST_PAGE] for row in line_rows] + [Row([Text(0, "Wordt vervolgd op pagina 2")], gap=GAP)]
+    second = [Row([Text(0, f"Bestelling {TRYOUT_PO_NUMBER}"), _placed(amounts, "Pagina 2 van 2")])]
+    second += [row for line_rows in rows[TRYOUT_FIRST_PAGE:] for row in line_rows]
+    second += [Row([Text(column_of["delivery_date"].x, "Totaal exclusief btw"), _placed(amounts, _number(total, "nl", 2))], gap=GAP),
+               Row([Text(0, "Levering uitsluitend op werkdagen tussen 8.00 en 16.00 uur.")], gap=GAP),
+               Row([Text(0, "Wilt u deze bestelling binnen twee werkdagen bevestigen?")])]
+    return [[_apart(row) for row in page] for page in (first, second)]
+
+
+def _tryout_po(out: Path) -> Path:
+    """Draw the try-out PO into the folder `out` and return the file."""
+    path = Path(out) / TRYOUT_PO_NAME
+    path.write_bytes(pdf_bytes(tryout_po_pages(), "made-up PO in a second layout, version 1"))
+    return path
+
+
 # ---------------------------------------------------------------- drawing
 
 SCAN_DPI, SCAN_ANGLE, SCAN_QUALITY = 150, 0.8, 75
@@ -615,7 +729,7 @@ def generate_tryout(out: Path) -> list[Path]:
     written by a helper of its own. The made-up set of generate() and its folder are not touched."""
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
-    return [_tryout_export(out)]
+    return [_tryout_export(out), _tryout_po(out)]
 
 
 # ---------------------------------------------------------------- references

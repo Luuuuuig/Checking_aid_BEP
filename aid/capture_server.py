@@ -25,9 +25,10 @@ new copy is removed. Else the cart reader reads the page; a page it refuses is k
 reader. When a capture case of the same day holds the same cart (its capture.json holds the same cart digest: the PO reference the
 page states and, per line, the item code, the quantity, the unit and the unit price, each in normal form or else as printed) and its
 result is not failed, that case answers and the new copy is removed, so that a reload of a page whose invisible parts changed opens
-no new case. Else the PO is found (find_po): the PO number the page states, when the store holds that PO, else the one
-PoStore.find_by_lines gives (several: among those whose latest version names the page's supplier, the one with the newest version
-date, a version without a date last, else the first; none: the case opens with an unknown PO). The case is opened with
+no new case. Else the PO is found (find_po): the PO number the page states, when the store knows that PO as it stands (from a PO
+PDF or from an export), else the one PoStore.find_by_lines gives (several: among those whose PO as it stands names the page's
+supplier, the one with the newest version date, a version without a date last, else the first; none: the case opens with an
+unknown PO). The case is opened with
 open_capture_case (a case of the same PO in the same second is opened a second later, up to five times, without waiting),
 capture.json is written into its folder (the page's sha256, the cart digest, the url's host and the saved page's path; the pipeline
 ignores it), and the case is run with run_case over the Deps the server was given and its dispositions recorded. main builds them
@@ -50,7 +51,8 @@ than the generic "cart: for the buyer" or a case-level reason, through the revie
 fixed sentence "zie de zaak voor de reden" ("see the case for the reason"), never the raw reason. A PO line not in the cart always
 says so, and an extra line too. A flag whose PO line the aid wrote or prepared, in any status, says what the aid did and why (an R10
 action's reason read as that of its base rule). A flag the buyer decided on the review page says what the buyer decided. The item
-code is the PO line's, else the cart line's; the text is the whole line as the banner shows it, in the settings' language. The
+code is the PO line's, in the version the case was checked against as its own step 01 holds it (else in the PO as it stands now),
+else the cart line's; the text is the whole line as the banner shows it, in the settings' language. The
 verdict is "failed" for a failed run, "no_po" for an unknown PO, "match" for a closed case whose every flag is settled as it stands
 now: by the buyer's latest decision when there is one (a "confirm" with a write on its line and field made as the review page counts
 it, aid.review.close._made: done or prepared, not waiting for the buyer, not undone; a "keep" leaves it standing), else by such a
@@ -93,8 +95,9 @@ from aid.pipeline import RESULT_FILE, CaseResult, Deps, _waits_for_the_buyer, re
 from aid.po_store import PoStore, PoVersion
 from aid.readers.cart import read_cart_html
 from aid.readers.llm_client import ReaderError
-# The review page's own readers of decisions.jsonl and steps/09_close.json, so that no file name is copied (loaded with aid.review).
-from aid.review.app import _decisions as _review_decisions
+# The review page's own readers of decisions.jsonl, of the version a case selected in its step 01, and of steps/09_close.json, so that
+# no file name is copied (loaded with aid.review).
+from aid.review.app import _decisions as _review_decisions, _selected_version
 from aid.review.close import BUYER_RULE, _made, _records as _close_records, _target
 from aid.review.i18n import STRINGS, reason_label
 from aid.routing import NO_VERSION, findings_by_id
@@ -262,21 +265,21 @@ def _run(case: Case, deps: Deps, before=None) -> CaseResult:
 
 
 def find_po(cart: Document, store: PoStore) -> str | None:
-    """The PO of the cart: the one the page states when the store holds it, else the one find_by_lines gives (see the module
-    docstring); None for a cart of no stored PO."""
+    """The PO of the cart: the one the page states when the store knows that PO as it stands (from a PDF or an export), else the one
+    find_by_lines gives (see the module docstring); None for a cart of no stored PO."""
     stated = cart.po_reference.value
-    if stated and store.versions(stated):
+    if stated and store.as_it_stands(stated) is not None:
         return stated
     candidates = store.find_by_lines(cart)
     if len(candidates) <= 1:
         return candidates[0] if candidates else None
-    latest = {number: store.versions(number)[-1] for number in candidates}
+    standing = {number: store.as_it_stands(number) for number in candidates}
     supplier = cart.supplier.value
-    same = [number for number in candidates if supplier and latest[number].supplier == supplier]
+    same = [number for number in candidates if supplier and standing[number].supplier == supplier]
     if not same:
         return candidates[0]
     # The newest version date first, a version without a date last; max keeps the first of the candidates among equals.
-    return max(same, key=lambda n: (latest[n].version_date is not None, str(latest[n].version_date or "")))
+    return max(same, key=lambda n: (standing[n].version_date is not None, str(standing[n].version_date or "")))
 
 
 def _open_case(cases_root: Path, page: Path, po_number: str | None, now: datetime) -> Case:
@@ -334,7 +337,7 @@ _LINE_WRITES = {"price": "po_line_price", "delivery_date": "po_line_date", "quan
 
 
 def _answer(case: Case, result: CaseResult, cart: Document | None, deps: Deps, settings: Settings) -> CaptureAnswer:
-    po = _version(deps, case.po_number, result)
+    po = _version(deps, case, result)
     decisions = _decisions(case, result)
     closes, undone = _close_history(case)
     writes = _Writes(_log_entries(case, result), undone)
@@ -345,11 +348,17 @@ def _answer(case: Case, result: CaseResult, cart: Document | None, deps: Deps, s
                          message=_message(verdict, case, result, lines, settings.language, writes))
 
 
-def _version(deps: Deps, po_number: str | None, result: CaseResult) -> PoVersion | None:
-    """The PO version the case was checked against: the one selected, else the latest stored; None for an unknown PO."""
-    versions = deps.store.versions(po_number) if po_number else []
-    selected = result.version.version if result.version is not None else None
-    return next((v for v in versions if v.version == selected), versions[-1] if versions else None)
+def _version(deps: Deps, case: Case, result: CaseResult) -> PoVersion | None:
+    """The PO version the case was checked against: the one selected, as the case's own step 01 holds it (read as the review page
+    reads it), so that a later version or look of the PO, or a PDF version with the number of a look, changes nothing; else, without
+    a selected version or a step 01 that can be read, the PO as it stands; None for an unknown PO."""
+    try:
+        selected = _selected_version(case, result)
+    except (OSError, ValueError, KeyError, TypeError):
+        selected = None
+    if selected is not None:
+        return selected
+    return deps.store.as_it_stands(case.po_number) if case.po_number else None
 
 
 def _decisions(case: Case, result: CaseResult) -> dict[str, str]:

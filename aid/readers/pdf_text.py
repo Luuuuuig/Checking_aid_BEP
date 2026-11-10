@@ -7,6 +7,12 @@ sources the same way, and so does every reader: "page 2, line 5" is the fifth li
 A PDF that holds only a scanned image has no words and so no lines.
 
 Page and line numbers start at 1 everywhere in the aid (SourceRef.page, SourceRef.line, TextLine, render_page).
+
+Words. pdfplumber joins characters less than 3 points apart into one word, so two cells that a PDF prints close together, a price
+and its basis for one, are one word. extract_rows(cut_cells=True), which the PO layout reader uses, cuts such a word again: where
+the gap between two of its characters is wider than the spacing of its letters (the lower median of its gaps) by more than CELL_GAP.
+A word printed with ordinary letter spacing, or with its letters spread evenly, stays whole, and so does a word of two characters,
+which has one gap only. The other readers keep pdfplumber's words.
 """
 import io
 import unicodedata
@@ -17,6 +23,7 @@ import pypdfium2 as pdfium
 from pydantic import BaseModel
 
 LINE_TOLERANCE = 3.0         # points: a word joins the line of the first word above it when their tops differ by at most this
+CELL_GAP = 1.0               # points: with cut_cells, a gap this much wider than the spacing of a word's letters cuts the word
 
 
 class TextLine(BaseModel):
@@ -39,16 +46,35 @@ class TextRow(BaseModel):
     words: list[TextWord]
 
 
-def extract_rows(pdf: Path) -> list[TextRow]:
-    """The lines of every page with the words they hold, ordered by page and then from the top down. A PDF without a text layer gives []."""
+def extract_rows(pdf: Path, cut_cells: bool = False) -> list[TextRow]:
+    """The lines of every page with the words they hold, ordered by page and then from the top down. A PDF without a text layer gives [].
+    With cut_cells a word is cut where two cells printed close together meet (see the module docstring)."""
     rows = []
     with pdfplumber.open(pdf) as document:
         for number, page in enumerate(document.pages, 1):
-            for line_number, words in enumerate(_group_into_lines(page.extract_words()), 1):
+            words = page.extract_words(return_chars=cut_cells)
+            if cut_cells:
+                words = [part for word in words for part in _cut(word)]
+            for line_number, words in enumerate(_group_into_lines(words), 1):
                 line = TextLine(page=number, line=line_number, text=" ".join(w["text"] for w in words),
                                 x0=words[0]["x0"], top=min(w["top"] for w in words))
                 rows.append(TextRow(line=line, words=[TextWord(text=w["text"], x0=w["x0"], x1=w["x1"]) for w in words]))
     return rows
+
+
+def _cut(word: dict) -> list[dict]:
+    """The word as pdfplumber gives it with its characters, cut where a gap between two of them is wider than the spacing of its
+    letters, the lower median of its gaps, by more than CELL_GAP. A word with fewer than two gaps is kept whole."""
+    chars = word["chars"]
+    gaps = [after["x0"] - before["x1"] for before, after in zip(chars, chars[1:])]
+    if len(gaps) < 2:
+        return [word]
+    spacing = sorted(gaps)[(len(gaps) - 1) // 2]
+    cuts = [n for n, gap in enumerate(gaps, 1) if gap > spacing + CELL_GAP]
+    if not cuts:
+        return [word]
+    return [{"text": "".join(c["text"] for c in part), "x0": min(c["x0"] for c in part), "x1": max(c["x1"] for c in part),
+             "top": min(c["top"] for c in part)} for part in (chars[start:end] for start, end in zip([0, *cuts], [*cuts, len(chars)]))]
 
 
 def _group_into_lines(words: list[dict]) -> list[list[dict]]:

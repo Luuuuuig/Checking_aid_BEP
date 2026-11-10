@@ -6,10 +6,17 @@ PO number, the quick parser read that the PO store needs, and it opens the case 
 
 Unpacking. An .eml file is opened with the standard library's email package (extract_eml). Its text is the subject and the body,
 and each attachment, at whatever depth the e-mail packs it, is handled as a file of its own, with the text of the e-mail as context.
-An attached e-mail is one attachment and is not opened. A .pdf or .png file is handled as it is. A file or an attachment of another
-type is skipped as an unsupported file type, and an e-mail without attachments as "no attachment". In the list of skipped items an
-attachment is named "<e-mail>/<attachment>", and a file that is not in an e-mail by its own name; the list is by file, and an e-mail's
-attachments are in their order in the e-mail.
+An attached e-mail is one attachment and is not opened. A .pdf or .png file is handled as it is. A .csv or .xlsx file is an export
+of the ERP when the setting export_columns is not empty and one of its rows holds every column title of that map (is_export of
+aid/readers/po_export.py; see "Exports" below). While export_columns is set, any other .csv or .xlsx file is skipped as
+"spreadsheet without the export's column titles" (NOT_AN_EXPORT): no row of it holds every title of the map, a price list for one,
+or it cannot be read as a table at all, a damaged workbook or a CSV file in an encoding the export reader does not read; so the
+digest says why the file was not read. With export_columns empty every spreadsheet is a file of another type. A file or an
+attachment of another type is skipped as an unsupported file type, and an e-mail without attachments as "no attachment". In the
+list of skipped items an attachment is named "<e-mail>/<attachment>", and a file that is not in an e-mail by its own name; the list
+is by file, and an e-mail's attachments are in their order in the e-mail. The attachments are written into a folder of the scan's
+own under <cases_root>/tmp/work (work_copy_folder of aid/case.py), made when the scan has an e-mail and removed when the scan is
+done, and never into the system's temporary folder, outside the aid's folders.
 
 Answers. An .eml that answers a question of the aid, by the Message-ID that its In-Reply-To or References header names (the
 message id of a record in a case's messages/sent.jsonl other than a re-approval request), is filed into that case with file_answer of aid/pipeline.py, which
@@ -22,7 +29,23 @@ with no copy filed.
 Duplicates. A document whose sha256 is already an input file of a case is skipped as "duplicate", whatever it would have been. The
 cases are searched for it once for each file, before the classification, so that a file that is sent again costs no decision and is a
 duplicate also when the decider cannot be reached. A copy of a confirmation in the same scan, which has no case yet when it is
-classed, is found when its turn comes, by the hashes of the confirmations that this scan has opened a case for.
+classed, is found when its turn comes, by the hashes of the confirmations that this scan has opened a case for. Two kinds of
+document are not searched for: an export of the ERP, which is told apart before the search, and a PDF that the layout of the
+settings makes a PO PDF (see "A PO layout in the settings" below).
+
+Exports. An export of the ERP, the order lines saved from an overview, gives a cart pre-check its PO side (aid/readers/po_export.py).
+It is filed with PoStore.from_export and the three export settings: each of its POs whose rows differ from those of the PO's latest
+look gets the next look, beside the PO's PDF versions (aid/po_store.py), and a PO whose rows are the same files nothing. An export
+file is filed once: the same file given again, also after a newer export of its POs, and a file or an e-mail that stays in the
+folder and is handled again at every pass, files nothing more (the store knows the file by its sha256), so an older export never
+comes back on top of a newer one. The exports are filed before the PO PDFs and the confirmations of the same scan, and among
+themselves in the order of the modification times of their files in the folder, an attachment by the time of its e-mail file, the
+name breaking a tie only: of two exports of one PO that wait for the same pass the newer stands, whatever their names. Each is
+listed in ScanResult.stored_exports with the PO numbers of the file and those whose look it filed (none when it is given again). An
+export that the store refuses is an error, as a refused PO PDF is: it stays in the folder, or its e-mail does, and the reason names
+the file with the column or the row, never what a cell holds. Such a refusal comes after is_export took the file: a title of the
+map that stands twice in the title row, or a row the reader refuses (a row with an item code and no PO number without fill-down, a
+PO number that is a date, holds no digit or cannot be a folder name, a line id that is blank or stands twice).
 
 Classes. classify_attachment gives a document one of the classes of DocClass by the keywords of KEYWORDS, looked for as whole words
 on the first page, in lower case and without accents ("Factuuradres" is not "factuur"), in three steps.
@@ -44,9 +67,28 @@ class it. When it cannot, the document is skipped as "no text layer; class unkno
 document as "other" with confidence, the document is skipped as "other" and no review item is written: the aid then knows that it is
 not a document it handles, a signature image for one.
 
+A PO layout in the settings. With settings.po_layout set, the layout of the PO PDF that the ERP e-mails, the first page of every PDF
+is first held against that layout, as the layout reader reads it (layout_first_page and fits of aid/readers/po_pdf.py: the whole
+title row, word for word, and the PO label with a value after it), before the cases are searched for a duplicate and before any
+keyword counts. A PDF that fits is a PO PDF whatever else its first page says below its column titles, so a PO that asks its
+supplier for an "orderbevestiging" under its lines is filed and not taken for a confirmation, and it is filed also when a case
+already holds its bytes, as when it opened a case before the layout was set. Two exceptions keep a supplier's document out of the PO
+store:
+- a PDF whose header, the lines of its first page above its first title row (header_lines of aid/readers/po_pdf.py), holds a
+  keyword of a confirmation as a whole word or phrase anywhere (titled_confirmation) is classed by the keywords, as without a layout,
+  although it fits: a supplier's confirmation may repeat the PO's own label and title row, with its title under a letterhead. A PO
+  of the company whose header holds such a keyword is taken for a confirmation in the same way;
+- when settings.po_senders is not empty, a PDF that fits and came in an e-mail whose From address (sender_of) is not one of those
+  senders, an address of the list or an address on a domain of the list, is a confirmation, also when the keywords alone would
+  call it a PO: a supplier may answer with the PO itself. Such a PDF is searched for as a duplicate as any confirmation is. An
+  e-mail without a From address is from nobody on the list. A file that lies in the folder by itself has no sender and passes.
+A PDF that does not fit is classed as without a layout. The store reads every PO PDF with the layout and with nothing else, so a
+PDF that the keywords class as a PO and that does not fit the layout is refused by the store and stays in the folder as an error.
+
 What happens to a document, by class:
-- po_pdf: filed in the PO store (stored_pos). A PDF that the store holds already is filed as the version it is, and listed all the
-  same. A PDF that the store refuses is an error.
+- an export: filed in the PO store as looks (stored_exports; see "Exports" above).
+- po_pdf: filed in the PO store (stored_pos), read with the layout of the settings when they hold one. A PDF that the store holds
+  already is filed as the version it is, and listed all the same. A PDF that the store refuses is an error.
 - confirmation: the PO numbers in the text of the e-mail and on the first page (find_po_numbers with the PO number pattern of the
   settings) decide:
     two or more different ones: skipped as "more than one PO number", and a review item is written;
@@ -58,14 +100,15 @@ What happens to a document, by class:
   The case is opened with the document as its only input file. Cases of one PO opened in the same second would get one case id, so a
   later case is opened one second after the earlier one, and so on, until its id is free.
 - any other class: skipped with the name of the class.
-PO PDFs are filed before confirmations are matched, so that a PO and its confirmation that arrive together find each other.
+The exports are filed first, then the PO PDFs, and only then are the confirmations matched, so that a PO and its confirmation that
+arrive together find each other.
 
 Filing. A file that was handled, whatever came of it, moves to processed/ in the folder under its own name, or with _2, _3 and so on
-before the extension when processed/ holds that name already. A file that raised an exception (a PDF that cannot be read, a decider
-that cannot be reached) stays where it is and is skipped as "error: <message>"; the next scan tries it again, and so classes it again,
-which asks the decider again when no keyword settles the class. An e-mail stays when any of its attachments raised, and the
-attachments that were handled are then handled again: a case for a confirmation is not opened twice (the duplicate check), and the
-PO store files a PDF once.
+before the extension when processed/ holds that name already. A file that raised an exception (a PDF that cannot be read, an export
+that the store refuses, a decider that cannot be reached) stays where it is and is skipped as "error: <message>"; the next scan
+tries it again, and so classes it again, which asks the decider again when no keyword settles the class. An e-mail stays when any of
+its attachments raised, and the attachments that were handled are then handled again: a case for a confirmation is not opened twice
+(the duplicate check), the PO store files a PDF once, and an export given again files nothing.
 
 Review items. cases_root/review_items.jsonl has one JSON line for each item that the buyer must look at, appended:
 {"time": <the scan's time>, "file": <the name used in the list of skipped items>, "reason": <the reason>}.
@@ -75,9 +118,9 @@ import json
 import mimetypes
 import os
 import re
-import tempfile
 import unicodedata
 from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from email import policy
@@ -89,15 +132,22 @@ from typing import Literal, get_args
 
 from pydantic import BaseModel
 
-from aid.case import Case, find_case_by_hash, open_case, sha256_file
+from aid.case import TEMPORARY, WORK, Case, find_case_by_hash, open_case, sha256_file, work_copy_folder
 from aid.decider import MIN_CONFIDENCE, Decider, Decision
 from aid.pipeline import file_answer, is_real_reply
 from aid.po_store import PoStore
 from aid.readers.pdf_text import extract_lines
+from aid.readers.po_export import EXPORT_SUFFIXES, is_export
+from aid.readers.po_layout import PoLayout
+from aid.readers.po_pdf import fits, header_lines, layout_first_page
 from aid.readers.supplier_parser import LayoutTemplate, detect_template, load_templates, read_with_template
 from aid.settings import Settings
 
 DocClass = Literal["po_pdf", "confirmation", "packing_slip", "invoice", "quotation", "other"]
+EXPORT = "export"                                # the kind of an export of the ERP: told apart before the classes, and none of them
+# Why a .csv or .xlsx file is skipped while export_columns is set: is_export does not take it, because no row of it holds every column
+# title of the map or it cannot be read as a table (see the module docstring).
+NOT_AN_EXPORT = "spreadsheet without the export's column titles"
 
 # The keywords of each class; the order of the classes matters (see the module docstring). Compared as whole words after lower-casing
 # and removing accents, so "auftragsbestätigung" also finds "AUFTRAGSBESTÄTIGUNG" and "Auftragsbestatigung", and "factuur" does not
@@ -137,6 +187,9 @@ class ScanResult(BaseModel):
     skipped: list[tuple[str, str]] = []          # (name, reason) of each item left alone: by file, and an e-mail's attachments in their order
     replies: list[tuple[str, str]] = []          # (file, case id) of each e-mail filed as an answer to a question of the aid
     answered: list[str] = []                     # the case id of each of those that is a real reply (no bounce, no automatic reply)
+    # (the name as the skipped list names it, the PO numbers of the file, and those of them that were new or changed, whose look it
+    # filed) of each export of the ERP filed in the store, in the order of filing
+    stored_exports: list[tuple[str, list[str], list[str]]] = []
 
 
 # --- classes ---
@@ -177,6 +230,13 @@ def _by_keywords(text: str) -> DocClass | None:
         if doc_class not in TITLE_CLASSES and any(_has_word(page, _fold(word)) for word in words):
             return doc_class
     return None
+
+
+def titled_confirmation(text: str, layout: PoLayout) -> bool:
+    """Whether a first page that fits the PO layout says in its header that it is a confirmation: a line above its first title row
+    (header_lines of aid/readers/po_pdf.py) holds a keyword of a confirmation as a whole word or phrase, anywhere on the line, in any
+    case and with or without its accents. A keyword below the title row is no title."""
+    return any(_has_word(_fold(line), _fold(word)) for line in header_lines(text, layout) for word in KEYWORDS["confirmation"])
 
 
 def _ask(decider: Decider, path: Path, text: str, email_text: str | None) -> DocClass | None:
@@ -266,6 +326,23 @@ def extract_eml(path: Path, out_dir: Path) -> tuple[str, list[Path]]:
         (folder / name).write_bytes(_payload(part))
         attachments.append(folder / name)
     return text, attachments
+
+
+def sender_of(eml: Path) -> str | None:
+    """The address of the From header of the e-mail file, in lower case: of several addresses the first. None for an e-mail without
+    a From header, and for one whose From header holds no address with a name before the at sign and a domain after it."""
+    message = BytesParser(policy=policy.default).parsebytes(Path(eml).read_bytes(), headersonly=True)
+    sender = message["From"]
+    addresses = sender.addresses if sender is not None else ()
+    return next((f"{address.username}@{address.domain}".lower() for address in addresses if address.username and address.domain), None)
+
+
+def _sent_by(sender: str, senders: list[str]) -> bool:
+    """Whether the address is one of the senders: an address of the list, or an address on a domain of the list, which is an entry
+    without a name before the at sign, written with or without the at sign. Case and outer spaces do not count. A domain under a
+    listed domain is another domain."""
+    domain = sender.rpartition("@")[2]
+    return any(entry == sender or entry.removeprefix("@") == domain for entry in (entry.strip().lower() for entry in senders))
 
 
 def _body_text(message: EmailMessage) -> str:
@@ -403,22 +480,48 @@ def _payload(part: EmailMessage) -> bytes:
 
 # --- the folder ---
 
+@contextmanager
+def _unpacking(cases_root: Path, files: list[Path]) -> Iterator[Path | None]:
+    """The folder for the attachments of the e-mails among the files: one of the scan's own under <cases_root>/tmp/work (aid/case.py),
+    made only when there is an e-mail and removed when the scan is done, never in the system's temporary folder; None without an
+    e-mail, which unpack then never needs."""
+    if not any(path.suffix.lower() == ".eml" for path in files):
+        yield None
+        return
+    with work_copy_folder(cases_root / TEMPORARY / WORK, "aid_mailbox_") as folder:
+        yield folder
+
+
 def scan_folder(folder: Path, store: PoStore, cases_root: Path, settings: Settings, now: datetime,
                 decider: Decider | None = None) -> ScanResult:
     """Handle every file in the folder as the module docstring says, and return what came of it.
 
-    PO PDFs go into `store`, cases are opened under `cases_root`, `settings` gives the PO number pattern, and `now` is the time of the
-    scan: the time in the id of each case and in each review item. A file whose name starts with a dot (".DS_Store") is neither read,
-    skipped nor moved, and so is a folder. Raises FileNotFoundError if the folder does not exist."""
+    Exports and PO PDFs go into `store`, cases are opened under `cases_root`, `settings` gives the PO number pattern and the export
+    settings, and `now` is the time of the scan: the time in the id of each case and in each review item. A file whose name starts
+    with a dot (".DS_Store") is neither read, skipped nor moved, and so is a folder. Raises FileNotFoundError if the folder does not
+    exist."""
     folder = Path(folder)
     files = sorted(path for path in folder.iterdir() if path.is_file() and not path.name.startswith("."))
+    modified = {path: _modified(path) for path in files}
     scan = _Scan(folder, store, Path(cases_root), settings, now, decider)
-    with tempfile.TemporaryDirectory(prefix="aid_mailbox_") as scratch:       # the attachments of the e-mails, until the scan is done
-        documents = [document for number, path in enumerate(files) for document in scan.unpack(number, path, Path(scratch))]
-        for document in sorted(documents, key=lambda d: d.kind != "po_pdf"):    # PO PDFs first; the sort keeps the order of the files
+    with _unpacking(Path(cases_root), files) as scratch:          # the attachments of the e-mails, until the scan is done
+        documents = [document for number, path in enumerate(files) for document in scan.unpack(number, path, scratch)]
+        # The exports first, by the time of their file (of its e-mail for an attachment), then the PO PDFs, then the rest; within
+        # each the order of the files, which also breaks a tie of times.
+        for document in sorted(documents, key=lambda d: (d.kind != EXPORT, d.kind != "po_pdf", modified[d.origin] if d.kind == EXPORT else 0,
+                                                         d.place)):
             scan.handle(document)
     scan.file_away(files)
     return scan.finish()
+
+
+def _modified(path: Path) -> int:
+    """The modification time of a file of the folder in nanoseconds, by which the exports of a pass are filed; 0 for a file that
+    cannot be looked at, which its own handling then reports."""
+    try:
+        return path.stat().st_mtime_ns
+    except OSError:
+        return 0
 
 
 Place = tuple[int, int]                          # (the number of the file in the folder's order, the number of the attachment in its e-mail)
@@ -432,8 +535,8 @@ class _Document:
     path: Path                                   # where it is read from
     sha256: str
     email_text: str                              # "" for a file that is not an e-mail
-    text: str                                    # its first page
-    kind: DocClass | None                        # None: nobody could class it
+    text: str                                    # its first page; "" for an export
+    kind: DocClass | Literal["export"] | None    # EXPORT: an export of the ERP; None: nobody could class it
 
 
 class _Scan:
@@ -447,10 +550,12 @@ class _Scan:
         self.opened: set[str] = set()                    # the sha256 of the confirmations that a case was opened for in this scan
         self.templates: list[LayoutTemplate] | None = None
 
-    def unpack(self, number: int, path: Path, scratch: Path) -> list[_Document]:
+    def unpack(self, number: int, path: Path, scratch: Path | None) -> list[_Document]:
         """The documents of a file: the file itself, or the attachments of an e-mail, each classed unless it is a duplicate; none for
         an e-mail filed as an answer to a message of the aid. A file that cannot be opened, and an attachment that cannot be classed,
-        stay and are skipped as an error."""
+        stay and are skipped as an error. An export of the ERP is told apart first, before the classes and the duplicate search;
+        then, with a PO layout in the settings, a PDF that fits it is classed by the fit, before the cases are searched (see the
+        module docstring). The attachments of an e-mail are written into `scratch` (see _unpacking)."""
         try:
             if path.suffix.lower() == ".eml":
                 if (case_id := file_answer(self.cases_root, path, self.now, language=self.settings.language)) is not None:
@@ -467,28 +572,60 @@ class _Scan:
         except Exception as error:
             self.fail((number, 0), path, path.name, error)
             return []
+        layout, columns = self.settings.po_layout, self.settings.export_columns
         documents = []
         for place, label, file in parts:
             try:
+                if file.suffix.lower() in EXPORT_SUFFIXES and columns:
+                    if is_export(file, columns):
+                        documents.append(_Document(place, path, label, file, sha256_file(file), email_text, "", EXPORT))
+                    else:
+                        self.skip(place, label, NOT_AN_EXPORT)
+                    continue
                 if file.suffix.lower() not in DOCUMENT_SUFFIXES:
                     self.skip(place, label, f"unsupported file type: {file.suffix.lower() or 'no extension'}")
                     continue
                 digest = sha256_file(file)
+                kind, fitted = None, False
+                if layout is not None and file.suffix.lower() == ".pdf":
+                    # With a layout the fit is tested first, on the page as the layout reader reads it: a PDF that fits is a PO PDF,
+                    # also when a case holds its bytes, unless its header makes it a confirmation or its e-mail came from another
+                    # sender than the PO e-mails do.
+                    page = layout_first_page(file)
+                    if fits(page, layout) and not titled_confirmation(page, layout):
+                        kind, fitted = "po_pdf" if self._po_sender(path) else "confirmation", True
                 # The one search of the cases for this file. It comes before the classing, which can cost a decision.
-                if find_case_by_hash(self.cases_root, digest) is not None:
+                if kind != "po_pdf" and find_case_by_hash(self.cases_root, digest) is not None:
                     self.skip(place, label, "duplicate")
                     continue
                 text = _first_page_text(file)
-                documents.append(_Document(place, path, label, file, digest, email_text, text, _classify(file, text, self.decider, email_text)))
+                if not fitted:
+                    kind = _classify(file, text, self.decider, email_text)
+                documents.append(_Document(place, path, label, file, digest, email_text, text, kind))
             except Exception as error:
                 self.fail(place, path, label, error)
         return documents
 
+    def _po_sender(self, path: Path) -> bool:
+        """Whether a PDF that fits the PO layout may be a PO by the sender of this file of the folder: always when the settings name
+        no senders, and for a file that is not an e-mail, which has no sender; for an e-mail when its From address is one of the
+        senders."""
+        senders = self.settings.po_senders
+        if not senders or path.suffix.lower() != ".eml":
+            return True
+        sender = sender_of(path)
+        return sender is not None and _sent_by(sender, senders)
+
     def handle(self, document: _Document) -> None:
-        """File the PO, open the case or skip the document, by its class."""
+        """File the export or the PO, open the case or skip the document, by its class."""
         try:
-            if document.kind == "po_pdf":
-                self.outcome.stored_pos.append(self.store.add(document.path).po_number)
+            if document.kind == EXPORT:
+                settings, filed = self.settings, []
+                looks = self.store.from_export(document.path, settings.export_columns, settings.export_decimal_comma,
+                                               settings.export_fill_down, filed)
+                self.outcome.stored_exports.append((document.label, [look.po_number for look in looks], filed))
+            elif document.kind == "po_pdf":
+                self.outcome.stored_pos.append(self.store.add(document.path, self.settings.po_layout).po_number)
             elif document.kind == "confirmation":
                 self._confirmation(document)
             elif document.kind is None and not document.text.strip():

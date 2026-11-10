@@ -3,6 +3,7 @@ and the work sign-in. The sign-in is a fake msal application and Graph is FakeSe
 up, or the perfect reading of a made-up case (aid/tests/helpers.py): no test reaches Microsoft or the network."""
 import json
 import tempfile
+from pathlib import Path
 
 import msal
 import pytest
@@ -13,6 +14,7 @@ from reportlab.pdfgen.canvas import Canvas
 from aid.connections.microsoft import COPILOT_SCOPES, GRAPH_TIMEOUT, MAIL_SCOPES, MicrosoftAccount, SignInNeeded
 from aid.connections.secrets import SecretStore
 from aid.decider import Decision, LlmDecider, decision_request
+from aid.readers import copilot_client
 from aid.readers.copilot_client import CHAT_TIMEOUT, CopilotClient, CopilotError
 from aid.readers.llm_client import LlmRequest, LlmResponse, ReaderError
 from aid.readers.pdf_text import extract_lines
@@ -122,6 +124,29 @@ def test_a_request_creates_a_conversation_and_sends_one_chat_with_each_page_as_c
     assert response == LlmResponse(text='{"made-up": "answer"}', model="microsoft-365-copilot", input_tokens=0, output_tokens=0,
                                    seconds=response.seconds, cost_eur=None, request_id=CONVERSATION, attempts=1)
     assert response.seconds >= 0 and waits == [] and CopilotClient.name == copilot.name == "microsoft-365-copilot"
+
+
+def test_the_copy_of_the_pdf_is_read_in_the_work_folder_and_removed(tmp_path, madeup_out, monkeypatch):
+    """The runner gives the client <cases_root>/tmp/work (aid/runner.py): the copy of the PDF that the text layer is read from lies in
+    a folder of its own there, made when needed, and is removed again with the folders made on the way; nothing goes into the
+    system's temporary folder. Without a work folder the PDF is read from memory, and nothing is written at all."""
+    (system := tmp_path / "system temp").mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(system))
+    read, extract = [], copilot_client.extract_lines
+
+    def noting(pdf):
+        read.append(pdf)
+        return extract(pdf)
+    monkeypatch.setattr(copilot_client, "extract_lines", noting)
+    work = tmp_path / "cases" / "tmp" / "work"
+    copilot, _ = client(tmp_path, copilot_session('{"made-up": "answer"}'), work=work)
+    copilot.complete(reading_request(madeup_out / "MU04_conf.pdf"))
+    [copy] = read
+    assert isinstance(copy, Path) and copy.parent.parent == work and copy.name == "document.pdf" and not copy.parent.exists()
+    assert copy.parent.name.startswith("aid-copilot-") and not (tmp_path / "cases").exists() and list(system.iterdir()) == []
+    without, _ = client(tmp_path, copilot_session('{"made-up": "answer"}'))
+    without.complete(reading_request(madeup_out / "MU04_conf.pdf"))
+    assert not isinstance(read[-1], Path) and list(system.iterdir()) == []
 
 
 def test_the_token_is_asked_for_the_copilot_scopes_and_shows_nowhere(tmp_path, madeup_out):

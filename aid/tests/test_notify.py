@@ -12,7 +12,7 @@ from aid.comparison import Field, Findings, Flag, Uncompared
 from aid.execution.ops import OpKind, WriteOp
 from aid.execution.writer import WriteLogEntry
 from aid.messaging import QUESTIONS, FileMailer
-from aid.notify import build_digest, digest_due, review_link, send_digest, undo_link
+from aid.notify import build_digest, digest_due, list_link, review_link, send_digest, undo_link
 from aid.pipeline import NOT_APPLIED, ReviewItem, _write_name     # _write_name: how the pipeline names a write in a reason or an error
 from aid.schema import DocValue
 from aid.tests.conftest import SETTINGS
@@ -134,7 +134,7 @@ def test_review_block_lists_the_items_of_each_case():
     assert block(d.text, "Wacht op u") == [
         "Wacht op u", f"- PO 250107 (S07): [beoordelen]({review_link(SETTINGS, review.case_id)})",
         "    - Prijsverschil boven de drempel (prijs, regel 1)",
-        "    - Berichten aan deze leverancier staan uit (ontbrekende of extra regel, regel 4 van het document)",
+        "    - De assistent stuurt deze leverancier uit zichzelf geen vragen (ontbrekende of extra regel, regel 4 van het document)",
         "    - Samengevoegde regel (eenheid, regels 2, 3)",
         "    - Niet uitgevoerd: een eerdere schrijfactie is mislukt (prijs, regel 1)",
         "    - Geen antwoord binnen de wachttijd",
@@ -286,7 +286,7 @@ def test_english_review_items_and_the_article_before_the_line():
     closed = case_result("250101_20261118T090000", "closed", writes=[both], language="en")
     d = build_digest([closed, review], [], ENGLISH, DAY)
     assert block(d.text, "Waiting for you")[2:] == ["    - Price difference above the threshold (price, line 1)",
-                                                    "    - Messages to this supplier are off (missing or extra line, line 4 of the document)",
+                                                    "    - The aid sends this supplier no questions by itself (missing or extra line, line 4 of the document)",
                                                     "    - Merged line (delivery date, lines 2, 3)"]
     assert f"    - article price KM-1001: 12.50 → 12.70 [undo]({undo_link(ENGLISH, closed.case_id, 'e1')})" in d.text.splitlines()
 
@@ -340,7 +340,7 @@ def test_the_undo_link_selects_its_case_and_write_on_the_review_page(tmp_path, m
 
 
 @pytest.mark.parametrize("language, line", [
-    ("nl", "Postvak niet verbonden: meld je opnieuw aan op het tabblad Instellingen, onderaan bij Koppelingen"),
+    ("nl", "Postvak niet verbonden: meld u opnieuw aan op het tabblad Instellingen, onderaan bij Koppelingen"),
     ("en", "Mailbox not connected: sign in again on the Settings tab, at its bottom under Connections")])
 def test_a_lapsed_mailbox_is_one_line_under_the_title_before_the_blocks(language, line):
     settings = SETTINGS.model_copy(update={"language": language})
@@ -351,9 +351,9 @@ def test_a_lapsed_mailbox_is_one_line_under_the_title_before_the_blocks(language
 
 
 @pytest.mark.parametrize("language, waiting, line", [
-    ("nl", 2, "Copilot werkt niet (Copilot refused: 403 Forbidden): 2 zaken wachten erop; meld je aan voor Copilot of test Copilot op "
+    ("nl", 2, "Copilot werkt niet (Copilot refused: 403 Forbidden): 2 zaken wachten erop; meld u aan voor Copilot of test Copilot op "
               "het tabblad Instellingen, onderaan bij Koppelingen"),
-    ("nl", 1, "Copilot werkt niet (Copilot refused: 403 Forbidden): 1 zaak wacht erop; meld je aan voor Copilot of test Copilot op "
+    ("nl", 1, "Copilot werkt niet (Copilot refused: 403 Forbidden): 1 zaak wacht erop; meld u aan voor Copilot of test Copilot op "
               "het tabblad Instellingen, onderaan bij Koppelingen"),
     ("en", 3, "Copilot is not working (Copilot refused: 403 Forbidden): 3 cases wait for it; sign in for Copilot or test Copilot on "
               "the Settings tab, at its bottom under Connections")])
@@ -379,3 +379,93 @@ def test_the_documents_copilot_could_not_read_are_a_line_of_their_own(language, 
     both = build_digest([], [], settings, date(2026, 11, 18), copilot_down=("Copilot refused: 403 Forbidden", 2), copilot_refused=refused)
     assert both.text.splitlines()[3] == line
     assert "Copilot" not in build_digest([], [], settings, date(2026, 11, 18), copilot_refused=0).text
+
+
+# --- the line of the changes to enter in Exact (Task 34) ---
+
+def test_the_digest_names_the_changes_to_enter_in_one_line():
+    """While changes are open on the list 'In Exact invoeren', one line under the title gives their number and the link to the tab,
+    before the other lines under the title and before the blocks; the link opens the review page with the tab selected."""
+    link = list_link(SETTINGS)
+    assert link == "http://localhost:7860/?tab=invoeren"
+    assert list_link(SETTINGS.model_copy(update={"review_url": "https://review.example.com/aid/"})) == "https://review.example.com/aid/?tab=invoeren"
+    prepared = entry("po_line_price", "12.50", "12.70", entry_id="e1").model_copy(update={"status": "prepared"})
+    closed = case_result("250101_20261118T090000", "closed", writes=[prepared])
+    for settings, to_enter, line in ((SETTINGS, 1, f"In Exact in te voeren: 1 wijziging. Open het tabblad In Exact invoeren: {link}"),
+                                     (SETTINGS, 3, f"In Exact in te voeren: 3 wijzigingen. Open het tabblad In Exact invoeren: {link}"),
+                                     (ENGLISH, 1, f"To enter in Exact: 1 change. Open the tab Enter in Exact: {link}"),
+                                     (ENGLISH, 2, f"To enter in Exact: 2 changes. Open the tab Enter in Exact: {link}")):
+        d = build_digest([closed], [], settings, DAY, to_enter=to_enter)
+        assert d.text.splitlines()[1:4] == ["", line, ""] and d.text.count(link) == 1, line
+        words = line.removesuffix(link)
+        assert f'<p>{escape(words)}<a href="{escape(link)}">{escape(link)}</a></p>' in d.html
+        assert d.html.index("</h1>") < d.html.index(escape(words)) < d.html.index("<h2>")
+    both = build_digest([closed], [], SETTINGS, DAY, mailbox_lapsed=True, copilot_down=("Copilot refused: 403 Forbidden", 1), copilot_refused=1,
+                        to_enter=2)
+    lines = both.text.splitlines()
+    assert [line.split(":")[0] for line in lines[2:6]] == ["In Exact in te voeren", "Postvak niet verbonden", "Copilot werkt niet (Copilot refused",
+                                                           "Copilot kon 1 document niet lezen; nieuwe poging bij de volgende ronde"]
+    assert lines[6:8] == ["", "Behandelde zaken"]
+    empty = build_digest([], [], SETTINGS, DAY, to_enter=1)                        # a day without cases, with a change still open
+    assert empty.text == (f"Dagoverzicht 18-11-2026\n\nIn Exact in te voeren: 1 wijziging. Open het tabblad In Exact invoeren: {link}\n\n"
+                          "Er zijn geen zaken behandeld en geen bestanden overgeslagen.\n")
+    limited = SETTINGS.model_copy(update={"authorization_limit": Decimal("98765.43")})
+    shown = build_digest([closed], [], limited, DAY, to_enter=2)
+    assert "98765" not in shown.text + shown.html
+
+
+def test_a_digest_without_the_count_is_unchanged():
+    """A digest built without the count, or with none open, is the digest of before: no line of the list, no link to its tab. The
+    texts of the tests above pin what that digest is."""
+    closed = case_result("250101_20261118T090000", "closed", writes=[entry("po_line_price", "12.50", "12.70", entry_id="e1")])
+    review = case_result("250107_20261118T091000", "review").model_copy(update={"review_items": [item("RI1", "new supplier")]})
+    for results, skipped, settings, notes in (([closed, review], [("again.pdf", "duplicate")], SETTINGS, {}), ([], [], ENGLISH, {}),
+                                              ([closed], [], SETTINGS, {"mailbox_lapsed": True, "copilot_down": ("Copilot refused: 403", 2)})):
+        before = build_digest(results, skipped, settings, DAY, **notes)
+        assert build_digest(results, skipped, settings, DAY, **notes, to_enter=0) == before
+        assert "tab=invoeren" not in before.text + before.html and "Exact" not in before.text + before.html
+    assert build_digest([], [], SETTINGS, DAY).text == "Dagoverzicht 18-11-2026\n\nEr zijn geen zaken behandeld en geen bestanden overgeslagen.\n"
+
+
+# --- the review round of Task 34: a list that could not be read (Z4), and what the buyer does in Exact himself (Z5) ---
+
+def test_a_list_that_could_not_be_read_is_said_in_one_line_with_the_link():
+    """When the list could not be read (to_enter None), the line under the title says so, with the link to the tab, instead of
+    looking like a day with nothing to enter."""
+    link = list_link(SETTINGS)
+    for settings, line in ((SETTINGS, f"De lijst In Exact invoeren kon niet worden gelezen. Open het tabblad om te zien wat er nog in te voeren is: {link}"),
+                           (ENGLISH, f"The list Enter in Exact could not be read. Open the tab to see what is still to enter: {link}")):
+        d = build_digest([], [], settings, DAY, to_enter=None)
+        assert d.text.splitlines()[1:4] == ["", line, ""] and d.text.count(link) == 1
+        assert f'<a href="{escape(link)}">{escape(link)}</a></p>' in d.html
+    assert "kon niet worden gelezen" not in build_digest([], [], SETTINGS, DAY, to_enter=0).text
+
+
+def test_the_attachment_and_the_status_prepared_are_for_the_buyer_to_do_in_exact():
+    """The aid prepares the confirmation to attach and the status Bevestigd too, but lists them nowhere: their lines in the digest say
+    that the buyer does them in Exact himself, and the case's line counts them apart from the prepared changes, which the tab lists. A
+    write made, and one that failed, keep their words."""
+    def prepared(made: WriteLogEntry) -> WriteLogEntry:
+        return made.model_copy(update={"status": "prepared"})
+    attach = changed(entry("attach_document", None, None, entry_id="e3"), line_id=None, document="/cases/250101_20261118T090000/input/MU01_conf.pdf")
+    status = changed(entry("set_status", "Besteld", "Bevestigd", entry_id="e4"), line_id=None)
+    writes = [prepared(entry("po_line_price", "12.50", "12.70", entry_id="e1")), prepared(entry("article_price", None, "12.70", entry_id="e2")),
+              prepared(attach), prepared(status)]
+    for settings, heading, lines in ((SETTINGS, "Behandelde zaken", ["- PO 250101 (S01): afgesloten, 2 voorbereide wijzigingen, 2 in Exact zelf te doen",
+                                        "    - prijs regel 1: 12,50 → 12,70 (voorbereid)", "    - artikelprijs KM-1001: onbekend → 12,70 (voorbereid)",
+                                        "    - bijlage MU01_conf.pdf (zelf in Exact doen)", "    - status: Besteld → Bevestigd (zelf in Exact doen)"]),
+                            (ENGLISH, "Handled cases", ["- PO 250101 (S01): closed, 2 prepared changes, 2 to do in Exact yourself",
+                                       "    - price line 1: 12.50 → 12.70 (prepared)", "    - article price KM-1001: unknown → 12.70 (prepared)",
+                                       "    - attachment MU01_conf.pdf (do it in Exact yourself)",
+                                       "    - status: Besteld → Bevestigd (do it in Exact yourself)"])):
+        closed = case_result("250101_20261118T090000", "closed", writes=writes, supplier="S01", language=settings.language)
+        assert block(build_digest([closed], [], settings, DAY).text, heading)[1:] == lines, settings.language
+    alone = case_result("250102_20261118T090000", "closed", writes=[prepared(attach), prepared(status)], supplier="S02")
+    assert block(build_digest([alone], [], SETTINGS, DAY).text, "Behandelde zaken")[1] == "- PO 250102 (S02): afgesloten, 2 in Exact zelf te doen"
+    kept = case_result("250103_20261118T090000", "closed", writes=[attach, status.model_copy(update={"status": "failed"})], supplier="S03")
+    kept_lines = block(build_digest([kept], [], SETTINGS, DAY).text, "Behandelde zaken")
+    assert kept_lines[1] == f"- {kept.digest_line}" and kept_lines[3] == "    - status: Besteld → Bevestigd (mislukt)"
+    assert kept_lines[2] == f"    - bijlage MU01_conf.pdf [ongedaan maken]({undo_link(SETTINGS, kept.case_id, 'e3')})"
+    cart = case_result("250201_20261118T090000", "closed", writes=writes[:2], supplier="S21").model_copy(
+        update={"digest_line": "voorcontrole PO 250201 (S21): afgesloten, 2 voorbereide wijzigingen"})
+    assert f"- {cart.digest_line}" in build_digest([cart], [], SETTINGS, DAY).text.splitlines()   # nothing to do by hand: the line as it is

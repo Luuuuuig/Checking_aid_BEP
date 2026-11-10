@@ -7,10 +7,11 @@ from pathlib import Path
 import pytest
 from PIL import Image
 from reportlab.lib.pagesizes import A4
+from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfgen.canvas import Canvas
 
 from aid.madeup.generate import answered_version, load_specs, po_pages, row_positions
-from aid.readers.pdf_text import TextLine, extract_lines, extract_rows, find_source, page_count, render_page
+from aid.readers.pdf_text import CELL_GAP, TextLine, extract_lines, extract_rows, find_source, page_count, render_page
 
 SPEC_DIR = Path(__file__).resolve().parents[1] / "madeup" / "spec"
 
@@ -68,6 +69,43 @@ def test_extract_rows_keep_the_words_of_each_line_with_their_positions(madeup_ou
     assert [w.text for w in title.words] == ["Regel", "Artikel", "Omschrijving", "Aantal", "Eenheid", "Prijs", "Per", "Leverdatum"]
     assert [round(w.x0) for w in title.words] == [50, 82, 140, 310, 352, 397, 452, 482]
     assert all(w.x0 < w.x1 for row in rows for w in row.words)
+
+
+def test_cut_cells_cuts_a_word_where_two_cells_are_printed_close_together(tmp_path):
+    """pdfplumber joins characters less than 3 points apart into one word, so a price printed 2 points before its basis is one word.
+    With cut_cells a word is cut where the gap between two of its characters is wider than the spacing of its letters by more than
+    CELL_GAP. A word printed with ordinary letter spacing, or with its letters spread evenly, stays one word, and so does a word of
+    two characters, which has one gap only."""
+    path = tmp_path / "close.pdf"
+    canvas = Canvas(str(path), pagesize=A4)
+    canvas.setFont("Helvetica", 9)
+    canvas.drawString(50, 700, "12,50")
+    canvas.drawString(50 + stringWidth("12,50", "Helvetica", 9) + 2, 700, "100")       # 2 points after the price
+    canvas.drawString(150, 700, "Hydraulische")
+    spread = canvas.beginText(250, 700)
+    spread.setFont("Helvetica", 9)
+    spread.setCharSpace(1.5)                                                          # every letter 1.5 points from the next
+    spread.textOut("Omschrijving")
+    canvas.drawText(spread)
+    canvas.drawString(50, 680, "1")
+    canvas.drawString(50 + stringWidth("1", "Helvetica", 9) + 2, 680, "5")
+    canvas.showPage()
+    canvas.save()
+    joined, cut = extract_rows(path), extract_rows(path, cut_cells=True)
+    assert [w.text for w in joined[0].words] == ["12,50100", "Hydraulische", "Omschrijving"]
+    assert [w.text for w in cut[0].words] == ["12,50", "100", "Hydraulische", "Omschrijving"]
+    price, basis = cut[0].words[:2]
+    assert basis.x0 - price.x1 == pytest.approx(2.0, abs=0.01) and price.x0 == joined[0].words[0].x0 and basis.x1 == joined[0].words[0].x1
+    assert cut[0].line == joined[0].line.model_copy(update={"text": "12,50 100 Hydraulische Omschrijving"})
+    assert [w.text for w in cut[1].words] == [w.text for w in joined[1].words] == ["15"] and CELL_GAP == 1.0
+
+
+def test_cut_cells_changes_no_word_of_the_made_up_set(madeup_out):
+    """The made-up documents print their cells apart: cutting at the gaps leaves every word, line and position as it was."""
+    pdfs = sorted(madeup_out.glob("*.pdf"))
+    assert len(pdfs) == 41
+    for pdf in pdfs:
+        assert extract_rows(pdf, cut_cells=True) == extract_rows(pdf), pdf.name
 
 
 def test_page_count(madeup_out):

@@ -12,9 +12,11 @@ page has one module to import from.
 
 The view. doc_pages are the pages of the supplier's document (the case's first input file) as PNG images at 100 dpi, rendered with
 render_page of aid/readers/pdf_text.py; a PNG cart is its own one page and an HTML cart has none, its rows being in the lists.
-po_pages are the pages of the PDF of the selected PO version, none for a version from an export. The three lists are built from the
-result's findings: a row per flag, per match and per uncompared item; then `flags` gets a row for each review item that no row
-carries (an item without a finding, such as "new supplier" on a case without findings, or a second item on one finding). A row's
+po_pages are the pages of the PDF of the selected PO version, none for a look from an export; when step 01 names the store's copy
+of a PDF that is no longer there (the folder of the aid was moved), the page looks the version up in the store as it is now. The
+three lists are built from the result's findings: a row per flag, per match and per uncompared item; then `flags` gets a row for each
+review item that no row carries (an item without a finding, such as "new supplier" on a case without findings, or a second item on
+one finding). A row's
 item_id is that of the first review item that names its finding (RI1, RI2, ...), else the finding's id (F1, ...; U1, ... as the
 routing numbers the uncompared items; M1, M2, ... for the matches, which have no id), and the page offers the four decisions on
 every row whose item_id is a review item. A row shows its values in normal form (else as printed; a match its value on both
@@ -34,7 +36,7 @@ from aid.case import Case
 from aid.comparison import Findings, Flag, Match, Uncompared
 from aid.messaging import _append_line           # the lines of a file of records, appended as the messaging module appends them
 from aid.pipeline import RESULT_FILE, CaseResult, ReviewItem
-from aid.po_store import PoVersion
+from aid.po_store import PoStore, PoVersion
 from aid.readers.pdf_text import page_count, render_page
 from aid.routing import CaseContext, findings_by_id
 from aid.routing import _shown                   # a value as the routing's questions show it
@@ -105,14 +107,20 @@ def _list_cases(cases_root: Path, listed: Callable[[Path, CaseResult], bool]) ->
     return sorted(summaries, key=lambda summary: (summary.opened_at, summary.case_id))
 
 
-def load_case_view(case: Case) -> CaseView:
-    """The case as the page shows it (see the module docstring). A case without a result raises FileNotFoundError."""
+def load_case_view(case: Case, store: PoStore | None = None) -> CaseView:
+    """The case as the page shows it (see the module docstring). A case without a result raises FileNotFoundError. When the store's
+    copy of the selected version's PDF (its po.pdf) is not where step 01 names it (the folder of the aid was moved), the same
+    version is looked up in `store`, the store as it is now, which gives the po.pdf of the version's own folder; a look from an
+    export names its export, which has no pages and is not looked up."""
     result = _saved_result(case)
     meta = json.loads((case.root / "case.json").read_text(encoding="utf-8"))
     flags, matches, uncompared = _rows(result)
     version = _selected_version(case, result)
+    pdf = version.pdf_path if version is not None else None
+    if version is not None and store is not None and Path(pdf).name == "po.pdf" and not Path(pdf).is_file():
+        pdf = next((stored.pdf_path for stored in store.versions(version.po_number) if stored.version == version.version), pdf)
     return CaseView(summary=_summary(case.case_id, meta, result), doc_pages=_pages(case.input_files[0] if case.input_files else None),
-                    po_pages=_pages(version.pdf_path if version is not None else None), flags=flags, matches=matches, uncompared=uncompared,
+                    po_pages=_pages(pdf), flags=flags, matches=matches, uncompared=uncompared,
                     decisions={item_id: record["decision"] for item_id, record in _decisions(case).items()},
                     reapproval_banner=bool(_context(case, result).po_above_authorization))
 

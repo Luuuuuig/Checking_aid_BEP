@@ -1,37 +1,50 @@
 """Tests of the watched folder source (aid/sources/mailbox.py) on the made-up documents, and on e-mails and variants of them
 that the tests build with the standard library and the generator. Every address is made up (example.com)."""
+import csv
+import io
 import json
 import mimetypes
+import os
 import re
 import shutil
+import tempfile
 import unicodedata
 from datetime import datetime, timedelta
 from email.message import EmailMessage
 from pathlib import Path
 
 import pytest
+from openpyxl import Workbook
+from reportlab.pdfbase.pdfmetrics import stringWidth
 
 from aid.case import find_case_by_hash, load_case, sha256_file
 from aid.decider import NoDecider
-from aid.madeup.generate import Row, Text, confirmation_pages, load_specs, pdf_bytes, po_pages
+from aid.madeup.generate import TRYOUT_EXPORT_COLUMNS, Row, Text, confirmation_pages, export_csv, load_specs, pdf_bytes, po_pages
 from aid.po_store import PoStore
 from aid.readers.pdf_text import extract_lines
+from aid.readers.po_pdf import fits
 from aid.readers.supplier_parser import load_templates
-from aid.sources.mailbox import CASE_ID_TRIES, CONTEXT_CHARS, KEYWORDS, TITLE_CLASSES, TITLE_LINES, ScanResult, classify_attachment, extract_eml, find_po_numbers, scan_folder
-from aid.tests.conftest import SETTINGS
+from aid.sources import mailbox
+from aid.sources.mailbox import (CASE_ID_TRIES, CONTEXT_CHARS, KEYWORDS, NOT_AN_EXPORT, TITLE_CLASSES, TITLE_LINES, ScanResult,
+                                 classify_attachment, extract_eml, find_po_numbers, scan_folder, sender_of, titled_confirmation)
+from aid.tests.conftest import REPO_ROOT, SETTINGS
 from aid.tests.fakes import FakeDecider
+from aid.tests.helpers import ANDERS_LAYOUT, ANDERS_PO, EXPORT_COLUMNS, MADEUP_LAYOUT, first_page
 
 SPECS = {spec.case_id: spec for spec in load_specs(Path(__file__).resolve().parents[1] / "madeup" / "spec")}
 
 
-def write_eml(path: Path, subject: str = "", body: str | None = "", html: str | None = None, attachments: list = ()) -> Path:
+def write_eml(path: Path, subject: str = "", body: str | None = "", html: str | None = None, attachments: list = (),
+              sender: str | None = "supplier@example.com") -> Path:
     """An e-mail at `path`, built with the standard library from made-up addresses: this subject, this plain-text body (None for
-    none), this HTML body (None for none) and these attachments. An attachment is a file, attached under its own name, or a pair
-    (name, bytes), where the name None attaches the bytes without a name, or a triple (name, bytes, content type). Without a type,
-    the type is the one the name suggests, else PDF. A pair (name, EmailMessage) attaches the message itself, as a mail client does
-    when it forwards a message as an attachment."""
+    none), this HTML body (None for none) and these attachments, from this sender (None for an e-mail without a From header). An
+    attachment is a file, attached under its own name, or a pair (name, bytes), where the name None attaches the bytes without a
+    name, or a triple (name, bytes, content type). Without a type, the type is the one the name suggests, else PDF. A pair
+    (name, EmailMessage) attaches the message itself, as a mail client does when it forwards a message as an attachment."""
     message = EmailMessage()
-    message["From"], message["To"], message["Subject"] = "supplier@example.com", "aid@example.com", subject
+    if sender is not None:
+        message["From"] = sender
+    message["To"], message["Subject"] = "aid@example.com", subject
     if body is not None:
         message.set_content(body)
         if html is not None:
@@ -65,6 +78,32 @@ def test_scan_opens_one_case_and_skips_duplicate(tmp_path, madeup_out):
     shutil.copy(madeup_out / "MU01_conf.pdf", inbox / "again.pdf")
     r2 = scan_folder(inbox, PoStore(tmp_path / "store"), tmp_path / "cases", SETTINGS, datetime(2026, 11, 16, 9, 0))
     assert r2.new_cases == [] and r2.skipped == [("again.pdf", "duplicate")]
+
+
+def test_the_attachments_of_an_email_are_unpacked_under_the_cases_root_never_in_the_temporary_folder(tmp_path, madeup_out, monkeypatch):
+    """A scan unpacks an e-mail's attachments into a folder of its own under <cases_root>/tmp/work, made when the scan has an e-mail,
+    and removes it when the scan is done, with the folders it made on the way: a document of a case never lies in the system's
+    temporary folder, which is outside the aid's folders. A scan without an e-mail makes no folder for it."""
+    (system := tmp_path / "system temp").mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(system))
+    unpacked, unpack = [], mailbox._Scan.unpack
+
+    def noting(self, number, path, scratch):
+        unpacked.append((path.name, scratch, scratch is not None and scratch.is_dir()))
+        return unpack(self, number, path, scratch)
+    monkeypatch.setattr(mailbox._Scan, "unpack", noting)
+    inbox, cases = tmp_path / "inbox", tmp_path / "cases"
+    inbox.mkdir()
+    shutil.copy(madeup_out / "MU01_po_v1.pdf", inbox)
+    write_eml(inbox / "confirmation.eml", "Orderbevestiging PO 250101", "made-up body", attachments=[madeup_out / "MU01_conf.pdf"])
+    result = scan_folder(inbox, PoStore(tmp_path / "store"), cases, SETTINGS, datetime(2026, 11, 16, 8, 0))
+    assert len(result.new_cases) == 1 and result.stored_pos == ["250101"]
+    assert [name for name, _, _ in unpacked] == ["MU01_po_v1.pdf", "confirmation.eml"]
+    assert all(scratch.parent == cases / "tmp" / "work" and seen for _, scratch, seen in unpacked)
+    assert unpacked[0][1].name.startswith("aid_mailbox_") and not (cases / "tmp").exists() and list(system.iterdir()) == []
+    shutil.copy(madeup_out / "MU02_po_v1.pdf", inbox)
+    scan_folder(inbox, PoStore(tmp_path / "store"), cases, SETTINGS, datetime(2026, 11, 16, 9, 0))
+    assert unpacked[-1] == ("MU02_po_v1.pdf", None, False) and not (cases / "tmp").exists()
 
 
 def test_two_po_numbers_are_not_a_case(tmp_path, madeup_out):
@@ -1437,3 +1476,425 @@ def test_an_e_mail_that_answers_no_question_is_handled_as_before(tmp_path, madeu
     r = scan(tmp_path, inbox)
     assert r.replies == [] and len(r.new_cases) == 1 and r.skipped == [("leeg.eml", "no attachment")]
     assert not (c.root / "messages" / "replies").exists() and c.read_step("result")["status"] == "waiting"
+
+
+# --- a PO layout in the settings: a PDF that fits it is a PO PDF ---
+
+LAYOUT = SETTINGS.model_copy(update={"po_layout": MADEUP_LAYOUT})          # the made-up layout as the layout of the settings
+EXACT = "inkoop@example.org"                                               # the made-up address the PO e-mails come from
+ASKING = "Graag ontvangen wij uw orderbevestiging per e-mail."             # what a PO may say to its supplier
+
+
+def asking_po(path: Path, case_id: str = "MU01") -> Path:
+    """The first version of the made-up PO of `case_id` with a last row that asks the supplier for a confirmation."""
+    spec = SPECS[case_id]
+    pages = po_pages(spec, spec.po.versions[0])
+    pages[0] += page_of(ASKING)
+    return drawn(path, *pages)
+
+
+def returned_po(path: Path, case_id: str = "MU08", title: tuple[str, ...] = ("S08", "Orderbevestiging")) -> Path:
+    """A supplier's document that repeats the first page of the made-up PO of `case_id`, its PO label and title row included, below
+    rows of its own (by default the supplier's name and the title of a confirmation)."""
+    spec = SPECS[case_id]
+    pages = po_pages(spec, spec.po.versions[0])
+    pages[0][0:0] = page_of(*title)
+    return drawn(path, *pages)
+
+
+def test_with_a_layout_a_po_that_mentions_a_confirmation_is_filed_as_a_po(tmp_path):
+    """A PO that asks for an order confirmation below its lines holds a keyword of a confirmation, which ranks first: without a layout
+    it is taken for a confirmation and opens a case. With the layout of the settings it fits, and its header (the lines above the
+    column titles) holds no such keyword, so it is a PO: it is filed, read with the layout, and no case is opened. A PO whose header
+    holds the keyword is taken for a confirmation, as a supplier's confirmation that repeats the PO's page is."""
+    inbox = inbox_of(tmp_path)
+    po = asking_po(inbox / "po.pdf")
+    assert classify_attachment(po, None) == "confirmation" and not titled_confirmation(first_page(po), MADEUP_LAYOUT)
+    r = scan(tmp_path, inbox, settings=LAYOUT)
+    assert r.stored_pos == ["250101"] and r.new_cases == [] and r.skipped == [] and case_names(tmp_path) == []
+    [version] = PoStore(tmp_path / "store").versions("250101")
+    assert (version.version, version.document.reader, len(version.document.lines)) == (1, "po_pdf:layout", 3)
+    assert (inbox / "processed" / "po.pdf").exists()
+    decider = FakeDecider("confirmation", 1.0)                              # a fitting PDF costs no decision
+    asking_po(inbox / "po2.pdf", "MU02")
+    assert scan(tmp_path, inbox, decider, settings=LAYOUT).stored_pos == ["250102"] and decider.decisions == []
+    pages = po_pages(SPECS["MU03"], SPECS["MU03"].po.versions[0])
+    pages[0][6:6] = page_of("Orderbevestiging verplicht binnen 2 werkdagen")     # in the header, right above the column titles
+    asks_in_its_header = drawn(inbox / "po3.pdf", *pages)
+    assert fits(first_page(asks_in_its_header), MADEUP_LAYOUT) and titled_confirmation(first_page(asks_in_its_header), MADEUP_LAYOUT)
+    r = scan(tmp_path, inbox, settings=LAYOUT, now=datetime(2026, 11, 16, 9, 0))
+    assert r.stored_pos == [] and r.new_cases == ["250103_20261116T090000"]
+
+
+def test_a_document_titled_as_a_confirmation_opens_a_case_though_it_fits(tmp_path, madeup_out):
+    """A supplier's confirmation that repeats the PO's own label and title row fits the layout, but a line above its title row holds a
+    keyword of a confirmation: it is classed by the keywords, as without a layout, and opens a case. So does one whose title stands
+    on its fourth line, below a letterhead of three lines. The made-up confirmations, which do not fit, open their cases as before."""
+    inbox = inbox_of(tmp_path)
+    returned = returned_po(inbox / "bevestiging.pdf")
+    assert fits(first_page(returned), MADEUP_LAYOUT) and titled_confirmation(first_page(returned), MADEUP_LAYOUT)
+    put(inbox, madeup_out / "MU01_conf.pdf")
+    r = scan(tmp_path, inbox, settings=LAYOUT)
+    assert r.new_cases == ["250101_20261116T080000", "250108_20261116T080000"] and r.stored_pos == [] and r.skipped == []
+    assert [f.name for f in load_case(tmp_path / "cases", r.new_cases[1]).input_files] == ["bevestiging.pdf"]
+    assert not (tmp_path / "store").exists()
+    low = returned_po(inbox / "laag.pdf", title=("S08", "Postbus 1", "1234 AB Voorbeeldstad", "Orderbevestiging"))
+    assert fits(first_page(low), MADEUP_LAYOUT) and titled_confirmation(first_page(low), MADEUP_LAYOUT)     # the title is its fourth line
+    r = scan(tmp_path, inbox, settings=LAYOUT, now=datetime(2026, 11, 16, 9, 0))
+    assert r.stored_pos == [] and r.new_cases == ["250108_20261116T090000"] and not (tmp_path / "store").exists()
+
+
+TITLES = "Regel Artikel Omschrijving Aantal Eenheid Prijs Per Leverdatum"     # the title row of the made-up layout
+LINE = "1 KM-1001 Kogelkraan 10 st 12,50 1 16-11-2026"
+
+
+@pytest.mark.parametrize("header, titled", [
+    ("S01\nOrderbevestiging\nUw inkooporder 250101", True), ("ORDER CONFIRMATION 4500123\nACME Ltd", True),
+    ("Proefleverancier\nPostbus 1\n1234 AB Voorbeeldstad\nOrderbevestiging\nUw inkooporder 250101", True),   # below a letterhead
+    ("Purchase order confirmation 4500123", True), ("Uw inkooporder 250101: orderbevestiging", True),        # anywhere on its line
+    ("S04\n\n  \nAdres\nAuftragsbestätigung Nr. 7", True), ("AUFTRAGSBESTATIGUNG 7", True),                  # case and accents
+    ("Inkooporder 250101\nVersie 1", False), ("Orderbevestigingen 2026\nS01", False),                       # no keyword as a word
+    ("", False),
+])
+def test_a_header_that_holds_a_confirmation_keyword(header, titled):
+    """With a layout set a PDF counts as titled as a confirmation when a line of its first page above its first title row holds a
+    keyword of a confirmation as a whole word or phrase. Below the title row a keyword counts for nothing."""
+    assert titled_confirmation(f"{header}\n{TITLES}\n{LINE}", MADEUP_LAYOUT) is titled
+    assert titled_confirmation(f"Inkooporder 250101\n{TITLES}\n{LINE}\n{header}", MADEUP_LAYOUT) is False
+    assert titled_confirmation(header, MADEUP_LAYOUT) is titled                 # a page without the title row: all its lines
+
+
+def test_sender_of_gives_the_address_of_the_from_header_in_lower_case(tmp_path):
+    assert sender_of(write_eml(tmp_path / "a.eml", sender="Inkoop <Inkoop@Example.ORG>")) == "inkoop@example.org"
+    assert sender_of(write_eml(tmp_path / "b.eml", sender="sales@s01.example.com")) == "sales@s01.example.com"
+    assert sender_of(write_eml(tmp_path / "c.eml", sender=None)) is None
+    (tmp_path / "d.eml").write_bytes(b"From: not an address\r\nSubject: S\r\n\r\ntekst\r\n")
+    assert sender_of(tmp_path / "d.eml") is None
+
+
+def test_a_fitting_pdf_from_another_sender_opens_a_case(tmp_path, madeup_out):
+    """With senders in the settings, a PDF that fits and came in an e-mail from anyone else is a confirmation, also when its title
+    makes it a PO by the keywords, as a supplier's copy of the PO is: it opens a case and is not filed. From a listed address or
+    domain it is filed, and so is a file that lies in the folder by itself, which has no sender."""
+    listed = LAYOUT.model_copy(update={"po_senders": [EXACT]})
+    po = madeup_out / "MU01_po_v1.pdf"
+    assert classify_attachment(po, None) == "po_pdf"
+    inbox = inbox_of(tmp_path)
+    write_eml(inbox / "a_supplier.eml", subject="Uw order", attachments=[po], sender="sales@s01.example.com")
+    write_eml(inbox / "b_no_sender.eml", subject="Order", attachments=[madeup_out / "MU02_po_v1.pdf"], sender=None)
+    r = scan(tmp_path, inbox, settings=listed)
+    assert r.new_cases == ["250101_20261116T080000", "250102_20261116T080000"] and r.stored_pos == [] and r.skipped == []
+    assert [f.name for f in load_case(tmp_path / "cases", r.new_cases[0]).input_files] == ["MU01_po_v1.pdf"]
+    assert not (tmp_path / "store").exists()
+    write_eml(inbox / "c_exact.eml", attachments=[madeup_out / "MU03_po_v1.pdf"], sender=f"Inkoop <{EXACT.upper()}>")
+    put(inbox, madeup_out / "MU04_po_v1.pdf", "d_loose.pdf")
+    r = scan(tmp_path, inbox, settings=listed, now=datetime(2026, 11, 16, 9, 0))
+    assert r.stored_pos == ["250103", "250104"] and r.new_cases == [] and r.skipped == []
+    # The supplier sends the same e-mail again: a fitting PDF that the sender list makes a confirmation is searched for as any
+    # confirmation is, so it is a duplicate of the case it opened and opens no second one.
+    write_eml(inbox / "e_supplier_again.eml", subject="Uw order", attachments=[po], sender="sales@s01.example.com")
+    r = scan(tmp_path, inbox, settings=listed, now=datetime(2026, 11, 16, 10, 0))
+    assert r.skipped == [("e_supplier_again.eml/MU01_po_v1.pdf", "duplicate")] and r.new_cases == [] and r.stored_pos == []
+    assert len(case_names(tmp_path)) == 2
+    for number, (senders, sender, filed) in enumerate([
+            (["example.org"], "erp@example.org", True), (["@Example.org "], "erp@example.org", True),      # a domain, with or without "@"
+            (["example.org"], "erp@mail.example.org", False), (["example.org"], "erp@example.org.example.com", False),
+            (["other@example.org", EXACT], EXACT, True), ([], "sales@s01.example.com", True)]):             # an empty list: any sender
+        folder = tmp_path / f"run{number}"
+        folder.mkdir()
+        write_eml(inbox_of(folder) / "m.eml", attachments=[madeup_out / "MU05_po_v1.pdf"], sender=sender)
+        r = scan(folder, folder / "inbox", settings=LAYOUT.model_copy(update={"po_senders": senders}))
+        assert (r.stored_pos, len(r.new_cases)) == ((["250105"], 0) if filed else ([], 1)), (senders, sender)
+
+
+def test_a_fitting_pdf_is_filed_though_a_case_holds_its_bytes(tmp_path, madeup_out):
+    """Before the layout was set, a PO that asks for a confirmation opened a case, which holds its bytes. Given again with the layout
+    set it is filed as a PO: the fit is tested before the cases are searched for a duplicate. A PDF that does not fit is still a
+    duplicate of the case that holds it."""
+    inbox = inbox_of(tmp_path)
+    po = asking_po(tmp_path / "po.pdf")
+    put(inbox, po)
+    put(inbox, madeup_out / "MU02_conf.pdf")
+    first = scan(tmp_path, inbox)
+    assert first.new_cases == ["250102_20261116T080000", "250101_20261116T080000"] and first.stored_pos == []
+    assert find_case_by_hash(tmp_path / "cases", sha256_file(po)).case_id == "250101_20261116T080000"
+    put(inbox, po, "again.pdf")
+    put(inbox, madeup_out / "MU02_conf.pdf", "conf_again.pdf")
+    assert scan(tmp_path, inbox, now=datetime(2026, 11, 16, 9, 0)).skipped == [("again.pdf", "duplicate"), ("conf_again.pdf", "duplicate")]
+    put(inbox, po, "again.pdf")
+    put(inbox, madeup_out / "MU02_conf.pdf", "conf_again.pdf")
+    r = scan(tmp_path, inbox, settings=LAYOUT, now=datetime(2026, 11, 16, 10, 0))
+    assert r.stored_pos == ["250101"] and r.new_cases == [] and r.skipped == [("conf_again.pdf", "duplicate")]
+    assert [v.version for v in PoStore(tmp_path / "store").versions("250101")] == [1] and len(case_names(tmp_path)) == 2
+
+
+def test_with_a_layout_a_po_pdf_that_does_not_fit_stays_as_an_error(tmp_path, madeup_out):
+    """With a layout set no PDF is read with the made-up template: a made-up PO, which the keywords still class as a PO, is refused
+    by the store under the second layout and stays in the folder, and the second made-up PO is filed. Without a layout the second
+    made-up PO has no keyword and is skipped as before."""
+    anders = SETTINGS.model_copy(update={"po_layout": ANDERS_LAYOUT})
+    inbox = inbox_of(tmp_path)
+    put(inbox, madeup_out / "MU01_po_v1.pdf")
+    put(inbox, ANDERS_PO)
+    r = scan(tmp_path, inbox, settings=anders)
+    assert r.stored_pos == ["IB-2600417"] and r.new_cases == [] and [name for name, _ in r.skipped] == ["MU01_po_v1.pdf"]
+    assert r.skipped[0][1].startswith("error: MU01_po_v1.pdf: the PDF does not fit the purchase order layout")
+    assert "250101" not in r.skipped[0][1] and "Inkooporder" not in r.skipped[0][1]                     # no text of the PDF in the reason
+    assert (inbox / "MU01_po_v1.pdf").exists() and (inbox / "processed" / "ANDERS_po_v1.pdf").exists()
+    assert PoStore(tmp_path / "store").versions("250101") == []
+    other = tmp_path / "other"
+    other.mkdir()
+    put(inbox_of(other), ANDERS_PO)
+    assert scan(other, other / "inbox", FakeDecider(None, 0.0)).skipped == [("ANDERS_po_v1.pdf", "other")]
+
+
+def test_a_po_number_that_cannot_be_a_folder_name_is_skipped_without_the_number(tmp_path):
+    """A PO PDF that fits and whose PO number holds a slash is refused by the store: it stays in the folder as an error, and the reason,
+    which the digest and runner.log repeat, names the setting and not the number."""
+    inbox = inbox_of(tmp_path)
+    drawn_po(inbox / "po.pdf", heading="Inkooporder PO/2026/0417")
+    r = scan(tmp_path, inbox, settings=LAYOUT)
+    [(name, reason)] = r.skipped
+    assert name == "po.pdf" and reason.startswith("error: po.pdf: the PO number") and "po_layout.po_label" in reason
+    assert "PO/2026/0417" not in reason and "2026" not in reason and (inbox / "po.pdf").exists() and r.stored_pos == []
+
+
+def test_title_words_printed_close_together_are_held_against_the_layout_as_its_reader_cuts_them(tmp_path):
+    """The scan tests the fit on the first page as the layout reader reads it, with cells printed close together cut apart: a PO whose
+    titles Prijs and Per stand 2 points apart fits and is filed."""
+    pages = po_pages(SPECS["MU01"], SPECS["MU01"].po.versions[0])
+    prijs, per = (next(t for t in pages[0][6].texts if t.text == word) for word in ("Prijs", "Per"))
+    per.x = prijs.x + stringWidth(prijs.text, prijs.font, prijs.size) + 2
+    inbox = inbox_of(tmp_path)
+    drawn(inbox / "po.pdf", *pages)
+    assert "PrijsPer" in "\n".join(line.text for line in extract_lines(inbox / "po.pdf"))
+    r = scan(tmp_path, inbox, settings=LAYOUT)
+    assert r.stored_pos == ["250101"] and r.skipped == [] and r.new_cases == []
+
+
+# --- an export of the ERP in the folder or on an e-mail (Task 40) ---
+
+EXPORTS = SETTINGS.model_copy(update={"export_columns": EXPORT_COLUMNS})      # the column titles of the made-up export, as a map
+EXPORT_NL = REPO_ROOT / "aid" / "madeup" / "tryout" / "EXPORT_nl.csv"           # the made-up export in a Dutch form
+
+
+class Recording(PoStore):
+    """The PO store, noting the name of each file it is given to file, in the order it gets them."""
+
+    def __init__(self, root: Path):
+        super().__init__(root)
+        self.given: list[str] = []
+
+    def add(self, pdf, layout=None):
+        self.given.append(Path(pdf).name)
+        return super().add(pdf, layout)
+
+    def from_export(self, path, *args, **kwargs):
+        self.given.append(Path(path).name)
+        return super().from_export(path, *args, **kwargs)
+
+
+def export_workbook(path: Path, case_id: str, quantity: str) -> Path:
+    """The ERP export of the made-up PO of `case_id` saved as a workbook, the quantity of its first line given as `quantity`."""
+    rows = list(csv.reader(io.StringIO(export_csv(SPECS[case_id]))))
+    rows[1][rows[0].index("quantity")] = quantity
+    workbook = Workbook()
+    for row in rows:
+        workbook.active.append(row)
+    workbook.save(path)
+    return path
+
+
+def test_an_export_in_the_folder_or_on_an_e_mail_is_filed_first_and_listed(tmp_path, madeup_out):
+    """With export_columns set, a .csv or .xlsx file one of whose rows holds every column title of the map is an export of the ERP. In
+    the folder or as an attachment of an e-mail it is filed before the PO PDFs and the confirmations of the same scan, whatever its
+    name, listed in stored_exports with the PO numbers of the file and those whose look it filed, and moved to processed/. So a
+    confirmation that names no PO number finds the PO of an export of the same scan by its lines. The same rows again file nothing,
+    and other rows are the next look."""
+    inbox = inbox_of(tmp_path)
+    put(inbox, madeup_out / "MU03_po_v1.pdf", "a_po.pdf")
+    drawn_confirmation(inbox / "b_conf.pdf", drop=("po_reference",))                     # MU01's confirmation without its PO number
+    (inbox / "z_export.csv").write_text(export_csv(SPECS["MU01"]), encoding="utf-8")      # PO 250101 as the ERP exports it, the last file
+    store = Recording(tmp_path / "store")
+    r = scan_folder(inbox, store, tmp_path / "cases", EXPORTS, NOW)
+    assert store.given == ["z_export.csv", "a_po.pdf"]
+    assert r.stored_exports == [("z_export.csv", ["250101"], ["250101"])] and r.stored_pos == ["250103"]
+    assert r.new_cases == ["250101_20261116T080000"] and r.skipped == []
+    assert sorted(p.name for p in (inbox / "processed").iterdir()) == ["a_po.pdf", "b_conf.pdf", "z_export.csv"]
+    [look] = store.snapshots("250101")
+    assert (look.document.reader, store.versions("250101")) == ("export:z_export.csv", [])
+    write_eml(inbox / "m.eml", subject="Export uit Exact", attachments=[inbox / "processed" / "z_export.csv"])
+    write_eml(inbox / "n.eml", subject="Export uit Exact", attachments=[export_workbook(tmp_path / "Orderregels.xlsx", "MU01", "12")])
+    r = scan_folder(inbox, store, tmp_path / "cases", EXPORTS, NOW + timedelta(hours=1))
+    assert r.stored_exports == [("m.eml/z_export.csv", ["250101"], []), ("n.eml/Orderregels.xlsx", ["250101"], ["250101"])]
+    assert r.skipped == [] and r.new_cases == [] and r.stored_pos == []
+    assert [look.document.lines[0].quantity.value for look in store.snapshots("250101")] == ["10", "12"]
+    assert sorted(p.name for p in (inbox / "processed").iterdir()) == ["a_po.pdf", "b_conf.pdf", "m.eml", "n.eml", "z_export.csv"]
+
+
+def test_another_spreadsheet_is_skipped_as_before(tmp_path, madeup_out):
+    """A spreadsheet that is not an export is skipped and filed away, as before Task 40, and puts nothing into the store; the reason
+    says why (ruling E8). With export_columns set, a .csv or .xlsx file that is_export does not take, because no row of it holds every
+    column title of the map (a price list, an export with a title renamed) or because it cannot be read as a table (a damaged
+    workbook), is skipped as a spreadsheet without the export's column titles, so the buyer sees in the digest why his file was not
+    read. With export_columns empty every spreadsheet, the export itself included, is an unsupported file type, and an old .xls always
+    is."""
+    for name, settings in (("set", EXPORTS), ("empty", SETTINGS)):
+        folder = tmp_path / name
+        folder.mkdir()
+        inbox = inbox_of(folder)
+        (inbox / "export.csv").write_text(export_csv(SPECS["MU01"]), encoding="utf-8")
+        (inbox / "titles.csv").write_text(export_csv(SPECS["MU01"]).replace("delivery_date", "leverdatum", 1), encoding="utf-8")
+        (inbox / "kapot.xlsx").write_bytes(b"PK\x03\x04 a workbook cut off in the mail")
+        (inbox / "prijslijst.csv").write_text("artikel;prijs\nKM-1001;12,50\n", encoding="utf-8")
+        workbook = Workbook()
+        workbook.active.append(["artikel", "prijs"])
+        workbook.active.append(["KM-1001", 12.5])
+        workbook.save(inbox / "prijslijst.xlsx")
+        (inbox / "oud.xls").write_bytes(b"made up")
+        r = scan(folder, inbox, settings=settings)
+        names = ["kapot.xlsx", "oud.xls", "prijslijst.csv", "prijslijst.xlsx", "titles.csv"]
+        if name == "set":
+            assert r.stored_exports == [("export.csv", ["250101"], ["250101"])]
+            assert r.skipped == [(file, "unsupported file type: .xls" if file == "oud.xls" else NOT_AN_EXPORT) for file in names]
+            assert NOT_AN_EXPORT == "spreadsheet without the export's column titles"
+            assert [p.name for p in (folder / "store").iterdir()] == ["250101"]          # the export's look and nothing else
+        else:
+            assert r.stored_exports == [] and not (folder / "store").exists()
+            assert r.skipped == [(file, f"unsupported file type: {Path(file).suffix}") for file in ["export.csv", *names]]
+        assert sorted(p.name for p in (inbox / "processed").iterdir()) == ["export.csv", *names] and list(inbox.glob("*.*")) == []
+        assert r.new_cases == [] and r.stored_pos == [] and review_items(folder) == []
+
+
+def test_a_refused_export_stays_as_an_error(tmp_path, madeup_out):
+    """An export that the store refuses stays in the folder as an error, as a refused PO PDF does: here the Dutch export with
+    export_fill_down off, whose second line has no PO number. The reason is the store's, which names the file and the row and no
+    value; nothing of the export is filed, and the rest of the scan goes on. An e-mail that carries it stays as well. With the
+    setting right it is filed at the next scan, and the same rows on the e-mail file nothing more."""
+    inbox = inbox_of(tmp_path)
+    shutil.copy(EXPORT_NL, inbox / EXPORT_NL.name)
+    put(inbox, madeup_out / "MU01_po_v1.pdf")
+    write_eml(inbox / "m.eml", subject="Export uit Exact", attachments=[EXPORT_NL])
+    dutch = SETTINGS.model_copy(update={"export_columns": TRYOUT_EXPORT_COLUMNS, "export_decimal_comma": True})
+    r = scan(tmp_path, inbox, settings=dutch)
+    refused = "error: EXPORT_nl.csv, row 5: an item code without a PO number"
+    assert r.skipped == [("EXPORT_nl.csv", refused), ("m.eml/EXPORT_nl.csv", refused)]
+    assert r.stored_exports == [] and r.stored_pos == ["250101"] and r.new_cases == []
+    assert (inbox / "EXPORT_nl.csv").exists() and (inbox / "m.eml").exists() and [p.name for p in (inbox / "processed").iterdir()] == ["MU01_po_v1.pdf"]
+    assert not (tmp_path / "store" / "250301").exists() and not (tmp_path / "store" / "250302").exists()
+    r = scan(tmp_path, inbox, settings=dutch.model_copy(update={"export_fill_down": True}), now=NOW + timedelta(hours=1))
+    assert r.stored_exports == [("EXPORT_nl.csv", ["250301", "250302"], ["250301", "250302"]),
+                                ("m.eml/EXPORT_nl.csv", ["250301", "250302"], [])]
+    assert r.skipped == [] and sorted(p.name for p in (inbox / "processed").iterdir()) == ["EXPORT_nl.csv", "MU01_po_v1.pdf", "m.eml"]
+    store = PoStore(tmp_path / "store")
+    assert [look.supplier for number in ("250301", "250302") for look in store.snapshots(number)] == ["S21", "S22"]
+    first = store.snapshots("250301")[0].document.lines[0]
+    assert (first.quantity.text, first.quantity.value) == ("1.000", "1000")      # the scan passes the decimal comma (ruling E6)
+    # A title of the map that stands twice in the title row, all the others there too: is_export takes the file and the store refuses
+    # it, so it stays as an error, as the refusals of the rows do (ruling E8).
+    text = EXPORT_NL.read_text(encoding="utf-8")
+    (inbox / "dubbel.csv").write_text(text.replace(";Bedrag", ";Prijs", 1), encoding="utf-8")
+    r = scan(tmp_path, inbox, settings=dutch.model_copy(update={"export_fill_down": True}), now=NOW + timedelta(hours=2))
+    assert r.skipped == [("dubbel.csv", "error: dubbel.csv, row 3: the column 'Prijs' stands twice")] and (inbox / "dubbel.csv").exists()
+
+
+def cart_export(price: str) -> str:
+    """The ERP export of CART01's PO 250201 (export_csv of the generator), the price of its first line given as `price`."""
+    return export_csv(SPECS["CART01"]).replace(",0.95,", f",{price},", 1)
+
+
+def first_prices(store: PoStore) -> list[str]:
+    """The price of the first line of each look at PO 250201, in the order of filing."""
+    return [look.document.lines[0].unit_price.value for look in store.snapshots("250201")]
+
+
+def test_a_kept_e_mail_does_not_file_its_export_again(tmp_path):
+    """Ruling E1, the reviewers' kept e-mail: an e-mail stays in the folder while one of its attachments raises, here a PDF that only
+    the decider can class while the decider cannot be reached, and every pass handles it again, its export included. Its export is
+    filed once: after a newer export of the same PO, the kept e-mail's older export files nothing at the passes that follow, and the
+    newer one stays the PO as it stands."""
+    inbox = inbox_of(tmp_path)
+    (tmp_path / "Inkooporderregels.csv").write_text(cart_export("0.95"), encoding="utf-8")
+    note = drawn(tmp_path / "notitie.pdf", page_of("Hallo, zie de bijlage."))                    # no keyword: only the decider
+    kept = write_eml(inbox / "20261116T075500_aaaa.eml", subject="Export", attachments=[tmp_path / "Inkooporderregels.csv", note])
+    label = f"{kept.name}/Inkooporderregels.csv"
+    store = PoStore(tmp_path / "store")
+    filed = {1: [(label, ["250201"], ["250201"])], 2: [(label, ["250201"], []), ("Inkooporderregels.csv", ["250201"], ["250201"])],
+             3: [(label, ["250201"], [])], 4: [(label, ["250201"], [])]}
+    for number in range(1, 5):
+        if number == 2:
+            (inbox / "Inkooporderregels.csv").write_text(cart_export("0.99"), encoding="utf-8")      # a newer export, dropped
+        r = scan_folder(inbox, store, tmp_path / "cases", EXPORTS, NOW + timedelta(minutes=number), UnreachableDecider())
+        assert r.stored_exports == filed[number] and kept.exists(), number
+        assert first_prices(store) == (["0.95"] if number == 1 else ["0.95", "0.99"]), number
+        assert store.as_it_stands("250201").document.lines[0].unit_price.value == ("0.95" if number == 1 else "0.99"), number
+
+
+def test_a_locked_export_file_is_not_filed_again(tmp_path, monkeypatch):
+    """Ruling E1, the reviewers' locked file: two exports that cannot be moved to processed/ (on Windows a file still open in Excel;
+    here a rename that raises PermissionError), the newer one saved under another name because the first is still open. Every pass
+    handles both again: each is filed once, and after each pass the newer one is the PO as it stands."""
+    locked = {"Inkooporderregels.csv", "Inkooporderregels 2.csv"}
+    rename = Path.rename
+
+    def refused(self, target):
+        if self.name in locked:
+            raise PermissionError(13, "the file is open in another program")
+        return rename(self, target)
+    monkeypatch.setattr(Path, "rename", refused)
+    inbox = inbox_of(tmp_path)
+    store = PoStore(tmp_path / "store")
+    (inbox / "Inkooporderregels.csv").write_text(cart_export("0.95"), encoding="utf-8")
+    for number in range(1, 5):
+        if number == 2:
+            (inbox / "Inkooporderregels 2.csv").write_text(cart_export("0.99"), encoding="utf-8")
+        r = scan_folder(inbox, store, tmp_path / "cases", EXPORTS, NOW + timedelta(minutes=number))
+        assert sum(len(new) for _, _, new in r.stored_exports) == (1 if number <= 2 else 0), number
+        assert sorted(name for name, reason in r.skipped if reason.startswith("error: ")) == sorted(locked & {p.name for p in inbox.iterdir()})
+        assert first_prices(store) == (["0.95"] if number == 1 else ["0.95", "0.99"]), number
+        assert store.as_it_stands("250201").document.lines[0].unit_price.value == ("0.95" if number == 1 else "0.99"), number
+    assert sorted(p.name for p in inbox.iterdir() if p.is_file()) == sorted(locked)
+
+
+def test_the_exports_of_a_pass_are_filed_in_the_order_of_their_times(tmp_path):
+    """Ruling E3: the exports of one pass are filed in the order of the modification times of their files in the folder, for an
+    attachment that of its e-mail, the name breaking a tie only. So the newest export stands also when its name sorts first, as
+    'Inkooporderregels (1).csv', the usual name of a second copy, sorts before 'Inkooporderregels.csv', and an export put into the
+    folder under a name that begins with a letter sorts after every e-mail, whose name begins with its date."""
+    ten = datetime(2026, 11, 16, 10, 0).timestamp()
+
+    def saved(path: Path, text: str, minute: int) -> Path:
+        path.write_text(text, encoding="utf-8")
+        os.utime(path, (ten + 60 * minute, ten + 60 * minute))
+        return path
+
+    for number, (older, newer) in enumerate([("Inkooporderregels.csv", "Inkooporderregels (1).csv"),
+                                              ("Inkooporderregels (1).csv", "Inkooporderregels.csv"), ("b.csv", "a.csv")]):
+        folder = tmp_path / f"pass{number}"
+        folder.mkdir()
+        inbox = inbox_of(folder)
+        saved(inbox / older, cart_export("0.95"), 0)
+        saved(inbox / newer, cart_export("0.99"), 5)
+        store = PoStore(folder / "store")
+        r = scan_folder(inbox, store, folder / "cases", EXPORTS, NOW)
+        assert [label for label, _, _ in r.stored_exports] == [older, newer] and first_prices(store) == ["0.95", "0.99"], (older, newer)
+        assert store.as_it_stands("250201").document.lines[0].unit_price.value == "0.99"
+    folder = tmp_path / "mail"
+    folder.mkdir()
+    inbox = inbox_of(folder)
+    saved(inbox / "Orderregels.csv", cart_export("0.95"), 0)                                    # a loose export of 10:00
+    attached = saved(folder / "Inkooporderregels.csv", cart_export("0.99"), 5)
+    mail = write_eml(inbox / "20261116T100500_bbbb.eml", subject="Export", attachments=[attached])
+    os.utime(mail, (ten + 300, ten + 300))                                                      # the e-mail of 10:05
+    store = PoStore(folder / "store")
+    r = scan_folder(inbox, store, folder / "cases", EXPORTS, NOW)
+    assert [label for label, _, _ in r.stored_exports] == ["Orderregels.csv", f"{mail.name}/Inkooporderregels.csv"]
+    assert store.as_it_stands("250201").document.lines[0].unit_price.value == "0.99"
+    folder = tmp_path / "tie"                                                                   # the same time: the name decides
+    folder.mkdir()
+    inbox = inbox_of(folder)
+    saved(inbox / "a.csv", cart_export("0.99"), 0)
+    saved(inbox / "b.csv", cart_export("0.95"), 0)
+    store = PoStore(folder / "store")
+    r = scan_folder(inbox, store, folder / "cases", EXPORTS, NOW)
+    assert [label for label, _, _ in r.stored_exports] == ["a.csv", "b.csv"] and first_prices(store) == ["0.99", "0.95"]

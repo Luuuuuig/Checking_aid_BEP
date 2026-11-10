@@ -1,27 +1,35 @@
 """Tests of the pipeline (aid/pipeline.py), with its messages and the end of their wait (and the batch's call of it), and of the upload
 source (aid/sources/upload.py), on the made-up set."""
+import csv
 import hashlib
+import io
 import json
+import os
 from datetime import datetime, timedelta
 from decimal import Decimal
 from email import message_from_bytes, policy
+from pathlib import Path
 
 import pytest
 
+from aid import demo, versioning
 from aid.batch import main as batch_main
 from aid.case import sha256_file
 from aid.decider import PROMPT as DECISION_PROMPT
 from aid.decider import LlmDecider
 from aid.execution.writer import PreparedWriter, RetryingWriter, WriteLog, WriteLogEntry, WriterError
+from aid.madeup.generate import BOLD, GAP, TABLE_NL_COLUMNS, MadeUpSpec, Row, Text, export_csv, pdf_bytes, po_pages
 from aid.messaging import FileMailer, MailerError, SentRecord, file_reply, pending_asks, record_sent
 from aid.pipeline import DISPOSITION_COLUMNS, CaseResult, ReviewItem, escalate_pending, file_answer, read_with_parser, record_dispositions, run_case
-from aid.po_store import PoStore
+from aid.po_store import PoStore, PoVersion
 from aid.readers.llm_client import LlmResponse, ReaderError, RecordedClient
 from aid.readers.supplier_llm import read_supplier_document, reading_request
 from aid.routing import Action, MessageSpec
 from aid.schema import DocValue, SourceRef
 from aid.sources.upload import open_upload_case
+from aid.tests import made_up_batch
 from aid.tests.conftest import REPO_ROOT, SETTINGS, deps, read_csv
+from aid.tests.helpers import ANDERS_LAYOUT, ANDERS_PO, EXPORT_COLUMNS
 
 
 def test_no_difference_closes(tmp_path, madeup_out):
@@ -1018,6 +1026,124 @@ def test_a_cart_is_checked_against_the_po_of_its_export(tmp_path, madeup_out):
     assert r.digest_line == "voorcontrole PO 250202 (S22): ter beoordeling, 2 voorbereide wijzigingen"
 
 
+# --- what a case is matched against: the PDF versions, or the PO as it stands (Task 40) ---
+
+def export_of(path: Path, case_id: str, **first_line: str) -> Path:
+    """The ERP export of the made-up PO of `case_id` (export_csv of the generator: the lines of its latest version), written to
+    `path` with the cells of its first line given in `first_line` (column -> text) replaced."""
+    spec = MadeUpSpec.model_validate_json((REPO_ROOT / "aid" / "madeup" / "spec" / f"{case_id}.json").read_text(encoding="utf-8"))
+    rows = list(csv.reader(io.StringIO(export_csv(spec))))
+    for column, text in first_line.items():
+        rows[1][rows[0].index(column)] = text
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        csv.writer(f, lineterminator="\n").writerows(rows)
+    return path
+
+
+def filed_later(store: PoStore, po_number: str, look: str, seconds: int = 60) -> None:
+    """Make `look` ("e1") of the PO filed `seconds` after the newest po.json of the PO's other folders, so that the order of filing
+    the test needs does not rest on the clock."""
+    folder = store.root / po_number
+    newest = max(path.stat().st_mtime for path in folder.glob("*/po.json") if path.parent.name != look)
+    os.utime(folder / look / "po.json", (newest + seconds, newest + seconds))
+
+
+def test_select_version_gets_the_pdf_versions_for_a_store_of_pdfs(tmp_path, madeup_out, monkeypatch):
+    """For a store that holds only PO PDFs a case is matched against the PDF versions, as before Task 40: select_version gets every
+    version of the PO for a confirmation and the latest alone for a cart, here on PO 250103, which has two PDFs, and step 01 holds
+    every version for both."""
+    given = []
+
+    def spy(doc, versions, decider):
+        given.append(list(versions))
+        return versioning.select_version(doc, versions, decider)
+    monkeypatch.setattr("aid.pipeline.select_version", spy)
+    d = deps(tmp_path, madeup_out)
+    both = d.store.versions("250103")
+    assert [v.version for v in both] == [1, 2] and d.store.snapshots("250103") == []
+    confirmation, r = run(d, madeup_out, "MU03", "250103")
+    cart, cart_result = run(d, madeup_out, "CART01", "250103", kind="cart", document="CART01.html", now=LATER)
+    assert given == [both, both[-1:]] and (r.version.version, cart_result.version.version) == (1, 2)    # MU03 quotes version 1
+    for case in (confirmation, cart):
+        assert [PoVersion.model_validate(v) for v in case.read_step("po_versions")["versions"]] == both
+
+
+def test_the_made_up_batch_writes_the_files_it_wrote(tmp_path, capsys):
+    """A golden comparison (rule 7 of Task 40): the made-up batch, run as python3 -B -m aid.demo runs it, writes the summary and, for
+    each of its 22 cases, the step files, the disposition log and the write log that the code of e26bbb7, before Task 40, wrote. They
+    are held against the record of that run (aid/tests/fixtures/made_up_batch.json, made by aid/tests/made_up_batch.py, whose
+    docstring says how to make it again), by path and by the sha256 of the normalised content. Step 01 of the two carts is included:
+    the look keeps the export's path and its sha256. Only the PO store differs, by design: e1 where it held v1."""
+    run = tmp_path / "run"
+    assert demo.main(["--out", str(run)]) == 0
+    capsys.readouterr()
+    recorded = json.loads(made_up_batch.FIXTURE.read_text(encoding="utf-8"))
+    written = made_up_batch.record(run, REPO_ROOT)
+    assert recorded["commit"] == "e26bbb7" and len(recorded["files"]) == 193
+    assert [name for name in sorted(set(recorded["files"]) | set(written)) if recorded["files"].get(name) != written.get(name)] == []
+    assert len([name for name in written if name.endswith("/steps/08_result.json")]) == 22
+    for po_number in ("250201", "250202"):
+        assert [p.name for p in (run / "po_store" / po_number).iterdir()] == ["e1"]
+
+
+def drawn_po(path: Path, case_id: str, po_number: str) -> Path:
+    """Version 1 of the made-up PO of `case_id` drawn by the generator into `path` under the PO number `po_number`, so that a PO
+    can have a PDF with the lines of another."""
+    spec = MadeUpSpec.model_validate_json((REPO_ROOT / "aid" / "madeup" / "spec" / f"{case_id}.json").read_text(encoding="utf-8"))
+    pages = po_pages(spec, spec.po.versions[0])
+    next(row for row in pages[0] if row.ref == "po_reference").texts[0].text = f"Inkooporder {po_number}"
+    path.write_bytes(pdf_bytes(pages, path.name))
+    return path
+
+
+def test_a_cart_of_a_po_with_a_pdf_and_a_later_look_is_checked_against_the_look(tmp_path, madeup_out):
+    """PO 250201 has a PDF (with MU03's lines) and, filed after it, the look of CART01's export: the look is the PO as it stands. A
+    cart is matched against it alone, and CART01's page agrees with it line by line, while a confirmation of the same PO would get
+    the PDF. Step 01 holds the look alone, read with the PDF's number and supplier, and the findings are taken against it."""
+    d = deps(tmp_path, madeup_out)
+    pdf = d.store.add(drawn_po(tmp_path / "250201.pdf", "MU03", "250201"))
+    [look] = d.store.from_export(madeup_out / "CART01_export.csv", EXPORT_COLUMNS)
+    filed_later(d.store, "250201", "e1")
+    assert d.store.candidates("250201", "confirmation") == [pdf] and (look.version, look.supplier) == (1, "S03")
+    c, r = run(d, madeup_out, "CART01", "250201", kind="cart", document="CART01.html")
+    assert [PoVersion.model_validate(v) for v in c.read_step("po_versions")["versions"]] == [look]
+    assert (r.status, r.version.version, r.findings.version, r.findings.flags, r.findings.uncompared) == ("closed", 1, 1, [], [])
+    assert {line.item_code.value for line in look.document.lines} == {"KM-2101", "KM-2102", "KM-2103"}
+    assert sorted({m.po_line_ids[0] for m in r.findings.matches if m.field == "line_presence"}) == ["1", "2", "3"]
+    assert r.supplier == "S03"
+
+
+def test_a_confirmation_of_a_po_with_an_export_and_one_pdf_selects_the_pdf(tmp_path, madeup_out):
+    """PO 250101 has its PDF and, filed after it, a look from an export whose price of line 1 differs: the look is the PO as it
+    stands, but a confirmation is never matched against an export while its PO has a PDF. MU01 is checked against the PDF version
+    alone, as without the export, and closes."""
+    d = deps(tmp_path, madeup_out)
+    [look] = d.store.from_export(export_of(tmp_path / "MU01_export.csv", "MU01", unit_price="13.75"), EXPORT_COLUMNS)
+    filed_later(d.store, "250101", "e1")
+    [pdf] = d.store.versions("250101")
+    assert d.store.as_it_stands("250101") == look and look.document.lines[0].unit_price.value == "13.75"
+    c, r = run(d, madeup_out, "MU01", "250101")
+    assert (r.status, r.version.version, r.version.reason, r.findings.flags) == ("closed", 1, "single version", [])
+    assert [PoVersion.model_validate(v) for v in c.read_step("po_versions")["versions"]] == [pdf]
+    assert c.read_step("route")["context"]["supplier"] == "S01"
+
+
+def test_a_confirmation_of_a_po_known_from_an_export_only_is_compared_with_it(tmp_path, madeup_out):
+    """A store that knows PO 250108 from an export only: a confirmation of it is matched against its look, the one candidate, which
+    reads as version 1. MU08's price of line 1 (12.70 against the export's 12.50, within the thresholds) is found against it, and the
+    look is what step 01 holds."""
+    d = deps(tmp_path, madeup_out)
+    store = PoStore(tmp_path / "exports_only", d.settings.authorization_limit)
+    d = d.model_copy(update={"store": store})
+    [look] = store.from_export(export_of(tmp_path / "MU08_export.csv", "MU08"), EXPORT_COLUMNS)
+    assert store.versions("250108") == [] and store.candidates("250108", "confirmation") == [look]
+    c, r = run(d, madeup_out, "MU08", "250108")
+    assert (r.version.version, r.version.method, r.version.reason) == (1, "reference", "single version")
+    assert [PoVersion.model_validate(v) for v in c.read_step("po_versions")["versions"]] == [look]
+    assert [(f.field, f.po_line_ids, f.po_value.value, f.doc_value.value) for f in r.findings.flags] == [("price", ["1"], "12.50", "12.70")]
+    assert r.findings.version == 1 and r.supplier == "S08"
+
+
 # --- the readers and the upload ---
 
 def test_the_parser_reader_refuses_what_it_cannot_read(tmp_path, madeup_out, monkeypatch):
@@ -1045,3 +1171,58 @@ def test_open_upload_case(tmp_path, madeup_out):
     assert (unknown.case_id, unknown.kind, unknown.po_number) == ("unknown_20261112T090000", "cart", None)
     with pytest.raises(ValueError, match="unknown case kind"):
         open_upload_case(tmp_path / "cases", [madeup_out / "MU01_conf.pdf"], "250101", "invoice", NOW)
+
+
+# --- a PO read with a layout from the settings ---
+
+def confirmation_of(po, path, prices: dict[str, str] | None = None):
+    """A made-up supplier's confirmation of the stored PO version `po`, drawn at `path` in the layout the parser reads as table_nl:
+    the PO's currency and Incoterm, and each of its lines with the texts the PO prints, the price of a line in `prices` (line id ->
+    text) replaced. The Per column stays empty: this supplier prints no price basis."""
+    doc = po.document
+    rows = [Row([Text(0, po.supplier, BOLD, 14)]), Row([Text(0, "Orderbevestiging", BOLD, 12)]),
+            Row([Text(0, f"Uw inkooporder {po.po_number}")]), Row([Text(0, "Datum: 05-11-2026")]),
+            Row([Text(0, f"Valuta: {doc.currency.text}")]), Row([Text(0, f"Leveringsvoorwaarden: {doc.incoterm.text}")]),
+            Row([Text(column.x, column.title, BOLD) for column in TABLE_NL_COLUMNS], gap=GAP, rule=True)]
+    for line in doc.lines:
+        texts = {"line_id": line.line_id, "item_code": line.item_code.text, "description": line.description.text,
+                 "quantity": line.quantity.text, "unit": line.unit.text, "delivery_date": line.delivery_date.text,
+                 "unit_price": (prices or {}).get(line.line_id, line.unit_price.text)}
+        rows.append(Row([Text(column.x, texts[column.field]) for column in TABLE_NL_COLUMNS if column.field in texts]))
+    path.write_bytes(pdf_bytes([rows], path.name))
+    return path
+
+
+def test_a_confirmation_without_a_basis_is_compared_with_a_po_whose_prices_are_per_piece(tmp_path, madeup_out):
+    """The second made-up PO prints no price basis and is filed with its layout, which says that every price is per one unit. Its lines
+    keep an empty price basis, so the prices of a confirmation that prints none are compared: the one that differs within the
+    thresholds is taken over (R04, which counts a line without a basis as per one) and the case closes. The total is known, so the
+    PO is known not to be above the authorization. A made-up PO shows the other side: its lines print their basis, and the prices of
+    a confirmation without one are then left uncompared, which is what a basis written into the lines would do to every case."""
+    d = deps(tmp_path, madeup_out)
+    po = d.store.add(ANDERS_PO, ANDERS_LAYOUT)
+    assert (po.total, po.above_authorization) == (Decimal("4417.85"), False) and all(line.price_basis.missing for line in po.document.lines)
+    document = confirmation_of(po, tmp_path / "anders_conf.pdf", prices={"1": "12,70"})     # 12,50 on the PO: 1.6 percent, 2,00 on the line
+    c = open_upload_case(d.settings.cases_root, [document], po.po_number, "confirmation", NOW)
+    r = run_case(c, d)
+    assert r.status == "closed" and r.error is None
+    assert (r.version.version, r.version.reason, r.supplier) == (1, "single version", "Proefleverancier S23")
+    assert r.findings.uncompared == []
+    assert [(f.field, f.po_line_ids, f.po_value.value, f.doc_value.value, f.detail) for f in r.findings.flags] == [
+        ("price", ["1"], "12.50", "12.70", "different")]
+    assert [m.po_line_ids for m in r.findings.matches if m.field == "price"] == [[str(n)] for n in range(2, 13)]     # eleven prices agree
+    assert len(r.findings.matches) == 60                                         # five items a line but for one price, and the Incoterm
+    assert [(a.rule_id, a.route) for a in r.actions] == [("R04", "AUTO"), ("R01", "AUTO")] and r.review_items == [] and r.messages == []
+    assert [(e.op.kind, e.op.line_id, e.previous, e.new) for e in r.write_entries[:2]] == [
+        ("po_line_price", "1", "12.50", "12.70"), ("article_price", None, None, "12.70")]
+    context = c.read_step("route")["context"]
+    assert (context["po_basis"], context["po_above_authorization"], context["po_item_code"]["1"]) == ({}, False, "KM-2301")
+    assert c.read_step("po_versions")["versions"][0]["document"]["reader"] == "po_pdf:layout"
+
+    made_up = d.store.versions("250108")[0]                                      # a made-up PO: every line prints its basis
+    assert [line.price_basis.value for line in made_up.document.lines] == ["1", "1"]
+    c2 = open_upload_case(d.settings.cases_root, [confirmation_of(made_up, tmp_path / "250108_conf.pdf")], "250108", "confirmation", NOW)
+    r2 = run_case(c2, d)
+    assert [(u.field, u.po_line_ids, u.reason) for u in r2.findings.uncompared] == [
+        ("price", ["1"], "unknown price basis"), ("price", ["2"], "unknown price basis")]
+    assert r2.status == "review" and r2.write_entries == []

@@ -11,9 +11,12 @@ The launcher starts the runner (python -m aid.runner), the review page (python -
 (python -m aid.capture_server) as child processes, with the Python that runs the launcher itself (its full path, because on Windows
 the word "python" may be a placeholder that does nothing), with the folder that holds the package aid as their working folder, the
 settings file by its absolute path, stdin closed, and no console window on Windows. Their environment is the launcher's own plus
-PYTHONIOENCODING=utf-8 and PYTHONUNBUFFERED=1, so that each part's output file holds every line at once and in one encoding. Each
-part's output is appended to <settings folder>/logs/runner.out, review.out or capture.out; the launcher's own lines, with the time,
-go to logs/start.log and to stdout when there is one (under pythonw there is none).
+PYTHONIOENCODING=utf-8 and PYTHONUNBUFFERED=1, and each is started with -X utf8 -u, so that each part's output file holds every
+line at once and in one encoding also under a Python that does not read those two variables. A launcher that runs isolated (-I, as
+every Python of the aid from a folder does, aid/portable.py) starts its parts with -I as well, and so does its start at logon, so that
+the user's own site-packages and Python's environment variables never reach them. Each part's output is appended to
+<settings folder>/logs/runner.out, review.out or capture.out; the launcher's own lines, with the time, go to logs/start.log and to
+stdout when there is one (under pythonw there is none).
 
 A launcher started in a window lives in that window, and says so first: closing the window ends it. --background makes the checks
 of a start in the window, so that the reason is read there when nothing is started, and then starts the launcher apart from the
@@ -140,6 +143,10 @@ SAME_REQUEST = 1.0                               # a signal within this time of 
 LEFT_RUNNER_GRACE = 5.0                          # seconds beyond its poll time a runner that may be left behind gets to end by STOP
 CHECK_TIMEOUT = 2.0                              # seconds each address gets to answer
 ADDRESSES = {"review": "http://127.0.0.1:7860/", "capture": "http://127.0.0.1:7870/health"}   # fixed: one launcher runs on a PC
+# UTF-8 and no buffering, on each part's command line, for a Python that does not read PYTHONIOENCODING and PYTHONUNBUFFERED, which
+# the parts' environment holds for any other: one started with -I, as the parts of a launcher that runs isolated are (_isolated).
+PART_OPTIONS = ("-X", "utf8", "-u")
+ISOLATED = "-I"                                  # the user's own site-packages and Python's environment variables left out
 SHORTCUT = "Inkoopassistent"
 STOPPED = "stopped by the STOP file: delete it, or use --resume"
 WINDOW = "the launcher runs in this window: closing the window stops the parts (use --background to run it without a window)"
@@ -178,14 +185,26 @@ def _number(value: float) -> str:
     return f"{value:g}"
 
 
+def _isolated() -> bool:
+    """Whether this Python runs isolated (-I): the launcher of the aid from a folder does (aid/portable.py), a launcher of a copy of
+    the repository does not, and its parts find the package aid through their working folder, which -I would leave out."""
+    return bool(sys.flags.isolated)
+
+
+def _python_options(*options: str) -> list[str]:
+    """The options before -m: -I first when the launcher runs isolated (_isolated), then these."""
+    return [ISOLATED, *options] if _isolated() else list(options)
+
+
 def commands(settings_file: Path, testshop: bool, poll_seconds: float | None, python: str) -> dict[str, list[str]]:
-    """The three child commands, with the settings file by its absolute path."""
-    settings = str(Path(settings_file).resolve())
-    runner = [python, "-m", "aid.runner", "--settings", settings]
+    """The three child commands, with the settings file by its absolute path, each started with -X utf8 -u (see PART_OPTIONS),
+    and with -I when the launcher runs isolated."""
+    settings, options = str(Path(settings_file).resolve()), _python_options(*PART_OPTIONS)
+    runner = [python, *options, "-m", "aid.runner", "--settings", settings]
     if poll_seconds is not None:
         runner += ["--poll-seconds", _number(poll_seconds)]
-    capture = [python, "-m", "aid.capture_server", "--settings", settings] + (["--testshop"] if testshop else [])
-    return {"runner": runner, "review": [python, "-m", "aid.review", "--settings", settings], "capture": capture}
+    capture = [python, *options, "-m", "aid.capture_server", "--settings", settings] + (["--testshop"] if testshop else [])
+    return {"runner": runner, "review": [python, *options, "-m", "aid.review", "--settings", settings], "capture": capture}
 
 
 def _print(line: str) -> None:
@@ -1097,14 +1116,16 @@ def startup_folder() -> Path:
 
 def _launcher(settings_file: Path, testshop: bool, python: Path, poll_seconds: float | None = None) -> dict:
     """How the launcher is started without a window: target (pythonw.exe beside python when it exists, else python), arguments
-    (one text), argv (the same as a list) and working_folder (the folder that holds the package)."""
+    (one text), argv (the same as a list; with -I first when this launcher runs isolated) and working_folder (the folder that holds
+    the package)."""
     python = Path(python)
     pythonw = python.with_name("pythonw.exe")
     settings = str(Path(settings_file).resolve())
     options = (["--testshop"] if testshop else []) + (["--poll-seconds", _number(poll_seconds)] if poll_seconds is not None else [])
+    first = _python_options()
     return {"target": str(pythonw) if pythonw.is_file() else str(python),
-            "arguments": " ".join(["-m", "aid.start", "--settings", f'"{settings}"', *options]),
-            "argv": ["-m", "aid.start", "--settings", settings, *options], "working_folder": str(PACKAGE_PARENT)}
+            "arguments": " ".join([*first, "-m", "aid.start", "--settings", f'"{settings}"', *options]),
+            "argv": [*first, "-m", "aid.start", "--settings", settings, *options], "working_folder": str(PACKAGE_PARENT)}
 
 
 def autostart_shortcut(settings_file: Path, testshop: bool, python: Path, poll_seconds: float | None = None, *,

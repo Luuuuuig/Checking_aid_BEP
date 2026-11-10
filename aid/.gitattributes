@@ -1,0 +1,7 @@
+# The made-up documents and the test files are bytes that a checkout must never change: no line ends converted on Windows.
+*.pdf binary
+*.png binary
+*.xlsx binary
+*.eml -text
+*.csv -text
+*.html -text

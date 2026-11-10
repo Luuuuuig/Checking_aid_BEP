@@ -9,6 +9,8 @@ the answer.
   (in Colab, from Colab Secrets). It streams the answer, because the model's thinking counts toward max_tokens and a long
   answer then needs a limit the SDK allows only on a stream. It never logs or keeps the document. It also counts the input tokens
   of a request without running the model (count_tokens), which is how the bake-off estimates its cost before it spends any.
+  The SDK is the development client's own library: the aid from a folder (aid/portable.py) is built without it, so this module
+  imports without it, with the name anthropic None, and the client raises ReaderError when it is used.
 - RecordedClient replays recorded answers, one JSON file per request named by the request's digest, so that no test calls
   the model. Given a live client, it sends a request it has no answer for and records the answer.
 """
@@ -21,7 +23,10 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Protocol
 
-import anthropic
+try:
+    import anthropic
+except ImportError:                              # the aid from a folder has no development client; the name stays for the tests
+    anthropic = None
 
 
 @dataclass
@@ -156,6 +161,8 @@ class AnthropicClient:
 
     def _client(self):
         if self._sdk is None:
+            if anthropic is None:
+                raise ReaderError("the anthropic package is not installed: this Python cannot use the development client")
             self._sdk = anthropic.Anthropic()
         return self._sdk
 

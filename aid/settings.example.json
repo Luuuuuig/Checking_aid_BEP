@@ -39,6 +39,8 @@
   "export_columns": {},
   "export_decimal_comma": false,
   "export_fill_down": false,
+  "po_layout": null,
+  "po_senders": [],
   "review_url": "http://localhost:7860",
   "capture_token": null
 }

@@ -1,7 +1,9 @@
 """Tests of the review page (aid/review): the cases that wait for the buyer, one case as the page shows it, the buyer's decisions, the
 close and the undo, the strings of the page, the construction of the page and its command, on the made-up set."""
 import json
+import os
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -13,10 +15,12 @@ from typing import get_args
 
 import pytest
 
+from aid.case import load_case
 from aid.comparison import Detail, Findings, Flag, Reason
 from aid.execution.writer import PreparedWriter, RetryingWriter, WriteLog, WriteLogEntry, WriterError
 from aid.messaging import FileMailer
 from aid.pipeline import CaseResult, ReviewItem, escalate_pending, run_case
+from aid.po_store import PoStore
 from aid.readers.pdf_text import render_page
 from aid.review.__main__ import company_values
 from aid.review.__main__ import main as review_main
@@ -611,6 +615,28 @@ def test_refuse_share_accepts_the_made_up_settings(tmp_path):
     assert refuse_share(MADE_UP.model_copy(update={"buyer_email": "buyer@example.net"})) is not None
 
 
+def test_a_layout_or_a_sender_list_refuses_the_share_link(tmp_path, capsys):
+    """The layout of the PO PDF and the senders of the PO e-mails are set on the company side from the company's own documents: with
+    either in the settings a public share link is refused, by the name of the setting and never by a word of the layout."""
+    layout = {"po_label": "Bestelnummer", "title_row": ["Hoeveelheid", "Artikelcode"], "columns": ["quantity", "item_code"]}
+    made_up = MADE_UP.model_dump()
+    assert company_values(MADE_UP.model_validate(made_up | {"po_layout": layout})) == ["po_layout is set"]
+    assert company_values(MADE_UP.model_validate(made_up | {"po_senders": ["inkoop@example.org"]})) == ["po_senders is not empty"]
+    both = made_up | {"po_layout": layout, "po_senders": ["example.org"], "exact_base_url": "https://erp.example.com"}
+    both = MADE_UP.model_validate(both)
+    assert company_values(both) == ["exact_base_url is set", "po_layout is set", "po_senders is not empty"]
+    reason = refuse_share(both)
+    assert reason is not None and "internal use only" in reason
+    assert not any(word in reason for word in ("Bestelnummer", "Hoeveelheid", "example.org"))
+    assert company_values(MADE_UP) == [] and refuse_share(MADE_UP.model_copy(update={"po_layout": None, "po_senders": []})) is None
+    example = json.loads((REPO_ROOT / "aid" / "settings.example.json").read_text(encoding="utf-8"))
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps(example | {"po_layout": layout, "cases_root": str(tmp_path / "cases")}), encoding="utf-8")
+    assert review_main(["--settings", str(path), "--share"]) == 2
+    err = capsys.readouterr().err
+    assert "po_layout is set" in err and "Bestelnummer" not in err and not (tmp_path / "cases").exists()
+
+
 def test_share_is_refused_with_the_reason(tmp_path, capsys):
     example = json.loads((REPO_ROOT / "aid" / "settings.example.json").read_text(encoding="utf-8"))
     path = tmp_path / "settings.json"
@@ -685,10 +711,11 @@ def test_the_page_reads_the_query_on_load(tmp_path, madeup_out):
     entry_id = r.write_entries[1].entry_id
     app = build_app(d)
     [opened] = [f.fn for f in app.fns.values() if getattr(f.fn, "__name__", "") == "opened"]
-    choice, wanted = opened("nl", SimpleNamespace(query_params={"case": closed.case_id, "undo": entry_id}))
+    choice, wanted, selected = opened("nl", SimpleNamespace(query_params={"case": closed.case_id, "undo": entry_id}))
     assert choice["value"] == closed.case_id and closed.case_id in [value for _, value in choice["choices"]] and wanted == entry_id
-    choice, wanted = opened("nl", SimpleNamespace(query_params={}))
-    assert choice["value"] is None and wanted is None
+    assert selected == {"__type__": "update"}                  # the tab of the review stays the one shown
+    choice, wanted, selected = opened("nl", SimpleNamespace(query_params={}))
+    assert choice["value"] is None and wanted is None and selected == {"__type__": "update"}
 
 
 def test_prepared_entries_are_not_offered_for_undo(tmp_path, madeup_out):
@@ -776,3 +803,161 @@ def test_the_message_record_of_a_close_counts_a_refused_copy(tmp_path, madeup_ou
     [message] = r2.messages
     assert message["status"] == "sent" and message["refused_cc"] == 1
     assert c.read_step("close")["records"][-1]["messages"][0]["refused_cc"] == 1
+
+
+# --- the page's temporary files (Task 30) ---
+
+TEMPORARY = """
+import json, os, sys
+import aid.review.__main__ as review
+
+seen = {}
+
+class Page:
+    def launch(self, **options):
+        seen["launched"] = True
+
+def build_app(deps, **options):
+    seen["folder"] = os.environ.get("GRADIO_TEMP_DIR")
+    seen["no_proxy"] = [os.environ.get("NO_PROXY"), os.environ.get("no_proxy")]
+    seen["gradio"] = "gradio" in sys.modules              # the page library is imported in build_app, after the folder is named
+    return Page()
+
+review.build_app, review.launch_options = build_app, lambda page, share: {}
+seen["code"] = review.main(["--settings", sys.argv[1]])
+print(json.dumps(seen))
+"""
+
+
+def test_the_page_keeps_its_temporary_files_under_the_cases_root(tmp_path, madeup_out):
+    """The page library keeps an uploaded file and the page images of a document in its temporary folder: <cases_root>/tmp, named
+    in GRADIO_TEMP_DIR before the library is imported and emptied when the page starts, unless the environment names a folder
+    already. The command runs in a fresh interpreter, as the launcher starts it, with build_app replaced so that no page is built."""
+    example = json.loads((REPO_ROOT / "aid" / "settings.example.json").read_text(encoding="utf-8"))
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps(example | {"reader": "parser"}), encoding="utf-8")
+    left = tmp_path / "cases" / "tmp" / "0a1b2c" / "page_1.png"            # left by a page that was ended without its own clean-up
+    left.parent.mkdir(parents=True)
+    left.write_bytes(PNG)
+    working = tmp_path / "cases" / "tmp" / "work" / "aid_mailbox_x" / "MU07_conf.pdf"     # the runner's, while it scans the inbox
+    working.parent.mkdir(parents=True)
+    working.write_bytes(b"%PDF")
+    environment = {name: value for name, value in os.environ.items() if name != "GRADIO_TEMP_DIR" and not name.lower().endswith("_proxy")}
+    environment["NO_PROXY"] = "intranet.example.com"                       # what the environment holds there is kept
+
+    def review_command(**more) -> dict:
+        done = subprocess.run([sys.executable, "-B", "-c", TEMPORARY, str(path)], cwd=REPO_ROOT, env=environment | more,
+                              capture_output=True, text=True, timeout=120)
+        assert done.returncode == 0, done.stderr
+        return json.loads(done.stdout.splitlines()[-1])
+
+    seen = review_command()
+    assert seen == {"folder": str(tmp_path / "cases" / "tmp"), "gradio": False, "launched": True, "code": 0,
+                    "no_proxy": ["intranet.example.com,127.0.0.1,localhost", "127.0.0.1,localhost"]}     # no proxy for the page itself
+    assert sorted(path.name for path in (tmp_path / "cases" / "tmp").iterdir()) == ["work"] and working.is_file()     # the work stays
+    # a folder the environment names is the one used, and it is not emptied
+    own = tmp_path / "own temporary folder"
+    own.mkdir()
+    (own / "kept.txt").write_text("another program's", encoding="utf-8")
+    left.parent.mkdir(parents=True)
+    left.write_bytes(PNG)
+    assert review_command(GRADIO_TEMP_DIR=str(own))["folder"] == str(own)
+    assert (own / "kept.txt").is_file() and left.is_file()
+    # the page removes a temporary file an hour after it was made: every hour, the files older than an hour
+    assert build_app(deps(tmp_path, madeup_out)).delete_cache == (3600, 3600)
+
+
+def test_a_moved_folder_keeps_its_purchase_order_pages(tmp_path, madeup_out):
+    """The aid from a folder may be moved (MANUAL 3.16). The store gives a PDF version's pdf_path as the po.pdf in the version's own
+    folder under its current root, whatever po.json holds, and the page looks the selected version of a case up in the current
+    store when the path of step 01 is not there. Nothing written changes, and in place every path reads as stored."""
+    before = tmp_path / "before"
+    store = PoStore(before / "po_store", SETTINGS.authorization_limit)
+    store.add(madeup_out / "MU07_po_v1.pdf")
+    d = deps(before, madeup_out).model_copy(update={"store": store})
+    c, r = run(d, madeup_out, "MU07", "250107")
+    stored = before / "po_store" / "250107" / "v1" / "po.json"
+    assert store.versions("250107")[0].pdf_path == Path(json.loads(stored.read_text(encoding="utf-8"))["pdf_path"])     # in place
+    assert len(load_case_view(c).po_pages) == 1
+    written = {path.relative_to(before): path.read_bytes() for path in before.rglob("*.json")}
+    shutil.move(str(before), str(tmp_path / "after"))
+    after = tmp_path / "after"
+    moved_store = PoStore(after / "po_store", SETTINGS.authorization_limit)
+    assert moved_store.versions("250107")[0].pdf_path == after / "po_store" / "250107" / "v1" / "po.pdf"
+    moved = load_case(after / "cases", c.case_id)
+    assert load_case_view(moved).po_pages == []                          # the path of step 01 names the folder before the move
+    view = load_case_view(moved, moved_store)
+    assert len(view.po_pages) == 1 and len(view.doc_pages) == 1
+    # the page itself, built on the moved folder
+    moved_deps = d.model_copy(update={"store": moved_store, "settings": d.settings.model_copy(update={"cases_root": after / "cases"})})
+    [show] = [f.fn for f in build_app(moved_deps).fns.values() if getattr(f.fn, "__name__", "") == "show"]
+    shown = show(c.case_id, "nl")
+    assert len(shown[1]) == 1 and len(shown[2]) == 1                     # the supplier's document and the PO, a page each
+    assert {path.relative_to(after): path.read_bytes() for path in after.rglob("*.json")} == written     # nothing written changed
+
+
+def test_a_look_from_an_export_that_is_gone_shows_no_purchase_order_pages(tmp_path, madeup_out):
+    """A cart is matched against a look from an export (aid/po_store.py), which the store gives with the number of the PO's latest
+    PDF version and which names its export, not a copy in the store. The page shows no pages of an export, and when the export is
+    gone it shows none either: the lookup for a moved folder is for the store's own copy of a PDF (po.pdf), so it never gives the
+    pages of the PDF version that has the look's number."""
+    from aid.tests.helpers import EXPORT_COLUMNS
+    from aid.tests.test_pipeline import drawn_po, filed_later
+    d = deps(tmp_path, madeup_out)
+    pdf = d.store.add(drawn_po(tmp_path / "250201.pdf", "MU03", "250201"))
+    export = tmp_path / "exports" / "CART01_export.csv"
+    export.parent.mkdir()
+    shutil.copy(madeup_out / "CART01_export.csv", export)
+    [look] = d.store.from_export(export, EXPORT_COLUMNS)
+    filed_later(d.store, "250201", "e1")
+    c = open_upload_case(d.settings.cases_root, [madeup_out / "CART01.html"], "250201", "cart", NOW)
+    run_case(c, d)
+    assert [v["pdf_path"] for v in c.read_step("po_versions")["versions"]] == [str(export)]          # step 01 holds the look
+    assert (look.version, pdf.version, d.store.snapshots("250201")[0].pdf_path) == (1, 1, export)    # a look keeps its export's path
+    assert load_case_view(c, d.store).po_pages == []
+    export.unlink()
+    assert load_case_view(c, d.store).po_pages == [] and load_case_view(c, d.store).doc_pages == []   # an HTML cart has no pages
+
+
+# --- no proxy between the aid and its own pages (Task 30) ---
+
+def test_the_review_command_lets_no_proxy_stand_between_the_page_library_and_the_page():
+    """127.0.0.1 and localhost are added to NO_PROXY and no_proxy, each keeping what it holds. Python takes the PC's own proxy from
+    the system (Windows, macOS) only while the environment names no proxy at all, and NO_PROXY is such a name: so when the
+    environment named none, the system's http and https proxies are written into it too, and every other address keeps the proxy
+    it had. An environment that names a proxy keeps it as it is."""
+    from aid.review.__main__ import own_hosts_without_proxy
+    environ = {}
+    own_hosts_without_proxy(environ, system_proxies=lambda: {})
+    assert environ == {"NO_PROXY": "127.0.0.1,localhost", "no_proxy": "127.0.0.1,localhost"}
+    own_hosts_without_proxy(environ, system_proxies=lambda: {})
+    assert environ == {"NO_PROXY": "127.0.0.1,localhost", "no_proxy": "127.0.0.1,localhost"}         # a second time adds nothing
+    environ = {"NO_PROXY": "intranet.example.com, .corp.example.org,", "no_proxy": "LOCALHOST", "HTTPS_PROXY": "http://proxy.example.com:3128"}
+    own_hosts_without_proxy(environ, system_proxies=lambda: {"http": "http://other.example.com:8080"})
+    assert environ == {"NO_PROXY": "intranet.example.com, .corp.example.org,127.0.0.1,localhost", "no_proxy": "LOCALHOST,127.0.0.1",
+                       "HTTPS_PROXY": "http://proxy.example.com:3128"}
+    environ = {}
+    system = {"http": "http://proxy.example.com:8080", "https": "http://proxy.example.com:8080", "ftp": "http://proxy.example.com:8080"}
+    own_hosts_without_proxy(environ, system_proxies=lambda: system)
+    assert environ == {"http_proxy": "http://proxy.example.com:8080", "https_proxy": "http://proxy.example.com:8080",
+                       "NO_PROXY": "127.0.0.1,localhost", "no_proxy": "127.0.0.1,localhost"}
+
+
+def test_the_page_librarys_request_to_its_own_address_goes_past_the_proxy(monkeypatch):
+    """The page library asks its own start-up address (http://127.0.0.1:<port>/) with httpx once it is started. A proxy of the PC
+    cannot reach this PC's 127.0.0.1, so through it that request fails and the page ends: here a proxy of the environment that
+    nothing listens on stands for it. After own_hosts_without_proxy the same request goes to the page itself."""
+    import httpx
+
+    from aid.review.__main__ import own_hosts_without_proxy
+    from aid.tests.helpers import local_page, unreachable_proxy, without_proxies
+    without_proxies(monkeypatch)
+    monkeypatch.setenv("http_proxy", unreachable_proxy())
+    for name in ("NO_PROXY", "no_proxy"):                       # recorded, so that what the call adds is undone after the test
+        monkeypatch.setenv(name, "")
+    with local_page() as url:
+        with pytest.raises(httpx.HTTPError):
+            httpx.get(url, timeout=5)
+        own_hosts_without_proxy()
+        assert httpx.get(url, timeout=5).status_code == 200
+        assert httpx.get(url.replace("127.0.0.1", "localhost"), timeout=5).status_code == 200

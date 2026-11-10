@@ -3,6 +3,7 @@ import csv
 import json
 import shutil
 from datetime import datetime
+from decimal import Decimal
 
 import pytest
 
@@ -10,6 +11,7 @@ from aid.batch import SUMMARY_COLUMNS, main
 from aid.madeup.generate import TRYOUT_EXPORT_COLUMNS, MadeUpSpec, export_csv
 from aid.po_store import EXPORT_FIELDS, PoStore
 from aid.tests.conftest import REPO_ROOT, SETTINGS, read_csv
+from aid.tests.helpers import ANDERS_LAYOUT, ANDERS_PO, MADEUP_LAYOUT
 
 
 def test_batch_summary(tmp_path, madeup_out):
@@ -152,10 +154,10 @@ def test_the_batch_passes_the_export_settings(tmp_path):
                      "--out", str(tmp_path / name / "summary.csv")])
 
     def filed(name: str) -> list[tuple]:
-        """Each version the store of the run holds for the two POs of the export, with the id, item code and quantity of its lines."""
-        versions = [v for number in ("250301", "250302") for v in PoStore(tmp_path / name / "store").versions(number)]
+        """Each look the store of the run holds at the two POs of the export, with the id, item code and quantity of its lines."""
+        looks = [look for number in ("250301", "250302") for look in PoStore(tmp_path / name / "store").snapshots(number)]
         return [(v.po_number, v.version, v.supplier, v.document.reader,
-                 [(line.line_id, line.item_code.value, line.quantity.value) for line in v.document.lines]) for v in versions]
+                 [(line.line_id, line.item_code.value, line.quantity.value) for line in v.document.lines]) for v in looks]
 
     with pytest.raises(ValueError, match=r"^NL_export\.csv, row 5: an item code without a PO number$"):
         run("defaults")
@@ -168,7 +170,8 @@ def test_the_batch_passes_the_export_settings(tmp_path):
 
 
 def test_the_batch_files_the_po_pdfs_before_the_exports(tmp_path, madeup_out):
-    """A PO with a PDF and rows in an export: the PDF, which prints its version, is version 1, and the export the next version."""
+    """A PO with a PDF and rows in an export: the PDF, which prints its version, is version 1, and the export, filed after it, a look
+    beside it, which reads with the PDF's number and supplier (rewritten by Task 40, by design: the export was the next version)."""
     po_dir = tmp_path / "po"
     po_dir.mkdir()
     shutil.copy2(madeup_out / "MU01_po_v1.pdf", po_dir)
@@ -178,8 +181,11 @@ def test_the_batch_files_the_po_pdfs_before_the_exports(tmp_path, madeup_out):
     cases.write_text("case_id,document,po_number,kind\n", encoding="utf-8")
     assert main(["--cases", str(cases), "--po-dir", str(po_dir), "--settings", str(write_settings(tmp_path)), "--reader", "parser",
                  "--out", str(tmp_path / "summary.csv")]) == 0
-    assert [(v.version, v.document.reader, v.pdf_path.name) for v in PoStore(tmp_path / "store").versions("250101")] == [
-        (1, "po_pdf:po_madeup", "po.pdf"), (2, "export:MU01_export.csv", "MU01_export.csv")]
+    store = PoStore(tmp_path / "store")
+    assert [(v.version, v.document.reader, v.pdf_path.name) for v in store.versions("250101")] == [(1, "po_pdf:po_madeup", "po.pdf")]
+    assert [(look.version, look.supplier, look.document.reader, look.pdf_path.name) for look in store.snapshots("250101")] == [
+        (1, "S01", "export:MU01_export.csv", "MU01_export.csv")]
+    assert store.filed_at("250101", "e1") >= store.filed_at("250101", "v1")
 
 
 def test_a_case_that_cannot_be_opened_fails_in_its_row(tmp_path, madeup_out):
@@ -246,3 +252,59 @@ def test_a_case_without_a_po_number_runs_and_goes_to_review(tmp_path, madeup_out
     assert (row["case_id"], row["status"], row["version"], row["actions"], row["error"]) == ("X1", "review", "", "R09 REVIEW", "")
     [case] = (tmp_path / "cases").glob("unknown_*")
     assert json.loads((case / "steps" / "08_result.json").read_text(encoding="utf-8"))["digest_line"] == "PO onbekend (S01): ter beoordeling, geen schrijfacties"
+
+
+def test_the_batch_reads_po_pdfs_with_the_layout_of_the_settings(tmp_path, madeup_out):
+    """With a layout in the settings the batch files every PO PDF of --po-dir with it: the second made-up PO under its own layout,
+    and a made-up PO under the made-up layout. A PO PDF the layout does not fit stops the batch before any case runs, as any file the
+    store refuses does, and so does the second made-up PO without a layout: the template of the made-up layout finds no PO number
+    in it."""
+    po_dir = tmp_path / "po"
+    po_dir.mkdir()
+    shutil.copy2(ANDERS_PO, po_dir)
+    cases, out = write_cases(tmp_path, madeup_out, ["MU01"]), tmp_path / "summary.csv"
+
+    def run(name: str, layout) -> int:
+        settings = tmp_path / f"{name}.json"
+        settings.write_text(SETTINGS.model_copy(update={"cases_root": tmp_path / name / "cases", "po_store_root": tmp_path / name / "store",
+                                                        "po_layout": layout}).model_dump_json(), encoding="utf-8")
+        return main(["--cases", str(cases), "--po-dir", str(po_dir), "--settings", str(settings), "--reader", "parser", "--out", str(out)])
+
+    with pytest.raises(ValueError, match=r"^ANDERS_po_v1\.pdf: no PO number found, so the PDF cannot be filed$"):
+        run("none", None)                                    # no layout: the template of the made-up layout, as before
+    assert not (tmp_path / "none" / "store").exists() and not (tmp_path / "none" / "cases").exists()
+    assert run("anders", ANDERS_LAYOUT) == 0                 # MU01's PO is not in the folder: its case runs and finds no version
+    [version] = PoStore(tmp_path / "anders" / "store").versions("IB-2600417")
+    assert (version.version, version.document.reader, version.total) == (1, "po_pdf:layout", Decimal("4417.85"))
+    assert [(row["case_id"], row["status"], row["actions"]) for row in read_csv(out)] == [("MU01", "review", "R09 REVIEW")]
+    shutil.copy2(madeup_out / "MU01_po_v1.pdf", po_dir)
+    with pytest.raises(ValueError, match=r"^MU01_po_v1\.pdf: the PDF does not fit the purchase order layout"):
+        run("mixed", ANDERS_LAYOUT)                          # sorted after ANDERS_po_v1.pdf, which was filed before the batch stopped
+    assert not (tmp_path / "mixed" / "cases").exists() and len(PoStore(tmp_path / "mixed" / "store").versions("IB-2600417")) == 1
+    (po_dir / "ANDERS_po_v1.pdf").unlink()
+    assert run("madeup", MADEUP_LAYOUT) == 0
+    [version] = PoStore(tmp_path / "madeup" / "store").versions("250101")
+    assert (version.document.reader, read_csv(out)[0]["status"], read_csv(out)[0]["version"]) == ("po_pdf:layout", "closed", "1")
+
+
+def test_a_layout_is_tried_on_one_sample_po_with_a_cases_file_of_its_header_row(tmp_path):
+    """The manual's way to try a layout before it is used (section 3.12): a copy of the settings with a scratch store, a folder with
+    one sample PO named like <name>_po_v1.pdf, and a cases file that holds its header row only. The batch runs no case and files the
+    sample; the reading is in po_store/<PO>/v1/po.json, each value with its printed text."""
+    sample = tmp_path / "sample"
+    sample.mkdir()
+    shutil.copy2(ANDERS_PO, sample / ANDERS_PO.name)
+    cases = tmp_path / "cases.csv"
+    cases.write_text("case_id,document,po_number,kind\n", encoding="utf-8")
+    scratch = tmp_path / "scratch"
+    settings = tmp_path / "settings.json"
+    settings.write_text(SETTINGS.model_copy(update={"cases_root": scratch / "cases", "po_store_root": scratch / "po_store",
+                                                    "po_layout": ANDERS_LAYOUT}).model_dump_json(), encoding="utf-8")
+    out = tmp_path / "summary.csv"
+    assert main(["--cases", str(cases), "--po-dir", str(sample), "--settings", str(settings), "--reader", "parser", "--out", str(out)]) == 0
+    assert read_csv(out) == []
+    reading = json.loads((scratch / "po_store" / "IB-2600417" / "v1" / "po.json").read_text(encoding="utf-8"))
+    first = reading["document"]["lines"][0]
+    assert (reading["po_number"], reading["document"]["reader"], len(reading["document"]["lines"])) == ("IB-2600417", "po_pdf:layout", 12)
+    assert [(first[field]["text"], first[field]["value"]) for field in ("item_code", "quantity", "unit_price")] == [
+        ("KM-2301", "KM-2301"), ("10", "10"), ("12,50", "12.50")]

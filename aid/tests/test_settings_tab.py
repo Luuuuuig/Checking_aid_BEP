@@ -1,9 +1,11 @@
 """Tests of the settings tab of the review page (aid/review/page.py, its strings in aid/review/i18n.py) and of the six settings it
 writes (aid/settings.py). The sign-in is a fake msal application and Microsoft Graph is FakeSession (aid/tests/fakes.py): no test
 opens a browser or reaches the network."""
+import hashlib
 import json
 import os
 import re
+import shutil
 import stat
 from datetime import datetime
 from decimal import Decimal
@@ -15,14 +17,20 @@ import requests
 
 from aid.connections.microsoft import COPILOT_SCOPES, MAIL_SCOPES, SHARED_SCOPES, MicrosoftAccount
 from aid.connections.secrets import SecretStore
+from aid.madeup.generate import TRYOUT_PO_LAYOUT, Row, Text, pdf_bytes, tryout_po_pages
+from aid.po_store import PoStore
 from aid.review.__main__ import company_values, refuse_share
 from aid.review.buyer_settings import BUYER_FIELDS, SUPPLIER_FIELDS, supplier_rows
+from aid.review.exact_settings import FORM as EXACT_FORM
+from aid.review.exact_settings import MEANINGS, SLOTS, line_headers, page_lines
 from aid.review.i18n import STRINGS
 from aid.review.page import NEW_SUPPLIER, build_app, import_gradio
 from aid.settings import Settings, SettingsInvalid, is_address, load_settings, read_settings, update_settings_file
+from aid.sources.mailbox import scan_folder
 from aid.tests.conftest import SETTINGS, ReachedMicrosoft, deps
 from aid.tests.fakes import (ACCESS_TOKEN, CLIENT_ID, COPILOT, GRAPH, TENANT_ID, USERNAME, FakeApp, FakeResponse, FakeSession,
                              copilot_answer, copilot_session, sent_text, sign_in_event)
+from aid.tests.helpers import ANDERS_FORM, ANDERS_LAYOUT, ANDERS_MEANINGS, ANDERS_PO, ERP_FORM, ERP_MEANINGS, MADEUP_LAYOUT, SAMPLES
 
 FOLDER = "AAMkADMadeUpFolder0001="
 SIX = {"ms_tenant_id": TENANT_ID, "ms_client_id": CLIENT_ID, "mailbox": None, "mail_folder": FOLDER, "mail_folder_name": "Orderbevestigingen",
@@ -414,10 +422,11 @@ def test_saving_on_the_tab_writes_the_settings_and_says_that_the_check_takes_the
     save = handler(page, "save_settings")
     listed = {"mailbox": "", "folders": {FOLDER: "Orderbevestigingen"}}
     note, trigger = save(TENANT_ID, CLIENT_ID, "", FOLDER, "auto", listed, "nl")
-    assert note == STRINGS["nl"]["settings_saved"] == "De controle neemt dit over bij de volgende ronde"
+    assert note == STRINGS["nl"]["settings_buyer_saved"] == "Opgeslagen. De assistent gebruikt dit vanaf de volgende ronde, binnen een minuut."
     saved = json.loads(path.read_text(encoding="utf-8"))
     assert {key: saved[key] for key in SIX} == SIX and trigger == STRINGS["nl"]["settings_trigger_pending"]
-    assert ACCESS_TOKEN not in path.read_text(encoding="utf-8") and STRINGS["en"]["settings_saved"] == "The check takes this over at the next pass"
+    assert ACCESS_TOKEN not in path.read_text(encoding="utf-8") and STRINGS["en"]["settings_buyer_saved"] == "Saved. The aid uses this from its next pass, within a minute."
+    assert "settings_saved" not in STRINGS["nl"] and "settings_saved" not in STRINGS["en"]      # one note for a save the runner takes over
     refused, _ = save(TENANT_ID, "not-a-guid-xyz", "", FOLDER, "auto", listed, "nl")
     assert refused == STRINGS["nl"]["settings_not_saved"].format(fields=STRINGS["nl"]["settings_client"]) and "not-a-guid-xyz" not in refused
     assert json.loads(path.read_text(encoding="utf-8")) == saved
@@ -443,7 +452,7 @@ def test_a_save_that_turns_the_trigger_off_or_names_another_folder_forgets_the_c
     save = handler(page, "save_settings")
     listed = {"mailbox": "", "folders": {FOLDER: "Orderbevestigingen", "AAMkADInbox=": "Postvak IN"}}
     connect()
-    assert save(TENANT_ID, CLIENT_ID, "", FOLDER, "auto", listed, "nl")[0] == STRINGS["nl"]["settings_saved"]
+    assert save(TENANT_ID, CLIENT_ID, "", FOLDER, "auto", listed, "nl")[0] == STRINGS["nl"]["settings_buyer_saved"]
     assert stored() == ["mailbox_known.json", "mailbox_state.json"]                     # the same folder: the connection stays
     save(TENANT_ID, CLIENT_ID, "", None, "auto", listed, "nl")                         # no folder: the trigger is off
     assert stored() == []
@@ -516,6 +525,8 @@ def test_a_page_without_its_settings_file_offers_no_settings_either(tmp_path, ma
 
 def test_the_review_command_gives_the_page_its_settings_file_and_its_share_and_stays_on_the_loopback(tmp_path, monkeypatch):
     import aid.review.__main__ as review
+    monkeypatch.setenv("GRADIO_TEMP_DIR", "")                   # recorded, so that the folder the command names is undone after the test
+    monkeypatch.delenv("GRADIO_TEMP_DIR")
     path = settings_file(tmp_path)
     built = []
 
@@ -532,6 +543,42 @@ def test_the_review_command_gives_the_page_its_settings_file_and_its_share_and_s
     for guard in guards:                                      # each launch with the check of the Host header, and nothing else
         assert list(guard) == ["middleware"] and [middleware.cls for middleware in guard["middleware"]] == [review.OwnHost]
     assert len(guards) == 2
+    assert os.environ["GRADIO_TEMP_DIR"] == str(tmp_path / "cases" / "tmp")           # the page library's temporary files
+
+
+def test_the_extension_code_is_shown_on_the_local_page_only(tmp_path, madeup_out):
+    """The code the browser extension sends (capture_token) is one line inside the folded connections that cannot be edited, with
+    a button to copy it, filled from the settings file when the page loads: on the page of this PC only, not on a public link and
+    not on a page without its settings file."""
+    gr = import_gradio()
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    assert (nl["settings_extension_code"], en["settings_extension_code"]) == ("Code voor de uitbreiding in de browser", "Code for the browser extension")
+    assert nl["settings_extension_code_help"] == "Plak deze code in de opties van de uitbreiding Inkoopassistent in Edge of Chrome."
+    assert en["settings_extension_code_help"] == "Paste this code into the options of the Inkoopassistent extension in Edge or Chrome."
+    token = "made-up-code-of-the-extension-0123456789"
+    path, page, made = tab(tmp_path, madeup_out, capture_token=token)
+    [settings] = [block for block in page.blocks.values() if isinstance(block, gr.Tab) and block.label == nl["settings_tab"]]
+    [folded] = [block for block in settings.children if isinstance(block, gr.Accordion) and block.label == nl["settings_connections"]]
+
+    def inside(block) -> list:
+        return [block, *[found for child in getattr(block, "children", []) for found in inside(child)]]
+    [code] = [block for block in page.blocks.values() if getattr(block, "label", None) == nl["settings_extension_code"]]
+    assert code in inside(folded) and isinstance(code, gr.Textbox) and code.interactive is False and code.buttons == ["copy"]
+    assert code.info == nl["settings_extension_code_help"] and code.max_lines == 1
+    [fill] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == "extension_code_opened"]
+    assert fill.outputs == [code] and fill.fn() == token
+    assert token not in json.dumps(page.config, default=str)                     # read when the page loads, not built into it
+    assert handler(page, "extension_code_relabel")("en") == {"__type__": "update", "label": en["settings_extension_code"],
+                                                            "info": en["settings_extension_code_help"]}
+    path.write_text(path.read_text(encoding="utf-8").replace(token, "made-up-code-after-a-change-of-the-file"), encoding="utf-8")
+    assert fill.fn() == "made-up-code-after-a-change-of-the-file"                  # the file as it is when the page loads
+    # nothing of it on a public link, and nothing on a page without its settings file
+    shared = tab(tmp_path / "shared", madeup_out, share=True, capture_token=token)[1]
+    without = build_app(deps(tmp_path / "without", madeup_out).model_copy(update={"settings": load_settings(path)}))
+    for other in (shared, without):
+        assert nl["settings_extension_code"] not in {getattr(block, "label", None) for block in other.blocks.values()}
+        assert not {"extension_code_opened", "extension_code_relabel"} & {getattr(f.fn, "__name__", "") for f in other.fns.values()}
+        assert token not in json.dumps(other.config, default=str) and "made-up-code-after" not in json.dumps(other.config, default=str)
 
 
 def test_switching_the_language_relabels_the_tab_and_clears_its_note(tmp_path, madeup_out):
@@ -613,10 +660,10 @@ def test_the_choice_of_the_reader_is_written_to_the_settings_file_and_shown_when
     assert handler(page, "ai_opened")("nl") == "parser"
     choice, note = handler(page, "save_reader")("llm", "nl")
     after = json.loads(path.read_text(encoding="utf-8"))
-    assert after == before | {"reader": "llm"} and list(after) == list(before) and note == STRINGS["nl"]["settings_saved"]
+    assert after == before | {"reader": "llm"} and list(after) == list(before) and note == STRINGS["nl"]["settings_buyer_saved"]
     assert choice == "llm" and handler(page, "ai_opened")("en") == "llm"
     choice, note = handler(page, "save_reader")("parser", "en")
-    assert json.loads(path.read_text(encoding="utf-8"))["reader"] == "parser" and note == STRINGS["en"]["settings_saved"]
+    assert json.loads(path.read_text(encoding="utf-8"))["reader"] == "parser" and note == STRINGS["en"]["settings_buyer_saved"]
 
 
 def test_copilot_is_not_chosen_before_the_tenant_and_the_client_are_saved(tmp_path, madeup_out):
@@ -1355,11 +1402,12 @@ def test_the_buyers_part_is_wired_as_the_page_shows_it(tmp_path, madeup_out):
     path, page, made = tab(tmp_path, madeup_out, **BUYER)
     nl = STRINGS["nl"]
     [settings] = [block for block in page.blocks.values() if isinstance(block, gr.Tab) and block.label == nl["settings_tab"]]
-    [folded] = [block for block in settings.children if isinstance(block, gr.Accordion)]
+    [folded] = [block for block in settings.children if isinstance(block, gr.Accordion) and block.label == nl["settings_connections"]]
+    [exact] = [block for block in settings.children if isinstance(block, gr.Accordion) and block.label == nl["exact_title"]]
 
     def inside(block) -> list:
         return [block, *[found for child in getattr(block, "children", []) for found in inside(child)]]
-    buyers = [block for block in inside(settings) if block not in inside(folded)]
+    buyers = [block for block in inside(settings) if block not in inside(folded) and block not in inside(exact)]
     [fill] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == "buyer_opened"]
     states = {id(fill.outputs[OPENED.index("filled")]): "filled", id(fill.outputs[-1]): "supplier filled"}
     assert all(isinstance(fill.outputs[OPENED.index(name)], gr.State) for name in ("filled", "supplier_filled"))
@@ -1435,7 +1483,7 @@ def test_the_connections_are_folded_away_under_one_heading_and_still_work(tmp_pa
     gr = import_gradio()
     path, page, made = tab(tmp_path, madeup_out, app=FakeApp(accounts=[USERNAME]), **SIX)
     [settings] = [block for block in page.blocks.values() if isinstance(block, gr.Tab) and block.label == STRINGS["nl"]["settings_tab"]]
-    [folded] = [block for block in settings.children if isinstance(block, gr.Accordion)]
+    [folded] = [block for block in settings.children if isinstance(block, gr.Accordion) and block.label == STRINGS["nl"]["settings_connections"]]
     assert folded.label == STRINGS["nl"]["settings_connections"] == "Koppelingen: het Microsoft-postvak en de AI-dienst"
     assert folded.open is False and type(settings.children[-1]).__name__ == "Accordion"
 
@@ -1565,10 +1613,58 @@ def test_on_a_public_link_the_links_host_passes_too(tmp_path, madeup_out):
     assert statuses(private, False, "abc123.gradio.live", "localhost:7861") == [400, 200]
 
 
+def test_the_page_tells_the_browser_to_keep_none_of_its_files(tmp_path, madeup_out):
+    """The page images of a document and an uploaded file are served on the page library's file route: every answer there carries
+    Cache-Control: no-store, so that the browser keeps no copy of them in its cache, which lies outside the aid's folders. The
+    middleware that checks the Host does it; the page's other answers are left as the library makes them."""
+    import asyncio
+
+    import aid.review.__main__ as review
+    from gradio.routes import App
+
+    async def inner(scope, receive, send):
+        await send({"type": "http.response.start", "status": 200, "headers": [(b"content-type", b"image/webp"),
+                                                                             (b"cache-control", b"max-age=3600")]})
+        await send({"type": "http.response.body", "body": b"made-up image"})
+
+    async def headers_of(application, path: str) -> dict:
+        sent = []
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(message):
+            sent.append(message)
+        scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "GET", "scheme": "http", "path": path,
+                 "raw_path": path.encode(), "query_string": b"", "root_path": "", "client": ("127.0.0.1", 50000),
+                 "server": ("127.0.0.1", 7861), "headers": [(b"host", b"127.0.0.1:7861")]}
+        await application(scope, receive, send)
+        return {"status": sent[0]["status"], **{name.decode().lower(): value.decode() for name, value in sent[0]["headers"]}}
+
+    async def middleware() -> list[dict]:
+        guard = review.OwnHost(inner)
+        return [await headers_of(guard, path) for path in ("/gradio_api/file=/made/up/cases/tmp/0a1b/image.webp",
+                                                           "/gradio_api/file/made/up/image.webp", "/config")]
+
+    image, deprecated, config = asyncio.run(middleware())
+    assert image["cache-control"] == "no-store" and image["content-type"] == "image/webp"
+    assert deprecated["cache-control"] == "no-store"
+    assert config["cache-control"] == "max-age=3600"                                          # not a file of the page: as it was
+    path, page, made = tab(tmp_path, madeup_out, **BUYER)
+
+    async def page_answers() -> list[dict]:
+        application = App.create_app(page, app_kwargs=review.launch_options(page, False)["app_kwargs"])
+        return [await headers_of(application, path) for path in (f"/gradio_api/file={tmp_path / 'not-a-file-of-the-page.webp'}", "/config")]
+
+    answered, config = asyncio.run(page_answers())
+    assert answered["status"] in (403, 404) and answered["cache-control"] == "no-store"
+    assert config["status"] == 200 and config.get("cache-control") != "no-store"
+
+
 # --- the documents say what the tab does ---
 
 def manual_sections() -> dict[str, str]:
-    """The manual's sections by their number ("2.6", "3.14", "5", "7"), each with its own text only."""
+    """The manual's sections by their number ("2.7", "3.14", "5", "7"), each with its own text only."""
     sections, number = {}, None
     for line in Path("aid/MANUAL.md").read_text(encoding="utf-8").splitlines():
         if (heading := re.match(r"#{2,3} (\d+(?:\.\d+)?)\.? ", line)) is not None:
@@ -1580,7 +1676,7 @@ def manual_sections() -> dict[str, str]:
 
 def test_the_manual_names_the_tab_as_the_page_does():
     nl, manual = STRINGS["nl"], manual_sections()
-    buyers = manual["2.6"]
+    buyers = manual["2.7"]
     for key in ([f"settings_group:{group}" for group in ("handled", "questions", "digest", "approval")]
                 + [f"settings_field:{field}" for field in BUYER_FIELDS]
                 + ["settings_digest:daily", "settings_digest:per_case", "settings_buyer_save", "settings_buyer_saved", "settings_buyer_unchanged",
@@ -1590,7 +1686,9 @@ def test_the_manual_names_the_tab_as_the_page_does():
         assert f"\"{nl[key]}\"" in buyers, key                                              # quoted word for word
     assert nl["settings_file_unreadable"].format(fields="") in buyers and nl["settings_problem:decimals"] in buyers
     whole = Path("aid/MANUAL.md").read_text(encoding="utf-8")
-    assert "(bij de installatie)" not in whole and "Geen e-mails" not in whole and "geen e-mails" not in whole
+    # the connections' heading names no installation; the block "Koppeling met Exact (bij de installatie)" is the one that does
+    assert "(bij de installatie)" not in whole.replace(f"\"{nl['exact_title']}\"", "")
+    assert "Geen e-mails" not in whole and "geen e-mails" not in whole
     assert "never e-mails" not in whole and "after the PO's date" not in whole and "This many first cases" not in whole
     assert "\"Leverancier toevoegen\"" in manual["4.1"] and "Nieuwe leverancier" not in manual["4.1"]
     assert buyers.count("Nieuwe leverancier") == 1 and manual["7"].count("Nieuwe leverancier") == 1      # the reason of the first cases only
@@ -1607,7 +1705,7 @@ def test_the_manual_names_the_tab_as_the_page_does():
 
 
 def test_the_manual_and_the_readme_say_what_a_save_does_and_does_not_do():
-    manual, guide = manual_sections()["2.6"], manual_sections()["7"]
+    manual, guide = manual_sections()["2.7"], manual_sections()["7"]
     # what was checked before a save keeps its outcome, and a cart is checked anew only when the cart itself changes: on the same day,
     # since the capture server answers the same cart from its case for the rest of that day only (the same page byte for byte on any day)
     assert "keeps its outcome" in manual and "on the same day a cart is checked anew, with the new values, only when the cart itself changes" in manual
@@ -1631,3 +1729,516 @@ def test_the_manual_and_the_readme_say_what_a_save_does_and_does_not_do():
     assert "python3 -m aid.review --settings live/settings.json" in readme[choice - 260:choice]
     for text in (Path("aid/MANUAL.md").read_text(encoding="utf-8"), readme):
         assert "—" not in text                           # no em-dash
+
+
+# --- the connection to Exact, part 1: the layout of the purchase order PDF set from a sample (Task 32) ---
+
+SLOT_NAMES = tuple(f"slot{n}" for n in range(1, SLOTS + 1))
+EXACT_OPENED = ("state", *EXACT_FORM, "title_word", "title_row", *SLOT_NAMES, "senders", "filled", "title_note")   # the fill, in its order
+SAMPLE_SHOWN = ("page", "sample_note", "summary", "header", "lines", "problems", "note")       # what choosing a sample gives
+TITLE_FOUND = ("title_row", *SLOT_NAMES, "title_note")                                          # what "Kopregel zoeken" gives
+TESTED = ("summary", "header", "lines", "problems", "note")                                    # what "Testen" gives
+EXACT_SAVED = ("note", "state", "filled", "summary", "header", "lines", "problems")            # what "Opslaan" gives
+SENDERS = "inkoop@example.org, example.org"
+NOTHING_SAVED = {"po_layout": None, "po_senders": []}          # what the block's form is filled with from a file without the two settings
+MINE = {"exact_opened", "exact_sample_shown", "exact_title_found", "exact_tested", "exact_saved", "exact_state_shown", "exact_relabel"}
+
+
+def exact_args(sample, form: dict | None = None, meanings: list | None = None, senders: str = SENDERS, language: str = "nl",
+               filled: dict | None = NOTHING_SAVED) -> list:
+    """The inputs of "Testen" and "Opslaan": the sample as the page library hands it over (a path), the fields of the form, the title
+    row found, the SLOTS dropdowns (those beyond the title row empty), the senders, what the form was filled with (the two settings as
+    the file held them), then the page's language."""
+    form = ANDERS_FORM if form is None else form
+    meanings = list(ANDERS_MEANINGS if meanings is None else meanings)
+    return [None if sample is None else str(sample), *[form[field] for field in EXACT_FORM], form["title_row"],
+            *(meanings + [None] * (SLOTS - len(meanings))), senders, filled, language]
+
+
+def edited_anders(tmp_path: Path, edit, name: str) -> Path:
+    """The second made-up PO after `edit` has changed the rows of its pages (tryout_po_pages of the generator)."""
+    pages = tryout_po_pages()
+    edit(pages)
+    path = tmp_path / name
+    path.write_bytes(pdf_bytes(pages, "edited try-out PO"))
+    return path
+
+
+def test_the_sample_shows_its_lines_and_the_title_row_its_dropdowns(tmp_path, madeup_out):
+    path, page, made = tab(tmp_path, madeup_out, **BUYER)
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    shown = named(SAMPLE_SHOWN, handler(page, "exact_sample_shown")(str(ANDERS_PO), "nl"))
+    assert shown["page"]["headers"] == ["Regel", "Tekst"] and shown["page"]["data"] == page_lines(ANDERS_PO)
+    assert shown["page"]["data"][2] == ["3", "Proefleverancier S23"] and shown["sample_note"] == ""
+    assert (shown["summary"], shown["problems"], shown["note"], shown["lines"]["value"]["data"]) == ("", "", "", [])     # an earlier reading goes
+    found = named(TITLE_FOUND, handler(page, "exact_title_found")(str(ANDERS_PO), "Artikelcode", [], *[None] * SLOTS, "nl"))
+    assert found["title_row"] == ANDERS_LAYOUT.title_row and found["title_note"] == nl["exact_title_found"]
+    slots = [found[name] for name in SLOT_NAMES]
+    assert [slot["label"] for slot in slots[:8]] == ANDERS_LAYOUT.title_row and [slot["visible"] for slot in slots] == [True] * 8 + [False] * 12
+    assert slots[0]["choices"] == [(nl[f"exact_meaning:{meaning}"], meaning) for meaning in MEANINGS] and [s["value"] for s in slots] == [None] * 20
+    # the same title row found again keeps what was chosen; another title row starts empty
+    chosen = [*ANDERS_MEANINGS, *[None] * 12]
+    again = named(TITLE_FOUND, handler(page, "exact_title_found")(str(ANDERS_PO), "Benaming", ANDERS_LAYOUT.title_row, *chosen, "nl"))
+    assert [again[name]["value"] for name in SLOT_NAMES[:8]] == ANDERS_MEANINGS
+    other = named(TITLE_FOUND, handler(page, "exact_title_found")(str(madeup_out / "MU01_po_v1.pdf"), "Artikel", ANDERS_LAYOUT.title_row, *chosen, "nl"))
+    assert other["title_row"] == MADEUP_LAYOUT.title_row and [other[name]["value"] for name in SLOT_NAMES[:8]] == [None] * 8
+    # a word on no line of page 1, a scan, no sample, and a title row of more than 20 words leave the title row and the dropdowns
+    long = tmp_path / "long.pdf"
+    long.write_bytes(pdf_bytes([[Row([Text(0, "Bestelnummer: X-1")]), Row([Text(0, " ".join(f"K{n}" for n in range(1, 22)))])]], "long"))
+    for sample, word, note in ((ANDERS_PO, "Artikel", nl["exact_title_missing"]), (madeup_out / "MU05_conf.pdf", "Artikel", nl["exact_problem:scan"]),
+                               (None, "Artikel", nl["exact_problem:no_sample"]), (long, "K3", nl["exact_title_long"])):
+        kept = named(TITLE_FOUND, handler(page, "exact_title_found")(None if sample is None else str(sample), word, ANDERS_LAYOUT.title_row,
+                                                                     *chosen, "nl"))
+        assert kept["title_note"] == note and kept["title_row"] == ANDERS_LAYOUT.title_row and [kept[n] for n in SLOT_NAMES] == [SAME] * 20, note
+    assert nl["exact_title_found"] == "Kopregel gevonden. Kies bij elk woord wat er in die kolom staat."
+    assert nl["exact_title_missing"] == "Op de eerste pagina staat geen regel met dit woord."
+    scan = named(SAMPLE_SHOWN, handler(page, "exact_sample_shown")(str(madeup_out / "MU05_conf.pdf"), "en"))
+    assert (scan["page"]["headers"], scan["page"]["data"], scan["sample_note"]) == (["Line", "Text"], [], en["exact_problem:scan"])
+    gone = named(SAMPLE_SHOWN, handler(page, "exact_sample_shown")(None, "nl"))          # the sample taken away again
+    assert (gone["page"]["data"], gone["sample_note"]) == ([], "")
+
+
+def test_testing_writes_nothing(tmp_path, madeup_out):
+    path, page, made = tab(tmp_path, madeup_out, authorization_limit="777.77", **BUYER)
+    os.utime(path, ns=(1_700_000_000_000_000_000, 1_700_000_000_000_000_000))
+    before = path.read_bytes()
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    result = named(TESTED, handler(page, "exact_tested")(*exact_args(ANDERS_PO)))
+    assert result["summary"] == nl["exact_read"].format(n=12, answer=nl["exact_yes"]) and result["note"] == ""
+    assert result["summary"].startswith("Het voorbeeld is gelezen: 12 orderregels; het totaal is te berekenen: ja.")
+    assert result["header"]["headers"] == [nl["exact_read_what"], nl["exact_read_value"]]
+    assert result["header"]["data"][:2] == [["Inkoopordernummer", "IB-2600417"], ["Datum", "2026-11-03 (03-11-2026)"]]
+    assert result["lines"]["value"]["headers"] == line_headers("nl", ANDERS_LAYOUT) and len(result["lines"]["value"]["data"]) == 12
+    assert result["lines"]["value"]["data"][0] == ["1", "10", "pc (st)", "KM-2301", "Kogelkraan DN25 messing", "2026-11-16 (16-11-2026)", "12.5 (12,50)"]
+    assert result["problems"] == f"- {nl['exact_warning:continued'].format(page=2)}"     # page 2 has no title row
+    # never the authorization limit, nor whether the total is above it (the total is 4.417,85, above the limit of the file)
+    flat = json.dumps(result, ensure_ascii=False)
+    assert not any(text in flat for text in ("777", "4417", "4.417", "fiat", "Fiat", "grens", "limiet", "boven de"))
+    unpriced = named(TESTED, handler(page, "exact_tested")(*exact_args(ANDERS_PO, ANDERS_FORM | {"per_piece": False}, language="en")))
+    assert unpriced["summary"] == en["exact_read"].format(n=12, answer=en["exact_no"]) and unpriced["summary"].endswith("press Save.")
+    # a form that gives no layout reads nothing and says why, in the note
+    refused = named(TESTED, handler(page, "exact_tested")(*exact_args(ANDERS_PO, ANDERS_FORM | {"po_label": ""}, senders="Inkoop")))
+    assert refused["note"] == " ".join([nl["exact_problem:po_label"], nl["exact_problem:sender"].format(text="Inkoop")])
+    assert (refused["summary"], refused["lines"]["value"]["data"], refused["problems"]) == ("", [], "")
+    assert path.read_bytes() == before and path.stat().st_mtime_ns == 1_700_000_000_000_000_000
+    assert not (tmp_path / "po_store").exists() and not (tmp_path / "inbox").exists()
+
+
+def test_saving_writes_the_layout_and_the_senders_and_keeps_every_other_key(tmp_path, madeup_out):
+    path, page, made = tab(tmp_path, madeup_out, **(BUYER | {"po_layout": None, "po_senders": [], "review_url": "http://localhost:7860"}))
+    text, before = path.read_text(encoding="utf-8"), held(path)
+    nl = STRINGS["nl"]
+    result = named(EXACT_SAVED, handler(page, "exact_saved")(*exact_args(ANDERS_PO)))
+    assert result["note"] == nl["exact_saved"] and nl["exact_state_set"] in result["state"]
+    assert result["summary"] == nl["exact_read"].format(n=12, answer=nl["exact_yes"])          # the reading the save checked
+    assert result["filled"] == {"po_layout": TRYOUT_PO_LAYOUT, "po_senders": ["inkoop@example.org", "example.org"]}   # what the form now holds
+    after = held(path)
+    assert after["po_layout"] == TRYOUT_PO_LAYOUT and list(after["po_layout"]) == list(TRYOUT_PO_LAYOUT)
+    assert after["po_senders"] == ["inkoop@example.org", "example.org"] and list(after) == list(before)
+    # the two values are replaced where they stand, in the file's indentation; every other character of the file is kept
+    def written(value) -> str:
+        return json.dumps(value, indent=4).replace("\n", "\n    ")
+    assert path.read_text(encoding="utf-8") == text.replace('"po_layout": null', f'"po_layout": {written(TRYOUT_PO_LAYOUT)}').replace(
+        '"po_senders": []', f'"po_senders": {written(["inkoop@example.org", "example.org"])}')
+    saved = load_settings(path)
+    assert saved.po_layout == ANDERS_LAYOUT and company_values(saved) == ["po_layout is set", "po_senders is not empty"]    # no share link now
+    # the same save again, from the form as the first save left it, writes nothing
+    os.utime(path, ns=(1_700_000_000_000_000_000, 1_700_000_000_000_000_000))
+    assert named(EXACT_SAVED, handler(page, "exact_saved")(*exact_args(ANDERS_PO, filled=result["filled"])))["note"] == nl["exact_saved"]
+    assert path.stat().st_mtime_ns == 1_700_000_000_000_000_000
+    # a file without the two keys gets them at its end, in this order; empty senders are an empty list
+    path, page, made = tab(tmp_path / "lacking", madeup_out, **BUYER)
+    before = held(path)
+    assert named(EXACT_SAVED, handler(page, "exact_saved")(*exact_args(ANDERS_PO, senders=" ")))["note"] == nl["exact_saved"]
+    after = held(path)
+    assert list(after) == [*before, "po_layout", "po_senders"] and after["po_senders"] == [] and {key: after[key] for key in before} == before
+
+
+def test_after_a_save_the_next_pass_files_the_purchase_orders_that_stayed_in_the_watched_folder(tmp_path, madeup_out):
+    """A PO PDF that the aid cannot read without the layout stays in the watched folder as an error (its title "Inkooporder" makes it
+    a PO); once the layout is saved, the next pass, which reads the settings file again, files it."""
+    path, page, made = tab(tmp_path, madeup_out, **BUYER)
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    shutil.copy(edited_anders(tmp_path, lambda pages: setattr(pages[0][1].texts[0], "text", "Inkooporder"), "exact_po.pdf"), inbox / "exact_po.pdf")
+    store = PoStore(tmp_path / "po_store")
+    first = scan_folder(inbox, store, tmp_path / "cases", load_settings(path), datetime(2026, 11, 12, 9, 0))
+    assert first.stored_pos == [] and first.skipped[0][0] == "exact_po.pdf" and first.skipped[0][1].startswith("error:")
+    assert (inbox / "exact_po.pdf").exists()
+    assert named(EXACT_SAVED, handler(page, "exact_saved")(*exact_args(ANDERS_PO)))["note"] == STRINGS["nl"]["exact_saved"]
+    second = scan_folder(inbox, store, tmp_path / "cases", load_settings(path), datetime(2026, 11, 12, 9, 1))
+    assert second.stored_pos == ["IB-2600417"] and not (inbox / "exact_po.pdf").exists()
+    assert store.versions("IB-2600417")[0].document.reader == "po_pdf:layout"
+    state = handler(page, "exact_state_shown")("nl")
+    assert STRINGS["nl"]["exact_state_known"].split("{count}")[0] + "1." in state and "IB-2600417" in state
+
+
+def test_a_refused_save_writes_nothing_and_names_the_problem(tmp_path, madeup_out):
+    path, page, made = tab(tmp_path, madeup_out, **BUYER)
+    before = path.read_bytes()
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    titled = edited_anders(tmp_path, lambda pages: setattr(pages[0][1].texts[0], "text", "Orderbevestiging"), "titled.pdf")
+    two = edited_anders(tmp_path, lambda pages: setattr(pages[1][0].texts[0], "text", "Bestelnummer: IB-2600999"), "two.pdf")
+    two_pos = nl["exact_problem:two_pos"].format(places="regel 6 van de eerste pagina en pagina 2")
+    c01 = SAMPLES / "c01_dutch_numbers.pdf"
+    cases = [(exact_args(None), [nl["exact_problem:no_sample"]]),
+             (exact_args(ANDERS_PO, senders="Inkoop <inkoop@example.org>"), [nl["exact_problem:sender"].format(text="Inkoop <inkoop@example.org>")]),
+             (exact_args(ANDERS_PO, meanings=ANDERS_MEANINGS[:7]), [nl["exact_problem:meanings"]]),
+             (exact_args(ANDERS_PO, ANDERS_FORM | {"po_label": " "}), [nl["exact_problem:po_label"]]),
+             (exact_args(madeup_out / "MU01_po_v1.pdf"), [nl["exact_problem:title_differs"], nl["exact_problem:no_number"]]),
+             (exact_args(madeup_out / "MU05_conf.pdf"), [nl["exact_problem:scan"]]),
+             (exact_args(titled), [nl["exact_problem:confirmation"].format(line=2)]),
+             (exact_args(two), [two_pos]),
+             (exact_args(c01, ERP_FORM | {"numbers": "point"}, ERP_MEANINGS), [nl["exact_problem:convention_comma"].format(column="Prijs")])]
+    for args, problems in cases:
+        result = named(EXACT_SAVED, handler(page, "exact_saved")(*args))
+        assert result["note"] == nl["exact_not_saved"].format(problems=" ".join(problems)), problems
+        assert result["state"] == SAME and result["filled"] == NOTHING_SAVED and path.read_bytes() == before, problems
+    shown = named(EXACT_SAVED, handler(page, "exact_saved")(*exact_args(two)))                # the reading shows the refusal below the tables
+    assert shown["problems"].splitlines() == [f"- {two_pos}", f"- {nl['exact_warning:continued'].format(page=2)}"]
+    assert "IB-2600999" not in shown["problems"] + shown["note"]
+    english = named(EXACT_SAVED, handler(page, "exact_saved")(*exact_args(None, language="en")))
+    assert english["note"] == en["exact_not_saved"].format(problems=en["exact_problem:no_sample"]) == "Not saved: Choose a sample first."
+    assert nl["exact_not_saved"] == "Niet opgeslagen: {problems}" and nl["exact_problem:no_sample"] == "Kies eerst een voorbeeld."
+    by_hand(path, price_pct="x")                                                           # a settings file that cannot be read
+    broken = path.read_bytes()
+    result = named(EXACT_SAVED, handler(page, "exact_saved")(*exact_args(ANDERS_PO)))
+    assert result["note"] == unreadable("nl", nl["settings_field:price_pct"]) and path.read_bytes() == broken
+
+
+def test_the_block_reopens_with_the_saved_layout(tmp_path, madeup_out):
+    path, page, made = tab(tmp_path, madeup_out, **BUYER)
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    empty = named(EXACT_OPENED, handler(page, "exact_opened")("nl"))
+    assert {field: empty[field] for field in EXACT_FORM} == {field: "" for field in EXACT_FORM} | {"numbers": "comma", "per_piece": False}
+    assert (empty["title_word"], empty["title_row"], empty["senders"]) == ("", [], "") and nl["exact_state_unset"] in empty["state"]
+    assert [empty[name]["visible"] for name in SLOT_NAMES] == [False] * 20 and (empty["filled"], empty["title_note"]) == (NOTHING_SAVED, "")
+    handler(page, "exact_saved")(*exact_args(ANDERS_PO))
+    again = build_app(deps(tmp_path, madeup_out).model_copy(update={"settings": load_settings(path)}), settings_file=path, session=FakeSession())
+    shown = named(EXACT_OPENED, handler(again, "exact_opened")("en"))
+    assert {field: shown[field] for field in EXACT_FORM} == {field: ANDERS_FORM[field] for field in EXACT_FORM}
+    assert (shown["title_word"], shown["title_row"], shown["senders"]) == ("Artikelcode", ANDERS_LAYOUT.title_row, SENDERS)
+    assert [shown[name]["label"] for name in SLOT_NAMES[:8]] == ANDERS_LAYOUT.title_row
+    assert [shown[name]["value"] for name in SLOT_NAMES] == [*ANDERS_MEANINGS, *[None] * 12]
+    assert [shown[name]["visible"] for name in SLOT_NAMES] == [True] * 8 + [False] * 12
+    assert shown["slot1"]["choices"] == [(en[f"exact_meaning:{meaning}"], meaning) for meaning in MEANINGS] and en["exact_state_set"] in shown["state"]
+    assert shown["filled"] == {"po_layout": TRYOUT_PO_LAYOUT, "po_senders": ["inkoop@example.org", "example.org"]} and shown["title_note"] == ""
+    # the reopened form is tested as it is: no new search of the title row is needed
+    form = {field: shown[field] for field in EXACT_FORM} | {"title_row": shown["title_row"]}
+    tested = named(TESTED, handler(again, "exact_tested")(*exact_args(ANDERS_PO, form, [shown[name]["value"] for name in SLOT_NAMES], shown["senders"],
+                                                                      filled=shown["filled"])))
+    assert tested["summary"] == nl["exact_read"].format(n=12, answer=nl["exact_yes"])
+    # a layout written into the file by hand opens the same way
+    path, page, made = tab(tmp_path / "by_hand", madeup_out, **(BUYER | {"po_layout": TRYOUT_PO_LAYOUT, "po_senders": ["example.org"]}))
+    by_file = named(EXACT_OPENED, handler(page, "exact_opened")("nl"))
+    assert by_file["po_label"] == "Bestelnummer" and by_file["supplier_line"] == "3" and by_file["senders"] == "example.org"
+
+
+def test_the_block_offers_nothing_on_a_share_link_or_without_a_settings_file(tmp_path, madeup_out):
+    path, page, made = tab(tmp_path, madeup_out, share=True, **BUYER)
+    assert not {getattr(f.fn, "__name__", "") for f in page.fns.values()} & MINE
+    labels = {getattr(block, "label", None) for block in page.blocks.values()}
+    assert not labels & {STRINGS["nl"]["exact_title"], STRINGS["nl"]["exact_sample"], STRINGS["nl"]["exact_field:po_label"]}
+    assert not {getattr(f.fn, "__name__", "") for f in build_app(deps(tmp_path / "nofile", madeup_out)).fns.values()} & MINE
+    own = tab(tmp_path / "own", madeup_out, **BUYER)[1]                                     # the page of this PC has them all
+    assert MINE <= {getattr(f.fn, "__name__", "") for f in own.fns.values()}
+
+
+def test_both_languages_hold_the_same_keys():
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    mine = [key for key in nl if key.startswith("exact_")]
+    assert set(nl) == set(en) and mine == [key for key in en if key.startswith("exact_")] and len(mine) > 60
+    for key in mine:
+        assert nl[key] and en[key], key
+        assert re.findall(r"\{(\w+)\}", nl[key]) == re.findall(r"\{(\w+)\}", en[key]), key       # the same places for the same values
+        assert not re.search(r"[—–_]", nl[key] + en[key]), key                                  # no dash, and no setting's name
+    assert (nl["exact_title"], en["exact_title"]) == ("Koppeling met Exact (bij de installatie)", "Connection to Exact (at the installation)")
+    assert nl["exact_intro"] == ("De assistent leest wat Exact zelf levert en verandert zelf niets in Exact. Hier stelt u in hoe de documenten uit "
+                                 "Exact eruitzien. Uw voorbeeldbestanden blijven op deze pc.")
+    assert en["exact_intro"] == ("The assistant reads what Exact itself delivers and changes nothing in Exact. Here you set what the documents "
+                                 "from Exact look like. Your sample files stay on this PC.")
+    assert (nl["exact_part_po"], en["exact_part_po"]) == ("1. Inkooporders die Exact per e-mail stuurt (pdf)",
+                                                          "1. Purchase orders that Exact sends by e-mail (PDF)")
+    assert [nl[f"exact_meaning:{meaning}"] for meaning in MEANINGS] == [
+        "Regelnummer", "Artikelcode", "Omschrijving", "Aantal", "Eenheid", "Prijs", "Prijs per (aantal)", "Korting in procenten", "Nettoprijs",
+        "Leverdatum", "Hoort bij de kolom links ervan", "Niet nodig"]
+    assert [en[f"exact_meaning:{meaning}"] for meaning in MEANINGS] == [
+        "Line number", "Item code", "Description", "Quantity", "Unit", "Price", "Price per (number)", "Discount in percent", "Net price",
+        "Delivery date", "Belongs to the column on its left", "Not needed"]
+    assert [nl[f"exact_field:{field}"] for field in ("po_label", "date_label", "supplier_label", "supplier_line", "version_label", "currency_label",
+                                                      "incoterm_label")] == [
+        "Tekst voor het inkoopordernummer", "Tekst voor de datum (mag leeg)", "Tekst voor de leverancier",
+        "Of: het nummer van de regel waarop alleen de leverancier staat",
+        "Tekst voor het versienummer (leeg: de pdf noemt geen versie; de assistent nummert dan in de volgorde van binnenkomst)",
+        "Tekst voor de valuta (mag leeg)", "Tekst voor de leveringsconditie (mag leeg)"]
+    assert (nl["exact_sample"], nl["exact_page"], nl["exact_page_line"], nl["exact_page_text"]) == (
+        "Voorbeeld: een inkooporder uit Exact als pdf", "De eerste pagina van het voorbeeld, regel voor regel", "Regel", "Tekst")
+    assert (nl["exact_field:title_word"], nl["exact_find"], en["exact_find"]) == (
+        "Een woord uit de kopregel boven de orderregels, bijvoorbeeld Artikel", "Kopregel zoeken", "Find title row")
+    assert (nl["exact_field:table_end"], nl["exact_field:numbers"], nl["exact_numbers:comma"], nl["exact_numbers:point"]) == (
+        "De tabel houdt op bij de regel met deze tekst (leeg: tot het eind)", "Getallen op de pdf", "1.234,50 (komma voor de decimalen)",
+        "1,234.50 (punt voor de decimalen)")
+    assert nl["exact_field:per_piece"] == "De pdf heeft geen kolom prijs per: elke prijs is per 1 stuk"
+    assert (nl["exact_test"], nl["exact_save"], en["exact_test"], en["exact_save"]) == ("Testen", "Opslaan", "Test", "Save")
+    assert (nl["exact_reading"], nl["exact_state_title"], nl["exact_refresh"]) == ("Zo leest de assistent het voorbeeld", "Stand van de koppeling",
+                                                                                  "Stand vernieuwen")
+    assert nl["exact_read"] == ("Het voorbeeld is gelezen: {n} orderregels; het totaal is te berekenen: {answer}. Vergelijk de tabel met de "
+                                "inkooporder in Exact. Klopt alles, druk dan op Opslaan.")
+    assert nl["exact_saved"] == ("Opgeslagen. De assistent leest inkooporders in deze opmaak vanaf de volgende ronde, binnen een minuut. "
+                                 "Inkooporders die nog in de bewaakte map liggen omdat de assistent ze niet kon lezen, worden dan opgenomen; "
+                                 "andere geeft u opnieuw.")
+    assert en["exact_saved"] == ("Saved. The assistant reads purchase orders in this layout from its next pass, within a minute. Purchase orders "
+                                 "that still lie in the watched folder because it could not read them are then filed; give any others again.")
+    # the texts of the review's rulings, word for word
+    assert nl["exact_title_saved_long"] == ("De opgeslagen kopregel heeft meer dan 20 woorden; dat kan dit formulier niet tonen. De opmaak blijft "
+                                            "gelden tot u een nieuwe opslaat.")
+    assert en["exact_title_saved_long"] == ("The saved title row has more than 20 words, which this form cannot show. The layout stays in force "
+                                            "until you save a new one.")
+    assert (nl["exact_page_more"], en["exact_page_more"]) == ("De tabel toont de eerste {n} regels van de eerste pagina.",
+                                                              "The table shows the first {n} lines of the first page.")
+    assert nl["exact_changed"] == ("Niet opgeslagen: de koppeling is intussen op een andere plek gewijzigd. Open het tabblad Instellingen "
+                                   "opnieuw en kijk de opmaak na.")
+    assert en["exact_changed"] == "Not saved: the connection was changed elsewhere meanwhile. Open the tab Settings again and check the layout."
+    assert nl["exact_problem:unopenable"] == "Dit pdf-bestand kan niet worden geopend. Sla het opnieuw op uit de e-mail en kies het nog eens."
+
+
+def test_the_exact_block_is_wired_as_the_page_shows_it(tmp_path, madeup_out):
+    """The built page itself: the block folded away just above the connections, its controls in their order, each field's help, and
+    each handler's trigger, inputs and outputs."""
+    gr = import_gradio()
+    path, page, made = tab(tmp_path, madeup_out, **BUYER)
+    nl = STRINGS["nl"]
+    [settings] = [block for block in page.blocks.values() if isinstance(block, gr.Tab) and block.label == nl["settings_tab"]]
+    accordions = [block for block in settings.children if isinstance(block, gr.Accordion)]
+    assert [block.label for block in accordions] == [nl["exact_title"], nl["settings_connections"]]
+    exact = accordions[0]
+    assert exact.open is False and settings.children[-2:] == accordions                  # above the Microsoft connections, at the bottom
+
+    def inside(block) -> list:
+        return [block, *[found for child in getattr(block, "children", []) for found in inside(child)]]
+    [fill] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == "exact_opened"]
+    states = {id(fill.outputs[EXACT_OPENED.index("title_row")]): "title row", id(fill.outputs[EXACT_OPENED.index("filled")]): "filled"}
+    assert all(isinstance(fill.outputs[EXACT_OPENED.index(state)], gr.State) for state in ("title_row", "filled"))
+
+    def name(component) -> str:
+        if id(component) in states:
+            return states[id(component)]
+        if isinstance(component, gr.Button):
+            return f"button {component.value}"
+        if isinstance(component, (gr.Dataframe, gr.Markdown)) and component.elem_id:
+            return component.elem_id
+        return getattr(component, "label", None) or str(getattr(component, "value", ""))
+
+    def bound(fn_name: str) -> tuple:
+        [f] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == fn_name]
+        return (sorted((name(page.blocks[block]) if block != page._id else "page", event) for block, event in f.targets),
+                [name(component) for component in f.inputs], [name(component) for component in f.outputs])
+
+    fields = [nl[f"exact_field:{field}"] for field in ("po_label", "date_label", "supplier_label", "supplier_line", "version_label", "currency_label",
+                                                        "incoterm_label")]
+    form = [*fields, nl["exact_field:table_end"], nl["exact_field:numbers"], nl["exact_field:per_piece"]]       # in the order of FORM
+    slots = [str(n) for n in range(1, SLOTS + 1)]
+    reading = ["exact-summary", "exact-header", "exact-lines", "exact-problems"]
+    sample, word, senders, page_language = nl["exact_sample"], nl["exact_field:title_word"], nl["exact_field:senders"], nl["language"]
+    order = [block for block in inside(exact) if isinstance(block, (gr.Markdown, gr.Textbox, gr.Radio, gr.Button, gr.Dataframe, gr.Dropdown,
+                                                                     gr.Checkbox, gr.File))]
+    assert [name(block) for block in order] == [
+        nl["exact_intro"], f"### {nl['exact_state_title']}", "exact-state", f"button {nl['exact_refresh']}", f"### {nl['exact_part_po']}", sample,
+        "exact-page", "exact-sample-note", *fields, word, f"button {nl['exact_find']}", "exact-title-note", *slots, nl["exact_field:table_end"],
+        nl["exact_field:numbers"], nl["exact_field:per_piece"], senders, f"button {nl['exact_test']}", f"button {nl['exact_save']}", "exact-note",
+        f"### {nl['exact_reading']}", *reading]
+    # the fill at the load and at each select of the settings tab, as the buyer's part (ruling L6)
+    assert bound("exact_opened") == ([(nl["settings_tab"], "select"), ("page", "load")], [page_language],
+                                     ["exact-state", *form, word, "title row", *slots, senders, "filled", "exact-title-note"])
+    assert bound("exact_sample_shown") == ([(sample, "change")], [sample, page_language], ["exact-page", "exact-sample-note", *reading, "exact-note"])
+    assert bound("exact_title_found") == ([(f"button {nl['exact_find']}", "click")], [sample, word, "title row", *slots, page_language],
+                                          ["title row", *slots, "exact-title-note"])
+    inputs = [sample, *form, "title row", *slots, senders, "filled", page_language]
+    assert bound("exact_tested") == ([(f"button {nl['exact_test']}", "click")], inputs, [*reading, "exact-note"])
+    assert bound("exact_saved") == ([(f"button {nl['exact_save']}", "click")], inputs, ["exact-note", "exact-state", "filled", *reading])
+    assert bound("exact_state_shown") == ([(f"button {nl['exact_refresh']}", "click")], [page_language], ["exact-state"])
+    assert bound("exact_relabel")[0] == [(page_language, "change")]
+    [lines] = [block for block in inside(exact) if getattr(block, "elem_id", None) == "exact-lines"]          # ruling L10: a width for each column
+    assert len(lines.column_widths) == len(line_headers("nl")) and sum(float(width.rstrip("%")) for width in lines.column_widths) == 100
+    shown = {block.label: block for block in inside(exact) if getattr(block, "label", None)}
+    assert shown[nl["exact_field:po_label"]].info == nl["exact_help:po_label"] and shown[nl["exact_field:supplier_line"]].info is None
+    assert [shown[label].info for label in fields[1:3] + fields[4:]] == [nl["exact_help:label"]] * 5
+    assert (shown[nl["exact_field:table_end"]].info, shown[senders].info) == (nl["exact_help:table_end"], nl["exact_help:senders"])
+    assert shown[nl["exact_field:numbers"]].choices == [(nl["exact_numbers:comma"], "comma"), (nl["exact_numbers:point"], "point")]
+    assert shown[sample].file_types == [".pdf"] and shown[nl["exact_page"]].elem_id == "exact-page"
+    assert all(block.interactive is False for block in inside(exact) if isinstance(block, gr.Dataframe))
+    assert [block.visible for block in inside(exact) if isinstance(block, gr.Dropdown)] == [False] * SLOTS     # until a title row is found
+
+
+RELABELLED = ("block", "intro", "state_title", "state", "refresh", "part", "sample", "page", "sample_note", "po_label", "date_label",
+              "supplier_label", "supplier_line", "version_label", "currency_label", "incoterm_label", "title_word", "find", "title_note", *SLOT_NAMES,
+              "table_end", "numbers", "per_piece", "senders", "test", "save", "note", "reading", "summary", "header", "lines", "problems")
+
+
+def test_switching_the_language_relabels_the_exact_block_and_keeps_what_is_chosen(tmp_path, madeup_out):
+    path, page, made = tab(tmp_path, madeup_out, **BUYER)
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    shown = named(RELABELLED, handler(page, "exact_relabel")("en", str(ANDERS_PO), "point", ANDERS_LAYOUT.title_row, *ANDERS_MEANINGS, *[None] * 12))
+    flat = json.dumps(shown, default=str, ensure_ascii=False)
+    for key in ("exact_title", "exact_intro", "exact_field:po_label", "exact_help:senders", "exact_test", "exact_state_unset", "exact_reading"):
+        assert en[key] in flat, key
+    assert nl["exact_field:po_label"] not in flat and nl["exact_help:label"] not in flat
+    assert (shown["block"]["label"], shown["po_label"]["label"], shown["po_label"]["info"]) == (en["exact_title"], en["exact_field:po_label"],
+                                                                                                en["exact_help:po_label"])
+    assert shown["numbers"]["value"] == "point" and shown["numbers"]["choices"] == [(en["exact_numbers:comma"], "comma"),
+                                                                                    (en["exact_numbers:point"], "point")]
+    choices = [(en[f"exact_meaning:{meaning}"], meaning) for meaning in MEANINGS]
+    assert [shown[name]["choices"] for name in SLOT_NAMES] == [choices] * SLOTS
+    assert [shown[name]["value"] for name in SLOT_NAMES] == [*ANDERS_MEANINGS, *[None] * 12]       # what is chosen stays
+    assert shown["page"]["label"] == en["exact_page"] and nl["exact_page"] not in flat                   # ruling L8: the table's label too
+    assert shown["page"]["value"] == {"headers": ["Line", "Text"], "data": page_lines(ANDERS_PO)} and shown["sample_note"] == ""
+    assert (shown["note"], shown["summary"], shown["problems"], shown["lines"]["value"]["data"]) == ("", "", "", [])     # tested again in English
+    assert shown["lines"]["value"]["headers"] == line_headers("en")
+
+
+def test_the_sample_is_read_where_the_page_library_put_it_and_copied_nowhere(tmp_path, madeup_out):
+    """The page library hands the sample over as a file of its own temporary folder (gradio's GRADIO_TEMP_DIR, which the review
+    command sets to <cases_root>/tmp, aid/review/__main__.py). Choosing, testing and saving read it there: no copy of it is made
+    anywhere, nothing is filed and no case is opened."""
+    path, page, made = tab(tmp_path, madeup_out, **BUYER)
+    upload = tmp_path / "gradio" / "0a1b2c3d"
+    upload.mkdir(parents=True)
+    sample = upload / "ANDERS_po_v1.pdf"
+    shutil.copy(ANDERS_PO, sample)
+    digest = hashlib.sha256(sample.read_bytes()).hexdigest()
+    handler(page, "exact_sample_shown")(str(sample), "nl")
+    handler(page, "exact_title_found")(str(sample), "Artikelcode", [], *[None] * SLOTS, "nl")
+    handler(page, "exact_tested")(*exact_args(sample))
+    assert named(EXACT_SAVED, handler(page, "exact_saved")(*exact_args(sample)))["note"] == STRINGS["nl"]["exact_saved"]
+    copies = [p for p in tmp_path.rglob("*") if p.is_file() and hashlib.sha256(p.read_bytes()).hexdigest() == digest]
+    assert copies == [sample] and sorted(p.name for p in upload.iterdir()) == ["ANDERS_po_v1.pdf"]
+    assert not (tmp_path / "po_store").exists() and not (tmp_path / "inbox").exists() and not list(tmp_path.glob("cases/IB-*"))
+
+
+def test_the_manual_and_the_readme_say_how_the_layout_is_set_on_the_page():
+    nl, manual = STRINGS["nl"], manual_sections()
+    exact = manual["3.17"]
+    for key in ("exact_title", "exact_part_po", "exact_sample", "exact_page", "exact_field:po_label", "exact_field:supplier_line",
+                "exact_field:title_word", "exact_find", "exact_meaning:same", "exact_meaning:skip", "exact_field:table_end", "exact_field:numbers",
+                "exact_field:per_piece", "exact_field:senders", "exact_test", "exact_save", "exact_reading", "exact_state_title", "exact_refresh"):
+        assert f"\"{nl[key]}\"" in exact, key                                               # quoted word for word
+    assert "the layout first, the mailbox second" in exact and "not on a shared screen" in exact and "ANDERS_po_v1.pdf" in exact
+    assert "test walk" in exact and "B2" in exact and "\"Bestelnummer\"" in exact and "\"Artikelcode\"" in exact
+    assert "3.17" in manual["3.12"] and "Until the trial read on the page exists" not in manual["3.12"]
+    assert "3.17" in manual["2.7"] and "3.17" in manual["3.2"] and "`po_layout`, `po_senders`, `review_url`" not in manual["3.2"]
+    readme = Path("aid/README.md").read_text(encoding="utf-8")
+    assert nl["exact_title"] in readme and "section 3.17" in readme
+
+
+# --- the review round of the block (rulings L2, L3, L6, L10, L11 and L12) ---
+
+def test_a_saved_title_row_longer_than_the_form_opens_without_its_dropdowns(tmp_path, madeup_out):
+    """Ruling L2: a layout written into the file with a title row of more than 20 words, which the reader takes, opens the block without
+    the title row and its dropdowns, with the line that says so and every other field as saved; the fill gives one value per output, so
+    gradio can send it, and the layout stays in force: a save of that form has no title row and is refused."""
+    import asyncio
+    nl = STRINGS["nl"]
+    layout = {"po_label": "Bestelnummer", "date_label": "Besteldatum", "title_row": [f"K{n}" for n in range(1, 23)],
+              "columns": ["item_code", "quantity"] + ["skip"] * 20, "decimal_comma": False}
+    path, page, made = tab(tmp_path, madeup_out, **(BUYER | {"po_layout": layout, "po_senders": ["inkoop@example.org"]}))
+    [fill] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == "exact_opened"]
+    out = handler(page, "exact_opened")("nl")
+    assert len(out) == len(fill.outputs)
+    asyncio.run(page.postprocess_data(fill, list(out), None))                       # no TypeError: each value fits its output
+    shown = named(EXACT_OPENED, out)
+    assert shown["title_row"] == [] and [shown[name]["visible"] for name in SLOT_NAMES] == [False] * SLOTS
+    assert shown["title_note"] == nl["exact_title_saved_long"] and nl["exact_state_set"] in shown["state"]
+    assert (shown["po_label"], shown["date_label"], shown["numbers"], shown["senders"]) == ("Bestelnummer", "Besteldatum", "point", "inkoop@example.org")
+    before = path.read_bytes()
+    form = {field: shown[field] for field in EXACT_FORM} | {"title_row": shown["title_row"]}
+    note = handler(page, "exact_saved")(*exact_args(ANDERS_PO, form, [], shown["senders"], filled=shown["filled"]))[0]
+    assert note == nl["exact_not_saved"].format(problems=nl["exact_problem:no_title"]) and path.read_bytes() == before
+
+
+def test_the_table_says_when_it_shows_only_the_first_lines_of_the_first_page(tmp_path, madeup_out):
+    """Ruling L3: a first page of more lines than the table shows gets the line under the table, in the page's language."""
+    path, page, made = tab(tmp_path, madeup_out, **BUYER)
+    many, sixty = tmp_path / "many.pdf", tmp_path / "sixty.pdf"
+    for pdf, count in ((many, 65), (sixty, 60)):
+        pdf.write_bytes(pdf_bytes([[Row([Text(0, f"Regel {n}", "Helvetica", 5)]) for n in range(1, count + 1)]], "made-up page"))
+    shown = named(SAMPLE_SHOWN, handler(page, "exact_sample_shown")(str(many), "nl"))
+    assert len(shown["page"]["data"]) == 60 and shown["page"]["data"][-1] == ["60", "Regel 60"]
+    assert shown["sample_note"] == STRINGS["nl"]["exact_page_more"].format(n=60) == "De tabel toont de eerste 60 regels van de eerste pagina."
+    assert named(SAMPLE_SHOWN, handler(page, "exact_sample_shown")(str(sixty), "nl"))["sample_note"] == ""         # all 60 shown
+    relabelled = named(RELABELLED, handler(page, "exact_relabel")("en", str(many), "comma", [], *[None] * SLOTS))
+    assert relabelled["sample_note"] == "The table shows the first 60 lines of the first page."
+
+
+def test_a_save_from_a_form_the_file_no_longer_holds_is_refused_and_selecting_the_tab_fills_it_again(tmp_path, madeup_out):
+    """Ruling L6: the block keeps what its form was filled with (at the load, at each select of the settings tab and after each save).
+    A save from a form that another browser tab overtook writes nothing and says so; the tab selected again shows the file and saves."""
+    nl = STRINGS["nl"]
+    path, page, made = tab(tmp_path, madeup_out, **(BUYER | {"po_layout": TRYOUT_PO_LAYOUT, "po_senders": ["inkoop@example.org"]}))
+    first, second = (named(EXACT_OPENED, handler(page, "exact_opened")("nl")) for _ in range(2))      # two browser tabs
+    assert first["filled"] == second["filled"] == {"po_layout": TRYOUT_PO_LAYOUT, "po_senders": ["inkoop@example.org"]}
+    saved = named(EXACT_SAVED, handler(page, "exact_saved")(*exact_args(ANDERS_PO, senders="inkoop@example.org, orders.example.org",
+                                                                         filled=first["filled"])))
+    assert saved["note"] == nl["exact_saved"] and saved["filled"]["po_senders"] == ["inkoop@example.org", "orders.example.org"]
+    before = path.read_bytes()
+    stale = named(EXACT_SAVED, handler(page, "exact_saved")(*exact_args(ANDERS_PO, senders="inkoop@example.org", filled=second["filled"])))
+    assert (stale["note"], stale["state"], stale["filled"]) == (nl["exact_changed"], SAME, second["filled"]) and path.read_bytes() == before
+    again = named(EXACT_OPENED, handler(page, "exact_opened")("nl"))                     # the settings tab selected again in tab 2
+    assert again["senders"] == "inkoop@example.org, orders.example.org" and again["filled"] == saved["filled"]
+    landed = named(EXACT_SAVED, handler(page, "exact_saved")(*exact_args(ANDERS_PO, senders="inkoop@example.org", filled=again["filled"])))
+    assert landed["note"] == nl["exact_saved"] and held(path)["po_senders"] == ["inkoop@example.org"]
+    by_hand(path, po_layout=TRYOUT_PO_LAYOUT | {"table_end": "Totaal exclusief btw"})        # the layout counts too: changed in the file
+    refused = named(EXACT_SAVED, handler(page, "exact_saved")(*exact_args(ANDERS_PO, filled=landed["filled"])))
+    assert refused["note"] == nl["exact_changed"] and held(path)["po_layout"]["table_end"] == "Totaal exclusief btw"
+    assert handler(page, "exact_saved")(*exact_args(ANDERS_PO, filled=None))[0] == nl["exact_changed"]     # a fill the page no longer knows
+
+
+def test_the_table_of_order_lines_gives_each_column_a_width_inside_the_block(tmp_path, madeup_out):
+    """Ruling L10: the table of order lines carries a width for each of its columns, together the whole width of the block, so that
+    its cells wrap inside it; the widest column is the description's."""
+    path, page, made = tab(tmp_path, madeup_out, **BUYER)
+    for args in (exact_args(ANDERS_PO), exact_args(SAMPLES / "c01_dutch_numbers.pdf", ERP_FORM, ERP_MEANINGS), exact_args(None)):
+        lines = named(TESTED, handler(page, "exact_tested")(*args))["lines"]
+        widths = [int(width.rstrip("%")) for width in lines["column_widths"]]
+        assert len(widths) == len(lines["value"]["headers"]) and sum(widths) == 100, lines["value"]["headers"]
+    lines = named(TESTED, handler(page, "exact_tested")(*exact_args(ANDERS_PO)))["lines"]
+    widths = dict(zip(lines["value"]["headers"], [int(width.rstrip("%")) for width in lines["column_widths"]]))
+    assert max(widths, key=widths.get) == "Omschrijving" and len(widths) == 7
+
+
+def test_a_pdf_that_cannot_be_opened_is_named_in_every_handler_that_opens_it(tmp_path, madeup_out):
+    """Ruling L11: a sample cut short gets the sentence that says what to do, never a class of the PDF library."""
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    path, page, made = tab(tmp_path, madeup_out, **BUYER)
+    cut = tmp_path / "cut.pdf"
+    cut.write_bytes(ANDERS_PO.read_bytes()[:1500])
+    shown = named(SAMPLE_SHOWN, handler(page, "exact_sample_shown")(str(cut), "nl"))
+    assert (shown["sample_note"], shown["page"]["data"]) == (nl["exact_problem:unopenable"], [])
+    found = named(TITLE_FOUND, handler(page, "exact_title_found")(str(cut), "Artikelcode", [], *[None] * SLOTS, "nl"))
+    assert found["title_note"] == nl["exact_problem:unopenable"]
+    assert named(TESTED, handler(page, "exact_tested")(*exact_args(cut)))["note"] == nl["exact_problem:unopenable"]
+    before = path.read_bytes()
+    saved = named(EXACT_SAVED, handler(page, "exact_saved")(*exact_args(cut)))
+    assert saved["note"] == nl["exact_not_saved"].format(problems=nl["exact_problem:unopenable"]) and path.read_bytes() == before
+    relabelled = named(RELABELLED, handler(page, "exact_relabel")("en", str(cut), "comma", [], *[None] * SLOTS))
+    assert relabelled["sample_note"] == en["exact_problem:unopenable"]
+    assert "Pdfminer" not in json.dumps([shown, found, saved, relabelled], default=str)
+
+
+def test_the_summary_is_shown_only_when_the_trial_has_no_problem(tmp_path, madeup_out):
+    """Ruling L12: "Klopt alles, druk dan op Opslaan" stands only above a reading without problems; a warning alone keeps it."""
+    nl = STRINGS["nl"]
+    path, page, made = tab(tmp_path, madeup_out, **BUYER)
+    wrong = named(TESTED, handler(page, "exact_tested")(*exact_args(madeup_out / "MU01_po_v1.pdf")))
+    assert wrong["summary"] == "" and wrong["problems"].splitlines() == [f"- {nl['exact_problem:title_differs']}",
+                                                                        f"- {nl['exact_problem:no_number']}"]
+    right = named(TESTED, handler(page, "exact_tested")(*exact_args(ANDERS_PO)))
+    assert right["summary"] == nl["exact_read"].format(n=12, answer=nl["exact_yes"]) and right["problems"] != ""        # the page-2 warning
+    refused = named(EXACT_SAVED, handler(page, "exact_saved")(*exact_args(madeup_out / "MU01_po_v1.pdf")))
+    assert refused["summary"] == "" and refused["note"].startswith("Niet opgeslagen: ")
+
+
+def test_the_manual_says_how_the_review_round_reads_a_sample():
+    exact = manual_sections()["3.17"]
+    assert "the first 60 lines" in exact and "\"1000 (1.000)\"" in exact and "\"1 (1.000)\"" in exact
+    assert "\"Inkooporder:\"" in exact and "which is two purchase orders in one PDF" not in exact
+    assert "another browser tab" in exact and "\"Klopt alles, druk dan op Opslaan\"" in exact

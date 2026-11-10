@@ -8,8 +8,9 @@ seven delegated permissions of COPILOT_SCOPES together, four of which need an ad
 message and additional context) or links to files in OneDrive and SharePoint, and answers with text only; web grounding can be
 switched off per message, enterprise grounding cannot; it names no model and states no JSON mode, no limits and no throttling.
 
-The request. complete reads the text layer of the request's PDF with extract_lines (aid/readers/pdf_text.py), from a temporary file
-that is removed again, and sends it as additional context: one entry per page, each line written "p<page> r<line>: <text>" with the
+The request. complete reads the text layer of the request's PDF with extract_lines (aid/readers/pdf_text.py), from a copy in the
+client's work folder that is removed again (the runner's <cases_root>/tmp/work; from memory without one, never from the system's
+temporary folder), and sends it as additional context: one entry per page, each line written "p<page> r<line>: <text>" with the
 page and the line as the reader's sources count them, so that the reader's check of every value against the page
 (aid/readers/supplier_llm.py, "Checking the sources") works as for any model, and a value Copilot takes from elsewhere is uncertain. A
 request with images, or with a PDF without text lines (a scan), raises ReaderError "Copilot reads the text layer only: this document
@@ -49,9 +50,9 @@ failure can be the document's own, while a failure to get the token or to create
 ask sends one message as it is, without context and without the instruction to answer in JSON: the test of Copilot on the settings
 tab of the review page uses it.
 """
+import io
 import json
 import re
-import tempfile
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -60,6 +61,7 @@ from urllib.parse import quote
 import pdfplumber
 import requests
 
+from aid.case import work_copy_folder
 from aid.connections.microsoft import COPILOT_SCOPES, GRAPH_TIMEOUT, MicrosoftAccount, MicrosoftUnreachable, SignInNeeded
 from aid.readers.llm_client import LlmRequest, LlmResponse, ReaderError
 from aid.readers.pdf_text import TextLine, extract_lines
@@ -101,18 +103,19 @@ class CopilotError(Exception):
 class CopilotClient:
     """Microsoft 365 Copilot through the Chat API with the account's sign-in (see the module docstring), an LlmClient. `session` is
     the requests session that Graph is called through (None: requests itself), and `sleep` waits the seconds before a request is
-    sent again."""
+    sent again. `work` is the folder for the copy of a PDF while its text layer is read: the runner gives <cases_root>/tmp/work, so
+    that the copy lies under the cases and never in the system's temporary folder; without one the PDF is read from memory."""
     name = "microsoft-365-copilot"
 
     def __init__(self, account: MicrosoftAccount, time_zone: str = "Europe/Amsterdam", session=None,
-                 sleep: Callable[[float], None] = time.sleep):
-        self.account, self.time_zone, self.session, self.sleep = account, time_zone, session, sleep
+                 sleep: Callable[[float], None] = time.sleep, work: Path | None = None):
+        self.account, self.time_zone, self.session, self.sleep, self.work = account, time_zone, session, sleep, work
 
     def complete(self, req: LlmRequest) -> LlmResponse:
         """Send the request as one chat in a new conversation, its PDF's text layer as the context, and return the answer. Raises
         ReaderError for a request with images or a PDF without a text layer (before any call) and for a chat without an answer,
         SignInNeeded and CopilotError as the module docstring says."""
-        context = _page_context(req)
+        context = _page_context(req, self.work)
         return self.ask(_message(req), context)
 
     def ask(self, text: str, context: list[dict] | None = None) -> LlmResponse:
@@ -170,7 +173,7 @@ class CopilotClient:
             self.sleep(_wait(response))
 
 
-def _page_context(req: LlmRequest) -> list[dict]:
+def _page_context(req: LlmRequest, work: Path | None = None) -> list[dict]:
     """The additional context of a request: an entry per page of its PDF's text layer, [] without a PDF. ReaderError for images, for
     a PDF without text lines, and for a PDF with a page that holds an image and no text lines (a scanned page), so that no document
     is read in part; a page with neither (a blank page) is left out."""
@@ -178,7 +181,7 @@ def _page_context(req: LlmRequest) -> list[dict]:
         raise ReaderError(NO_TEXT_LAYER)
     if req.pdf is None:
         return []
-    lines, with_images = _text_lines(req.pdf)
+    lines, with_images = _text_lines(req.pdf, work)
     if not lines:
         raise ReaderError(NO_TEXT_LAYER)
     pages = sorted({line.page for line in lines})
@@ -188,11 +191,16 @@ def _page_context(req: LlmRequest) -> list[dict]:
              "description": PAGE.format(page=page)} for page in pages]
 
 
-def _text_lines(pdf: bytes) -> tuple[list[TextLine], list[bool]]:
-    """The text lines of the PDF's bytes and, for each page in order, whether it holds an image, read from a temporary file that is
-    removed again."""
-    with tempfile.TemporaryDirectory(prefix="aid-copilot-") as folder:
-        path = Path(folder) / "document.pdf"
+def _text_lines(pdf: bytes, work: Path | None = None) -> tuple[list[TextLine], list[bool]]:
+    """The text lines of the PDF's bytes and, for each page in order, whether it holds an image: with a work folder read from a copy
+    in a folder of its own there (work_copy_folder of aid/case.py), which is removed again; without one read from memory. No copy
+    ever lies in the system's temporary folder."""
+    if work is None:
+        with pdfplumber.open(io.BytesIO(pdf)) as document:
+            with_images = [bool(page.images) for page in document.pages]
+        return extract_lines(io.BytesIO(pdf)), with_images
+    with work_copy_folder(work, "aid-copilot-") as folder:
+        path = folder / "document.pdf"
         path.write_bytes(pdf)
         with pdfplumber.open(path) as document:
             with_images = [bool(page.images) for page in document.pages]

@@ -2,6 +2,7 @@
 switch and the launcher's own stop, the signals, the single instance and the leftovers, --status, --stop, --resume, --background,
 the tie to the launcher and the start at logon on Windows (with fakes), and two runs of the real launcher on the demo folder."""
 import ctypes
+import inspect
 import json
 import os
 import re
@@ -199,6 +200,9 @@ def tying(proc) -> bool:
     return True
 
 
+REAL_OPEN_URL = start._open_url                 # kept before the fixture below replaces it
+
+
 @pytest.fixture(autouse=True)
 def nothing_answers(monkeypatch):
     """No test asks a real address: the review page and the capture server refuse unless a test gives its own opener."""
@@ -332,14 +336,49 @@ def test_the_three_commands_use_the_given_python_and_the_absolute_settings(tmp_p
     settings = Path("live/settings.json")
     absolute = str((tmp_path / "live" / "settings.json").resolve())
     assert start.commands(settings, False, None, PY) == {
-        "runner": [PY, "-m", "aid.runner", "--settings", absolute],
-        "review": [PY, "-m", "aid.review", "--settings", absolute],
-        "capture": [PY, "-m", "aid.capture_server", "--settings", absolute]}
+        "runner": [PY, "-X", "utf8", "-u", "-m", "aid.runner", "--settings", absolute],
+        "review": [PY, "-X", "utf8", "-u", "-m", "aid.review", "--settings", absolute],
+        "capture": [PY, "-X", "utf8", "-u", "-m", "aid.capture_server", "--settings", absolute]}
     with_options = start.commands(settings, True, 5, PY)
-    assert with_options["runner"] == [PY, "-m", "aid.runner", "--settings", absolute, "--poll-seconds", "5"]
-    assert with_options["review"] == [PY, "-m", "aid.review", "--settings", absolute]
-    assert with_options["capture"] == [PY, "-m", "aid.capture_server", "--settings", absolute, "--testshop"]
+    assert with_options["runner"] == [PY, "-X", "utf8", "-u", "-m", "aid.runner", "--settings", absolute, "--poll-seconds", "5"]
+    assert with_options["review"] == [PY, "-X", "utf8", "-u", "-m", "aid.review", "--settings", absolute]
+    assert with_options["capture"] == [PY, "-X", "utf8", "-u", "-m", "aid.capture_server", "--settings", absolute, "--testshop"]
     assert start.commands(settings, False, 1.5, PY)["runner"][-2:] == ["--poll-seconds", "1.5"]
+
+
+def test_the_parts_are_started_with_utf8_and_unbuffered(folder):
+    """Each part gets -X utf8 and -u on its command line, before -m, so that its .out file holds every line at once and in UTF-8 also
+    under a Python that does not read PYTHONIOENCODING and PYTHONUNBUFFERED: one started with -I, as every Python of the aid from a
+    folder is (aid/portable.py). The environment keeps both variables for a Python that reads them."""
+    for cmd in start.commands(folder / "settings.json", True, 5, PY).values():
+        assert cmd[:5] == [PY, "-X", "utf8", "-u", "-m"]
+    clock = Clock()
+    spawn = Spawn(clock)
+    stop_at(clock, folder, clock.now + 2)
+    assert run(folder, clock, spawn) == 0
+    for name, _, cmd, kwargs in spawn.calls:
+        assert cmd[1:5] == ["-X", "utf8", "-u", "-m"] and kwargs["env"]["PYTHONIOENCODING"] == "utf-8", name
+    # the state file names each part's command by its module, also with the options before -m
+    assert [start._Part(name, cmd).command for name, _, cmd, _ in spawn.calls] == ["aid.runner", "aid.review", "aid.capture_server"]
+
+
+def test_an_isolated_launcher_starts_its_parts_and_its_start_at_logon_isolated(tmp_path, monkeypatch):
+    """The aid from a folder starts the launcher with -I (aid/portable.py), so that the user's own site-packages and Python's
+    environment variables never reach the folder's Python. A launcher that runs isolated gives -I to its parts and to the command of
+    the start at logon, which the detached start of --background and --install-autostart uses as well; a launcher that does not run
+    isolated (a copy of the repository) gives it to neither, since its parts find the package aid through the working folder."""
+    assert start._isolated() is bool(sys.flags.isolated)
+    python = python_with_spaces(tmp_path, pythonw=True)
+    settings = tmp_path / "settings.json"
+    monkeypatch.setattr(start, "_isolated", lambda: True)
+    for cmd in start.commands(settings, True, 5, PY).values():
+        assert cmd[:6] == [PY, "-I", "-X", "utf8", "-u", "-m"]
+    values = start.autostart_shortcut(settings, True, python, poll_seconds=30, startup=tmp_path / "Startup")
+    assert values["argv"] == ["-I", "-m", "aid.start", "--settings", str(settings.resolve()), "--testshop", "--poll-seconds", "30"]
+    assert values["arguments"] == f'-I -m aid.start --settings "{settings.resolve()}" --testshop --poll-seconds 30'
+    monkeypatch.setattr(start, "_isolated", lambda: False)
+    assert all("-I" not in cmd for cmd in start.commands(settings, True, 5, PY).values())
+    assert start.autostart_shortcut(settings, False, python, startup=tmp_path / "Startup")["argv"][0] == "-m"
 
 
 def test_the_stop_file_is_the_runners_own():
@@ -2883,3 +2922,21 @@ def test_the_real_launcher_stops_its_parts_on_sigterm(tmp_path):
         runner_out = (launcher.live / "logs" / "runner.out").read_text(encoding="utf-8", errors="replace")
         assert "Traceback" not in runner_out and "KeyboardInterrupt" not in runner_out
         assert "stopped by" in runner_out
+
+
+def test_the_launcher_asks_its_local_addresses_without_any_proxy(monkeypatch):
+    """A proxy of the PC cannot reach this PC's own 127.0.0.1: the launcher asks its two addresses (a start, --status, --stop)
+    without any proxy, also when the environment names one, so that a page that answers is seen as answering."""
+    import urllib.error
+    import urllib.request
+
+    from aid.tests.helpers import local_page, unreachable_proxy, without_proxies
+    without_proxies(monkeypatch)
+    monkeypatch.setenv("http_proxy", unreachable_proxy())
+    monkeypatch.setattr(start, "_open_url", REAL_OPEN_URL)              # the real one, which the fixture nothing_answers replaces
+    with local_page() as url:
+        with pytest.raises(urllib.error.URLError):                     # through the proxy the page cannot be reached
+            urllib.request.urlopen(url, timeout=5)
+        assert start._answers(url) is True
+    for check in (start.supervise, start.status, start.stop, start.background, start.install_autostart):
+        assert inspect.signature(check).parameters["opener"].default is None, check     # None: _open_url, which asks without a proxy

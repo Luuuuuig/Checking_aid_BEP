@@ -93,8 +93,9 @@ def deps(tmp_path, madeup_out, writer=None, settings=None):
     that stands at 12 November 2026, 9:00.
 
     The PO PDFs of the madeup_out fixture are filed once per session and each call copies that store, which takes a small part of
-    the time filing does; the pdf_path of a version in the copy names the session's copy of its PDF, which holds the same bytes. A
-    set from any other folder is filed for the call. A second call on the same tmp_path reuses its store and its cases."""
+    the time filing does; a version read from the copy has the copy's own po.pdf as its pdf_path (the store reads it from the
+    version's own folder, aid/po_store.py), which holds the same bytes. A set from any other folder is filed for the call. A second
+    call on the same tmp_path reuses its store and its cases."""
     from aid.decider import NoDecider
     from aid.execution.writer import PreparedWriter
     from aid.pipeline import Deps, read_with_parser

@@ -3,10 +3,12 @@
 run_case takes a case (aid/case.py) and the dependencies of the run (Deps) and goes through these steps in this order. Each step
 writes its output to the case folder as steps/<nn>_<name>.json and records it in the audit record (aid/audit.py) with its seconds:
 
-    01_po_versions    the versions the store holds of the case's PO; none when the PO number is unknown
+    01_po_versions    what the store gives the case's PO to be matched against (PoStore.candidates of aid/po_store.py): its PDF
+                      versions, or the PO as it stands alone when that is a look from an ERP export and the case is a cart or the PO
+                      has no PDF version; none when the PO number is unknown
     02_read_document  the supplier's document, the first input file of the case, as deps.reader reads it
-    03_version        the version the document answers (aid/versioning.py). A cart is checked against the PO as it stands: the latest
-                      stored version, which for a cart filed from the ERP export is its one version
+    03_version        the version the document answers (aid/versioning.py), among those of step 01. A cart is checked against the PO
+                      as it stands: the last of step 01, the latest PDF version or the look from the export
     04_match          the line pairs (aid/matching.py)
     05_compare        the findings (aid/comparison.py), with the selected version as their version
     06_route          the context of the case and the actions (aid/routing.py), each action also a decision in the audit
@@ -274,7 +276,7 @@ class _Run:
             self.audit.model(*_decider_model(self.deps.decider), role="decider")
 
         self.begin("po_versions")
-        versions = self.deps.store.versions(self.case.po_number) if self.case.po_number else []
+        versions = self.deps.store.candidates(self.case.po_number, self.case.kind) if self.case.po_number else []
         self.supplier = versions[-1].supplier if versions else None
         self.end(1, {"po_number": self.case.po_number, "versions": [version.model_dump(mode="json") for version in versions]})
 

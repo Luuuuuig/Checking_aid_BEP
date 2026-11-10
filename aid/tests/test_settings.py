@@ -1,11 +1,14 @@
 import json
 import re
+import subprocess
+import sys
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
 
-from aid.settings import Settings, load_settings
+from aid.readers.po_layout import PoLayout
+from aid.settings import Settings, SettingsInvalid, load_settings, update_settings_file
 
 
 def test_example_settings_load(tmp_path):
@@ -85,3 +88,94 @@ def test_a_settings_file_that_fails_names_the_field_and_never_the_value(tmp_path
     error = info.value
     assert type(error) is ValueError and error.__cause__ is None and error.__suppress_context__
     assert next(iter(change)) in str(error) and value not in str(error) and "input_value" not in str(error)
+
+
+# --- the layout of the PO PDF and the senders of the PO e-mails ---
+
+LAYOUT = {"po_label": "Bestelnummer", "date_label": "Besteldatum", "supplier_line": 3,       # a made-up layout, as the settings hold one
+          "title_row": ["Hoeveelheid", "Artikelcode", "Stuksprijs"], "columns": ["quantity", "item_code", "unit_price"],
+          "prices_per_piece": True}
+
+
+def test_the_example_holds_no_layout_and_no_senders_and_a_settings_file_may_hold_both(tmp_path):
+    example = json.loads(Path("aid/settings.example.json").read_text(encoding="utf-8"))
+    assert example["po_layout"] is None and example["po_senders"] == []
+    settings = load_settings(Path("aid/settings.example.json"))
+    assert settings.po_layout is None and settings.po_senders == []
+    p = tmp_path / "s.json"; p.write_text(json.dumps(example | {"po_layout": LAYOUT, "po_senders": ["inkoop@example.org", "example.com"]}))
+    settings = load_settings(p)
+    assert settings.po_layout == PoLayout.model_validate(LAYOUT)
+    assert settings.po_layout.table_end is None and settings.po_layout.decimal_comma
+    assert settings.po_senders == ["inkoop@example.org", "example.com"]
+
+
+@pytest.mark.parametrize("change, field", [
+    ({"title_row": ["Artikelcode"], "columns": ["item_code"]}, "po_layout.title_row"),         # fewer than two words
+    ({"columns": ["quantity", "item_code"]}, "po_layout.columns"),                              # one meaning too few
+    ({"columns": ["quantity", "description", "unit_price"]}, "po_layout.columns"),              # no item code
+    ({"po_label": ""}, "po_layout.po_label"),
+    ({"supplier_label": "Crediteur"}, "po_layout.supplier_line"),                               # a label and a line for the supplier
+    ({"kolommen": ["quantity"]}, "po_layout.kolommen"),                                         # a key the layout does not know
+    ({"title_row": "Hoeveelheid Artikelcode Stuksprijs"}, "po_layout.title_row"),               # a text where a list is asked
+    ({"title_row": ["Hoeveelheid", "Artikel code", "Stuksprijs"]}, "po_layout.title_row"),      # two printed words in one entry
+])
+def test_a_layout_that_does_not_validate_is_named_by_its_field(tmp_path, change, field):
+    """A layout at fault stops the aid as any setting does: the error names the field of the layout and its problem, and never a
+    word of the layout, which is the company's. A save of such a layout is refused in the same way and leaves the file as it was."""
+    example = json.loads(Path("aid/settings.example.json").read_text(encoding="utf-8"))
+    p = tmp_path / "s.json"; p.write_text(json.dumps(example | {"po_layout": LAYOUT | change}))
+    with pytest.raises(ValueError) as info:
+        load_settings(p)
+    error = str(info.value)
+    assert type(info.value) is ValueError and info.value.__cause__ is None and field in error and "input_value" not in error
+    for word in ("Bestelnummer", "Besteldatum", "Hoeveelheid", "Artikelcode", "Artikel code", "Stuksprijs", "Crediteur"):
+        assert word not in error, word
+    p.write_text(json.dumps(example, indent=2))
+    before = p.read_text()
+    with pytest.raises(SettingsInvalid) as refused:
+        update_settings_file(p, {"po_layout": LAYOUT | change})
+    assert field in refused.value.fields and p.read_text() == before
+    assert update_settings_file(p, {"po_layout": LAYOUT, "po_senders": ["example.org"]}).po_layout == PoLayout.model_validate(LAYOUT)
+    saved = json.loads(p.read_text())
+    assert (saved["po_layout"], saved["po_senders"]) == (LAYOUT, ["example.org"]) and list(saved) == list(example)   # each key in its place
+
+
+
+@pytest.mark.parametrize("entry", ["", " ", "Inkoop <inkoop@example.org>", "inkoop@example.org,", "inkoop@example.org;erp@example.org",
+                                   "inkoop@example.org erp@example.org", "inkoop", "inkoop@", "@", "example", "inkoop@example"])
+def test_a_sender_that_is_no_address_or_domain_is_refused_by_its_place(tmp_path, entry):
+    """Each entry of po_senders is, after its outer spaces, an e-mail address or a domain (the part after the at sign, with or without
+    the at sign). Anything else is refused by its place in the list, po_senders.<n>, and never by what it holds: a blank entry, the
+    form a mail program shows (a name with the address in angle brackets), two addresses in one entry, a trailing comma. A save of
+    such a list is refused in the same way and leaves the file as it was."""
+    example = json.loads(Path("aid/settings.example.json").read_text(encoding="utf-8"))
+    p = tmp_path / "s.json"
+    p.write_text(json.dumps(example | {"po_senders": ["erp@example.org", entry]}))
+    with pytest.raises(ValueError) as info:
+        load_settings(p)
+    error = str(info.value)
+    assert "po_senders.1" in error and "po_senders.0" not in error and "input_value" not in error
+    assert not entry.strip() or entry.strip() not in error.split("s.json is not valid: ", 1)[1], error
+    p.write_text(json.dumps(example, indent=2))
+    before = p.read_text()
+    with pytest.raises(SettingsInvalid) as refused:
+        update_settings_file(p, {"po_senders": [entry]})
+    assert refused.value.fields == ["po_senders.0"] and p.read_text() == before
+
+
+def test_a_sender_list_of_addresses_and_domains_loads(tmp_path):
+    """Addresses and domains load, with their outer spaces taken off; an empty list is any sender."""
+    example = json.loads(Path("aid/settings.example.json").read_text(encoding="utf-8"))
+    senders = ["Inkoop@Example.ORG", " example.org ", "@example.com", "mail.example.org", "a.b-c@x.example.org"]
+    p = tmp_path / "s.json"
+    p.write_text(json.dumps(example | {"po_senders": senders}))
+    assert load_settings(p).po_senders == ["Inkoop@Example.ORG", "example.org", "@example.com", "mail.example.org", "a.b-c@x.example.org"]
+
+
+def test_the_settings_load_without_the_pdf_libraries():
+    """The layout's model is pydantic only: a process that reads the settings, as the review page's command does first, does not load
+    the PDF libraries for it."""
+    code = "import sys, aid.settings; print(sorted(name for name in ('pdfplumber', 'pypdfium2', 'reportlab') if name in sys.modules))"
+    root = Path(__file__).resolve().parents[2]
+    done = subprocess.run([sys.executable, "-B", "-c", code], cwd=root, capture_output=True, text=True, timeout=120)
+    assert done.returncode == 0 and done.stdout.strip() == "[]", done.stderr

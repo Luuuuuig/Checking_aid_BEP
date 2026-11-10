@@ -7,19 +7,31 @@ the settings, as plain text and as simple HTML with the same content. Its blocks
 - Behandelde zaken (Handled cases): every case, in its digest line (CaseResult.digest_line), with a line under it for each of its
   writes: the field in words, the article, the line or the file it changed, the old and the new value, and the undo link of a write
   made. A change prepared says "(voorbereid)" and a write that failed "(mislukt)" instead: neither changed the ERP, so neither has
-  anything to undo.
+  anything to undo. Only a price, a delivery date or a quantity of a PO line and an article's purchase price are rows of the list
+  "In Exact invoeren" (aid/execution/by_hand.py): the confirmation to attach (or detach) and the status that the aid prepared are on
+  no list yet, so the buyer attaches the confirmation and sets the status in Exact himself, and their lines say "(zelf in Exact
+  doen)" ("(do it in Exact yourself)") instead. They are not counted among the prepared changes of the case's line, which then counts
+  them on their own, in the language of the settings: "PO 250101 (S01): afgesloten, 2 voorbereide wijzigingen, 2 in Exact zelf te
+  doen" ("closed, 2 prepared changes, 2 to do in Exact yourself").
 - Wacht op u (Waiting for you): the cases in review, each with its link to the review page and a line per review item: its reason
   by the review page's label (see below), then its field and its line when they are known.
 - Vraag gesteld aan de leverancier (Question sent to the supplier): the cases that wait for the supplier, each with the supplier and
   the template of each question in words. A request to the approver to approve a PO again is no question.
 - Mislukt (Failed): the failed cases, each with the first line of its error.
 - Overgeslagen (Skipped): the skipped files grouped by their reason, "<file>: <reason>", the reasons in alphabetical order.
-While the runner cannot read the work mailbox because the Microsoft sign-in has lapsed (aid/runner.py), one line under the title,
-before the blocks, says so: "Postvak niet verbonden: meld je opnieuw aan op het tabblad Instellingen, onderaan bij Koppelingen"
-("Mailbox not connected: sign in again on the Settings tab, at its bottom under Connections"). While Microsoft 365 Copilot, the AI
-service, fails (it refused, could not be reached, or its sign-in has lapsed), a line after it names the error and the number of
-cases waiting for Copilot: "Copilot werkt niet (<error>): 2 zaken wachten erop; meld je aan voor Copilot of test Copilot op het
-tabblad Instellingen, onderaan bij Koppelingen". Both lines name the place of the buttons, because the settings tab keeps them
+While changes wait on the list "In Exact invoeren" of the review page (aid/execution/by_hand.py), the first line under the title,
+before the blocks, gives their number and the link to that tab: "In Exact in te voeren: 2 wijzigingen. Open het tabblad In Exact
+invoeren: <link>" ("To enter in Exact: 2 changes. Open the tab Enter in Exact: <link>"); the caller counts them (to_enter), and a
+digest built without the count has no such line. When the caller could not read the list (to_enter None), that line says so, with
+the same link, so that the digest does not look like a day with nothing to enter: "De lijst In Exact invoeren kon niet worden
+gelezen. Open het tabblad om te zien wat er nog in te voeren is: <link>" ("The list Enter in Exact could not be read. Open the tab to
+see what is still to enter: <link>"). While the runner cannot read the work mailbox because the Microsoft sign-in has
+lapsed (aid/runner.py), one line under the title, before the blocks, says so: "Postvak niet verbonden: meld u opnieuw aan op het
+tabblad Instellingen, onderaan bij Koppelingen" ("Mailbox not connected: sign in again on the Settings tab, at its bottom under
+Connections"). While Microsoft 365 Copilot, the AI service, fails (it refused, could not be reached, or its sign-in has lapsed), a
+line after it names the error and the number of cases waiting for Copilot: "Copilot werkt niet (<error>): 2 zaken wachten erop; meld
+u aan voor Copilot of test Copilot op het tabblad Instellingen, onderaan bij Koppelingen". Both lines name the place of the buttons,
+because the settings tab keeps them
 folded away under "Koppelingen" at its bottom (aid/review/page.py). The documents that Copilot could not read while it read
 others (it refused them, or failed them after reading another case) are a line of their own: "Copilot kon 1 document niet lezen;
 nieuwe poging bij de volgende ronde".
@@ -30,14 +42,15 @@ supplier when that is known. The reason of a review item is shown by its label o
 labels "no answer in 3 working days"); a reason without a label, and an error, is shown by its first line as the routing or the
 pipeline wrote it, without the name the pipeline gives a write (" (rule R04, po_line_price, line 1)"), because the digest shows no
 rule code. Of the settings it shows only the address of the review page, in its links: never a threshold and never the
-authorization limit. The text writes a link as [label](link) and the HTML as an anchor, and the HTML
-passes every value through html.escape.
+authorization limit. The text writes a link as [label](link), and a link whose label is its address as the address alone (the link
+of the list); the HTML writes each link as an anchor and passes every value through html.escape.
 
 The subject is "[Inkoopassistent] Dagoverzicht DD-MM-YYYY", in English "[Inkoopassistent] Daily digest DD-MM-YYYY": the prefix is
 the same in both languages because the Power Automate flow matches it. undo_link and review_link are the links to the review page
 (settings.review_url): <review_url>/?case=<case id> opens the page with that case selected, and &undo=<entry id> also selects that
 write in the page's list of writes to undo, which the buyer then undoes with the undo button; opening the link undoes nothing. The
 page offers the cases in review and the closed cases with a write made in the system that is not undone (aid/review/page.py).
+list_link, <review_url>/?tab=invoeren, opens the page with the tab "In Exact invoeren" selected.
 digest_due says when the digest is to be sent, and send_digest sends its text to the buyer through a mailer
 (aid/messaging).
 
@@ -57,6 +70,8 @@ from aid.execution.ops import WriteOp
 from aid.execution.writer import WriteLogEntry
 from aid.messaging import QUESTIONS, Mailer, Message, SentRecord
 from aid.pipeline import CaseResult, ReviewItem
+from aid.pipeline import _WORDS as _CASE_WORDS, _digest_line
+from aid.review.hand_list import TAB
 from aid.review.i18n import STRINGS, reason_label
 from aid.routing import findings_by_id
 from aid.settings import Settings
@@ -64,18 +79,24 @@ from aid.settings import Settings
 SUBJECT_PREFIX = "[Inkoopassistent]"             # the same in both languages: the Power Automate flow matches it
 DIGEST = "digest"                                # the template of the digest's message, and the start of its case id
 _AMOUNTS = ("po_line_price", "article_price", "po_line_quantity")      # the kinds whose values take the decimal sign of the language
+_YOURS = ("attach_document", "detach_document", "set_status")  # prepared, but on no list yet: the buyer does them in Exact himself
 _WRITE_NAME = re.compile(r" \((?:write: )?rule R\d+[^)]*\)")    # the pipeline's name of a write in a reason, " (rule R04, po_line_price,
                                                             # line 1)", and in the error of a case, " (write: rule R04, ...)"
 _WORDS = {
     "nl": {"digest": "Dagoverzicht", "handled": "Behandelde zaken", "review": "Wacht op u", "waiting": "Vraag gesteld aan de leverancier",
            "failed": "Mislukt", "skipped": "Overgeslagen", "nothing": "Er zijn geen zaken behandeld en geen bestanden overgeslagen.",
-           "mailbox": "Postvak niet verbonden: meld je opnieuw aan op het tabblad Instellingen, onderaan bij Koppelingen",
-           "copilot": ("Copilot werkt niet ({error}): {waiting}; meld je aan voor Copilot of test Copilot op het tabblad Instellingen, "
+           "to_enter_one": "In Exact in te voeren: 1 wijziging. Open het tabblad In Exact invoeren: {link}",
+           "to_enter_many": "In Exact in te voeren: {n} wijzigingen. Open het tabblad In Exact invoeren: {link}",
+           "to_enter_unread": ("De lijst In Exact invoeren kon niet worden gelezen. Open het tabblad om te zien wat er nog in te voeren is: "
+                               "{link}"),
+           "mailbox": "Postvak niet verbonden: meld u opnieuw aan op het tabblad Instellingen, onderaan bij Koppelingen",
+           "copilot": ("Copilot werkt niet ({error}): {waiting}; meld u aan voor Copilot of test Copilot op het tabblad Instellingen, "
                        "onderaan bij Koppelingen"),
            "copilot_one": "1 zaak wacht erop", "copilot_many": "{n} zaken wachten erop",
            "copilot_refused": "Copilot kon {documents} niet lezen; nieuwe poging bij de volgende ronde",
            "document_one": "1 document", "documents_many": "{n} documenten",
            "undo": "ongedaan maken", "open": "beoordelen", "status": {"prepared": "(voorbereid)", "failed": "(mislukt)"},
+           "yours": "(zelf in Exact doen)", "yours_count": "{n} in Exact zelf te doen",
            "line": "regel", "lines": "regels", "of_document": "van het document", "unknown": "onbekend", "decimal": ",",
            "kinds": {"po_line_price": "prijs", "po_line_date": "levertijd", "po_line_quantity": "aantal", "article_price": "artikelprijs",
                      "attach_document": "bijlage", "detach_document": "bijlage", "set_status": "status"},
@@ -85,6 +106,9 @@ _WORDS = {
                          "missing_info": "ontbrekende gegevens"}},
     "en": {"digest": "Daily digest", "handled": "Handled cases", "review": "Waiting for you", "waiting": "Question sent to the supplier",
            "failed": "Failed", "skipped": "Skipped", "nothing": "No cases were handled and no files were skipped.",
+           "to_enter_one": "To enter in Exact: 1 change. Open the tab Enter in Exact: {link}",
+           "to_enter_many": "To enter in Exact: {n} changes. Open the tab Enter in Exact: {link}",
+           "to_enter_unread": "The list Enter in Exact could not be read. Open the tab to see what is still to enter: {link}",
            "mailbox": "Mailbox not connected: sign in again on the Settings tab, at its bottom under Connections",
            "copilot": ("Copilot is not working ({error}): {waiting}; sign in for Copilot or test Copilot on the Settings tab, at its "
                        "bottom under Connections"),
@@ -92,6 +116,7 @@ _WORDS = {
            "copilot_refused": "Copilot could not read {documents}; {again} tried again at the next pass",
            "document_one": "1 document", "documents_many": "{n} documents",
            "undo": "undo", "open": "review", "status": {"prepared": "(prepared)", "failed": "(failed)"},
+           "yours": "(do it in Exact yourself)", "yours_count": "{n} to do in Exact yourself",
            "line": "line", "lines": "lines", "of_document": "of the document", "unknown": "unknown", "decimal": ".",
            "kinds": {"po_line_price": "price", "po_line_date": "delivery date", "po_line_quantity": "quantity", "article_price": "article price",
                      "attach_document": "attachment", "detach_document": "attachment", "set_status": "status"},
@@ -133,6 +158,11 @@ def review_link(settings: Settings, case_id: str) -> str:
     return f"{_review_url(settings)}/?case={case_id}"
 
 
+def list_link(settings: Settings) -> str:
+    """The link to the review page that selects the tab "In Exact invoeren", the list of the changes to enter in Exact."""
+    return f"{_review_url(settings)}/?tab={TAB}"
+
+
 def _review_url(settings: Settings) -> str:
     """settings.review_url without a trailing slash, as the links add their own."""
     return settings.review_url.rstrip("/")
@@ -150,21 +180,30 @@ def digest_due(now: datetime, last_sent: datetime | None, settings: Settings) ->
 
 
 def build_digest(results: list[CaseResult], skipped: list[tuple[str, str]], settings: Settings, period: date,
-                 mailbox_lapsed: bool = False, copilot_down: tuple[str, int] | None = None, copilot_refused: int = 0) -> Digest:
+                 mailbox_lapsed: bool = False, copilot_down: tuple[str, int] | None = None, copilot_refused: int = 0,
+                 to_enter: int | None = 0) -> Digest:
     """The digest of the day `period` from the results of its cases and the skipped files, (name, reason) pairs, in the language of
-    the settings (see the module docstring), with the line on the work mailbox when its sign-in has lapsed, the line on Copilot,
-    (its error, the number of cases waiting for it), when it fails, and the line on the documents Copilot could not read while it
-    read others, their number."""
+    the settings (see the module docstring), with the line of the changes to enter in Exact while to_enter, their number, is not 0,
+    or the line that the list could not be read when to_enter is None, the line on the work mailbox when its sign-in has lapsed, the
+    line on Copilot, (its error, the number of cases waiting for it), when it fails, and the line on the documents Copilot could not
+    read while it read others, their number."""
     words = _WORDS[settings.language]
-    notes = [words["mailbox"]] if mailbox_lapsed else []
+    notes: list[_Line] = []
+    if to_enter is None or to_enter:
+        key = "to_enter_unread" if to_enter is None else "to_enter_one" if to_enter == 1 else "to_enter_many"
+        before, _, after = words[key].partition("{link}")
+        link = list_link(settings)
+        notes.append([before.format(n=to_enter), _Link(link, link), after])
+    if mailbox_lapsed:
+        notes.append([words["mailbox"]])
     if copilot_down is not None:
         error, waiting = copilot_down
         cases = words["copilot_one"] if waiting == 1 else words["copilot_many"].format(n=waiting)
-        notes.append(words["copilot"].format(error=error, waiting=cases))
+        notes.append([words["copilot"].format(error=error, waiting=cases)])
     if copilot_refused:
         documents = words["document_one"] if copilot_refused == 1 else words["documents_many"].format(n=copilot_refused)
         again = "it is" if copilot_refused == 1 else "they are"
-        notes.append(words["copilot_refused"].format(documents=documents, again=again))
+        notes.append([words["copilot_refused"].format(documents=documents, again=again)])
     title = f"{words['digest']} {period:%d-%m-%Y}"
     blocks = [(words["handled"], [_handled(result, settings, words) for result in results]),
               (words["review"], [_in_review(result, settings, words) for result in results if result.status == "review"]),
@@ -187,19 +226,41 @@ def send_digest(d: Digest, mailer: Mailer, settings: Settings) -> SentRecord:
 # --- the lines of the blocks ---
 
 def _handled(result: CaseResult, settings: Settings, words: dict) -> _Item:
-    """A handled case: its digest line, and a line per write under it."""
-    return _Item([result.digest_line], [_write(entry, result.case_id, settings, words) for entry in result.write_entries])
+    """A handled case: its line (_case_line), and a line per write under it."""
+    return _Item([_case_line(result, settings, words)], [_write(entry, result.case_id, settings, words) for entry in result.write_entries])
+
+
+def _case_line(result: CaseResult, settings: Settings, words: dict) -> str:
+    """The case's digest line (CaseResult.digest_line). When the aid prepared a confirmation to attach or a status (_yours), the line
+    is made again as the pipeline makes it, in the language of the settings, without those among the prepared changes, and then
+    counts them on their own: "PO 250101 (S01): afgesloten, 2 voorbereide wijzigingen, 2 in Exact zelf te doen"."""
+    yours = sum(1 for entry in result.write_entries if _yours(entry))
+    if not yours:
+        return result.digest_line
+    po_number = result.case_id.partition("_")[0]
+    cart = result.digest_line.startswith(tuple(f"{case_words['cart']} " for case_words in _CASE_WORDS.values()))
+    line = _digest_line(None if po_number == "unknown" else po_number, result.supplier, result.status,
+                        [entry for entry in result.write_entries if not _yours(entry)], settings.language, "cart" if cart else "confirmation")
+    return f"{line.removesuffix(', ' + _CASE_WORDS[settings.language]['none'])}, {words['yours_count'].format(n=yours)}"
+
+
+def _yours(entry: WriteLogEntry) -> bool:
+    """Whether the buyer does this write in Exact himself: a confirmation to attach or detach, or a status, that the aid prepared."""
+    return entry.status == "prepared" and entry.op.kind in _YOURS
 
 
 def _write(entry: WriteLogEntry, case_id: str, settings: Settings, words: dict) -> _Line:
     """A write: the field in words and what it changed, then the old and the new value when it has either (an attached file has
-    neither), then its undo link when it was made, else whether it was prepared or failed."""
+    neither), then its undo link when it was made, else whether it was prepared or failed; a confirmation to attach or a status that
+    was prepared says that the buyer does it in Exact himself."""
     op = entry.op
     text = " ".join(part for part in (words["kinds"].get(op.kind, op.kind), _changed(op, words)) if part)
     if entry.previous is not None or entry.new is not None:
         text += f": {_value(entry.previous, op.kind, words)} → {_value(entry.new, op.kind, words)}"
     if entry.status == "done":
         return [f"{text} ", _Link(words["undo"], undo_link(settings, case_id, entry.entry_id))]
+    if _yours(entry):
+        return [f"{text} {words['yours']}"]
     return [f"{text} {words['status'].get(entry.status, entry.status)}"]
 
 
@@ -271,10 +332,11 @@ def _shown(text: str | None) -> str:
 
 # --- the text and the HTML ---
 
-def _text(title: str, notes: list[str], blocks: list[tuple[str, list[_Item]]], words: dict) -> str:
+def _text(title: str, notes: list[_Line], blocks: list[tuple[str, list[_Item]]], words: dict) -> str:
     """The digest as plain text: the title, the notes after a blank line, then each block after a blank line, its heading and a line
-    "- ..." per item, with the lines under the item indented; a link is written [label](link)."""
-    lines = [title] + (["", *notes] if notes else [])
+    "- ..." per item, with the lines under the item indented; a link is written [label](link), or as its address alone when that is
+    its label."""
+    lines = [title] + (["", *(_plain(note) for note in notes)] if notes else [])
     for heading, items in blocks:
         lines += ["", heading]
         for item in items:
@@ -285,11 +347,11 @@ def _text(title: str, notes: list[str], blocks: list[tuple[str, list[_Item]]], w
     return "\n".join(lines) + "\n"
 
 
-def _html(title: str, notes: list[str], blocks: list[tuple[str, list[_Item]]], words: dict, language: str) -> str:
+def _html(title: str, notes: list[_Line], blocks: list[tuple[str, list[_Item]]], words: dict, language: str) -> str:
     """The digest as simple HTML: the title as the page's heading, each note as a paragraph, each block as a heading and a list, the
     lines under an item as a list in it, and each link as an anchor; every value passes through html.escape."""
     parts = ["<!DOCTYPE html>", f'<html lang="{language}">', f'<head><meta charset="utf-8"><title>{escape(title)}</title></head>',
-             "<body>", f"<h1>{escape(title)}</h1>", *(f"<p>{escape(note)}</p>" for note in notes)]
+             "<body>", f"<h1>{escape(title)}</h1>", *(f"<p>{_marked(note)}</p>" for note in notes)]
     for heading, items in blocks:
         parts += [f"<h2>{escape(heading)}</h2>", "<ul>"]
         for item in items:
@@ -302,7 +364,8 @@ def _html(title: str, notes: list[str], blocks: list[tuple[str, list[_Item]]], w
 
 
 def _plain(line: _Line) -> str:
-    return "".join(f"[{part.label}]({part.url})" if isinstance(part, _Link) else part for part in line)
+    return "".join((part.url if part.label == part.url else f"[{part.label}]({part.url})") if isinstance(part, _Link) else part
+                   for part in line)
 
 
 def _marked(line: _Line) -> str:

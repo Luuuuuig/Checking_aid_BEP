@@ -1,4 +1,4 @@
-# Python environment of the checking aid (package aid/), Python 3.13.
+# Python environment of the checking aid (package aid/), Python 3.11 or newer.
 # Direct packages only, not a complete transitive lock. Versions as installed on 29 October 2026; msal and msal-extensions, Microsoft's
 # own libraries for the Microsoft sign-in, on 8 November 2026.
 pydantic==2.13.5

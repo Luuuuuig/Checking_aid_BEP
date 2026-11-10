@@ -25,6 +25,9 @@ import hashlib
 import json
 import os
 import shutil
+import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -169,3 +172,29 @@ def _write_json(path: Path, data) -> None:
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
     os.replace(tmp, path)
+
+
+# Under cases_root, the folder where a part keeps a copy of a document for a moment, never in the system's temporary folder, which lies
+# outside the aid's folders: the runner the attachments of an e-mail it unpacks (aid/sources/mailbox.py), the Copilot reader the PDF
+# it reads (aid/readers/copilot_client.py). It lies in the review page's temporary folder, whose start spares it (aid/review/__main__.py);
+# the runner empties it at its own start, so that a copy left by a part that was ended in the middle of it never stays (aid/runner.py).
+TEMPORARY, WORK = "tmp", "work"
+
+
+@contextmanager
+def work_copy_folder(work: Path, prefix: str) -> Iterator[Path]:
+    """A folder of its own in the work folder (<cases_root>/tmp/work) for the time of the block, for a copy of a document, removed
+    afterwards with what it holds. The folders made on the way (the work folder, the temporary folder above it, the cases root) go
+    again afterwards when they are empty, so that a part leaves no folder of its own behind."""
+    work = Path(work)
+    made = [folder for folder in (work, work.parent, work.parent.parent) if not folder.exists()]      # the innermost first
+    work.mkdir(parents=True, exist_ok=True)
+    try:
+        with tempfile.TemporaryDirectory(prefix=prefix, dir=work) as folder:
+            yield Path(folder)
+    finally:
+        for folder in made:
+            try:
+                folder.rmdir()
+            except OSError:                      # not empty: the review page's files, or a case
+                break

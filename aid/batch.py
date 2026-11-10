@@ -8,7 +8,8 @@ cases.csv has the columns case_id, document, po_number and kind: the evaluation'
 relative to the folder of cases.csv, or absolute), the PO number (blank when it is unknown) and "confirmation" or "cart". A line
 without a case id, a document or a kind is a failed case. The store
 is the one under po_store_root of the settings, with the authorization limit of the settings. Every *_po_v*.pdf of --po-dir is filed
-into it first, and then every *_export.csv, the ERP export that gives a cart its PO side (PoStore.from_export), with the column map
+into it first, read with the PO layout of the settings (po_layout) when they hold one and else with the template of the made-up
+layout, and then every *_export.csv, the ERP export that gives a cart its PO side (PoStore.from_export), with the column map
 of settings.export_columns, or with each column named after its field when that setting is empty, and with the number convention
 and the fill-down of settings.export_decimal_comma and settings.export_fill_down; a file the store refuses
 stops the batch before any case runs, and what the store holds from before stays. The reader is the parser baseline
@@ -77,12 +78,13 @@ def main(argv: list[str] | None = None, reader: Callable | None = None, decider:
 
 
 def file_po_dir(settings: Settings, po_dir: Path) -> PoStore:
-    """The PO store of the settings with every *_po_v*.pdf of po_dir filed into it, then every *_export.csv, read with the three
-    export settings (the column map, which when empty means that each column is named after its field, the number convention and
-    the fill-down of the PO number); a file the store holds already is not filed twice."""
+    """The PO store of the settings with every *_po_v*.pdf of po_dir filed into it, read with the PO layout of the settings when
+    they hold one (settings.po_layout) and else with the template of the made-up layout, then every *_export.csv, read with the
+    three export settings (the column map, which when empty means that each column is named after its field, the number convention
+    and the fill-down of the PO number); a file the store holds already is not filed twice."""
     store = PoStore(settings.po_store_root, settings.authorization_limit)
     for pdf in sorted(Path(po_dir).glob("*_po_v*.pdf")):
-        store.add(pdf)
+        store.add(pdf, settings.po_layout)
     for export in sorted(Path(po_dir).glob("*_export.csv")):
         store.from_export(export, settings.export_columns, settings.export_decimal_comma, settings.export_fill_down)
     return store

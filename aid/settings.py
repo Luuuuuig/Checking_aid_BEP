@@ -21,6 +21,13 @@ The six settings of the work mailbox (ms_tenant_id, ms_client_id, mailbox, mail_
 with them empty or null the aid works as before, from the watched folder. An empty text counts as null. The tenant and the client
 are the IDs of the app registration in Microsoft Entra ID, which are identifiers and no secrets: the client a GUID, the tenant a GUID
 or its domain name. send_via "microsoft" needs both.
+
+po_layout is the layout of the PO PDF that the ERP e-mails, as words read off its page (PoLayout of aid/readers/po_layout.py): with
+it the aid reads every PO PDF with that layout, and takes a PDF that fits it for a PO. It is validated with the settings, and a
+layout at fault is named by its field (po_layout.title_row), never by a word it holds. po_senders are the senders of the PO e-mails,
+one address or one domain (the part after the at sign) to each entry; an entry that is neither is refused by its place
+(po_senders.1), never by what it holds. Fill it whenever po_layout is set: without it a supplier's document that repeats the PO's
+page is filed as a PO. With both empty or null the aid works as before, with the made-up layout.
 """
 import codecs
 import json
@@ -32,15 +39,27 @@ import threading
 from collections.abc import Callable, Mapping
 from decimal import Decimal
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, ValidationError, ValidationInfo, field_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, ValidationError, ValidationInfo, field_validator
+
+from aid.readers.po_layout import PoLayout
 
 _GUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 _DOMAIN = re.compile(r"(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}")
 _ADDRESS = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s.]+")
+_SENDER = re.compile(r"[^@\s,;<>()\[\]\"']+@" + _DOMAIN.pattern)       # the address of a sender: no list, no name, nothing around it
 _WRITING = threading.Lock()                      # one save of a settings file at a time in this process (update_settings_file)
 _BLANK = " \t\n\r"                               # the white space of JSON
+
+
+def _sender(entry: str) -> str:
+    """An entry of po_senders without its outer spaces: an e-mail address, or a domain with or without the at sign before it."""
+    entry = entry.strip()
+    if not (_SENDER.fullmatch(entry) or _DOMAIN.fullmatch(entry.removeprefix("@"))):
+        raise ValueError("must be one e-mail address or one domain (the part after the at sign, with or without the at sign): no name "
+                         "around it, no second address, no comma")
+    return entry
 
 
 class Settings(BaseModel):
@@ -97,6 +116,11 @@ class Settings(BaseModel):
     export_columns: dict[str, str] = {}
     export_decimal_comma: bool = False           # numbers the export writes as text use the decimal comma: 1.234,50
     export_fill_down: bool = False               # the export prints the PO number once for each PO, on its first line or above it
+    # The PO PDF that the ERP e-mails (aid/readers/po_pdf.py, aid/sources/mailbox.py). None: only the made-up layout is read.
+    po_layout: PoLayout | None = None            # the layout of that PDF; with it a PDF that fits is a PO PDF, read with the layout alone
+    # Who sends those e-mails: addresses, or domains as the part after the at sign. Not empty: a PDF that fits the layout and came
+    # in an e-mail from anyone else is a confirmation. Empty: any sender.
+    po_senders: list[Annotated[str, AfterValidator(_sender)]] = []
     review_url: str = "http://localhost:7860"
     # The token the browser extension sends to the capture server (aid/capture_server.py) in the header X-Aid-Token. It is
     # company-specific: set it in the real settings.json only, never in a repository. None (or empty) keeps the server from starting.

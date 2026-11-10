@@ -1,0 +1,527 @@
+"""Tests of the tab 'In Exact invoeren' of the review page (aid/review/page.py; its list in aid/review/hand_list.py, its strings in
+aid/review/i18n.py), through its handlers by name as the page holds them: no browser. The cases are made-up cases run as the runner
+runs them, their changes prepared in <cases_root>/prepared, where the page of the review command reads the list."""
+import json
+import re
+from datetime import datetime
+from decimal import Decimal
+from pathlib import Path
+from types import SimpleNamespace
+from urllib.parse import parse_qsl, urlsplit
+
+from aid.case import load_case
+from aid.execution.by_hand import MARKS_FILE, changes, mark, open_changes
+from aid.execution.ops import WriteOp
+from aid.execution.writer import PREPARED_FILE, PreparedWriter, undo_case
+from aid.notify import list_link
+from aid.pipeline import record_dispositions, run_case
+from aid.po_store import PoStore
+from aid.review.hand_list import ids_of
+from aid.review.i18n import STRINGS
+from aid.review.page import _undo_choices, build_app, import_gradio
+from aid.runner import build_deps
+from aid.settings import load_settings
+from aid.sources.upload import open_upload_case
+from aid.tests.conftest import SETTINGS, deps
+
+PO = {"MU08": "250108", "MU14": "250114"}             # MU08 prepares a price on PO line 1 and the article's price, MU14 a delivery date
+SHOWN = ("tab", "intro", "rows", "block", "note", "seen")    # what each handler of the list gives, in the order of its outputs
+NL, EN = STRINGS["nl"], STRINGS["en"]
+LIST_HANDLERS = {"list_opened", "changes_entered", "changes_dropped", "block_entered", "hand_relabel"}
+ROWS = ["Inkooporder 250108 (S08), regel 1 (KM-0801): prijs 12,50 → 12,70",
+        "Inkooporder 250114 (S14), regel 1 (KM-1401): leverdatum 16-11-2026 → week 48 (2026)",
+        "artikel KM-0801: inkoopprijs onbekend → 12,70"]
+
+
+def settings_file(tmp_path: Path, **values) -> Path:
+    """A made-up settings file with relative folders, holding the tests' settings and the values given."""
+    data = json.loads(SETTINGS.model_dump_json()) | {"cases_root": "cases", "po_store_root": "po_store", "watched_folder": "inbox",
+                                                       "reader": "parser"} | values
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps(data, indent=4), encoding="utf-8")
+    return path
+
+
+def tab_page(tmp_path: Path, madeup_out: Path, cases=("MU08", "MU14"), share: bool = False, file: bool = True,
+             limit: Decimal | None = None) -> tuple:
+    """The review page on a made-up settings file (none when file is False), the made-up cases given run before as the runner runs
+    them, with the prepared writer into <cases_root>/prepared as the review command builds it: (the page, that folder, the Deps). With
+    a limit, the page's store compares the totals with it instead of the tests' made-up limit."""
+    path = settings_file(tmp_path)
+    settings = load_settings(path)
+    prepared = settings.cases_root / "prepared"
+    d = deps(tmp_path, madeup_out, writer=PreparedWriter(prepared)).model_copy(update={"settings": settings})
+    for minute, name in enumerate(cases):
+        case = open_upload_case(settings.cases_root, [madeup_out / f"{name}_conf.pdf"], PO[name], "confirmation", datetime(2026, 11, 12, 9, minute))
+        record_dispositions(case, run_case(case, d))
+    if limit is not None:
+        d = d.model_copy(update={"store": PoStore(d.store.root, limit)})
+    return build_app(d, settings_file=path if file else None, share=share), prepared, d
+
+
+def handler(page, name: str):
+    [found] = [f.fn for f in page.fns.values() if getattr(f.fn, "__name__", "") == name]
+    return found
+
+
+def shown(page, name: str, *args) -> dict:
+    """What a handler of the list gives, by name."""
+    outputs = handler(page, name)(*args)
+    assert len(outputs) == len(SHOWN)
+    return dict(zip(SHOWN, outputs))
+
+
+def value_of(listed: dict, words: str) -> str:
+    """The value of the row of the list whose text holds the words."""
+    [value] = [value for text, value in listed["rows"]["choices"] if words in text]
+    return value
+
+
+def hand_tab(page):
+    gr = import_gradio()
+    [tab] = [block for block in page.blocks.values() if isinstance(block, gr.Tab) and block.label == NL["hand_tab"]]
+    return tab
+
+
+def inside(block) -> list:
+    return [block, *[found for child in getattr(block, "children", []) for found in inside(child)]]
+
+
+def test_the_label_counts_the_open_changes(tmp_path, madeup_out):
+    gr = import_gradio()
+    page, prepared, d = tab_page(tmp_path, madeup_out)
+    tab = hand_tab(page)                                      # as the page is built: the label without a number
+    [refresh] = [block for block in inside(tab) if isinstance(block, gr.Button) and block.value == NL["refresh"]]
+    [fill] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == "list_opened"]
+    assert sorted(fill.targets) == sorted([(page._id, "load"), (tab._id, "select"), (refresh._id, "click")])     # read again when selected
+    listed = shown(page, "list_opened", "nl")
+    assert listed["tab"] == {"__type__": "update", "label": "In Exact invoeren (3)"} and shown(page, "list_opened", "en")["tab"]["label"] == "Enter in Exact (3)"
+    assert [text for text, _ in listed["rows"]["choices"]] == ROWS and listed["rows"]["value"] == []
+    assert (listed["intro"], listed["note"]) == (NL["hand_intro"], "")
+    price, date, article = (value_of(listed, words) for words in ("prijs 12,50", "leverdatum", "inkoopprijs"))
+    assert listed["seen"] == {"po:250108": [price], "po:250114": [date], "articles": [article]}      # the rows shown, per block
+    for change in open_changes(prepared):
+        mark(prepared, change.ids, "entered", datetime(2026, 11, 12, 10, 0))
+    listed = shown(page, "list_opened", "nl")
+    assert listed["tab"]["label"] == "In Exact invoeren" and listed["rows"]["choices"] == [] and listed["block"]["choices"] == []
+    assert listed["intro"] == f"{NL['hand_intro']}\n\n{NL['hand_nothing']}" and NL["hand_nothing"] == "Er is niets in te voeren."
+    assert shown(page, "list_opened", "en")["intro"].endswith("\n\nThere is nothing to enter.")
+
+
+def test_ticked_rows_are_entered_or_dropped(tmp_path, madeup_out):
+    page, prepared, d = tab_page(tmp_path, madeup_out)
+    root = d.settings.cases_root
+    kept = {path: path.read_bytes() for path in root.rglob("*") if path.is_file()}       # the cases' files and the prepared rows
+    listed = shown(page, "list_opened", "nl")
+    price, date, article = (value_of(listed, words) for words in ("prijs 12,50", "leverdatum", "inkoopprijs"))
+    entered = shown(page, "changes_entered", [price], "nl")
+    assert entered["note"] == "1 wijziging genoteerd als ingevoerd in Exact." and entered["tab"]["label"] == "In Exact invoeren (2)"
+    assert [value for _, value in entered["rows"]["choices"]] == [date, article] and entered["rows"]["value"] == []
+    dropped = shown(page, "changes_dropped", [date, article], "nl")
+    assert dropped["note"] == "2 wijzigingen vervallen: de assistent vraagt er niet meer om." and dropped["tab"]["label"] == "In Exact invoeren"
+    marks = [json.loads(line) for line in (prepared / MARKS_FILE).read_text(encoding="utf-8").splitlines()]
+    assert [(line["entry_id"], line["mark"], line["at"], line["by"]) for line in marks] == [
+        (ids_of(price)[0], "entered", "2026-11-12T09:00:00", "buyer"), (ids_of(date)[0], "dropped", "2026-11-12T09:00:00", "buyer"),
+        (ids_of(article)[0], "dropped", "2026-11-12T09:00:00", "buyer")]                  # at the time of the page's clock
+    # Nothing of a case changed, nor the prepared rows: the marks are the one file written. The review tab's own undo list is as it
+    # was: it offers writes made in a system, and these changes were only prepared.
+    assert {path: path.read_bytes() for path in kept} == kept
+    assert sorted(path for path in root.rglob("*") if path.is_file() and path not in kept) == [prepared / MARKS_FILE]
+    assert {path.name for path in kept if path.parent == prepared} == {PREPARED_FILE}
+    for case_id in sorted(path.name for path in root.iterdir() if (path / "case.json").exists()):
+        assert _undo_choices(load_case(root, case_id), NL) == []
+    # the same in English, the three put back on the list first
+    for value in (price, date, article):
+        mark(prepared, ids_of(value), "reopened", datetime(2026, 11, 12, 11, 0))
+    assert shown(page, "changes_entered", [price, date], "en")["note"] == "2 changes noted as entered in Exact."
+    assert shown(page, "changes_dropped", [article], "en")["note"] == "1 change is dropped: the assistant no longer asks for it."
+    assert [change.state for change in open_changes(prepared)] == []
+
+
+def test_a_whole_block_is_entered(tmp_path, madeup_out):
+    page, prepared, d = tab_page(tmp_path, madeup_out)
+    [price] = [change for change in open_changes(prepared) if change.kind == "po_line_price"]
+    # a second change of PO 250108, the quantity of line 2, prepared for the same case as a close of the review page prepares it
+    PreparedWriter(prepared).apply(WriteOp(kind="po_line_quantity", po_number="250108", version=1, line_id="2", old_value="50", new_value="60"),
+                                   price.case_ids[0], "B01", {}, datetime(2026, 11, 12, 9, 30))
+    listed = shown(page, "list_opened", "nl")
+    assert listed["block"]["choices"] == [("Inkooporder 250108 (S08)", "po:250108"), ("Inkooporder 250114 (S14)", "po:250114"),
+                                          ("Artikelprijzen", "articles")]
+    assert (listed["block"]["value"], listed["block"]["label"]) == (None, "Blok") and listed["tab"]["label"] == "In Exact invoeren (4)"
+    done = shown(page, "block_entered", "po:250108", listed["seen"], "nl")
+    assert done["note"] == "2 wijzigingen genoteerd als ingevoerd in Exact." and done["tab"]["label"] == "In Exact invoeren (2)"
+    assert [choice for choice, _ in done["block"]["choices"]] == ["Inkooporder 250114 (S14)", "Artikelprijzen"]
+    assert [change.kind for change in open_changes(prepared)] == ["article_price", "po_line_date"]   # the article's price is a block of its own
+    assert shown(page, "block_entered", "articles", done["seen"], "en")["note"] == "1 change noted as entered in Exact."
+    gone = shown(page, "block_entered", "po:250108", listed["seen"], "nl")                          # pressed again in a tab not read again
+    assert gone["note"] == NL["hand_nothing_noted"] and gone["tab"]["label"] == "In Exact invoeren (1)"
+
+
+def test_nothing_ticked_writes_nothing(tmp_path, madeup_out):
+    page, prepared, d = tab_page(tmp_path, madeup_out)
+    for language, nothing in (("nl", []), ("en", None)):
+        strings = STRINGS[language]
+        for name in ("changes_entered", "changes_dropped"):
+            result = shown(page, name, nothing, language)
+            assert result["note"] == strings["hand_tick_first"] and result["tab"]["label"] == strings["hand_tab_count"].format(n=3)
+        assert shown(page, "block_entered", None if language == "nl" else "", {}, language)["note"] == strings["hand_tick_first"]
+    assert (NL["hand_tick_first"], EN["hand_tick_first"]) == ("Vink eerst aan wat u bedoelt.", "Tick what you mean first.")
+    assert not (prepared / MARKS_FILE).exists() and len(open_changes(prepared)) == 3
+
+
+def test_the_query_selects_the_tab(tmp_path, madeup_out):
+    gr = import_gradio()
+    page, prepared, d = tab_page(tmp_path, madeup_out)
+    [tabs] = [block for block in page.blocks.values() if isinstance(block, gr.Tabs)]
+    assert [(tab.label, tab.id) for tab in tabs.children] == [(NL["review_tab"], "beoordelen"), (NL["hand_tab"], "invoeren"),
+                                                              (NL["settings_tab"], "instellingen")]
+    [load] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == "opened"]
+    assert load.targets == [(page._id, "load")] and load.outputs[-1] is tabs
+    link = list_link(d.settings)                              # the digest's link, read as the page reads the query of its address
+    assert link == "http://localhost:7860/?tab=invoeren"
+    case, wanted, selected = load.fn("nl", SimpleNamespace(query_params=dict(parse_qsl(urlsplit(link).query))))
+    assert selected == {"__type__": "update", "selected": "invoeren"} and (case["value"], wanted) == (None, None)
+    for query in ({}, {"tab": "instellingen"}, {"tab": "Invoeren"}, {"case": "250108_20261112T090000"}):
+        assert load.fn("nl", SimpleNamespace(query_params=query))[2] == {"__type__": "update"}, query
+
+
+def test_the_tab_offers_nothing_on_a_share_link(tmp_path, madeup_out):
+    for share, file, key in ((True, True, "settings_share"), (False, False, "settings_no_file")):
+        page, prepared, d = tab_page(tmp_path / key, madeup_out, share=share, file=file)
+        tab = hand_tab(page)
+        assert [type(child).__name__ for child in tab.children] == ["Markdown"] and tab.children[0].value == NL[key]
+        assert not {getattr(f.fn, "__name__", "") for f in page.fns.values()} & LIST_HANDLERS
+        [relabel] = [f.fn for f in page.fns.values() if tab in f.outputs]
+        assert relabel("en") == (EN[key], {"__type__": "update", "label": "Enter in Exact"}), key
+    assert NL["settings_share"] == "Niet beschikbaar op een openbare link"
+    own = tab_page(tmp_path / "own", madeup_out)[0]                                         # the page of this PC has them all
+    assert LIST_HANDLERS <= {getattr(f.fn, "__name__", "") for f in own.fns.values()}
+
+
+# --- what the brief's tests above leave to the tab: the lines under the intro, the language, the controls and the texts ---
+
+def test_the_tab_says_how_many_lines_could_not_be_read(tmp_path, madeup_out):
+    page, prepared, d = tab_page(tmp_path, madeup_out)
+    with open(prepared / PREPARED_FILE, "ab") as f:
+        f.write(b"9f0e1d2c,250108_20261112T090000,250108,1,2,,po_line_quan")             # the last line, cut while it is written
+    listed = shown(page, "list_opened", "nl")
+    assert listed["intro"] == f"{NL['hand_intro']}\n\n1 regel van de lijst kon niet worden gelezen; vernieuw de lijst over een minuut."
+    assert listed["tab"]["label"] == "In Exact invoeren (3)"                                # the lines around it are read
+    (prepared / MARKS_FILE).write_text('{"entry_id": "9f0e", "mark": "ent', encoding="utf-8")
+    assert shown(page, "list_opened", "en")["intro"].endswith("\n\n2 lines of the list could not be read; refresh the list in a minute.")
+    assert shown(page, "list_opened", "nl")["intro"].endswith("\n\n2 regels van de lijst konden niet worden gelezen; vernieuw de lijst over een minuut.")
+
+
+def test_a_file_of_the_list_that_cannot_be_opened_leaves_the_tab_as_it_was_with_a_note(tmp_path, madeup_out):
+    page, prepared, d = tab_page(tmp_path, madeup_out)
+    listed = shown(page, "list_opened", "nl")
+    price = value_of(listed, "prijs 12,50")
+    (prepared / MARKS_FILE).mkdir()                                  # a folder where the marks belong: the file cannot be opened
+    same = {"__type__": "update"}
+    for name, args in (("list_opened", ("nl",)), ("changes_entered", ([price], "nl")), ("changes_dropped", ([price], "nl")),
+                       ("block_entered", ("po:250108", listed["seen"], "nl"))):
+        result = shown(page, name, *args)
+        assert result["note"] in [NL["settings_failed"].format(code=code) for code in ("IsADirectoryError", "PermissionError")], name
+        assert result["tab"] == {"__type__": "update", "label": "In Exact invoeren (?)"}, name          # not a list with nothing to enter
+        assert [result[part] for part in ("intro", "rows", "block", "seen")] == [same] * 4, name
+    relabelled = handler(page, "hand_relabel")("en", [price], None)
+    assert relabelled[0] == {"__type__": "update", "label": "Enter in Exact (?)"} and relabelled[4].startswith("This did not work (")
+    assert relabelled[6] == {"__type__": "update", "value": "Refresh the list"}
+    assert (NL["hand_tab_unread"], EN["hand_tab_unread"]) == ("In Exact invoeren (?)", "Enter in Exact (?)")
+
+
+def test_an_order_above_the_authorization_shows_the_hint_and_no_amount(tmp_path, madeup_out):
+    gr = import_gradio()
+    page, prepared, d = tab_page(tmp_path, madeup_out, limit=Decimal("100.13"))         # PO 250114 (272.40) above it, PO 250108 (58.50) not
+    listed = shown(page, "list_opened", "nl")
+    assert listed["intro"] == f"{NL['hand_intro']}\n\n**Inkooporder 250114 (S14)** {NL['hand_hint']}"
+    assert [text for text, _ in listed["rows"]["choices"]] == ROWS and [label for label, _ in listed["block"]["choices"]][1] == "Inkooporder 250114 (S14)"
+    english = shown(page, "list_opened", "en")["intro"]
+    assert english.endswith("**Purchase order 250114 (S14)** Note: after this change the purchase order must be approved again.")
+    seen = json.dumps([listed, english], default=str)
+    assert not [amount for amount in ("100.13", "100,13", "272.4", "272,4", "58.5", "58,5") if amount in seen]
+    config = json.dumps(page.config, default=str)                                          # the page as the browser gets it
+    assert "100.13" not in config and "100,13" not in config
+    assert [block for block in inside(hand_tab(page)) if isinstance(block, gr.Markdown) and "100" in str(block.value)] == []
+
+
+def test_switching_the_language_relabels_the_tab_and_keeps_what_is_ticked(tmp_path, madeup_out):
+    page, prepared, d = tab_page(tmp_path, madeup_out)
+    price = value_of(shown(page, "list_opened", "nl"), "prijs 12,50")
+    (tab, intro, rows, block, note, seen, refresh, entered_above, dropped_above, entered, dropped,
+     whole) = handler(page, "hand_relabel")("en", [price, "gone"], "po:250114")
+    assert tab == {"__type__": "update", "label": "Enter in Exact (3)"} and (intro, note) == (EN["hand_intro"], "")
+    assert [text for text, _ in rows["choices"]][0] == "Purchase order 250108 (S08), line 1 (KM-0801): price 12.50 → 12.70"
+    assert rows["value"] == [price] and (block["value"], block["label"]) == ("po:250114", "Block")         # a row no longer listed is let go
+    assert seen["po:250108"] == [price]
+    assert [update["value"] for update in (refresh, entered_above, dropped_above, entered, dropped, whole)] == [
+        "Refresh the list", "The ticked rows have been entered", "Do not enter the ticked rows", "The ticked rows have been entered",
+        "Do not enter the ticked rows", "Everything of this block has been entered"]
+    assert handler(page, "hand_relabel")("nl", [], "po:999")[3]["value"] is None
+
+
+def test_the_tab_is_wired_as_the_page_shows_it(tmp_path, madeup_out):
+    """The tab's fixed controls in their order, and the trigger, the inputs and the outputs of each of its handlers: every press reads
+    the list again and shows it. Each control exists when the page is built, none inside a rendered function, and the buttons stand
+    outside the rows."""
+    gr = import_gradio()
+    page, prepared, d = tab_page(tmp_path, madeup_out)
+    tab = hand_tab(page)
+    language = [block for block in page.blocks.values() if isinstance(block, gr.Radio) and block.label == NL["language"]][0]
+
+    [fill] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == "list_opened"]
+    state = fill.outputs[-1]
+
+    def name(component) -> str:
+        if component is tab:
+            return "tab"
+        if component is language:
+            return "language"
+        if component is state:
+            return "seen"
+        if isinstance(component, gr.Button):
+            return f"button {component.value}"
+        return getattr(component, "label", None) or getattr(component, "elem_id", None) or type(component).__name__
+
+    def bound(fn_name: str) -> tuple:
+        [f] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == fn_name]
+        return (sorted((name(page.blocks[block]) if block != page._id else "page", event) for block, event in f.targets),
+                [name(component) for component in f.inputs], [name(component) for component in f.outputs])
+
+    order = [name(block) for block in inside(tab) if isinstance(block, (gr.Markdown, gr.Button, gr.CheckboxGroup, gr.Dropdown))]
+    entered, dropped, whole, refresh = (f"button {NL[key]}" for key in ("hand_entered", "hand_dropped", "hand_block_entered", "refresh"))
+    assert order == ["hand-intro", refresh, entered, dropped, "hand-rows", entered, dropped, "Blok", whole, "hand-note"]   # the two above and below
+    listed = ["tab", "hand-intro", "hand-rows", "Blok", "hand-note", "seen"]
+    assert bound("list_opened") == (sorted([("page", "load"), ("tab", "select"), (refresh, "click")]), ["language"], listed)
+    assert bound("changes_entered") == ([(entered, "click")] * 2, ["hand-rows", "language"], listed)
+    assert bound("changes_dropped") == ([(dropped, "click")] * 2, ["hand-rows", "language"], listed)
+    assert bound("block_entered") == ([(whole, "click")], ["Blok", "seen", "language"], listed)
+    assert bound("hand_relabel") == ([("language", "change")], ["language", "hand-rows", "Blok"],
+                                     [*listed, refresh, entered, dropped, entered, dropped, whole])
+    [rows] = [block for block in inside(tab) if isinstance(block, gr.CheckboxGroup)]
+    assert rows.show_label is False and rows.choices == [] and isinstance(tab.parent, gr.Tabs) and rows.elem_classes == ["hand-rows"]
+    # one tick box under the other: a style rule given to the page through the head of an HTML block of the tab, for the group's class
+    [style] = [block for block in inside(tab) if isinstance(block, gr.HTML)]
+    assert ".hand-rows .wrap" in style.head and "flex-direction: column" in style.head and style.head.startswith("<style>")
+
+
+def test_the_texts_of_the_tab_in_both_languages():
+    hand = {key for key in NL if key.startswith("hand_")}
+    assert hand == {key for key in EN if key.startswith("hand_")}
+    brief = {"hand_tab": ("In Exact invoeren", "Enter in Exact"), "hand_tab_count": ("In Exact invoeren ({n})", "Enter in Exact ({n})"),
+             "hand_intro": ("De assistent verandert zelf niets in Exact. Hieronder staat wat u in Exact invoert. Vink aan wat u hebt ingevoerd.",
+                            "The assistant changes nothing in Exact itself. Below is what you enter in Exact. Tick what you have entered."),
+             "hand_nothing": ("Er is niets in te voeren.", "There is nothing to enter."),
+             "hand_block_po": ("Inkooporder {number} ({supplier})", "Purchase order {number} ({supplier})"),
+             "hand_block_articles": ("Artikelprijzen", "Article prices"),
+             "hand_row:po_line_price": ("regel {line} ({item}): prijs {old} → {new}", "line {line} ({item}): price {old} → {new}"),
+             "hand_row:po_line_date": ("regel {line} ({item}): leverdatum {old} → {new}", "line {line} ({item}): delivery date {old} → {new}"),
+             "hand_row:po_line_quantity": ("regel {line} ({item}): aantal {old} → {new}", "line {line} ({item}): quantity {old} → {new}"),
+             "hand_row:article_price": ("artikel {item}: inkoopprijs {old} → {new}", "article {item}: purchase price {old} → {new}"),
+             "hand_unknown": ("onbekend", "unknown"),
+             "hand_hint": ("Let op: na deze wijziging moet de inkooporder opnieuw gefiatteerd worden.",
+                           "Note: after this change the purchase order must be approved again."),
+             "hand_entered": ("Aangevinkte regels zijn ingevoerd", "The ticked rows have been entered"),
+             "hand_dropped": ("Aangevinkte regels niet invoeren", "Do not enter the ticked rows"),
+             "hand_block_entered": ("Alles van dit blok is ingevoerd", "Everything of this block has been entered"),
+             "hand_block": ("Blok", "Block"),
+             "hand_tick_first": ("Vink eerst aan wat u bedoelt.", "Tick what you mean first."),
+             "hand_entered_one": ("1 wijziging genoteerd als ingevoerd in Exact.", "1 change noted as entered in Exact."),
+             "hand_entered_many": ("{n} wijzigingen genoteerd als ingevoerd in Exact.", "{n} changes noted as entered in Exact."),
+             "hand_dropped_one": ("1 wijziging vervalt: de assistent vraagt er niet meer om.", "1 change is dropped: the assistant no longer asks for it."),
+             "hand_dropped_many": ("{n} wijzigingen vervallen: de assistent vraagt er niet meer om.",
+                                   "{n} changes are dropped: the assistant no longer asks for them."),
+             "hand_unreadable_many": ("{n} regels van de lijst konden niet worden gelezen; vernieuw de lijst over een minuut.",
+                                      "{n} lines of the list could not be read; refresh the list in a minute."),
+             # the review round: Z2, Z4 and Z9
+             "hand_row:article_price_back": ("artikel {item}: inkoopprijs {old} terugzetten naar de prijs van daarvoor",
+                                             "article {item}: purchase price {old} back to the price before it"),
+             "hand_tab_unread": ("In Exact invoeren (?)", "Enter in Exact (?)"),
+             "hand_nothing_noted": ("Er is niets genoteerd: de aangevinkte regels staan niet meer open (al afgehandeld, of vervangen door een "
+                                    "nieuwere waarde). De lijst is bijgewerkt.",
+                                    "Nothing was noted: the ticked rows are no longer open (already handled, or replaced by a newer value). "
+                                    "The list has been updated.")}
+    assert {key: (NL[key], EN[key]) for key in brief} == brief
+    assert (NL["refresh"], EN["refresh"]) == ("Lijst vernieuwen", "Refresh the list")         # the button of the review tab's own list
+    for strings in (NL, EN):
+        texts = [strings[key] for key in hand]
+        assert not [text for text in texts if re.search(r"\bR\d{2}\b|—|–", text)]               # no rule code, no dash as punctuation
+
+
+# --- the review round: the block press, the undo through the manual's recipe, the press that notes nothing ---
+
+def test_the_block_button_marks_only_the_rows_the_page_showed(tmp_path, madeup_out):
+    """A change prepared after the list was read stays open when the buyer presses "Alles van dit blok is ingevoerd" (Z1): another
+    line of the order, and a newer value of the line he entered, which replaces the value he saw; the note counts what was marked."""
+    page, prepared, d = tab_page(tmp_path, madeup_out)
+    listed = shown(page, "list_opened", "nl")                                    # what the buyer sees: one row of PO 250108
+    [price] = [change for change in open_changes(prepared) if change.kind == "po_line_price"]
+    writer = PreparedWriter(prepared)
+    newer_line = writer.apply(WriteOp(kind="po_line_date", po_number="250108", version=1, line_id="1", old_value="2026-11-16",
+                                      new_value="2026-11-30"), price.case_ids[0], "R02", {}, datetime(2026, 11, 12, 9, 30)).entry_id
+    done = shown(page, "block_entered", "po:250108", listed["seen"], "nl")
+    assert done["note"] == "1 wijziging genoteerd als ingevoerd in Exact." and done["tab"]["label"] == "In Exact invoeren (3)"
+    states = {change.ids[0]: change.state for change in changes(prepared)[0]}
+    assert states[price.ids[0]] == "entered" and states[newer_line] == "open"   # the date he never saw stays on the list
+    assert "Inkooporder 250108 (S08), regel 1 (KM-0801): leverdatum 16-11-2026 → 30-11-2026" in [text for text, _ in done["rows"]["choices"]]
+    # a newer document asks 12.90 for the line while the buyer enters 12.70 from the list he read
+    other, other_prepared, _ = tab_page(tmp_path / "other", madeup_out)
+    seen = shown(other, "list_opened", "nl")["seen"]
+    [price] = [change for change in open_changes(other_prepared) if change.kind == "po_line_price"]
+    newer = PreparedWriter(other_prepared).apply(WriteOp(kind="po_line_price", po_number="250108", version=1, line_id="1", old_value="12.50",
+                                                         new_value="12.90"), price.case_ids[0], "R04", {}, datetime(2026, 11, 12, 9, 30)).entry_id
+    pressed = shown(other, "block_entered", "po:250108", seen, "nl")
+    assert pressed["note"] == NL["hand_nothing_noted"]                          # 12.70 was replaced: nothing is noted, and 12.90 is asked
+    states = {change.ids[0]: change.state for change in changes(other_prepared)[0]}
+    assert states[price.ids[0]] == "replaced" and states[newer] == "open" and not (other_prepared / MARKS_FILE).exists()
+    assert "Inkooporder 250108 (S08), regel 1 (KM-0801): prijs 12,50 → 12,90" in [text for text, _ in pressed["rows"]["choices"]]
+
+
+def test_an_undo_through_the_manuals_recipe_cancels_a_change_not_entered_and_asks_back_one_entered(tmp_path, madeup_out):
+    """MANUAL 3.10's recipe, undo_case through the runner's writer (Z2): with nothing entered, MU08's two changes leave the list and
+    nothing is asked for its order; with both entered, the list asks to put the price back and the article's price from before."""
+    page, prepared, d = tab_page(tmp_path, madeup_out)
+    [case_id] = [path.name for path in d.settings.cases_root.iterdir() if path.name.startswith("250108_")]
+    runner = build_deps(d.settings, {})                                          # the recipe of the manual, as it stands there
+    assert runner.writer.path.parent == prepared
+    undo_case(d.settings.cases_root / case_id, runner.writer, datetime(2026, 11, 12, 11, 0))
+    listed = shown(page, "list_opened", "nl")
+    assert listed["tab"]["label"] == "In Exact invoeren (1)" and [text for text, _ in listed["rows"]["choices"]] == ROWS[1:2]
+    entered, entered_prepared, entered_deps = tab_page(tmp_path / "entered", madeup_out)
+    for change in open_changes(entered_prepared):
+        if change.po_number == "250108":
+            mark(entered_prepared, change.ids, "entered", datetime(2026, 11, 12, 10, 0))
+    [case_id] = [path.name for path in entered_deps.settings.cases_root.iterdir() if path.name.startswith("250108_")]
+    undo_case(entered_deps.settings.cases_root / case_id, build_deps(entered_deps.settings, {}).writer, datetime(2026, 11, 12, 11, 0))
+    for language, rows in (("nl", ["Inkooporder 250108 (S08), regel 1 (KM-0801): prijs 12,70 → 12,50", ROWS[1],
+                                   "artikel KM-0801: inkoopprijs 12,70 terugzetten naar de prijs van daarvoor"]),
+                           ("en", ["Purchase order 250108 (S08), line 1 (KM-0801): price 12.70 → 12.50",
+                                   "Purchase order 250114 (S14), line 1 (KM-1401): delivery date 16-11-2026 → week 48 (2026)",
+                                   "article KM-0801: purchase price 12.70 back to the price before it"])):
+        listed = shown(entered, "list_opened", language)
+        assert [text for text, _ in listed["rows"]["choices"]] == rows, language
+        assert listed["tab"]["label"] == STRINGS[language]["hand_tab_count"].format(n=3)
+
+
+def test_a_press_that_notes_nothing_says_so(tmp_path, madeup_out):
+    """Two browser tabs read the list; the first ticks the price as entered, the second, not read again, drops the same row: nothing
+    is noted, and the note says why (Z9). One change noted keeps its own note."""
+    page, prepared, d = tab_page(tmp_path, madeup_out)
+    first, second = shown(page, "list_opened", "nl"), shown(page, "list_opened", "nl")
+    assert shown(page, "changes_entered", [value_of(first, "prijs 12,50")], "nl")["note"] == "1 wijziging genoteerd als ingevoerd in Exact."
+    late = shown(page, "changes_dropped", [value_of(second, "prijs 12,50")], "nl")
+    assert late["note"] == NL["hand_nothing_noted"] and late["tab"]["label"] == "In Exact invoeren (2)"
+    assert shown(page, "changes_entered", [value_of(second, "prijs 12,50")], "en")["note"] == EN["hand_nothing_noted"]
+    assert [json.loads(line)["mark"] for line in (prepared / MARKS_FILE).read_text(encoding="utf-8").splitlines()] == ["entered"]
+
+
+def manual_sections() -> dict[str, str]:
+    """The manual's sections by their number ("2.6", "3.10", "7"), each with its own text only."""
+    sections, number = {}, None
+    for line in Path("aid/MANUAL.md").read_text(encoding="utf-8").splitlines():
+        if (heading := re.match(r"#{2,3} (\d+(?:\.\d+)?)\.? ", line)) is not None:
+            number = heading[1]
+        if number is not None:
+            sections[number] = sections.get(number, "") + line + "\n"
+    return sections
+
+
+def test_the_documents_say_what_the_tab_does():
+    """The manual's section 2.6 quotes the tab word for word, 2.1 and the Dutch guide the digest's line, 3.10 says why the aid writes
+    nothing in Exact and what a program door would need; no sentence says any more that the researcher applies the prepared changes
+    by hand, and the README names no one where it says what the aid needs."""
+    manual, whole = manual_sections(), Path("aid/MANUAL.md").read_text(encoding="utf-8")
+    assert manual["2.6"].startswith("### 2.6 The tab In Exact invoeren\n") and manual["2.7"].startswith("### 2.7 Your settings on the page\n")
+    for key in ("hand_intro", "hand_entered", "hand_dropped", "hand_block", "hand_block_entered", "hand_tick_first", "hand_hint", "hand_nothing",
+                "hand_entered_one", "hand_dropped_one", "hand_unreadable_one", "refresh"):
+        assert f"\"{NL[key]}\"" in manual["2.6"], key                                    # quoted word for word
+    for row in ROWS:
+        assert row in manual["2.6"] or row.split(", ", 1)[-1] in manual["2.6"], row
+    assert "In Exact in te voeren: 2 wijzigingen. Open het tabblad In Exact invoeren: <link>" in manual["2.1"]
+    guide = manual["7"]
+    assert "\"(voorbereid)\" betekent: nog niet in Exact. Het staat op het tabblad In Exact invoeren." in guide
+    assert "\"Postvak niet verbonden: meld u opnieuw aan op het tabblad Instellingen, onderaan bij Koppelingen\"" in guide and "meld je" not in whole
+    for words in ("researcher applies", "applies those changes by hand", "onderzoeker voert", "onderzoeker draait", "changes to apply by hand"):
+        assert words not in whole, words
+    door = manual["3.10"]
+    for words in ("`exact_base_url` stays empty", "Entity Services of Exact on a company server", "an Exact user for the aid with rights on purchase orders",
+                  "the name of that server and of the database", "whether the Entity Services let a line of an existing purchase order be updated",
+                  "implements the Writer protocol", "stands in front of the prepared writer", "never reaches the list"):
+        assert words in door, words
+    # the corrections of the settings' review round: the reasons as the page shows them, and the save note of the connections
+    reasons = manual["2.4"]
+    assert (f"| messages off for this supplier | {NL['reason:messages off for this supplier']} | {EN['reason:messages off for this supplier']} |"
+            in reasons) and NL["reason:messages off for this supplier"] == NL["settings_supplier_messages_off"]
+    assert "| new supplier | Nieuwe leverancier | New supplier | Until as many cases of this supplier are closed as" in reasons
+    assert f"\"{NL['settings_buyer_saved']}\"" in manual["3.14"] and "De controle neemt dit over" not in whole
+    readme = Path("aid/README.md").read_text(encoding="utf-8")
+    [needs] = [paragraph for paragraph in readme.split("\n\n") if "It answers only a request that names that host" in paragraph]
+    assert not [name for name in ("Remy", "Johan", "Yijie") if name in needs] and "Remy" not in readme
+    assert "the company's written permission" in needs and "What waits on the company's answer" not in readme
+    assert "tab \"In Exact invoeren\"" in readme and "Microsoft sign-in on the settings tab" in readme
+    assert "It answers only a request that names that host (127.0.0.1 or localhost, alone or with the page's port)" in readme
+    assert "`--share` opens a public share link for the made-up set only: it is refused with company settings (exit code 2)." in readme
+
+
+def test_the_documents_say_what_the_review_round_settled():
+    """The review round in the documents: the block's button notes what the tab showed (Z1), an undo on the list (Z2), a list that
+    cannot be read (Z4), what the buyer does in Exact himself (Z5), the article rows as the tab shows them (Z6), the rows one under
+    the other with the buttons above and below (Z7), no name of a person and no waiting on an answer (Z8), and the wording of a
+    change dropped and of a press that notes nothing (Z9)."""
+    manual, whole = manual_sections(), Path("aid/MANUAL.md").read_text(encoding="utf-8")
+    readme = Path("aid/README.md").read_text(encoding="utf-8")
+    guide = manual["7"]
+    # Z1 and Z7
+    assert "as the tab showed them when the list was last read" in manual["2.6"] and "stays on the list" in manual["2.6"]
+    assert "one under the other" in manual["2.6"] and "above the rows and again below them" in manual["2.6"]
+    # Z2: the undo of a change not entered takes it off the list, the undo of one entered asks the old value back
+    for number in ("2.6", "3.10"):
+        assert "off the list" in manual[number] and "the old value back" in manual[number], number
+    assert f"\"{NL['hand_row:article_price_back'].format(item='KM-0801', old='12,70')}\"" in manual["3.10"]
+    assert "off the list" in manual["4.3"]
+    # Z2a: an undo takes away only its own case's request
+    assert "A change that another case asked too stays on the list for that case." in manual["2.6"]
+    assert "it takes away only its own case's request in that change" in manual["3.10"] and "for that case alone" in manual["3.10"]
+    # Z4: the digest's line and the tab's label while the list cannot be read
+    assert ("\"De lijst In Exact invoeren kon niet worden gelezen. Open het tabblad om te zien wat er nog in te voeren is: <link>\""
+            in manual["2.1"])
+    assert f"\"{NL['hand_tab_unread']}\"" in manual["2.6"] and "kon niet worden gelezen" in guide
+    # Z5: the confirmation and the status are the buyer's to do in Exact, and the digest says so
+    for number in ("2.1", "2.2", "2.6"):
+        assert "attach the confirmation and set the status Bevestigd in Exact yourself" in manual[number], number
+    assert "the buyer attaches the confirmation and sets the status Bevestigd in Exact himself" in manual["3.10"]
+    assert "the buyer attaches the confirmation and sets the status Bevestigd in Exact himself" in readme
+    assert "\"(zelf in Exact doen)\"" in manual["2.1"] and "\"in Exact zelf te doen\"" in manual["2.1"]
+    assert "\"(zelf in Exact doen)\"" in guide and "voegt u zelf toe in Exact" in guide
+    for words in ("the aid attaches the confirmation", "Then the aid attaches", "sets the PO to Bevestigd", "voegt de assistent de bevestiging toe",
+                  "heeft de assistent al verwerkt", "every change it makes, and every change you confirm"):
+        assert words not in whole and words not in readme, words
+    # Z6: the article rows as the tab shows them
+    assert "a row \"artikel <code>: inkoopprijs ...\" after the rows of the orders" in manual["2.2"] and "under \"Artikelprijzen\"" not in whole
+    page_doc = Path("aid/review/page.py").read_text(encoding="utf-8").split('"""')[1]
+    assert "and after them the article prices, each named \"artikel KM-0801:" in page_doc and "in blocks per purchase order" not in page_doc
+    # Z8: roles, no names, and nothing waits on an answer
+    assert "checks orders for the buyer. It does two checks." in manual["1"] and "bel of mail de onderzoeker.\n" in guide
+    assert "The researcher decided on 2 November 2026" in readme and "docs/meetings/" in readme and "_Feedback_" not in readme
+    for words in ("has not come yet", "his answer", "waits on", "'s answer"):
+        assert words not in manual["3.1"] and words not in manual["3.3"], words
+    assert "Microsoft sign-in on the settings tab" in manual["3.1"] and "the company's written permission" in manual["3.1"]
+    assert "In Exact invoeren" in manual["3.1"] and "Microsoft sign-in on the settings tab" in manual["3.3"]
+    # Z9
+    assert "as long as no other value was asked for that line in between" in manual["2.6"]
+    assert f"\"{NL['hand_nothing_noted']}\"" in manual["2.6"]
+
+
+def test_the_language_switch_relabels_the_buttons_above_and_below_as_gradio_applies_it(tmp_path, madeup_out):
+    """gradio takes the value out of an update as it applies it to its output, so one update given to two outputs would relabel only
+    the first: each button of the tab gets its own update, and all of them read English after the switch (found in the browser)."""
+    from gradio.blocks import postprocess_update_dict
+
+    page, prepared, d = tab_page(tmp_path, madeup_out)
+    [relabel] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == "hand_relabel"]
+    applied = [postprocess_update_dict(output, update) if isinstance(update, dict) else update
+               for output, update in zip(relabel.outputs, relabel.fn("en", [], None))]
+    assert [update["value"] for update in applied[6:]] == ["Refresh the list", "The ticked rows have been entered", "Do not enter the ticked rows",
+                                                          "The ticked rows have been entered", "Do not enter the ticked rows",
+                                                          "Everything of this block has been entered"]

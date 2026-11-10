@@ -2,6 +2,8 @@
 client sends. The SDK is replaced by a stub, so no test calls the network."""
 import base64
 import json
+import subprocess
+import sys
 from dataclasses import replace
 from decimal import Decimal
 from types import SimpleNamespace
@@ -9,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from aid.readers.llm_client import AnthropicClient, LlmRequest, LlmResponse, ReaderError, RecordedClient
+from aid.tests.conftest import REPO_ROOT
 
 
 def test_recorded_client_replays(tmp_path):
@@ -172,3 +175,30 @@ def test_the_client_counts_the_tokens_of_the_request_it_would_send(monkeypatch):
     assert sent["count"] == {name: value for name, value in sent["stream"].items() if name != "max_tokens"}
     assert sent["count"]["output_config"] == {"format": {"type": "json_schema", "schema": {"type": "object"}}, "effort": "low"}
     assert [block["type"] for block in sent["count"]["messages"][0]["content"]] == ["document", "text"] and len(made) == 1     # one SDK client
+
+
+# --- the aid from a folder, whose Python has no development client's library (Task 30) ---
+
+def test_the_package_imports_without_the_development_clients_library(monkeypatch):
+    """The folder's Python is given the aid's packages without the development AI client's library (aid/portable.py). The parts
+    and the launcher import all the same, and only a use of the development client fails, with ReaderError. In a fresh
+    interpreter, where an import of the library fails as it does when the library is not installed."""
+    script = ("import sys\n"
+              "sys.modules['anthropic'] = None\n"
+              "import aid.runner, aid.review, aid.review.__main__, aid.capture_server, aid.start, aid.demo\n"
+              "from aid.readers import llm_client\n"
+              "assert llm_client.anthropic is None\n"
+              "try:\n"
+              "    llm_client.AnthropicClient('model-x').complete(llm_client.LlmRequest(system='s', user_text='u', schema={}))\n"
+              "except llm_client.ReaderError as error:\n"
+              "    print(f'ReaderError: {error}')\n")
+    done = subprocess.run([sys.executable, "-B", "-c", script], cwd=REPO_ROOT, capture_output=True, text=True, timeout=120)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.startswith("ReaderError: ") and "not installed" in done.stdout
+    # the name stays in the module, so that the tests that replace the library keep working; without it, each use raises
+    monkeypatch.setattr("aid.readers.llm_client.anthropic", None)
+    client = AnthropicClient("model-x")
+    for use in (client.complete, client.count_tokens):
+        with pytest.raises(ReaderError, match="not installed") as raised:
+            use(LlmRequest(system="s", user_text="u", schema={}))
+        assert raised.value.response is None and raised.value.attempts == 0

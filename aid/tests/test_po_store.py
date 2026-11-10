@@ -1,10 +1,12 @@
 """Tests of the PO store (aid/po_store.py) on the made-up PO PDFs and the made-up export, and on variants of them that the
 generator draws. The amounts below are totals of made-up POs; the only authorization limit is the made-up one of conftest.py."""
 import csv
+import io
 import json
+import os
 import re
 import shutil
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -12,13 +14,13 @@ import pytest
 from openpyxl import Workbook
 
 from aid.case import sha256_file
-from aid.madeup.generate import EXPORT_COLUMNS, PO_COLUMNS, load_specs, pdf_bytes, po_pages
+from aid.madeup.generate import EXPORT_COLUMNS, PO_COLUMNS, Row, Text, export_csv, load_specs, pdf_bytes, po_pages
 from aid.po_store import PoStore, PoVersion
 from aid.readers.po_export import is_folder_name
 from aid.readers.po_pdf import read_po_pdf
 from aid.schema import DocValue
 from aid.tests.conftest import SETTINGS
-from aid.tests.helpers import document_from_spec
+from aid.tests.helpers import ANDERS_LAYOUT, ANDERS_PO, MADEUP_LAYOUT, document_from_spec
 
 SPECS = {spec.case_id: spec for spec in load_specs(Path(__file__).resolve().parents[1] / "madeup" / "spec")}
 COLUMNS = {field: field for field in EXPORT_COLUMNS}          # the made-up export names its columns after the aid's fields
@@ -179,7 +181,10 @@ def test_find_by_lines_names_the_pos_whose_latest_version_has_two_of_the_codes(m
 
 # --- filing the POs of an export ---
 
-def test_an_export_files_its_po_as_the_next_version(madeup_out, tmp_path):
+def test_an_export_files_its_po_as_the_next_look(madeup_out, tmp_path):
+    """Rewritten by Task 40, by design: an export files a look at its PO beside the PDF versions, and no version. The look reads as the
+    PO it shows: version 1 while the PO has no PDF version, then the number of its latest PDF version. The same export again files
+    nothing; other rows are the next look."""
     export = madeup_out / "CART02_export.csv"
     store = PoStore(tmp_path / "store", SETTINGS.authorization_limit)
     [version] = store.from_export(export, COLUMNS)
@@ -192,12 +197,15 @@ def test_an_export_files_its_po_as_the_next_version(madeup_out, tmp_path):
     unit, price = doc.lines[0].unit, doc.lines[0].unit_price
     assert (unit.text, unit.value, price.text, price.value, price.source, price.uncertain) == ("st", "pc", "12.50", "12.50", None, False)
     assert (version.total, version.above_authorization) == (Decimal("214.50"), False)       # 5 x 12,50 + 3 x 40,00 + 10 x 3,20
-    assert store.from_export(export, COLUMNS) == [version] and store.versions("250202") == [version]    # the same export again is stored once
-    store.add(drawn_po(tmp_path / "po.pdf", header={"po_reference": "Inkooporder 250202", "version": None}))
+    assert store.from_export(export, COLUMNS) == [version] and store.snapshots("250202") == [version]    # the same export again: nothing
+    assert store.versions("250202") == []
+    pdf = store.add(drawn_po(tmp_path / "po.pdf", header={"po_reference": "Inkooporder 250202", "version": None}))
+    assert pdf.version == 1                                                       # the PDFs keep a sequence of their own
     rows = export_rows(export)
     rows[0]["quantity"] = "6"
     [changed] = store.from_export(written_export(tmp_path / "changed.csv", rows), COLUMNS)
-    assert [v.version for v in store.versions("250202")] == [1, 2, 3] and changed.version == 3 and changed.document.lines[0].quantity.value == "6"
+    assert store.versions("250202") == [pdf] and [look.document.lines[0].quantity.value for look in store.snapshots("250202")] == ["5", "6"]
+    assert (changed.version, changed.supplier, changed.document.lines[0].quantity.value) == (1, "S03", "6")    # the PDF's number and supplier
 
 
 def test_an_export_of_several_pos_files_each_in_the_order_of_the_file(madeup_out, tmp_path):
@@ -333,8 +341,8 @@ def test_the_store_holds_the_po_number_of_a_pdf_to_the_same_folder_rule(madeup_o
     from a PDF as from an export, before it files anything; the error names the file and not the number. Such a number has no
     versions. Every made-up PO number is a folder name."""
     doc = read_po_pdf(madeup_out / "MU03_po_v1.pdf")
-    monkeypatch.setattr("aid.po_store.read_po_pdf", lambda pdf: doc.model_copy(update={"po_reference": DocValue(value=po_number,
-                                                                                                                text=po_number)}))
+    monkeypatch.setattr("aid.po_store.read_po", lambda pdf, layout: doc.model_copy(update={"po_reference": DocValue(value=po_number,
+                                                                                                                        text=po_number)}))
     with pytest.raises(ValueError, match=r"^MU03_po_v1\.pdf: the PO number cannot be the name of a folder$") as refused:
         PoStore(tmp_path / "store").add(madeup_out / "MU03_po_v1.pdf")
     assert po_number.strip() not in str(refused.value)
@@ -345,7 +353,7 @@ def test_the_store_holds_the_po_number_of_a_pdf_to_the_same_folder_rule(madeup_o
 def test_from_export_on_a_workbook_equals_the_csv(madeup_out, tmp_path):
     """The made-up export saved as a workbook, its numbers as number cells and its dates as date cells, is filed as the CSV file is:
     the same PO, version and total, and every line with the same values. A price cell shows 12.5 where the CSV file writes 12.50,
-    which is the same number. The version names the workbook as its file, and the same workbook again is stored once."""
+    which is the same number. The look names the workbook as its file, and the same workbook again files nothing."""
     workbook = Workbook()
     workbook.active.append(EXPORT_COLUMNS)
     for row in export_rows(madeup_out / "CART02_export.csv"):
@@ -367,12 +375,13 @@ def test_from_export_on_a_workbook_equals_the_csv(madeup_out, tmp_path):
         assert Decimal(line.quantity.value) == Decimal(other.quantity.value) and not line.quantity.uncertain
         assert Decimal(line.unit_price.value) == Decimal(other.unit_price.value) and not line.unit_price.uncertain
     assert (version.document.lines[0].unit_price.text, from_csv.document.lines[0].unit_price.text) == ("12.5", "12.50")
-    assert store.from_export(xlsx, COLUMNS) == [version] and store.versions("250202") == [version]
-    assert not (tmp_path / "store" / "250202" / "v1" / "po.pdf").exists()                   # no copy of an export is kept
+    assert store.from_export(xlsx, COLUMNS) == [version] and store.snapshots("250202") == [version] and store.versions("250202") == []
+    assert stored_files(tmp_path / "store" / "250202") == [tmp_path / "store" / "250202" / "e1", tmp_path / "store" / "250202" / "e1" / "po.json"]
+    assert store.from_export(madeup_out / "CART02_export.csv", COLUMNS) == [version]      # the same rows in the CSV file: nothing new
 
 
-def test_a_supplier_column_names_the_supplier_of_the_version(madeup_out, tmp_path):
-    """An export with a supplier column gives the version its supplier, which a version from an export did not have before."""
+def test_a_supplier_column_names_the_supplier_of_the_look(madeup_out, tmp_path):
+    """An export with a supplier column gives the look its supplier, which a PO from an export did not have before."""
     rows = [row | {"supplier": "S22" if row["line_id"] == "2" else ""} for row in export_rows(madeup_out / "CART02_export.csv")]
     with open(tmp_path / "export.csv", "w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=[*EXPORT_COLUMNS, "supplier"])
@@ -380,7 +389,7 @@ def test_a_supplier_column_names_the_supplier_of_the_version(madeup_out, tmp_pat
         writer.writerows(rows)
     [version] = PoStore(tmp_path / "store").from_export(tmp_path / "export.csv", COLUMNS | {"supplier": "supplier"})
     assert (version.supplier, version.document.supplier.text, version.version_date) == ("S22", "S22", None)
-    assert PoStore(tmp_path / "store").versions("250202")[0].supplier == "S22"
+    assert PoStore(tmp_path / "store").snapshots("250202")[0].supplier == "S22"
 
 
 def test_a_po_number_names_one_folder_inside_the_store(madeup_out, tmp_path):
@@ -398,7 +407,347 @@ def test_the_store_holds_absolute_paths_when_given_relative_ones(madeup_out, tmp
     here = tmp_path.resolve()
     copy, export = here / "store" / "250103" / "v1" / "po.pdf", here / "CART02_export.csv"
     assert (store.root, from_pdf.pdf_path, from_export.pdf_path) == (here / "store", copy, export)
-    written = [json.loads(path.read_text(encoding="utf-8"))["pdf_path"] for path in sorted(here.glob("store/*/v*/po.json"))]
-    assert written == [str(copy), str(export)]
+    written = [json.loads(path.read_text(encoding="utf-8"))["pdf_path"] for path in sorted(here.glob("store/*/*/po.json"))]
+    assert written == [str(copy), str(export)]                     # 250103/v1, the PDF version, and 250202/e1, the look of the export
     monkeypatch.chdir(madeup_out)                                                 # read from another working directory
     assert PoStore(here / "store").versions("250103")[0].pdf_path.read_bytes() == (madeup_out / "MU03_po_v1.pdf").read_bytes()
+    assert PoStore(here / "store").snapshots("250202")[0].pdf_path == export
+
+
+# --- adding PO PDFs with a layout from the settings ---
+
+def test_add_reads_with_the_layout(madeup_out, tmp_path):
+    """With a layout the store reads the PDF with it: the second made-up PO, which prints no version, becomes version 1 of its PO, and
+    a made-up PO read with the made-up layout is stored as without one, but for the reader's name."""
+    store = PoStore(tmp_path / "store", SETTINGS.authorization_limit)
+    anders = store.add(ANDERS_PO, ANDERS_LAYOUT)
+    assert (anders.po_number, anders.version, anders.version_date, anders.supplier) == (
+        "IB-2600417", 1, "2026-11-03", "Proefleverancier S23")
+    assert (anders.document.reader, anders.document.source_file, len(anders.document.lines)) == ("po_pdf:layout", "ANDERS_po_v1.pdf", 12)
+    folder = tmp_path / "store" / "IB-2600417" / "v1"
+    assert anders.pdf_path == folder / "po.pdf" and anders.pdf_path.read_bytes() == ANDERS_PO.read_bytes()
+    assert anders.sha256 == sha256_file(ANDERS_PO)
+    assert PoVersion.model_validate_json((folder / "po.json").read_text(encoding="utf-8")) == anders
+    assert store.add(ANDERS_PO, ANDERS_LAYOUT) == anders and store.versions("IB-2600417") == [anders]   # the same file again is stored once
+    by_layout = store.add(madeup_out / "MU03_po_v2.pdf", MADEUP_LAYOUT)
+    by_template = PoStore(tmp_path / "other", SETTINGS.authorization_limit).add(madeup_out / "MU03_po_v2.pdf")
+    assert (by_layout.document.reader, by_template.document.reader) == ("po_pdf:layout", "po_pdf:po_madeup")
+    but_for = {"pdf_path": True, "document": {"reader"}}                    # the store's own copy of the PDF, and the name of the reader
+    assert by_layout.model_dump(exclude=but_for) == by_template.model_dump(exclude=but_for)
+    assert (by_layout.version, by_layout.total, by_layout.above_authorization) == (2, Decimal("471.60"), False)
+    assert store.add(madeup_out / "MU03_po_v1.pdf", MADEUP_LAYOUT).version == 1                             # the number the PDF prints
+    assert [v.version for v in store.versions("250103")] == [1, 2] and store.add(madeup_out / "MU03_po_v1.pdf", None).version == 1
+
+
+def test_prices_per_piece_count_for_the_total_only(madeup_out, tmp_path):
+    """The second made-up PO prints no price basis. With prices_per_piece its lines keep an empty price basis and its total counts each
+    line as per one unit; without it the total is unknown. A line that prints its basis is counted with that basis either way."""
+    store = PoStore(tmp_path / "store", SETTINGS.authorization_limit)
+    per_piece = store.add(ANDERS_PO, ANDERS_LAYOUT)
+    assert ANDERS_LAYOUT.prices_per_piece and [line.price_basis for line in per_piece.document.lines] == [DocValue()] * 12
+    assert (per_piece.total, per_piece.above_authorization) == (Decimal("4417.85"), False)       # the total the PDF prints on its last row
+    assert PoStore(tmp_path / "store", Decimal("4000")).versions("IB-2600417")[0].above_authorization is True
+    unticked = ANDERS_LAYOUT.model_copy(update={"prices_per_piece": False})
+    unknown = PoStore(tmp_path / "unknown", SETTINGS.authorization_limit).add(ANDERS_PO, unticked)
+    assert (unknown.total, unknown.above_authorization) == (None, None) and unknown.document == per_piece.document
+    ticked = MADEUP_LAYOUT.model_copy(update={"prices_per_piece": True})
+    assert store.add(madeup_out / "MU04_po_v1.pdf", ticked).total == Decimal("680.50")       # 18 of its 32 lines print "100" as their basis
+    without_one = store.add(drawn_po(tmp_path / "po.pdf", "MU07", cells={("1", "Per"): ""}), ticked)
+    assert without_one.document.lines[0].price_basis == DocValue() and without_one.document.lines[1].price_basis.value == "1"
+    assert (without_one.total, without_one.above_authorization) == (Decimal("5537.50"), True)       # 3 x 12,50 per one + 100 x 55,00
+    unread = PoStore(tmp_path / "unread", SETTINGS.authorization_limit).add(drawn_po(tmp_path / "unread.pdf", "MU07",
+                                                                                     cells={("1", "Per"): "n.v.t."}), ticked)
+    basis = unread.document.lines[0].price_basis
+    assert (basis.text, basis.value, basis.uncertain) == ("n.v.t.", None, True)          # a basis is printed, and it cannot be read
+    assert (unread.total, unread.above_authorization) == (None, None)                    # so the line is not counted as per one
+
+
+def test_a_refused_pdf_leaves_the_store_as_it_was(madeup_out, tmp_path):
+    """With a layout the store refuses a PDF that does not fit it, also one that the template of the made-up layout reads, and a PDF
+    that fits and gives no PO number or no order line. Nothing is stored."""
+    store = PoStore(tmp_path / "store")
+    first = store.add(madeup_out / "MU03_po_v1.pdf", MADEUP_LAYOUT)
+    before = stored_files(tmp_path / "store")
+    no_number = drawn_po(tmp_path / "no_number.pdf", header={"po_reference": "Inkooporder nr. 250103"})   # fits: "nr." holds no digit
+    no_line = drawn_po(tmp_path / "no_line.pdf", cells={(line, "Regel"): "" for line in ("1", "2", "3")})
+    pages = po_pages(SPECS["MU03"], SPECS["MU03"].po.versions[0])
+    pages.append([Row([Text(0, "Inkooporder 250199")]), *pages[0][6:]])          # a second PO printed behind the first
+    two_pos = tmp_path / "two_pos.pdf"
+    two_pos.write_bytes(pdf_bytes(pages, two_pos.name))
+    for pdf, layout, reason in ((madeup_out / "MU03_conf.pdf", MADEUP_LAYOUT, "does not fit the purchase order layout"),
+                                (madeup_out / "MU05_conf.pdf", MADEUP_LAYOUT, "does not fit the purchase order layout"),       # a scan
+                                (ANDERS_PO, MADEUP_LAYOUT, "does not fit the purchase order layout"),
+                                (madeup_out / "MU03_po_v2.pdf", ANDERS_LAYOUT, "does not fit the purchase order layout"),   # a made-up PO
+                                (no_number, MADEUP_LAYOUT, "no PO number found"), (no_line, MADEUP_LAYOUT, "no order line found"),
+                                (two_pos, MADEUP_LAYOUT, "more than one PO")):
+        with pytest.raises(ValueError, match=rf"^{re.escape(pdf.name)}: .*{reason}"):
+            store.add(pdf, layout)
+        assert stored_files(tmp_path / "store") == before and store.versions("250103") == [first], pdf.name
+    assert not (tmp_path / "store" / "IB-2600417").exists()
+
+
+@pytest.mark.parametrize("printed", ["PO/2026/0417", "COM1"])
+def test_a_po_number_that_cannot_be_a_folder_name_is_refused_by_the_setting(tmp_path, printed):
+    """A PO number read after the PO label may hold a slash, or be a name that Windows keeps for a device. The store refuses it by the
+    folder rule of the export reader, and the refusal names the setting and not the number, so that the skip reason, the digest and
+    runner.log never hold a value read from the PDF."""
+    pdf = drawn_po(tmp_path / "slash.pdf", header={"po_reference": f"Inkooporder {printed}"})
+    with pytest.raises(ValueError, match=r"^slash\.pdf: the PO number .*po_layout\.po_label.* cannot be the name of a folder") as refused:
+        PoStore(tmp_path / "store").add(pdf, MADEUP_LAYOUT)
+    assert printed not in str(refused.value) and not any(char.isdigit() for char in str(refused.value))
+    assert stored_files(tmp_path / "store") == []
+
+
+def test_a_version_stored_from_another_pdf_is_refused_by_the_setting_with_a_layout(madeup_out, tmp_path):
+    """With a layout the refusal of a version number that the store holds from another file names the settings and the file, and
+    neither the version number nor the PO number, which are read from the company's PDF. Without a layout, for the made-up PDFs, it
+    names them as before."""
+    store = PoStore(tmp_path / "store")
+    first = store.add(madeup_out / "MU03_po_v1.pdf", MADEUP_LAYOUT)
+    other = drawn_po(tmp_path / "other.pdf", version=2, header={"version": "Versie 1"})     # version 2's lines, printed as version 1
+    with pytest.raises(ValueError, match=r"^other\.pdf: .*po_layout\.version_label.*from another file") as refused:
+        store.add(other, MADEUP_LAYOUT)
+    assert "250103" not in str(refused.value) and "1" not in str(refused.value).replace("other.pdf", "")
+    assert store.versions("250103") == [first]
+    made_up = PoStore(tmp_path / "made_up")
+    made_up.add(madeup_out / "MU03_po_v1.pdf")
+    with pytest.raises(ValueError, match=r"other\.pdf is version 1 of PO 250103, which is stored from another file"):
+        made_up.add(other)
+
+
+# --- an export is a look at the PO, kept beside its PDF versions (Task 40) ---
+
+FILED = datetime(2026, 11, 16, 8, 0).timestamp()          # the moment the tests below file from, in local time
+
+
+def filed(store: PoStore, po_number: str, look: str, minute: int) -> None:
+    """Set when the version or the look `look` ("v2", "e1") of the PO was filed: the modification time of its po.json, `minute`
+    minutes after FILED. The store orders the looks at a PO by these times, so a test that needs an order sets it."""
+    moment = FILED + 60 * minute
+    os.utime(store.root / po_number / look / "po.json", (moment, moment))
+
+
+def rows_of(case_id: str) -> list[dict[str, str]]:
+    """The rows of the ERP export of the made-up PO of `case_id`: the lines of its latest version (export_csv of the generator)."""
+    return list(csv.DictReader(io.StringIO(export_csv(SPECS[case_id]))))
+
+
+def test_an_export_files_a_look_and_no_version(madeup_out, tmp_path):
+    """An export makes no v folder: each of its POs gets the folder e1 with its po.json, a PoVersion written whole, that keeps the
+    export's path and the file's sha256 and has no po.pdf beside it. versions() gives no look, snapshots() gives the looks, and a
+    new store on the same root reads them back."""
+    export = madeup_out / "CART02_export.csv"
+    store = PoStore(tmp_path / "store", SETTINGS.authorization_limit)
+    [look] = store.from_export(export, COLUMNS)
+    folder = tmp_path / "store" / "250202" / "e1"
+    assert stored_files(tmp_path / "store") == [tmp_path / "store" / "250202", folder, folder / "po.json"]
+    assert PoVersion.model_validate_json((folder / "po.json").read_text(encoding="utf-8")) == look
+    assert (look.pdf_path, look.sha256, look.version, look.document.reader) == (export, sha256_file(export), 1, "export:CART02_export.csv")
+    again = PoStore(tmp_path / "store", SETTINGS.authorization_limit)
+    assert again.versions("250202") == [] and again.snapshots("250202") == [look] and again.as_it_stands("250202") == look
+    assert again.snapshots("250199") == [] and again.snapshots("..") == [] and PoStore(tmp_path / "nothing").snapshots("250202") == []
+    pdf = store.add(madeup_out / "MU03_po_v1.pdf")
+    assert store.versions("250103") == [pdf] and store.snapshots("250103") == []        # a PDF makes no look
+
+
+def test_the_same_rows_again_file_nothing_and_other_rows_the_next_look(madeup_out, tmp_path):
+    """Each PO of an export is held against its latest look, value by value in normal form, numbers as numbers: the same rows file
+    nothing, also when the file writes them otherwise; other rows are the next look, e1, e2 and so on, also when a new file holds the
+    rows of an earlier look, and so is a supplier the export now names. The file of an earlier look files nothing more (ruling E1,
+    below). A file of several POs files only those whose rows changed. `filed` gets the PO number of each look filed."""
+    store = PoStore(tmp_path / "store")
+    news: list[str] = []
+    [first] = store.from_export(madeup_out / "CART02_export.csv", COLUMNS, filed=news)
+    assert news == ["250202"]
+    same: list[str] = []
+    assert store.from_export(madeup_out / "CART02_export.csv", COLUMNS, filed=same) == [first] and same == []
+    rows = export_rows(madeup_out / "CART02_export.csv")
+    shorter = {"12.50": "12.5", "40.00": "40", "3.20": "3.2"}
+    written_otherwise = [row | {"quantity": f"{row['quantity']}.0", "unit_price": shorter[row["unit_price"]], "unit": "stuks",
+                                "delivery_date": "12-11-2026"} for row in rows]           # 5.0, 12.5, stuks for st, the day first
+    assert store.from_export(written_export(tmp_path / "otherwise.csv", written_otherwise), COLUMNS, filed=same) == [first] and same == []
+    changed = [rows[0] | {"unit_price": "12.60"}, *rows[1:]]
+    [second] = store.from_export(written_export(tmp_path / "changed.csv", changed), COLUMNS, filed=news)
+    assert news == ["250202", "250202"] and second.document.lines[0].unit_price.value == "12.60"
+    assert [look.document.reader for look in store.snapshots("250202")] == ["export:CART02_export.csv", "export:changed.csv"]
+    assert sorted(path.name for path in (tmp_path / "store" / "250202").iterdir()) == ["e1", "e2"]
+    [third] = store.from_export(written_export(tmp_path / "back.csv", rows), COLUMNS, filed=news)     # the first rows again, in a new
+    assert third.document.lines == first.document.lines and len(store.snapshots("250202")) == 3 and news[-1] == "250202"   # file
+    assert store.from_export(madeup_out / "CART02_export.csv", COLUMNS, filed=same) == [first] and same == []    # the first file: E1
+    both = written_export(tmp_path / "both.csv", rows + export_rows(madeup_out / "CART01_export.csv"))
+    several: list[str] = []
+    looks = store.from_export(both, COLUMNS, filed=several)
+    assert several == ["250201"] and [look.po_number for look in looks] == ["250202", "250201"] and looks[0] == third
+    with open(tmp_path / "named.csv", "w", encoding="utf-8", newline="") as f:          # the same lines, and now a supplier
+        writer = csv.DictWriter(f, fieldnames=[*EXPORT_COLUMNS, "supplier"])
+        writer.writeheader()
+        writer.writerows(row | {"supplier": "S21"} for row in export_rows(madeup_out / "CART01_export.csv"))
+    [named] = store.from_export(tmp_path / "named.csv", COLUMNS | {"supplier": "supplier"}, filed=several)
+    assert several == ["250201", "250201"] and named.supplier == "S21" and named.document.lines == looks[1].document.lines
+
+
+def test_an_export_file_is_filed_once(madeup_out, tmp_path):
+    """Ruling E1: an export file that is the source of a look of a PO files nothing more for that PO, whatever looks came after it,
+    and neither does a file that filed nothing for the PO because its rows were those of the latest look (the look keeps its sha256
+    in e<n>/same_rows.txt). So a file handled again at every pass, or an older export given again, never comes back on top of a
+    newer look, and each gives the look it was. Another file with the rows of an earlier look is still the next look (rule 2)."""
+    store = PoStore(tmp_path / "store")
+    older = madeup_out / "CART01_export.csv"
+    rows = export_rows(older)
+    same = written_export(tmp_path / "same.csv", rows)                                   # the older rows, in another file
+    newer = written_export(tmp_path / "newer.csv", [rows[0] | {"unit_price": "0.99"}, *rows[1:]])
+    [first] = store.from_export(older, COLUMNS)
+    assert store.from_export(same, COLUMNS) == [first]                                    # the same rows: nothing filed
+    assert (tmp_path / "store" / "250201" / "e1" / "same_rows.txt").read_text(encoding="utf-8") == sha256_file(same) + "\n"
+    [second] = store.from_export(newer, COLUMNS)
+    for path, look in ((older, first), (same, first), (newer, second), (older, first), (same, first)):
+        filed: list[str] = []
+        assert store.from_export(path, COLUMNS, filed=filed) == [look] and filed == [], path.name
+    assert [look.document.lines[0].unit_price.value for look in store.snapshots("250201")] == ["0.95", "0.99"]
+    assert store.as_it_stands("250201") == second
+    assert (tmp_path / "store" / "250201" / "e1" / "same_rows.txt").read_text(encoding="utf-8") == sha256_file(same) + "\n"
+    cut = tmp_path / "store" / "250201" / "e2" / "same_rows.txt"
+    cut.write_text("0123", encoding="utf-8")                                              # a line a crash cut off
+    copy = written_export(tmp_path / "copy.csv", [rows[0] | {"unit_price": "0.990"}, *rows[1:]])   # the newer rows, written otherwise
+    assert store.from_export(copy, COLUMNS) == [second] and cut.read_text(encoding="utf-8") == f"0123\n{sha256_file(copy)}\n"
+    assert store.from_export(copy, COLUMNS) == [second] and cut.read_text(encoding="utf-8") == f"0123\n{sha256_file(copy)}\n"   # kept once
+    back = written_export(tmp_path / "back.csv", rows + export_rows(madeup_out / "CART02_export.csv"))     # a new file of two POs
+    filed = []
+    third, other = store.from_export(back, COLUMNS, filed=filed)
+    assert filed == ["250201", "250202"] and third.document.lines == first.document.lines and store.as_it_stands("250201") == third
+
+
+@pytest.mark.parametrize("name,change", [
+    ("delivery_date", lambda rows: [rows[0] | {"delivery_date": "2026-11-13"}, *rows[1:]]),
+    ("unit", lambda rows: [rows[0] | {"unit": "m"}, *rows[1:]]),
+    ("price_basis", lambda rows: [rows[0] | {"price_basis": "10"}, *rows[1:]]),
+    ("description", lambda rows: [rows[0] | {"description": "Hydraulische slang 10 mm, 3 m"}, *rows[1:]]),
+    ("line_id", lambda rows: [rows[0] | {"line_id": "10"}, *rows[1:]]),
+])
+def test_each_value_of_the_rows_counts(madeup_out, tmp_path, name, change):
+    """Rule 2, value by value (ruling E7): an export that changes only one value of the latest look's rows, the delivery date, the
+    unit, the price basis, the description or a line id, files the next look, which holds the change."""
+    store = PoStore(tmp_path / "store")
+    rows = export_rows(madeup_out / "CART02_export.csv")
+    [first] = store.from_export(madeup_out / "CART02_export.csv", COLUMNS)
+    filed: list[str] = []
+    [look] = store.from_export(written_export(tmp_path / f"{name}.csv", change(rows)), COLUMNS, filed=filed)
+    assert filed == ["250202"] and store.as_it_stands("250202") == look and len(store.snapshots("250202")) == 2
+    differs = [(old, new) for old, new in zip(first.document.lines, look.document.lines) if old != new]
+    assert len(differs) == 1 and differs[0][0].line_id == "1"
+
+
+def test_the_po_as_it_stands_in_the_four_orders_of_filing(madeup_out, tmp_path):
+    """The PO as it stands is its latest PDF version, or its latest look when that was filed after the latest PDF version or the PO
+    has no PDF version; when the two were filed at the same time the PDF counts. The times are those of the po.json files, set
+    here, and filed_at gives them."""
+    store = PoStore(tmp_path / "store")
+    v1, v2 = (store.add(madeup_out / f"MU03_po_v{n}.pdf") for n in (1, 2))         # PDFs only: the latest version
+    filed(store, "250103", "v1", 10)
+    filed(store, "250103", "v2", 0)                                                 # filed before version 1, and still the latest
+    assert store.as_it_stands("250103") == v2
+    rows = export_rows(madeup_out / "CART02_export.csv")                           # exports only: the latest look
+    store.from_export(written_export(tmp_path / "first.csv", rows), COLUMNS)
+    [latest] = store.from_export(written_export(tmp_path / "second.csv", [rows[0] | {"quantity": "6"}, *rows[1:]]), COLUMNS)
+    filed(store, "250202", "e1", 20)
+    filed(store, "250202", "e2", 30)
+    assert store.as_it_stands("250202") == latest
+    [look] = store.from_export(written_export(tmp_path / "250101.csv", rows_of("MU01")), COLUMNS)     # an export, then a PDF: the PDF
+    pdf = store.add(madeup_out / "MU01_po_v1.pdf")
+    filed(store, "250101", "e1", 0)
+    filed(store, "250101", "v1", 5)
+    assert store.as_it_stands("250101") == pdf
+    filed(store, "250101", "e1", 6)                                                 # a PDF, then an export: the look
+    assert store.as_it_stands("250101") == look.model_copy(update={"supplier": "S01"})        # the look reads with the PDF's supplier
+    filed(store, "250101", "e1", 5)                                                 # filed at the same time: the PDF
+    assert store.as_it_stands("250101") == pdf
+    assert store.filed_at("250101", "v1") == store.filed_at("250101", "e1") == datetime.fromtimestamp(FILED + 300).astimezone()
+    assert store.filed_at("250202", "e2") > store.filed_at("250202", "e1")
+    assert store.as_it_stands("250199") is None and store.as_it_stands("..") is None
+    with pytest.raises(FileNotFoundError):
+        store.filed_at("250101", "e2")
+    with pytest.raises(ValueError):
+        store.filed_at("250101", "../250103/v1")
+
+
+def test_a_look_carries_the_number_and_the_supplier_of_the_latest_pdf_version(madeup_out, tmp_path):
+    """A look is given with the number of the latest PDF version of its PO, 1 without one, and with that version's supplier when its
+    export names none; a supplier the export names stays. Its po.json keeps what the export gave, so the look follows a later PDF."""
+    store = PoStore(tmp_path / "store")
+    [alone] = store.from_export(written_export(tmp_path / "250103.csv", rows_of("MU03")), COLUMNS)
+    assert (alone.version, alone.supplier) == (1, None)
+    store.add(madeup_out / "MU03_po_v1.pdf")
+    v2 = store.add(madeup_out / "MU03_po_v2.pdf")
+    filed(store, "250103", "e1", 10)
+    filed(store, "250103", "v1", 0)
+    filed(store, "250103", "v2", 5)
+    stands = store.as_it_stands("250103")
+    assert (stands.version, stands.supplier, stands.document) == (2, "S03", alone.document) and v2.supplier == "S03"
+    assert json.loads((tmp_path / "store" / "250103" / "e1" / "po.json").read_text(encoding="utf-8"))["supplier"] is None
+    v3 = store.add(drawn_po(tmp_path / "v3.pdf", version=2, header={"version": "Versie 3", "supplier": "Leverancier: S23"}))
+    assert (v3.version, v3.supplier) == (3, "S23")
+    assert [(look.version, look.supplier) for look in store.snapshots("250103")] == [(3, "S23")]
+    named = [row | {"supplier": "S21"} for row in export_rows(madeup_out / "CART02_export.csv")]
+    with open(tmp_path / "named.csv", "w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=[*EXPORT_COLUMNS, "supplier"])
+        writer.writeheader()
+        writer.writerows(named)
+    [own] = store.from_export(tmp_path / "named.csv", COLUMNS | {"supplier": "supplier"})
+    store.add(drawn_po(tmp_path / "250202.pdf", header={"po_reference": "Inkooporder 250202", "version": "Versie 4"}))
+    filed(store, "250202", "v4", 0)
+    filed(store, "250202", "e1", 1)
+    assert (own.version, own.supplier) == (1, "S21")
+    assert (store.as_it_stands("250202").version, store.as_it_stands("250202").supplier) == (4, "S21")
+
+
+def test_candidates_for_a_confirmation_and_for_a_cart(madeup_out, tmp_path):
+    """What a document is matched against. For a store of PO PDFs it is versions(), for a cart as for a confirmation, also with a
+    look filed before the latest PDF version. A look filed after it is the PO as it stands: a cart gets it alone, and a
+    confirmation still gets the PDF versions, never an export while its PO has a PDF. A PO known from an export only gives its
+    look to both kinds, and an unknown PO nothing."""
+    store = PoStore(tmp_path / "store")
+    pdfs = [store.add(madeup_out / f"MU03_po_v{n}.pdf") for n in (1, 2)]
+    assert store.candidates("250103", "confirmation") == store.candidates("250103", "cart") == store.versions("250103") == pdfs
+    [look] = store.from_export(written_export(tmp_path / "250103.csv", rows_of("MU03")), COLUMNS)
+    filed(store, "250103", "v1", 0)
+    filed(store, "250103", "e1", 5)
+    filed(store, "250103", "v2", 10)
+    assert store.candidates("250103", "confirmation") == store.candidates("250103", "cart") == pdfs
+    filed(store, "250103", "e1", 15)
+    assert (look.version, look.supplier, look.document.reader) == (2, "S03", "export:250103.csv")
+    assert store.candidates("250103", "cart") == [look] == [store.as_it_stands("250103")]
+    assert store.candidates("250103", "confirmation") == pdfs
+    [only] = store.from_export(madeup_out / "CART02_export.csv", COLUMNS)
+    assert store.candidates("250202", "confirmation") == store.candidates("250202", "cart") == [only]
+    assert store.candidates("250199", "confirmation") == store.candidates("250199", "cart") == [] == store.candidates("..", "cart")
+
+
+def test_find_by_lines_finds_a_po_known_from_an_export(madeup_out, tmp_path):
+    """find_by_lines looks at each PO as it stands: a PO known from an export only is found by the item codes of its look, and a PO
+    whose newer look holds other items is found by those, until a later PDF version stands again."""
+    store = PoStore(tmp_path / "store")
+    store.from_export(madeup_out / "CART01_export.csv", COLUMNS)
+    assert store.find_by_lines(document_from_spec("CART01", kind="cart")) == ["250201"]
+    for n in (1, 2):
+        store.add(madeup_out / f"MU03_po_v{n}.pdf")
+    other_items = [row | {"item_code": {"1": "KM-0391", "2": "KM-0392"}.get(row["line_id"], row["item_code"])} for row in rows_of("MU03")]
+    store.from_export(written_export(tmp_path / "250103.csv", other_items), COLUMNS)
+    filed(store, "250103", "v1", 0)
+    filed(store, "250103", "v2", 5)
+    filed(store, "250103", "e1", 10)
+    assert store.find_by_lines(document_from_spec("MU03")) == []                  # 250103 as it stands keeps only KM-0303
+    filed(store, "250103", "e1", 5)                                                # filed with version 2: the PDF stands
+    assert store.find_by_lines(document_from_spec("MU03")) == ["250103"]
+
+
+def test_a_pdf_that_prints_version_1_is_filed_after_an_export(madeup_out, tmp_path):
+    """The PDF versions and the looks no longer share a sequence: a PO PDF that prints its version number is filed as that version
+    whatever looks the PO has (before Task 40 an export was version 1, and the PDF that printed "Versie 1" was refused), and a PDF
+    that prints none is the next PDF version."""
+    store = PoStore(tmp_path / "store")
+    [look] = store.from_export(written_export(tmp_path / "250101.csv", rows_of("MU01")), COLUMNS)
+    pdf = store.add(madeup_out / "MU01_po_v1.pdf")
+    assert (pdf.version, pdf.document.version_hint.value) == (1, "1")
+    assert store.versions("250101") == [pdf] and store.snapshots("250101") == [look.model_copy(update={"supplier": "S01"})]
+    unnumbered = store.add(drawn_po(tmp_path / "unnumbered.pdf", "MU01", header={"version": None}))
+    assert unnumbered.version == 2 and [v.version for v in store.versions("250101")] == [1, 2]

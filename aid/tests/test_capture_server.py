@@ -20,6 +20,7 @@ import pytest
 from aid import batch, demo
 from aid import capture_server as server_module
 from aid.capture_server import MAX_BODY, _line_order, find_po, main, page_host, precheck, serve
+from aid.madeup.generate import load_specs, pdf_bytes, po_pages
 from aid.pipeline import Deps
 from aid.readers.cart import read_cart_html
 from aid.execution.writer import PreparedWriter, RetryingWriter, WriterError
@@ -30,7 +31,7 @@ from aid import runner
 from aid.schema import DocValue
 from aid.settings import Settings, load_settings
 from aid.case import load_case
-from aid.tests.conftest import SETTINGS, deps
+from aid.tests.conftest import REPO_ROOT, SETTINGS, deps
 
 TOKEN = "made-up-token-for-the-tests"
 SHOP = "http://127.0.0.1:7870/testshop/CART02.html"          # the url the extension sends with the test shop's page
@@ -260,16 +261,18 @@ def test_a_cart_of_no_stored_po_gives_no_po(capture_server, madeup_out):
 
 
 class _Store:
-    """A store of PO versions by number, with the candidates find_by_lines gives."""
+    """A store of PO versions by number, with the numbers find_by_lines gives; a PO as it stands is its last version (rewritten by
+    Task 40: find_po asks the store for the PO as it stands)."""
 
-    def __init__(self, candidates, versions):
-        self.candidates, self.held = candidates, versions
+    def __init__(self, found, versions):
+        self.found, self.held = found, versions
 
-    def versions(self, number):
-        return self.held.get(number, [])
+    def as_it_stands(self, number):
+        held = self.held.get(number, [])
+        return held[-1] if held else None
 
     def find_by_lines(self, doc):
-        return self.candidates
+        return self.found
 
 
 def _version(supplier, day):
@@ -281,7 +284,7 @@ def test_several_candidates_take_the_supplier_then_the_newest_date(madeup_out):
     assert cart.supplier.value == "S22" and cart.po_reference.value is None
     revised = _Store(["5", "4"], {"5": [_version("S22", "2026-10-01"), _version("S22", "2026-11-05")],
                                   "4": [_version("S22", "2026-11-01")]})
-    assert find_po(cart, revised) == "5"                                   # the latest version counts, not the first
+    assert find_po(cart, revised) == "5"                                   # the PO as it stands counts, not its first version
     store = _Store(["1", "2", "3", "4"], {"1": [_version("S01", "2026-12-01")], "2": [_version("S22", None)],
                                           "3": [_version("S22", "2026-10-01")], "4": [_version("S22", "2026-11-01")]})
     assert find_po(cart, store) == "4"
@@ -291,6 +294,71 @@ def test_several_candidates_take_the_supplier_then_the_newest_date(madeup_out):
     stated = read_cart_html(madeup_out / "CART02.html")
     assert find_po(stated, _Store(["4"], store.held | {"250202": [_version("S22", None)]})) == "250202"
     assert find_po(stated, _Store(["4"], store.held)) == "4"                    # a stated PO the store does not hold
+
+
+def test_the_version_of_a_cart_case_comes_from_its_own_step_01(capture_server, madeup_out, tmp_path):
+    """CART01 is checked against the PO as it stands, the look that CART01_export.csv gave PO 250201, which reads as version 1.
+    A PDF of PO 250201 that prints version 1, with other items, is filed after it. The same page sent again is answered from its
+    case, and the item codes of the answer come from the version that the case's own step 01 holds, the look, and not from the PDF
+    version of the same number. Only when step 01 cannot be read do they come from the PO as it stands, now that PDF."""
+    html = page(madeup_out, "CART01.html", texts={"€ 4,10": "€ 4,15"})
+    first = post(capture_server, html)[1]
+    store = capture_server.deps.store
+    [look] = store.candidates("250201", "cart")
+    assert (look.version, look.document.reader) == (1, "export:CART01_export.csv")
+    spec = next(spec for spec in load_specs(REPO_ROOT / "aid" / "madeup" / "spec") if spec.case_id == "MU03")
+    pages = po_pages(spec, spec.po.versions[0])                                   # MU03's lines, version 1, under PO number 250201
+    next(row for row in pages[0] if row.ref == "po_reference").texts[0].text = "Inkooporder 250201"
+    pdf = tmp_path / "250201.pdf"
+    pdf.write_bytes(pdf_bytes(pages, pdf.name))
+    assert store.add(pdf).version == 1 and store.versions("250201")[0].document.lines[1].item_code.value == "KM-0302"
+    again = post(capture_server, html)[1]
+    assert again == first and again["case_id"] == first["case_id"]
+    assert [entry["text"] for entry in again["lines"] if entry["kind"] == "flag"] == [
+        "regel 2 (KM-2102): prijs op de inkooporder: wijziging voorbereid van 4.10 naar 4.15, zie de zaak (prijs binnen de drempel)"]
+    assert {entry["item_code"] for entry in again["lines"]} == {"KM-2101", "KM-2102", "KM-2103"}
+    (capture_server.settings.cases_root / first["case_id"] / "steps" / "01_po_versions.json").write_text("{", encoding="utf-8")
+    status, damaged = post(capture_server, html)
+    assert status == 200 and damaged["case_id"] == first["case_id"]
+    assert {entry["item_code"] for entry in damaged["lines"]} == {"KM-0301", "KM-0302", "KM-0303"}
+
+
+def test_the_version_of_a_cart_case_on_a_po_known_from_exports_comes_from_its_own_step_01(capture_server, madeup_out, tmp_path):
+    """Rule 11 for the usual pre-check (ruling E9): PO 250201 is known from exports only. After CART01's case, the next export of the
+    PO changes the item codes of two lines. The same page sent again is answered from its case, with the item codes of the look its
+    own step 01 holds, not those of the PO as it stands. When step 01 cannot be read, the answer takes the PO as it stands, here a
+    look filed after a PDF of the PO: its item codes, not the PDF's."""
+    store = capture_server.deps.store
+    html = page(madeup_out, "CART01.html", texts={"€ 4,10": "€ 4,15"})
+    first = post(capture_server, html)[1]
+    assert store.versions("250201") == [] and {entry["item_code"] for entry in first["lines"]} == {"KM-2101", "KM-2102", "KM-2103"}
+
+    def exported(name: str, codes: dict[str, str]) -> Path:
+        path = tmp_path / name
+        text = (madeup_out / "CART01_export.csv").read_text(encoding="utf-8")
+        for old, new in codes.items():
+            text = text.replace(old, new)
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    [later] = store.from_export(exported("later.csv", {"KM-2101": "KM-2191", "KM-2102": "KM-2192"}), {})
+    assert store.as_it_stands("250201") == later and later.document.lines[0].item_code.value == "KM-2191"
+    again = post(capture_server, html)[1]
+    assert again == first                                       # its own step 01: KM-2101, KM-2102 and KM-2103
+    spec = next(spec for spec in load_specs(REPO_ROOT / "aid" / "madeup" / "spec") if spec.case_id == "MU03")
+    pages = po_pages(spec, spec.po.versions[0])                                   # a PDF of PO 250201 with MU03's lines
+    next(row for row in pages[0] if row.ref == "po_reference").texts[0].text = "Inkooporder 250201"
+    pdf = tmp_path / "250201.pdf"
+    pdf.write_bytes(pdf_bytes(pages, pdf.name))
+    store.add(pdf)
+    [newest] = store.from_export(exported("newest.csv", {"KM-2101": "KM-2181", "KM-2102": "KM-2182", "KM-2103": "KM-2183"}), {})
+    v1 = store.root / "250201" / "v1" / "po.json"
+    os.utime(store.root / "250201" / "e3" / "po.json", (v1.stat().st_mtime + 60, v1.stat().st_mtime + 60))   # filed after the PDF
+    assert store.as_it_stands("250201") == newest
+    (capture_server.settings.cases_root / first["case_id"] / "steps" / "01_po_versions.json").write_text("{", encoding="utf-8")
+    status, damaged = post(capture_server, html)
+    assert status == 200 and damaged["case_id"] == first["case_id"]
+    assert {entry["item_code"] for entry in damaged["lines"]} == {"KM-2181", "KM-2182", "KM-2183"}
 
 
 def test_a_case_level_reason_is_a_review_entry(tmp_path, madeup_out):
@@ -977,7 +1045,7 @@ def test_raised_thresholds_in_the_settings_file_give_the_same_server_another_ver
 
 
 def test_a_cart_checked_before_the_thresholds_changed_keeps_its_outcome_until_the_cart_itself_changes(tmp_path, madeup_out):
-    """What the manual tells the buyer after a save (section 2.6): the same cart is answered from its case, a changed cart is
+    """What the manual tells the buyer after a save (section 2.7): the same cart is answered from its case, a changed cart is
     checked anew with the new settings."""
     with watching(tmp_path, madeup_out) as (r, path, rebuilt):
         cart = page(madeup_out, "CART01.html", texts=PRICE_ABOVE)

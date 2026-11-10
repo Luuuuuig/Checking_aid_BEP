@@ -8,7 +8,7 @@ document or any connection:
     <out>/cases/          one folder per case after the run (steps/, audit.json, write_log.jsonl, dispositions.csv)
     <out>/cases/prepared/prepared_changes.csv   the changes the aid would make in Exact, prepared for the buyer
     <out>/cases/outbox/   the questions to the suppliers as .eml files, once a run has a mailer (the review page and the runner)
-    <out>/po_store/       the PO versions filed from the made-up PO PDFs and the two ERP exports
+    <out>/po_store/       the PO versions of the made-up PO PDFs and the looks that the two ERP exports gave
     <out>/inbox/          the watched folder of the runner, empty; drop a made-up confirmation in it and start the runner
     <out>/summary.csv     one row per case: the status, the flags, the writes, the messages, the review items
 

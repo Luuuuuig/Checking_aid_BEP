@@ -26,7 +26,17 @@ The first command writes a settings file and a case list for the 22 made-up case
 
 `python3 -m aid.start --settings live/settings.json --testshop` starts the runner, the review page and the capture server together, starts a part again when it stops, and writes their output under `live/logs/`. On Windows, `--install-autostart` puts a shortcut in your own Startup folder (no administrator rights), so the three parts start without a window each time you log on; `--status` says how they are, `--stop` stops them and keeps them off, and `--resume --background` starts them again without a window. On a PC where the word `python` does nothing, call Python by its full path (for example `& "C:\Users\<you>\AppData\Local\Programs\Python\Python311\python.exe" -m aid.start ...` in PowerShell). The details are in [aid/MANUAL.md](aid/MANUAL.md), section 3.4.1.
 
-The buyer changes his own rules on the tab "Instellingen" of the review page: the price and date margins, the wait for a supplier's answer, the digest, the language and the suppliers ([manual](aid/MANUAL.md), section 2.6). The connections (the work mailbox and the AI service) are folded away under "Koppelingen" at the bottom of that tab.
+The buyer changes his own rules on the tab "Instellingen" of the review page: the price and date margins, the wait for a supplier's answer, the digest, the language and the suppliers ([manual](aid/MANUAL.md), section 2.7). The connections (the work mailbox and the AI service) are folded away under "Koppelingen" at the bottom of that tab.
+
+**Without installing anything.** On a PC where nothing may be installed (a work laptop), the aid runs from one folder: `python -m aid.portable --build <folder>` on a Windows PC with python.org's 64-bit Python builds that folder with its own Python inside; a double click on "Inkoopassistent starten" there opens the page and makes the aid start at every logon, and every document stays in the folder's `data` ([manual](aid/MANUAL.md), section 3.16).
+
+## The connection to Exact
+
+The aid reads what Exact itself delivers and changes nothing in Exact ([manual](aid/MANUAL.md), section 3.17):
+
+- **Purchase orders in.** The PDF that Exact e-mails is read with a layout that the owner sets once on the settings tab, from one sample PDF, with a trial read that shows every value before anything is saved. For the check before ordering, when Exact has e-mailed nothing yet, an export of the order lines (Excel or CSV) is read with the columns set the same way, and kept beside the PDF versions.
+- **Changes out.** Every change the aid would make is a row on the tab "In Exact invoeren": the buyer types it into Exact and ticks it, and when a newer purchase order PDF from Exact shows the change, the aid ticks it off itself. A change can be put back with an honest row for the old value. The confirmations to attach and the status to set are listed for the buyer to do in Exact.
+- **Confirmations.** A confirmation finds its order among the numbers the aid knows, and one that came before its order is checked again by itself when the order arrives.
 
 ## The four parts
 

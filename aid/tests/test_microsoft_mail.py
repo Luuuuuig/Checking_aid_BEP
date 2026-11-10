@@ -31,7 +31,7 @@ CONNECTED = "2026-11-12T08:00:00Z"                   # NOW as the state file wri
 FOLDER = "AAMkADMadeUpFolder0001="                   # a made-up id of a mail folder, as Graph gives one
 DELTA_1, DELTA_2, DELTA_3 = (f"{GRAPH}/me/mailFolders/{FOLDER}/messages/delta?$deltatoken=made-up-{n}" for n in (1, 2, 3))
 NEXT_1 = f"{GRAPH}/me/mailFolders/{FOLDER}/messages/delta?$skiptoken=made-up-next-1"
-LAPSED = "Postvak niet verbonden: meld je opnieuw aan op het tabblad Instellingen"
+LAPSED = "Postvak niet verbonden: meld u opnieuw aan op het tabblad Instellingen"
 
 
 def baseline(owner: str = "me", folder: str = FOLDER) -> str:

@@ -2,6 +2,7 @@
 import json
 import shutil
 from datetime import datetime
+from types import SimpleNamespace
 
 import pytest
 import requests
@@ -49,6 +50,42 @@ def loop_deps(tmp_path, madeup_out, clock=None, mailer=None):
 def opened(d, madeup_out, name, po_number):
     """A case of the made-up confirmation `name` opened under the cases root, as an earlier pass cut off before its run leaves it."""
     return open_case(d.settings.cases_root, "confirmation", [madeup_out / f"{name}_conf.pdf"], po_number, d.clock())
+
+
+def test_the_runner_empties_the_work_folder_at_its_start(tmp_path, madeup_out, monkeypatch):
+    """A part that was ended in the middle of its copy (the attachments of an e-mail, the PDF that Copilot reads) leaves it in
+    <cases_root>/tmp/work. The runner empties that folder at its own start, before its first pass, also when STOP keeps it from
+    making one: only what lies in the folder goes, and the folder itself, the review page's files beside it and the cases stay. A
+    failure to empty it is one line in runner.log, which names no file, and the runner goes on with its passes."""
+    d = loop_deps(tmp_path, madeup_out)
+    cases = d.settings.cases_root
+    work = cases / "tmp" / "work"
+    left = [work / "aid_mailbox_x" / "0a1b2c3d4e5f" / "MU07_conf.pdf", work / "aid-copilot-y" / "document.pdf", work / "stray.pdf"]
+    for path in left:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"%PDF made-up")
+    page_file = cases / "tmp" / "0a1b2c" / "page_1.png"                  # the review page's, beside the folder work
+    page_file.parent.mkdir(parents=True)
+    page_file.write_bytes(b"made-up")
+    case = opened(d, madeup_out, "MU01", "250101")
+    stop = tmp_path / "STOP"
+    stop.write_text("", encoding="utf-8")
+    assert run_loop(d, stop, poll_seconds=0) == 0                          # no pass, and the folder is emptied all the same
+    assert work.is_dir() and list(work.iterdir()) == [] and page_file.is_file() and (case.root / "case.json").is_file()
+    assert not (cases / "runner.log").exists()
+    # a folder that cannot be emptied: one line in the log, and the pass is made
+    stop.unlink()
+    (work / "aid_mailbox_z").mkdir()
+    (work / "aid_mailbox_z" / "MU08_conf.pdf").write_bytes(b"%PDF made-up")
+
+    def refused(path, *args, **kwargs):
+        raise PermissionError(13, "made-up: in use", str(path))
+    monkeypatch.setattr(aid.runner, "shutil", SimpleNamespace(rmtree=refused))
+    assert run_loop(d, stop, poll_seconds=0, max_passes=1) == 1
+    assert (case.root / "steps" / "08_result.json").exists()                # the runner went on
+    [line] = [line for line in (cases / "runner.log").read_text(encoding="utf-8").splitlines() if " work folder: " in line]
+    assert line.endswith("work folder: PermissionError: 1 of the 1 copies left in tmp/work could not be removed; the runner goes on")
+    assert (work / "aid_mailbox_z" / "MU08_conf.pdf").is_file()
 
 
 def test_a_case_left_without_a_result_is_run_on_the_next_pass(tmp_path, madeup_out):
@@ -487,6 +524,7 @@ def test_reader_llm_builds_the_copilot_reader_and_decider_over_the_sign_in_of_th
     assert isinstance(d.decider, LlmDecider) and isinstance(d.decider.client, CopilotClient)
     copilot = d.decider.client
     assert (copilot.account, copilot.session, copilot.time_zone, d.decider.name) == (signed, session, "Europe/Amsterdam", "model:microsoft-365-copilot")
+    assert copilot.work == settings.cases_root / "tmp" / "work"           # the copy of a PDF it reads: under the cases, never in %TEMP%
     cart = d.reader(madeup_out / "CART01.html", "cart")                     # the cart reader, which needs no model
     assert cart.reader == "cart_html" and session.calls == []
     doc, response = d.reader(madeup_out / "MU01_conf.pdf", "confirmation")
@@ -874,3 +912,87 @@ def test_a_due_digest_with_a_state_file_that_cannot_be_written_goes_out_once(tmp
     assert len(digests_in(out)) == 1
     log = (d.settings.cases_root / "runner.log").read_text(encoding="utf-8").splitlines()
     assert len(log) == 1 and "digest_state.json: PermissionError" in log[0]
+
+
+# --- the line of the changes to enter in Exact (Task 34) ---
+
+def test_the_runner_passes_the_open_changes_and_open_rows_alone_make_no_per_case_digest(tmp_path, madeup_out):
+    """The digest names the changes open on the list, read from <cases_root>/prepared, where the command's writer prepares them. In
+    the per-case mode open changes alone make no digest; the digest of a case names what is open then, and none when nothing is."""
+    from email import message_from_bytes, policy
+    from html import escape
+
+    from aid.execution.by_hand import mark, open_changes
+    from aid.notify import list_link
+
+    out = tmp_path / "outbox"
+    d = loop_deps(tmp_path, madeup_out, clock=AFTER_DIGEST_TIME, mailer=FileMailer(out, clock=lambda: AFTER_DIGEST_TIME))
+    prepared = d.settings.cases_root / "prepared"
+    d = d.model_copy(update={"writer": PreparedWriter(prepared)})                  # where build_deps has the changes prepared
+    link = list_link(d.settings)
+
+    def texts() -> list[str]:
+        return [message_from_bytes(path.read_bytes(), policy=policy.default).get_content() for path in digests_in(out)]
+
+    shutil.copy(madeup_out / "MU08_conf.pdf", d.settings.watched_folder)          # the price of PO line 1 and the article's price
+    run_loop(d, tmp_path / "STOP", poll_seconds=0, max_passes=1)
+    [daily] = texts()
+    assert daily.splitlines()[:3] == ["Dagoverzicht 12-11-2026", "", f"In Exact in te voeren: 2 wijzigingen. Open het tabblad In Exact invoeren: {link}"]
+    assert f'In Exact invoeren: <a href="{escape(link)}">' in (d.settings.cases_root / "digests" / "2026-11-12.html").read_text(encoding="utf-8")
+    per_case = d.model_copy(update={"settings": d.settings.model_copy(update={"digest": "per_case"})})
+    run_loop(per_case, tmp_path / "STOP", poll_seconds=0, max_passes=2)           # nothing new: the open changes make no digest
+    assert len(texts()) == 1
+    [price] = [change for change in open_changes(prepared) if change.kind == "po_line_price"]
+    mark(prepared, price.ids, "entered", AFTER_DIGEST_TIME)
+    shutil.copy(madeup_out / "MU14_conf.pdf", d.settings.watched_folder)          # a case: the article's price and MU14's date are open
+    run_loop(per_case, tmp_path / "STOP", poll_seconds=0, max_passes=1)
+    [newest] = [text for text in texts() if "250114" in text]
+    assert newest.splitlines()[2] == f"In Exact in te voeren: 2 wijzigingen. Open het tabblad In Exact invoeren: {link}"
+    for change in open_changes(prepared):
+        mark(prepared, change.ids, "dropped", AFTER_DIGEST_TIME)
+    shutil.copy(madeup_out / "MU01_conf.pdf", d.settings.watched_folder)          # nothing open any more: a digest without the line
+    run_loop(per_case, tmp_path / "STOP", poll_seconds=0, max_passes=1)
+    [last] = [text for text in texts() if "250101" in text]
+    assert "In Exact" not in last and "tab=invoeren" not in last and len(texts()) == 3
+    assert not (d.settings.cases_root / "runner.log").exists()
+
+
+def test_a_list_that_cannot_be_read_is_said_in_the_digest(tmp_path, madeup_out):
+    """When the list cannot be read at all (here its file is a folder), the digest says so in its line, with the link to the tab, and
+    the log names the class of the error (review round, Z4). In the per-case mode that line alone makes no digest."""
+    from aid.notify import list_link
+
+    d = loop_deps(tmp_path, madeup_out, clock=AFTER_DIGEST_TIME)
+    (d.settings.cases_root / "prepared" / "prepared_changes.csv").mkdir(parents=True)
+    shutil.copy(madeup_out / "MU01_conf.pdf", d.settings.watched_folder)
+    run_loop(d, tmp_path / "STOP", poll_seconds=0, max_passes=1)
+    text = (d.settings.cases_root / "digests" / "2026-11-12.txt").read_text(encoding="utf-8")
+    assert text.splitlines()[2] == ("De lijst In Exact invoeren kon niet worden gelezen. Open het tabblad om te zien wat er nog in te voeren is: "
+                                    f"{list_link(d.settings)}") and "PO 250101" in text
+    [line] = (d.settings.cases_root / "runner.log").read_text(encoding="utf-8").splitlines()
+    assert " digest: " in line and ("IsADirectoryError" in line or "PermissionError" in line) and "the list of changes to enter" in line
+    per_case = d.model_copy(update={"settings": d.settings.model_copy(update={"digest": "per_case"}), "clock": lambda: datetime(2026, 11, 13, 9, 0)})
+    run_loop(per_case, tmp_path / "STOP", poll_seconds=0, max_passes=1)        # nothing to report: no digest for the line alone
+    assert sorted(path.name for path in (d.settings.cases_root / "digests").iterdir()) == ["2026-11-12.html", "2026-11-12.txt"]
+
+
+def test_a_damaged_line_that_the_csv_reader_cannot_parse_is_counted_and_the_digest_goes_out(tmp_path, madeup_out):
+    """A zero-filled stretch of prepared_changes.csv, longer than a field of the CSV reader may be, is a line passed over (review round,
+    Z3): the next day's digest is made with the line of the changes still open, and the log has no error of the digest."""
+    from email import message_from_bytes, policy
+
+    out = tmp_path / "outbox"
+    d = loop_deps(tmp_path, madeup_out, clock=AFTER_DIGEST_TIME, mailer=FileMailer(out, clock=lambda: AFTER_DIGEST_TIME))
+    prepared = d.settings.cases_root / "prepared"
+    d = d.model_copy(update={"writer": PreparedWriter(prepared)})
+    shutil.copy(madeup_out / "MU08_conf.pdf", d.settings.watched_folder)
+    run_loop(d, tmp_path / "STOP", poll_seconds=0, max_passes=1)
+    with open(prepared / "prepared_changes.csv", "ab") as f:
+        f.write(b"\x00" * 200_000 + b"\n")
+    shutil.copy(madeup_out / "MU14_conf.pdf", d.settings.watched_folder)
+    later = d.model_copy(update={"clock": lambda: datetime(2026, 11, 13, 17, 0)})
+    run_loop(later, tmp_path / "STOP", poll_seconds=0, max_passes=2)
+    texts = [message_from_bytes(path.read_bytes(), policy=policy.default).get_content() for path in digests_in(out)]
+    [newest] = [text for text in texts if "13-11-2026" in text]
+    assert newest.splitlines()[2].startswith("In Exact in te voeren: 3 wijzigingen.") and "250114" in newest
+    assert not (d.settings.cases_root / "runner.log").exists()

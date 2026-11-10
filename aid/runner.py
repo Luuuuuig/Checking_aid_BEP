@@ -3,11 +3,14 @@ documents, and the command that runs it on the company platform.
 
     python3 -m aid.runner --settings <path> [--poll-seconds N] [--max-passes N]
 
-run_loop makes a pass every poll_seconds until the stop file exists. Each pass, at the time of the Deps clock:
+run_loop first empties <cases_root>/tmp/work, where the runner keeps the attachments of an e-mail and the PDF that Copilot reads
+for a moment, so that what a runner that was ended in the middle of such a copy left there never stays (_empty_work; a copy that
+cannot be removed is one line in the log, and the runner goes on). Then it makes a pass every poll_seconds until the stop file
+exists. Each pass, at the time of the Deps clock:
 - when the settings name a folder of the work mailbox and the tenant and the client of the Microsoft sign-in (trigger_on of
   aid/sources/microsoft_mail.py), sync_mailbox saves the messages that arrived in that folder into the watched folder as .eml files,
   first, so that a confirmation that arrives opens its case in the same pass. A sign-in that has lapsed (SignInNeeded) is noted in
-  the digest state as "mailbox_lapsed": {"since", "logged"}, which the digest names in one line, "Postvak niet verbonden: meld je
+  the digest state as "mailbox_lapsed": {"since", "logged"}, which the digest names in one line, "Postvak niet verbonden: meld u
   opnieuw aan op het tabblad Instellingen", until a sync of the mailbox ends without an error or the trigger is turned off; it is
   logged at most once an hour (LAPSE_LOG). Any other error of the mailbox is logged as a failing case is, also once more after
   the settings name another mailbox, folder, tenant or client, and the pass goes on with the folder. Such an error leaves a lapse
@@ -39,9 +42,13 @@ run_loop makes a pass every poll_seconds until the stop file exists. Each pass, 
 - escalate_pending ends the wait of the questions that bounced or had no answer in time;
 - when digest_due says so, the digest of the cases handled and the files skipped since the last digest is made: its HTML is written to
   <cases_root>/digests/<day>.html, for a flow outside the code to pick up, and its text is sent through the mailer of the Deps, or,
-  without a mailer, written to <cases_root>/digests/<day>.txt. The digest names a lapse of the mailbox's sign-in, a failing Copilot
-  with the cases waiting for it, and the documents Copilot could not read while it read others, in a line each. In the per-case mode a
-  lapse or a failure of Copilot that no digest has named yet makes a digest too. A digest state file that cannot be written is logged
+  without a mailer, written to <cases_root>/digests/<day>.txt. The digest names the number of changes still to enter in Exact, the
+  open changes of <cases_root>/prepared (aid/execution/by_hand.py), where the command's writer prepares them, with the link to the
+  review page's tab "In Exact invoeren"; a lapse of the mailbox's sign-in, a failing Copilot with the cases waiting for it, and the
+  documents Copilot could not read while it read others, in a line each. In the per-case mode a lapse or a failure of Copilot that no
+  digest has named yet makes a digest too; open changes alone make none. A list that cannot be read, for any reason, is logged with
+  the class of its error, and the digest says in that line that the list could not be read, with the same link; in the per-case
+  mode that line alone makes no digest either. A digest state file that cannot be written is logged
   once in a run of the loop and never stops the runner (_save_quietly); a digest made while it cannot be written goes out once all the
   same, as the loop keeps the period it closed until the file holds it (_closed_again). A digest that the work mailbox cannot send
   because the sign-in has lapsed (SignInLapsed of aid/messaging/microsoft_mailer.py) is written through the file mailer into
@@ -94,16 +101,18 @@ the buyer.
 import argparse
 import json
 import os
+import shutil
 import sys
 import time
 from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from aid.case import _write_json, load_case        # _write_json: the state is rewritten whole or not at all, as a case file is
+from aid.case import TEMPORARY, WORK, _write_json, load_case   # _write_json: the state is rewritten whole or not at all, as a case file
 from aid.connections.microsoft import SIGN_IN_AGAIN, MicrosoftAccount, SignInNeeded
 from aid.connections.secrets import LazySecretStore, default_secrets_dir
 from aid.decider import LlmDecider, NoDecider
+from aid.execution.by_hand import FOLDER as PREPARED, open_changes
 from aid.execution.exact_api import ExactApiWriter
 from aid.execution.writer import PreparedWriter, RetryingWriter, WriterError
 from aid.messaging import FileMailer, Mailer, SmtpMailer
@@ -133,6 +142,7 @@ ALREADY_RUN = "case already run"                 # the start of run_case's Value
 SCAN = "scan"                                    # the stage of the scan, as runner.log names it
 MAILBOX = "mailbox"                              # the stage of the work mailbox
 SETTINGS = "settings"                            # the stage of a settings file that changed
+WORK_FOLDER = "work folder"                      # the stage of <cases_root>/tmp/work, emptied at the start of the runner
 OUTBOX = "outbox"                                # under cases_root: the messages written as files instead of sent
 MAILBOX_LAPSED = "mailbox_lapsed"                # the key of the digest state while the sign-in of the mailbox has lapsed
 LAPSE_LOG = timedelta(hours=1)                   # a lapsed sign-in is logged at most once in this time
@@ -154,6 +164,7 @@ def run_loop(deps: Deps, stop_file: Path, poll_seconds: float = 60.0, max_passes
     new settings (see the module docstring). account is the Microsoft account the work mailbox is read with, and session the
     requests session Graph is called through; without an account one is made of the settings (_microsoft_account)."""
     loop, passes = _Loop(deps, settings_file, rebuild, account, session), 0
+    _empty_work(Path(deps.settings.cases_root), deps.clock())
     while (max_passes is None or passes < max_passes) and not Path(stop_file).exists():
         loop.reload()
         _pass(loop)
@@ -161,6 +172,34 @@ def run_loop(deps: Deps, stop_file: Path, poll_seconds: float = 60.0, max_passes
         if max_passes is None or passes < max_passes:
             time.sleep(poll_seconds)
     return passes
+
+
+def _empty_work(root: Path, now: datetime) -> None:
+    """Empty <cases_root>/tmp/work, where the runner keeps a copy for a moment (the attachments of an e-mail while it scans the
+    folder, the PDF that Copilot reads; work_copy_folder of aid/case.py): what a part that was ended in the middle of its copy left
+    there goes at the next start of the runner. Only what lies in that folder is removed; the folder itself, the review page's files
+    beside it and a folder that is a link elsewhere are left. A copy that cannot be removed is counted, and the count is one line in
+    runner.log, which names no file; the runner goes on."""
+    work = root / TEMPORARY / WORK
+    if work.is_symlink() or not work.is_dir():
+        return
+    try:
+        entries = list(work.iterdir())
+    except OSError as exc:
+        _log(root, now, WORK_FOLDER, f"{type(exc).__name__}: {TEMPORARY}/{WORK} could not be read; the runner goes on")
+        return
+    failed: list[OSError] = []
+    for path in entries:
+        try:
+            if path.is_dir() and not path.is_symlink():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
+        except OSError as exc:
+            failed.append(exc)
+    if failed:
+        _log(root, now, WORK_FOLDER, f"{type(failed[0]).__name__}: {len(failed)} of the {len(entries)} copies left in {TEMPORARY}/{WORK} "
+                                     "could not be removed; the runner goes on")
 
 
 class _Loop:
@@ -530,9 +569,15 @@ def _digest(loop: _Loop, root: Path, state: dict, now: datetime) -> None:
             results.append(CaseResult.model_validate_json((root / case_id / "steps" / RESULT_FILE).read_text(encoding="utf-8")))
         except (OSError, ValueError) as exc:
             _log(root, now, case_id, exc)
+    try:
+        to_enter = len(open_changes(root / PREPARED))
+    except Exception as exc:                     # the list cannot be read now: the digest says so, and is not held back for it
+        _log(root, now, "digest", f"{type(exc).__name__}: the list of changes to enter cannot be read; the digest says so in the "
+                                  f"line of the list")
+        to_enter = None
     digest = build_digest(results, [(name, reason) for name, reason in state["skipped"]], settings, now.date(),
                           mailbox_lapsed=lapse is not None, copilot_down=(copilot["error"], copilot["waiting"]) if copilot else None,
-                          copilot_refused=refused)
+                          copilot_refused=refused, to_enter=to_enter)
     folder = root / DIGESTS_FOLDER
     folder.mkdir(exist_ok=True)
     (folder / f"{digest.period}.html").write_text(digest.html, encoding="utf-8")       # for a flow to pick up; the runner sends no HTML
@@ -699,7 +744,7 @@ def build_deps(settings: Settings, environ: Mapping[str, str], account: Microsof
         if not (settings.ms_tenant_id and settings.ms_client_id):
             raise ValueError(NO_LLM)
         account = account or _microsoft_account(settings)
-        client = CopilotClient(account, session=session)
+        client = CopilotClient(account, session=session, work=settings.cases_root / TEMPORARY / WORK)     # a PDF's copy: under the cases
         reader, decider = llm_reader(client), LlmDecider(client)
     prepared = PreparedWriter(settings.cases_root / "prepared")
     writer = prepared
