@@ -59,7 +59,18 @@ it, aid.review.close._made: done or prepared, not waiting for the buyer, not und
 write of the rules (a case with review items counts as closed by the buyer only with a readable close record of the review page),
 and "differences" otherwise; a line whose write was undone reads as a difference with "wijziging ongedaan gemaakt", and a line the
 buyer confirmed gives the buyer's decision as its reason; the message sums it up in one sentence, a flag the aid wrote or prepared
-not counted as a difference.
+not counted as a difference. A write is undone when its undo was made in a system, or when the undo's row on the list of changes to
+enter in Exact (<cases_root>/prepared, aid/execution/by_hand.py) is entered or seen, held by the marks, or cancelled together with
+the write's own row before the write was entered; while that row is open on the list (a put-back of the tab "In Exact invoeren"),
+the write stands and its line says so: "terugzetten staat op de lijst In Exact invoeren". An undo that the list passed over leaves
+the write standing. A prepared write is judged by the list as well, whatever case's write log holds the put-back: a put-back linked to
+an entry of the change that holds its row, or, for a row that a later row replaced while Exact held its value, the put-back that took
+that value out of Exact (the put-back that replaced the row, one of that same change made again, or that of the change whose value
+the row asked again), undoes it once entered or seen and waits while open, so that the same cart checked again on another day is
+told of the put-back too; a put-back made after another value was entered, or of a change of another value, never judges it. While
+the list cannot be read, no prepared write of a kind the list holds counts as made, whether the case has an undo of its own or not:
+the line shows the difference between the cart and the order, with "de lijst In Exact invoeren kon niet worden gelezen", and the
+banner is amber until the list can be read again, whatever case answers.
 
 One line per capture goes to stderr: the time, the host of the url, the case id and the verdict. The pre-checks run one at a time,
 so that two captures sent together never open the same case twice. A handler thread waits at most TIMEOUT seconds for a client; a
@@ -89,6 +100,7 @@ from pydantic import BaseModel
 
 from aid.case import Case, find_case_by_hash, load_case, sha256_file
 from aid.comparison import Findings, Flag
+from aid.execution.by_hand import FOLDER as PREPARED, KINDS as LIST_KINDS, changes, place_of, same_value
 from aid.execution.writer import LOG_FILE as WRITE_LOG_FILE, WriteLog, WriteLogEntry
 from aid.notify import review_link
 from aid.pipeline import RESULT_FILE, CaseResult, Deps, _waits_for_the_buyer, record_dispositions, run_case
@@ -302,6 +314,8 @@ _TEXTS = {
            "done": "{field} op de inkooporder bijgewerkt van {old} naar {new}",
            "prepared": "{field} op de inkooporder: wijziging voorbereid van {old} naar {new}, zie de zaak",
            "no label": "zie de zaak voor de reden", "undone": "wijziging ongedaan gemaakt",
+           "put_back": "terugzetten staat op de lijst In Exact invoeren",
+           "unread": "de lijst In Exact invoeren kon niet worden gelezen",
            "confirm": "besluit van de inkoper: waarde van de winkelwagen overgenomen",
            "keep": "besluit van de inkoper: waarde van de inkooporder gehouden"},
     "en": {"line": "line {line}", "values": "{field} {doc} in the cart, {po} on the purchase order", "no value": "no value",
@@ -309,6 +323,8 @@ _TEXTS = {
            "done": "{field} on the purchase order updated from {old} to {new}",
            "prepared": "{field} on the purchase order: change prepared from {old} to {new}, see the case",
            "no label": "see the case for the reason", "undone": "change undone",
+           "put_back": "put-back is on the list Enter in Exact",
+           "unread": "the list Enter in Exact could not be read",
            "confirm": "the buyer's decision: the cart's value taken",
            "keep": "the buyer's decision: the purchase order's value kept"},
 }
@@ -339,8 +355,8 @@ _LINE_WRITES = {"price": "po_line_price", "delivery_date": "po_line_date", "quan
 def _answer(case: Case, result: CaseResult, cart: Document | None, deps: Deps, settings: Settings) -> CaptureAnswer:
     po = _version(deps, case, result)
     decisions = _decisions(case, result)
-    closes, undone = _close_history(case)
-    writes = _Writes(_log_entries(case, result), undone)
+    closes, undone, waiting, unread = _history(case, Path(settings.cases_root) / PREPARED)
+    writes = _Writes(_log_entries(case, result), undone, waiting, unread)
     lines = _lines(result, po.document if po is not None else None, cart, settings.language, decisions, writes)
     verdict = _verdict(case, result, decisions, closes, writes)
     return CaptureAnswer(case_id=case.case_id, po_number=case.po_number, status=result.status, verdict=verdict, lines=lines,
@@ -372,27 +388,118 @@ def _decisions(case: Case, result: CaseResult) -> dict[str, str]:
             if item.finding_id is not None and item.item_id in by_item}
 
 
-def _close_history(case: Case) -> tuple[int | None, set[str]]:
+def _close_history(case: Case, prepared: Path | None = None) -> tuple[int | None, set[str], set[str]]:
+    """What the review page did to the case after its run (_history): the number of its closes, the ids of the write-log entries
+    that do not count as made (undone, or not judged because the list cannot be read), and those whose put-back waits."""
+    closes, undone, waiting, _ = _history(case, prepared)
+    return closes, undone, waiting
+
+
+def _history(case: Case, prepared: Path | None = None) -> tuple[int | None, set[str], set[str], set[str]]:
     """What the review page did to the case after its run: the number of its closes (the "close" records of steps/09_close.json;
-    None when that file cannot be read), and the ids of the write-log entries undone, by its "undo" records or by an undo entry of
-    the write log."""
+    None when that file cannot be read); the ids of the write-log entries that do not count as made; those whose put-back waits on
+    the list of changes to enter in Exact; and, of the first, those that the list could not judge because it cannot be read. An
+    undo, named by an "undo" record of the review page or by an undo entry of the write log, undoes its entry when it was made in a
+    system (status "done"), or when its row on the list in `prepared` (aid/execution/by_hand.py) is entered or seen, held by the
+    marks ("already"), or cancelled together with the entry's own row before the entry was entered (both "undone"). While that row is
+    open on the list (a put-back made from the tab "In Exact invoeren", or an undo the page could only prepare), the entry stands,
+    with its put-back waiting; an undo that failed, or whose row was dropped, replaced or passed over by the list (undone while the
+    entry's row is not), undoes nothing. Besides its own undos, each prepared write of the case is judged by the list too
+    (_put_backs_of): it is undone once a put-back linked by puts_back to an entry of the change that holds its row, or the put-back
+    that took a replaced row's value out of Exact, is entered or seen, and its put-back waits while that put-back is open; so a case
+    whose write another case's put-back undoes (the same cart captured again) is told. When the list cannot be read
+    (prepared_changes.csv or marks.jsonl held by another program, or no list given), no prepared write of a kind the list holds
+    counts as made, the case's own undo or not, and every undo not failed counts as undoing its entry: the line then shows a
+    difference, never a write that stands, and the banner is amber until the list can be read again, whatever case answers."""
     try:
         records = _close_records(case)
     except (OSError, ValueError, KeyError, TypeError):
         records = None
-    undone = {record.get("entry_id") for record in records or [] if record.get("action") == "undo"}
+    undos: dict[str, tuple[str, str | None]] = {}             # the id of an undo entry -> (the entry it undoes, its status)
+    for record in records or []:
+        made = record.get("undo")
+        if record.get("action") == "undo" and isinstance(made, dict) and record.get("entry_id") is not None:
+            undos[made.get("entry_id")] = (record["entry_id"], made.get("status"))
     try:
         lines = (case.root / WRITE_LOG_FILE).read_text(encoding="utf-8").splitlines()
     except OSError:
         lines = []
+    writes = []                                               # the case's own prepared writes of a kind the list holds
     for line in lines:
         try:
-            if (undo_of := json.loads(line).get("undo_of")) is not None:
-                undone.add(undo_of)
+            entry = json.loads(line)
+            if (undo_of := entry.get("undo_of")) is not None:
+                undos[entry.get("entry_id")] = (undo_of, entry.get("status"))
+            elif (entry.get("status") == "prepared" and isinstance(entry.get("entry_id"), str)
+                  and (entry.get("op") or {}).get("kind") in LIST_KINDS):
+                writes.append(entry["entry_id"])
         except (ValueError, AttributeError):
             continue
+    asked = bool(writes) or any(status not in ("done", "failed") for _, status in undos.values())    # what only the list knows
+    found = (_list(prepared) if prepared is not None else None) if asked else []
+    states = {entry_id: change.state for change in found for entry_id in change.ids} if found is not None else None
+    unread = set(writes) if found is None else set()          # the list cannot be read: no prepared write counts as made
+    undone, waiting = set(unread), set()
+    for write in writes if found is not None else []:
+        put = _put_backs_of(write, found)
+        if put is not None and put.state in ("entered", "seen"):
+            undone.add(write)
+        elif put is not None and put.state == "open":
+            waiting.add(write)
+    for undo_id, (of, status) in undos.items():
+        if status == "failed":
+            continue
+        state = states.get(undo_id) if states is not None else None
+        if (status == "done" or state is None or state in ("entered", "seen", "already")
+                or (state == "undone" and states.get(of) == "undone")):
+            undone.add(of)
+        elif state == "open":
+            waiting.add(of)
     closes = None if records is None else sum(1 for record in records if record.get("action") == "close")
-    return closes, undone - {None}
+    return closes, undone, waiting - undone, unread
+
+
+def _list(prepared: Path) -> list | None:
+    """The changes of the list of changes to enter in Exact (by_hand.changes); None when the list cannot be read (on Windows, a file
+    of it that another program holds)."""
+    try:
+        return changes(prepared)[0]
+    except (OSError, ValueError):
+        return None
+
+
+def _put_backs_of(entry_id: str, found: list):
+    """The put-back on the list that judges the prepared write `entry_id` (see _history), or None: the newest put-back linked to an
+    entry of the change that holds the write's row; else, when a later row replaced that change, the put-back that took the write's
+    value out of Exact. That is, while the marks say that Exact held the write's value when its row was asked (the last entered or
+    seen change of its place up to that row has it), the first entered or seen change after the row that sets another value, when
+    that is a put-back of a change of the write's value: the put-back that replaced the row (the first later row of its place), one
+    of that same change made again (K22), or the put-back of the change whose value the row asked again; while none has set another
+    value, a put-back of such a change that stands open as the last row of the place, which waits. Never a put-back made after
+    another value was entered, nor one of a change of another value: the case's own write, not a later change of another case."""
+    owner = next((change for change in found if entry_id in change.ids), None)
+    if owner is None:
+        return None
+    linked = [change for change in found if change.puts_back is not None and change.puts_back in owner.ids]
+    if linked:
+        return linked[-1]
+    if owner.state != "replaced":
+        return None
+    place, kind, value = place_of(owner), owner.kind, owner.new_value
+    runs = [change for change in found if place_of(change) == place and change.state != "undone"]    # the rows as the list has them
+    at = runs.index(owner)
+    held = [change for change in runs[:at + 1] if change.state in ("entered", "seen")]
+    if not held or not same_value(kind, held[-1].new_value, value):
+        return None                              # Exact did not hold the write's value when its row was asked
+    holders = {entry: change for change in found for entry in change.ids}
+
+    def puts_value_back(change) -> bool:
+        holder = holders.get(change.puts_back) if change.puts_back is not None else None
+        return holder is not None and same_value(kind, holder.new_value, value)
+    for change in runs[at + 1:]:
+        if change.state in ("entered", "seen") and not same_value(kind, change.new_value, value):
+            return change if puts_value_back(change) else None     # what took the value out of Exact, if a put-back of it did
+    return runs[-1] if runs[-1].state == "open" and puts_value_back(runs[-1]) else None
 
 
 def _log_entries(case: Case, result: CaseResult) -> list[WriteLogEntry]:
@@ -405,12 +512,14 @@ def _log_entries(case: Case, result: CaseResult) -> list[WriteLogEntry]:
 
 class _Writes:
     """The writes of a case on its PO lines as the review page counts them made: the set of aid.review.close._made (done or
-    prepared, not waiting for the buyer, not undone), with the entries the review page's undo records name taken out as well."""
+    prepared, not waiting for the buyer, not undone), with only the undos that _history counts as undoing (`undone`); `waiting`
+    holds the entries whose put-back waits on the list of changes to enter in Exact, which stand meanwhile, and `unread` those of
+    `undone` that the list could not judge because it cannot be read."""
 
-    def __init__(self, entries: list[WriteLogEntry], undone: set[str]):
-        self.undone = undone | {e.undo_of for e in entries if e.undo_of is not None and e.status != "failed"}
+    def __init__(self, entries: list[WriteLogEntry], undone: set[str], waiting: set[str] = frozenset(), unread: set[str] = frozenset()):
+        self.undone, self.waiting, self.unread = set(undone), set(waiting), set(unread)
         self.entries = [e for e in entries if e.undo_of is None and e.op.kind in _LINE_WRITES.values()]
-        self.made = _made(entries)
+        self.made = _made([e for e in entries if e.undo_of is None or e.undo_of in self.undone])   # an undo that undoes nothing yet
 
     def is_made(self, entry: WriteLogEntry) -> bool:
         return (_target(entry.op) in self.made and entry.entry_id not in self.undone and entry.status in ("done", "prepared")
@@ -427,6 +536,11 @@ class _Writes:
         """Whether a write on the flag's PO line and field was undone (and none is made now)."""
         kind = _LINE_WRITES.get(flag.field)
         return any(e.op.kind == kind and e.op.line_id in flag.po_line_ids and e.entry_id in self.undone for e in self.entries)
+
+    def not_read(self, flag) -> bool:
+        """Whether a write on the flag's PO line and field does not count as made because the list cannot be read."""
+        kind = _LINE_WRITES.get(flag.field)
+        return any(e.op.kind == kind and e.op.line_id in flag.po_line_ids and e.entry_id in self.unread for e in self.entries)
 
     def lines(self) -> dict[str, str]:
         """The status of the latest made write of each PO line ("done" or "prepared"), by line id."""
@@ -511,9 +625,12 @@ def _lines(result: CaseResult, po: Document | None, cart: Document | None, langu
                 text += f" ({reason})"
             else:
                 reason = texts.get(decisions.get(finding_id, ""), texts["no label"])
+            if write.entry_id in writes.waiting:       # its put-back waits on the list: Exact still holds the change
+                reason, text = texts["put_back"], f"{text}; {texts['put_back']}"
         else:
             undid = writes.undid(flag)                 # a write that the review page undid: the difference stands
-            reason = texts["undone"] if undid else label(reviewed.get(finding_id, flag.detail))
+            reason = (texts["unread"] if writes.not_read(flag) else texts["undone"] if undid
+                      else label(reviewed.get(finding_id, flag.detail)))
             text = (_lower(reason) if flag.field == "line_presence" else
                     texts["values"].format(field=field, doc=texts["no value"] if doc_value is None else doc_value,
                                            po=texts["no value"] if po_value is None else po_value) + f" ({_lower(reason)})")

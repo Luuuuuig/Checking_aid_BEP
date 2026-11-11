@@ -23,6 +23,7 @@ from aid.capture_server import MAX_BODY, _line_order, find_po, main, page_host, 
 from aid.madeup.generate import load_specs, pdf_bytes, po_pages
 from aid.pipeline import Deps
 from aid.readers.cart import read_cart_html
+from aid.execution.ops import WriteOp
 from aid.execution.writer import PreparedWriter, RetryingWriter, WriterError
 from aid.readers.llm_client import ReaderError
 from aid.review.app import decide
@@ -1153,3 +1154,435 @@ def test_main_gives_the_server_its_settings_file_and_a_rebuild_as_main_builds_th
                                                            ms_tenant_id="00000000-0000-0000-0000-000000000001",
                                                            ms_client_id="00000000-0000-0000-0000-000000000002")))
     assert isinstance(rebuilt.decider, NoDecider) and rebuilt.reader is read_with_parser and rebuilt.settings.reader == "parser"
+
+
+def test_a_put_back_waiting_on_the_list_is_no_undo_until_it_is_entered(capture_server, madeup_out):
+    """The reviewers' sequence (Task 35's review round, K3): a cart case closed with the cart's price confirmed (B01), the change
+    ticked as entered on the list and then put back ("Terugdraaien in Exact"). While the put-back waits on the list, the pre-check
+    keeps the write and says that the put-back is on the list, never "wijziging ongedaan gemaakt"; once the put-back is ticked as
+    entered, the write is undone and the line is a difference again."""
+    from aid.execution.by_hand import changes, mark
+    from aid.review.hand_list import take_back
+
+    prepared = capture_server.settings.cases_root / "prepared"
+    d = capture_server.deps.model_copy(update={"writer": PreparedWriter(prepared)})
+    capture_server.server.deps = d
+    first = post(capture_server, page(madeup_out))[1]
+    case, items = _items(capture_server, first["case_id"])
+    decide(case, next(item["item_id"] for item in items if item["field"] == "price"), "confirm")
+    decide(case, next(item["item_id"] for item in items if item["field"] == "line_presence"), "keep")
+    close_case(case, d)
+
+    def line_two(answer) -> str:
+        [text] = [entry["text"] for entry in answer["lines"] if entry["kind"] == "flag" and entry["line_id"] == "2"]
+        return text
+
+    [change] = [change for change in changes(prepared)[0] if change.po_number == "250202"]
+    mark(prepared, change.ids, "entered", datetime(2026, 11, 12, 10, 0))
+    made = "regel 2 (KM-2002): prijs op de inkooporder: wijziging voorbereid van 40.00 naar 41.00, zie de zaak"
+    decided = "besluit van de inkoper: waarde van de winkelwagen overgenomen"
+    assert line_two(post(capture_server, page(madeup_out))[1]) == f"{made}; {decided}"
+    entered = next(one for one in changes(prepared)[0] if one.ids == change.ids)
+    assert take_back(d, entered, datetime(2026, 11, 12, 11, 0), "nl").startswith("Nog niet teruggedraaid in Exact.")
+    waiting = post(capture_server, page(madeup_out))[1]
+    assert line_two(waiting) == f"{made}; terugzetten staat op de lijst In Exact invoeren; {decided}"
+    assert "ongedaan" not in json.dumps(waiting, ensure_ascii=False)
+    assert server_module._TEXTS["en"]["put_back"] == "put-back is on the list Enter in Exact"
+    [put] = [one for one in changes(prepared)[0] if one.puts_back is not None]
+    mark(prepared, put.ids, "entered", datetime(2026, 11, 12, 12, 0))
+    undone = post(capture_server, page(madeup_out))[1]
+    assert line_two(undone) == f"regel 2 (KM-2002): prijs 41.00 in de winkelwagen, 40.00 op de inkooporder (wijziging ongedaan gemaakt); {decided}"
+
+
+# --- the second review round of Task 35: the pre-check and the list of changes to enter (K10, K12, K15) ---
+
+def _flag_of(answer: dict, line_id: str) -> str:
+    [text] = [entry["text"] for entry in answer["lines"] if entry["kind"] == "flag" and entry["line_id"] == line_id]
+    return text
+
+
+def _cart_01(capture_server, madeup_out) -> tuple:
+    """CART01 with line 2 at 4,15: R04 prepares 4.10 -> 4.15 on the list and the pre-check is green. (the page, the first answer, the
+    Deps with the prepared writer, the list's folder)."""
+    prepared = capture_server.settings.cases_root / "prepared"
+    d = capture_server.deps.model_copy(update={"writer": PreparedWriter(prepared)})
+    capture_server.server.deps = d
+    html = page(madeup_out, "CART01.html", texts={"€ 4,10": "€ 4,15"})
+    first = post(capture_server, html)[1]
+    assert first["verdict"] == "match"
+    return html, first, d, prepared
+
+
+def test_a_put_back_of_a_change_asked_again_waits_on_the_list_and_the_pre_check_says_so(capture_server, madeup_out):
+    """The checkers' sequence (second review round, K10): CART02's line 2 confirmed by the buyer (B01 40.00 -> 41.00) and ticked; a
+    newer change of the line that the buyer drops; then 41.00 asked once more by another document ("already"). "Terugdraaien in Exact"
+    makes a put-back that stands open on the list, and until it is entered the pre-check keeps the write with "terugzetten staat op de
+    lijst In Exact invoeren", never "wijziging ongedaan gemaakt"; once it is entered, the line is a difference again."""
+    from aid.execution.by_hand import changes, mark
+    from aid.review.hand_list import take_back
+
+    prepared = capture_server.settings.cases_root / "prepared"
+    d = capture_server.deps.model_copy(update={"writer": PreparedWriter(prepared)})
+    capture_server.server.deps = d
+    first = post(capture_server, page(madeup_out))[1]
+    case, items = _items(capture_server, first["case_id"])
+    decide(case, next(item["item_id"] for item in items if item["field"] == "price"), "confirm")
+    decide(case, next(item["item_id"] for item in items if item["field"] == "line_presence"), "keep")
+    close_case(case, d)
+    [change] = [change for change in changes(prepared)[0] if change.po_number == "250202"]
+    mark(prepared, change.ids, "entered", datetime(2026, 11, 12, 10, 0))
+    writer = PreparedWriter(prepared)
+    newer = writer.apply(WriteOp(kind="po_line_price", po_number="250202", version=1, line_id="2", old_value="41.00", new_value="42.00"),
+                         "250202_20261112T103000", "R04", {}, datetime(2026, 11, 12, 10, 30))
+    mark(prepared, [newer.entry_id], "dropped", datetime(2026, 11, 12, 10, 35))
+    writer.apply(WriteOp(kind="po_line_price", po_number="250202", version=1, line_id="2", old_value="40.00", new_value="41.00"),
+                 "250202_20261112T104000", "B01", {}, datetime(2026, 11, 12, 10, 40))
+    assert [change.state for change in changes(prepared)[0] if change.po_number == "250202"] == ["entered", "dropped", "already"]
+    entered = next(one for one in changes(prepared)[0] if one.ids == change.ids)
+    assert take_back(d, entered, datetime(2026, 11, 12, 11, 0), "nl").startswith("Nog niet teruggedraaid in Exact.")
+    assert [change.state for change in changes(prepared)[0] if change.po_number == "250202"] == ["entered", "dropped", "replaced", "open"]
+    made = "regel 2 (KM-2002): prijs op de inkooporder: wijziging voorbereid van 40.00 naar 41.00, zie de zaak"
+    decided = "besluit van de inkoper: waarde van de winkelwagen overgenomen"
+    waiting = post(capture_server, page(madeup_out))[1]
+    assert _flag_of(waiting, "2") == f"{made}; terugzetten staat op de lijst In Exact invoeren; {decided}"
+    assert "ongedaan" not in json.dumps(waiting, ensure_ascii=False)
+    [put] = [one for one in changes(prepared)[0] if one.puts_back is not None]
+    mark(prepared, put.ids, "entered", datetime(2026, 11, 12, 12, 0))
+    undone = post(capture_server, page(madeup_out))[1]
+    assert _flag_of(undone, "2") == ("regel 2 (KM-2002): prijs 41.00 in de winkelwagen, 40.00 op de inkooporder (wijziging ongedaan gemaakt); "
+                                     f"{decided}")
+
+
+def test_an_undo_passed_over_on_the_list_leaves_the_write_standing(capture_server, madeup_out):
+    """An undo row that the run rules pass over (state undone) undoes its write only when the write's own row was cancelled with it
+    (second review round, K10): here the operator undid a ticked change after a later document asked its value again, so the undo
+    belongs to that later run, which holds no row of its case and no tick, and is passed over; Exact still holds 4.15, and the pre-check
+    keeps the write and stays green."""
+    from aid.execution.by_hand import changes, mark
+    from aid.execution.writer import undo_entry
+
+    html, first, d, prepared = _cart_01(capture_server, madeup_out)
+    [change] = [change for change in changes(prepared)[0] if change.kind == "po_line_price" and change.po_number == "250201"]
+    mark(prepared, change.ids, "entered", datetime(2026, 11, 12, 10, 0))
+    writer = PreparedWriter(prepared)
+    newer = writer.apply(WriteOp(kind="po_line_price", po_number="250201", version=1, line_id="2", old_value="4.15", new_value="4.20"),
+                         "250201_20261112T103000", "R04", {}, datetime(2026, 11, 12, 10, 30))
+    mark(prepared, [newer.entry_id], "dropped", datetime(2026, 11, 12, 10, 35))
+    writer.apply(WriteOp(kind="po_line_price", po_number="250201", version=1, line_id="2", old_value="4.10", new_value="4.15"),
+                 "250201_20261112T104000", "R04", {}, datetime(2026, 11, 12, 10, 40))
+    undo_entry(capture_server.settings.cases_root / first["case_id"], change.ids[0], writer, datetime(2026, 11, 12, 11, 0))
+    assert [one.state for one in changes(prepared)[0] if one.kind == "po_line_price" and one.po_number == "250201"] == [
+        "entered", "dropped", "already", "undone"]
+    again = post(capture_server, html)[1]
+    assert again["verdict"] == "match" and "ongedaan" not in json.dumps(again, ensure_ascii=False)
+    assert _flag_of(again, "2").startswith("regel 2 (KM-2102): prijs op de inkooporder: wijziging voorbereid van 4.10 naar 4.15")
+
+
+def test_a_write_cancelled_with_its_undo_before_it_was_entered_is_undone(capture_server, madeup_out):
+    """K3's branch for an undo cancelled together with its write (second review round, K15): the operator undoes the case with
+    MANUAL 3.10's recipe, undo_case through the prepared writer, before the buyer entered anything; on the list the change and its
+    undo cancel each other and Exact still holds 4.10, so the pre-check of the cart at 4,15 says "wijziging ongedaan gemaakt" and is
+    not green."""
+    from aid.execution.by_hand import changes
+    from aid.execution.writer import undo_case
+
+    html, first, d, prepared = _cart_01(capture_server, madeup_out)
+    undo_case(capture_server.settings.cases_root / first["case_id"], d.writer, datetime(2026, 11, 12, 10, 0))
+    assert {one.state for one in changes(prepared)[0] if one.po_number == "250201"} == {"undone"}
+    again = post(capture_server, html)[1]
+    assert again["verdict"] != "match"
+    assert _flag_of(again, "2") == "regel 2 (KM-2102): prijs 4.15 in de winkelwagen, 4.10 op de inkooporder (wijziging ongedaan gemaakt)"
+
+
+def test_a_write_whose_undo_the_marks_say_exact_holds_is_undone(capture_server, madeup_out):
+    """K3's branch for an undo in the state "already" (second review round, K15): the change 4.10 -> 4.15 was ticked, then another
+    document asked 4.10 again and that was ticked too, so Exact holds 4.10 by the marks, and a third asked 4.20, which was dropped;
+    the operator's undo of the write, which asks 4.10, is "already". The pre-check of the cart at 4,15 says "wijziging ongedaan
+    gemaakt" and is not green."""
+    from aid.execution.by_hand import changes, mark
+    from aid.execution.writer import undo_entry
+
+    html, first, d, prepared = _cart_01(capture_server, madeup_out)
+    [change] = [change for change in changes(prepared)[0] if change.kind == "po_line_price" and change.po_number == "250201"]
+    mark(prepared, change.ids, "entered", datetime(2026, 11, 12, 10, 0))
+    writer = PreparedWriter(prepared)
+    back = writer.apply(WriteOp(kind="po_line_price", po_number="250201", version=1, line_id="2", old_value="4.15", new_value="4.10"),
+                        "250201_20261112T103000", "R04", {}, datetime(2026, 11, 12, 10, 30))
+    mark(prepared, [back.entry_id], "entered", datetime(2026, 11, 12, 10, 35))
+    other = writer.apply(WriteOp(kind="po_line_price", po_number="250201", version=1, line_id="2", old_value="4.10", new_value="4.20"),
+                         "250201_20261112T104000", "R04", {}, datetime(2026, 11, 12, 10, 40))
+    mark(prepared, [other.entry_id], "dropped", datetime(2026, 11, 12, 10, 45))
+    undo_entry(capture_server.settings.cases_root / first["case_id"], change.ids[0], writer, datetime(2026, 11, 12, 11, 0))
+    assert [one.state for one in changes(prepared)[0] if one.kind == "po_line_price" and one.po_number == "250201"] == [
+        "entered", "entered", "dropped", "already"]
+    again = post(capture_server, html)[1]
+    assert again["verdict"] != "match"
+    assert _flag_of(again, "2") == "regel 2 (KM-2102): prijs 4.15 in de winkelwagen, 4.10 op de inkooporder (wijziging ongedaan gemaakt)"
+
+
+def test_a_put_back_counts_as_undoing_while_the_list_cannot_be_read(capture_server, madeup_out, monkeypatch):
+    """The checkers' sequence (second review round, K12): CART01's change ticked, put back, and the put-back ticked as entered, so Exact
+    holds 4.10 again. While prepared_changes.csv or marks.jsonl cannot be read (a PermissionError, as Windows gives for a file another
+    program holds), no prepared write counts as made (fourth review round, K30): the line is a difference, "(de lijst In Exact
+    invoeren kon niet worden gelezen)", never a write that stands, and the cart is not green. So also while the put-back still waits."""
+    import pathlib
+
+    from aid.execution.by_hand import changes, mark
+    from aid.review.hand_list import take_back
+
+    html, first, d, prepared = _cart_01(capture_server, madeup_out)
+    [change] = [change for change in changes(prepared)[0] if change.kind == "po_line_price" and change.po_number == "250201"]
+    mark(prepared, change.ids, "entered", datetime(2026, 11, 12, 10, 0))
+    take_back(d, next(one for one in changes(prepared)[0] if one.ids == change.ids), datetime(2026, 11, 12, 11, 0), "nl")
+    unread = "regel 2 (KM-2102): prijs 4.15 in de winkelwagen, 4.10 op de inkooporder (de lijst In Exact invoeren kon niet worden gelezen)"
+    real = pathlib.Path.read_bytes
+
+    def held_by(name: str):
+        def read_bytes(self):
+            if self.name == name:
+                raise PermissionError(13, "The process cannot access the file because it is being used by another process", str(self))
+            return real(self)
+        return read_bytes
+
+    for name in ("prepared_changes.csv", "marks.jsonl"):                     # the put-back waits: the list unreadable
+        monkeypatch.setattr(pathlib.Path, "read_bytes", held_by(name))
+        blind = post(capture_server, html)[1]
+        monkeypatch.setattr(pathlib.Path, "read_bytes", real)
+        assert blind["verdict"] != "match" and _flag_of(blind, "2") == unread, name
+    readable = post(capture_server, html)[1]
+    assert readable["verdict"] == "match" and "terugzetten staat op de lijst In Exact invoeren" in _flag_of(readable, "2")
+    [put] = [one for one in changes(prepared)[0] if one.puts_back is not None]
+    mark(prepared, put.ids, "entered", datetime(2026, 11, 12, 12, 0))
+    for name in ("prepared_changes.csv", "marks.jsonl"):                     # the put-back entered: Exact holds 4.10 again
+        monkeypatch.setattr(pathlib.Path, "read_bytes", held_by(name))
+        blind = post(capture_server, html)[1]
+        monkeypatch.setattr(pathlib.Path, "read_bytes", real)
+        assert blind["verdict"] == "differences" and _flag_of(blind, "2") == unread, name
+    assert post(capture_server, html)[1]["verdict"] == "differences"
+
+
+# --- the third review round of Task 35: the pre-check judges a write by the list (K19) ---
+
+def _cart_on(capture_server, madeup_out, day: int, html: str | None = None) -> tuple:
+    """CART01 at 4,15 captured on that day of November at 9:00, with the prepared writer: (the page, the answer, the Deps). A page of
+    another day holds a comment of its own, so that it is a new case, as the same cart shown again on another day is."""
+    prepared = capture_server.settings.cases_root / "prepared"
+    d = capture_server.deps.model_copy(update={"writer": PreparedWriter(prepared), "clock": lambda: datetime(2026, 11, day, 9, 0)})
+    capture_server.server.deps = d
+    html = html or page(madeup_out, "CART01.html", texts={"€ 4,10": "€ 4,15"}).replace("</body>", f"<!-- shown {day}-11 -->\n</body>")
+    return html, post(capture_server, html)[1], d
+
+
+def test_a_later_case_of_the_same_cart_is_judged_by_the_put_back_on_the_list(capture_server, madeup_out):
+    """The checkers' sequence (third review round, K19): CART01 at 4,15 on 12 November (case A, R04 4.10 -> 4.15), ticked; a newer
+    value for the line dropped; the same cart on 13 November (case C) asks 4.10 -> 4.15 again ("already"). The put-back of A's change
+    stands and replaces C's row. C's own write log holds no undo, but the pre-check judges C's write by the list: while the put-back
+    waits it says "terugzetten staat op de lijst In Exact invoeren", and once the put-back is entered the line is a difference,
+    "(wijziging ongedaan gemaakt)", and the cart is not green."""
+    from aid.execution.by_hand import changes, mark
+    from aid.review.hand_list import take_back
+
+    prepared = capture_server.settings.cases_root / "prepared"
+    html_a, first, d = _cart_on(capture_server, madeup_out, 12)
+    [a] = [change for change in changes(prepared)[0] if change.kind == "po_line_price" and change.po_number == "250201"]
+    mark(prepared, a.ids, "entered", datetime(2026, 11, 12, 10, 0))
+    newer = PreparedWriter(prepared).apply(WriteOp(kind="po_line_price", po_number="250201", version=1, line_id="2", old_value="4.15",
+                                                   new_value="4.20"), "250201_20261112T103000", "R04", {}, datetime(2026, 11, 12, 10, 30))
+    mark(prepared, [newer.entry_id], "dropped", datetime(2026, 11, 12, 10, 35))
+    html_c, second, d = _cart_on(capture_server, madeup_out, 13)
+    assert second["case_id"] != first["case_id"] and second["verdict"] == "match"
+    states = [change.state for change in changes(prepared)[0] if change.kind == "po_line_price" and change.po_number == "250201"]
+    assert states == ["entered", "dropped", "already"]
+    entered = next(change for change in changes(prepared)[0] if change.ids == a.ids)
+    later = d.model_copy(update={"clock": lambda: datetime(2026, 11, 13, 10, 0)})
+    assert take_back(later, entered, datetime(2026, 11, 13, 10, 0), "nl").startswith("Nog niet teruggedraaid in Exact.")
+    waiting = post(capture_server, html_c)[1]
+    assert waiting["case_id"] == second["case_id"]
+    assert "terugzetten staat op de lijst In Exact invoeren" in _flag_of(waiting, "2") and "ongedaan" not in json.dumps(waiting)
+    [put] = [change for change in changes(prepared)[0] if change.puts_back is not None]
+    mark(prepared, put.ids, "entered", datetime(2026, 11, 13, 11, 0))
+    undone = post(capture_server, html_c)[1]
+    assert undone["verdict"] != "match"
+    assert _flag_of(undone, "2") == "regel 2 (KM-2102): prijs 4.15 in de winkelwagen, 4.10 op de inkooporder (wijziging ongedaan gemaakt)"
+    assert post(capture_server, html_a)[1]["verdict"] != "match"                # case A's own page, as before
+
+
+def test_the_same_cart_on_two_days_is_judged_by_the_put_back_of_the_run(capture_server, madeup_out):
+    """The checkers' sequence (third review round, K19): the same cart on 12 and 13 November, with no other value in between, is one
+    change with the entries of two cases; the tick came before the second capture. The put-back undoes the first case's entry, and
+    the second case's pre-check says that it waits, then, once it is entered, "(wijziging ongedaan gemaakt)"."""
+    from aid.execution.by_hand import changes, mark
+    from aid.review.hand_list import take_back
+
+    prepared = capture_server.settings.cases_root / "prepared"
+    html_a, first, d = _cart_on(capture_server, madeup_out, 12)
+    [a] = [change for change in changes(prepared)[0] if change.kind == "po_line_price" and change.po_number == "250201"]
+    mark(prepared, a.ids, "entered", datetime(2026, 11, 12, 10, 0))
+    html_c, second, d = _cart_on(capture_server, madeup_out, 13)
+    [run] = [change for change in changes(prepared)[0] if change.kind == "po_line_price" and change.po_number == "250201"]
+    assert len(run.case_ids) == 2 and run.state == "entered"
+    later = d.model_copy(update={"clock": lambda: datetime(2026, 11, 13, 10, 0)})
+    assert take_back(later, run, datetime(2026, 11, 13, 10, 0), "nl").startswith("Nog niet teruggedraaid in Exact.")
+    assert "terugzetten staat op de lijst In Exact invoeren" in _flag_of(post(capture_server, html_c)[1], "2")
+    [put] = [change for change in changes(prepared)[0] if change.puts_back is not None]
+    mark(prepared, put.ids, "entered", datetime(2026, 11, 13, 11, 0))
+    undone = post(capture_server, html_c)[1]
+    assert undone["verdict"] != "match" and "(wijziging ongedaan gemaakt)" in _flag_of(undone, "2")
+
+
+# --- the fourth review round of Task 35: a replaced row judged by its own put-back (K29), and no prepared write stands while the
+# list cannot be read (K30) ---
+
+UNREAD = "regel 2 (KM-2102): prijs 4.15 in de winkelwagen, 4.10 op de inkooporder (de lijst In Exact invoeren kon niet worden gelezen)"
+UNDONE = "regel 2 (KM-2102): prijs 4.15 in de winkelwagen, 4.10 op de inkooporder (wijziging ongedaan gemaakt)"
+
+
+def _blind(capture_server, monkeypatch, html: str, name: str) -> dict:
+    """The answer for the page while the list's file `name` cannot be read (a PermissionError, as Windows gives for a file another
+    program holds)."""
+    import pathlib
+
+    real = pathlib.Path.read_bytes
+
+    def read_bytes(self):
+        if self.name == name:
+            raise PermissionError(13, "The process cannot access the file because it is being used by another process", str(self))
+        return real(self)
+
+    monkeypatch.setattr(pathlib.Path, "read_bytes", read_bytes)
+    try:
+        return post(capture_server, html)[1]
+    finally:
+        monkeypatch.setattr(pathlib.Path, "read_bytes", real)
+
+
+def test_a_replaced_row_is_judged_by_the_put_back_that_replaced_it(capture_server, madeup_out):
+    """The checkers' sequence (fourth review round, K29): on CART01's line 2, other cases ask 4.10 -> 4.30, 4.30 -> 4.15 (X1),
+    4.15 -> 4.30 and 4.10 -> 4.15 (X3), all entered, and 4.10 -> 4.30, which is open, when the cart at 4,15 is captured (case C asks
+    4.10 -> 4.15, "already"). X3's put-back replaces C's row and is entered: C is amber with "(wijziging ongedaan gemaakt)". The
+    put-back of X1, another change of the same value, waits and is dropped: C stays amber, as Exact holds 4.10 all along; before, the
+    newest put-back of that value judged C's write, and C was green."""
+    from aid.case import open_case
+    from aid.execution.by_hand import changes, mark
+    from aid.execution.writer import WriteLog
+    from aid.review.hand_list import take_back
+
+    root = capture_server.settings.cases_root
+    prepared = root / "prepared"
+    d = capture_server.deps.model_copy(update={"writer": PreparedWriter(prepared)})
+    ids = {}
+    for hour, (name, old, new, tick) in enumerate((("X0", "4.10", "4.30", True), ("X1", "4.30", "4.15", True),
+                                                   ("X2", "4.15", "4.30", True), ("X3", "4.10", "4.15", True),
+                                                   ("X4", "4.10", "4.30", False)), 10):
+        at = datetime(2026, 11, 10, hour, 0)
+        case = open_case(root, "confirmation", [], "250201", at)
+        entry = PreparedWriter(prepared).apply(WriteOp(kind="po_line_price", po_number="250201", version=1, line_id="2", old_value=old,
+                                                       new_value=new), case.case_id, "R04", {}, at)
+        WriteLog(case.root).append(entry)
+        ids[name] = entry.entry_id
+        if tick:
+            mark(prepared, [entry.entry_id], "entered", at + timedelta(minutes=5))
+
+    def change_of(entry_id):
+        return next(change for change in changes(prepared)[0] if entry_id in change.ids)
+
+    html, first, _ = _cart_on(capture_server, madeup_out, 11)
+    assert first["verdict"] == "match"
+    later = d.model_copy(update={"clock": lambda: datetime(2026, 11, 11, 10, 0)})
+    assert take_back(later, change_of(ids["X3"]), datetime(2026, 11, 11, 10, 0), "nl").startswith("Nog niet teruggedraaid in Exact.")
+    [p1] = [change for change in changes(prepared)[0] if change.puts_back == ids["X3"]]
+    mark(prepared, p1.ids, "entered", datetime(2026, 11, 11, 10, 5))
+    undone = post(capture_server, html)[1]
+    assert undone["verdict"] == "differences" and _flag_of(undone, "2") == UNDONE
+    later = d.model_copy(update={"clock": lambda: datetime(2026, 11, 11, 11, 0)})
+    assert take_back(later, change_of(ids["X1"]), datetime(2026, 11, 11, 11, 0), "nl").startswith("Nog niet teruggedraaid in Exact.")
+    waiting = post(capture_server, html)[1]
+    assert waiting["verdict"] == "differences" and _flag_of(waiting, "2") == UNDONE
+    [p2] = [change for change in changes(prepared)[0] if change.puts_back == ids["X1"]]
+    mark(prepared, p2.ids, "dropped", datetime(2026, 11, 11, 11, 5))
+    dropped = post(capture_server, html)[1]
+    assert dropped["verdict"] == "differences" and _flag_of(dropped, "2") == UNDONE
+
+
+@pytest.mark.parametrize("reask", [False, True])
+def test_no_prepared_write_stands_while_the_list_cannot_be_read(capture_server, madeup_out, monkeypatch, reask):
+    """The checkers' sequences (fourth review round, K30): CART01 at 4,15 captured on 12 November (case A) and ticked; the same cart on
+    13 November (case C), with a dropped 4.20 in between or not; A's change put back, which waits and is then entered. Case C's write
+    log holds no undo. While prepared_changes.csv or marks.jsonl cannot be read, neither case is green, the put-back waiting or
+    entered: the line shows the difference with "(de lijst In Exact invoeren kon niet worden gelezen)". Before, C was green with
+    "wijziging voorbereid" while A was amber. Once the list can be read again, the list decides (K19)."""
+    from aid.execution.by_hand import changes, mark
+    from aid.review.hand_list import take_back
+
+    prepared = capture_server.settings.cases_root / "prepared"
+    html_a, first, d = _cart_on(capture_server, madeup_out, 12)
+    for name in ("prepared_changes.csv", "marks.jsonl"):                     # a prepared change ticked or not: not counted made
+        blind = _blind(capture_server, monkeypatch, html_a, name)
+        assert blind["verdict"] == "differences" and _flag_of(blind, "2") == UNREAD, name
+    [a] = [change for change in changes(prepared)[0] if change.kind == "po_line_price" and change.po_number == "250201"]
+    mark(prepared, a.ids, "entered", datetime(2026, 11, 12, 10, 0))
+    if reask:
+        op = WriteOp(kind="po_line_price", po_number="250201", version=1, line_id="2", old_value="4.15", new_value="4.20")
+        newer = PreparedWriter(prepared).apply(op, "250201_20261112T103000", "R04", {}, datetime(2026, 11, 12, 10, 30))
+        mark(prepared, [newer.entry_id], "dropped", datetime(2026, 11, 12, 10, 35))
+    html_c, second, d = _cart_on(capture_server, madeup_out, 13)
+    assert second["verdict"] == "match"
+    run = next(change for change in changes(prepared)[0] if a.ids[0] in change.ids)
+    later = d.model_copy(update={"clock": lambda: datetime(2026, 11, 13, 10, 0)})
+    assert take_back(later, run, datetime(2026, 11, 13, 10, 0), "nl").startswith("Nog niet teruggedraaid in Exact.")
+    for html in (html_c, html_a):                                             # the put-back waits
+        for name in ("prepared_changes.csv", "marks.jsonl"):
+            blind = _blind(capture_server, monkeypatch, html, name)
+            assert blind["verdict"] == "differences" and _flag_of(blind, "2") == UNREAD, name
+    assert "terugzetten staat op de lijst In Exact invoeren" in _flag_of(post(capture_server, html_c)[1], "2")
+    [put] = [change for change in changes(prepared)[0] if change.puts_back is not None]
+    mark(prepared, put.ids, "entered", datetime(2026, 11, 13, 11, 0))
+    for html in (html_c, html_a):                                             # the put-back entered: Exact holds 4.10 again
+        for name in ("prepared_changes.csv", "marks.jsonl"):
+            blind = _blind(capture_server, monkeypatch, html, name)
+            assert blind["verdict"] == "differences" and _flag_of(blind, "2") == UNREAD, name
+        readable = post(capture_server, html)[1]
+        assert readable["verdict"] == "differences" and _flag_of(readable, "2") == UNDONE
+    assert server_module._TEXTS["en"]["unread"] == "the list Enter in Exact could not be read"
+
+
+def test_a_replaced_row_is_judged_by_the_put_back_that_took_its_value_out_of_exact(capture_server, madeup_out):
+    """The acceptance harness of the fourth review round (seed 7330 and its kind): on CART01's line 2 another case's 4.10 -> 4.15 (X) is
+    entered; a change to 4.30 is open when the cart at 4,15 is captured (case C asks 4.10 -> 4.15, "already": Exact holds X's 4.15).
+    A newer document then asks 4.15 -> 4.10, which replaces C's row and is dropped; X is put back, and its put-back entered: Exact holds
+    4.10. C's row was replaced by that newer document, not by the put-back, yet the put-back of X took C's value out of Exact: C is
+    amber with "(wijziging ongedaan gemaakt)", and while the put-back waits, "terugzetten staat op de lijst In Exact invoeren"."""
+    from aid.case import open_case
+    from aid.execution.by_hand import changes, mark
+    from aid.execution.writer import WriteLog
+    from aid.review.hand_list import take_back
+
+    root = capture_server.settings.cases_root
+    prepared = root / "prepared"
+    d = capture_server.deps.model_copy(update={"writer": PreparedWriter(prepared)})
+
+    def ask(old: str, new: str, at: datetime) -> str:
+        case = open_case(root, "confirmation", [], "250201", at)
+        entry = PreparedWriter(prepared).apply(WriteOp(kind="po_line_price", po_number="250201", version=1, line_id="2", old_value=old,
+                                                       new_value=new), case.case_id, "R04", {}, at)
+        WriteLog(case.root).append(entry)
+        return entry.entry_id
+
+    x = ask("4.10", "4.15", datetime(2026, 11, 10, 10, 0))
+    mark(prepared, [x], "entered", datetime(2026, 11, 10, 10, 5))
+    ask("4.15", "4.30", datetime(2026, 11, 10, 11, 0))
+    html, first, _ = _cart_on(capture_server, madeup_out, 11)
+    assert first["verdict"] == "match"
+    newer = ask("4.15", "4.10", datetime(2026, 11, 11, 9, 30))
+    mark(prepared, [newer], "dropped", datetime(2026, 11, 11, 9, 35))
+    later = d.model_copy(update={"clock": lambda: datetime(2026, 11, 11, 10, 0)})
+    entered = next(change for change in changes(prepared)[0] if x in change.ids)
+    assert take_back(later, entered, datetime(2026, 11, 11, 10, 0), "nl").startswith("Nog niet teruggedraaid in Exact.")
+    states = [(change.new_value, change.rule_id, change.state) for change in changes(prepared)[0] if change.po_number == "250201"
+              and change.kind == "po_line_price"]
+    assert states[2:] == [("4.15", "R04", "replaced"), ("4.10", "R04", "dropped"), ("4.10", "undo", "open")]
+    assert "terugzetten staat op de lijst In Exact invoeren" in _flag_of(post(capture_server, html)[1], "2")
+    [put] = [change for change in changes(prepared)[0] if change.puts_back == x]
+    mark(prepared, put.ids, "entered", datetime(2026, 11, 11, 10, 5))
+    undone = post(capture_server, html)[1]
+    assert undone["verdict"] == "differences" and _flag_of(undone, "2") == UNDONE

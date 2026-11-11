@@ -637,6 +637,27 @@ def test_a_layout_or_a_sender_list_refuses_the_share_link(tmp_path, capsys):
     assert "po_layout is set" in err and "Bestelnummer" not in err and not (tmp_path / "cases").exists()
 
 
+def test_saved_export_columns_refuse_the_share_link(tmp_path, capsys):
+    """The column titles of the export are chosen on the company side from the company's own export (Task 39): once they are saved a
+    public share link is refused, by the name of the setting and never by a title. The number convention and the tick alone are no
+    company values."""
+    columns = {"po_number": "Bestelnummer", "item_code": "Artikelnummer"}
+    made_up = MADE_UP.model_dump()
+    settings = MADE_UP.model_validate(made_up | {"export_columns": columns})
+    assert company_values(settings) == ["export_columns is not empty"]
+    reason = refuse_share(settings)
+    assert reason is not None and "internal use only" in reason and not any(title in reason for title in columns.values())
+    assert company_values(MADE_UP.model_validate(made_up | {"export_decimal_comma": True, "export_fill_down": True})) == []
+    every = MADE_UP.model_validate(made_up | {"export_columns": columns, "po_senders": ["example.org"], "exact_base_url": "https://erp.example.com"})
+    assert company_values(every) == ["exact_base_url is set", "po_senders is not empty", "export_columns is not empty"]
+    example = json.loads((REPO_ROOT / "aid" / "settings.example.json").read_text(encoding="utf-8"))
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps(example | {"export_columns": columns, "cases_root": str(tmp_path / "cases")}), encoding="utf-8")
+    assert review_main(["--settings", str(path), "--share"]) == 2
+    err = capsys.readouterr().err
+    assert "export_columns is not empty" in err and "Bestelnummer" not in err and not (tmp_path / "cases").exists()
+
+
 def test_share_is_refused_with_the_reason(tmp_path, capsys):
     example = json.loads((REPO_ROOT / "aid" / "settings.example.json").read_text(encoding="utf-8"))
     path = tmp_path / "settings.json"
@@ -803,6 +824,193 @@ def test_the_message_record_of_a_close_counts_a_refused_copy(tmp_path, madeup_ou
     [message] = r2.messages
     assert message["status"] == "sent" and message["refused_cc"] == 1
     assert c.read_step("close")["records"][-1]["messages"][0]["refused_cc"] == 1
+
+
+# --- a case that waits for its purchase order, and a case replaced when it was checked again (Task 36) ---
+
+from aid.pipeline import _closed_cases  # noqa: E402
+from aid.review.close import finish_replaced, waiting_for_po  # noqa: E402
+
+# The hint of a case that waits for its PO (ruling N2), word for word: for a PO, here 250101, and for a quoted version, here version 1
+# of PO 250103.
+HINT = {"nl": ("Inkooporder 250101 kent de assistent nog niet. Komt die inkooporder uit Exact binnen, dan controleert de assistent deze "
+               "bevestiging vanzelf opnieuw; u hoeft hier niets te besluiten. Blijft zij weg, sleep dan de pdf van de inkooporder of de "
+               "e-mail van Exact naar de map die de assistent leest. Is 250101 niet een van uw inkoopordernummers, besluit dan zelf over "
+               "deze zaak."),
+        "en": ("The assistant does not know purchase order 250101 yet. When that purchase order comes in from Exact, the assistant checks "
+               "this confirmation again by itself; you need not decide anything here. If it stays away, drag the PDF of the purchase "
+               "order or the e-mail from Exact into the folder the assistant reads. If 250101 is not one of your purchase order numbers, "
+               "decide on this case yourself.")}
+VERSION_HINT = {"nl": ("Versie 1 van inkooporder 250103 kent de assistent nog niet. Komt die versie uit Exact binnen, dan controleert de "
+                       "assistent deze bevestiging vanzelf opnieuw; u hoeft hier niets te besluiten. Blijft zij weg, sleep dan de pdf van "
+                       "die versie of de e-mail van Exact naar de map die de assistent leest."),
+                "en": ("The assistant does not know version 1 of purchase order 250103 yet. When that version comes in from Exact, the "
+                       "assistant checks this confirmation again by itself; you need not decide anything here. If it stays away, drag the "
+                       "PDF of that version or the e-mail from Exact into the folder the assistant reads.")}
+
+
+def without_po(d, tmp_path):
+    """The dependencies d with an empty PO store: a confirmation then waits for its PO."""
+    return d.model_copy(update={"store": PoStore(tmp_path / "empty_store")})
+
+
+def test_a_replaced_case_is_not_offered_and_a_decision_on_it_is_never_carried_out(tmp_path, madeup_out):
+    """Rule 8: a case finished as replaced is closed with no supplier and the digest line to match, keeps its review items and its
+    version, and has the record of its replacement in step 09 and in the audit record. The page no longer offers it, not even by the
+    digest's link; a decision that a browser tab still showing it records is never carried out, because the close refuses a case that
+    is not in review; and it does not count toward its supplier's first cases."""
+    d = deps(tmp_path, madeup_out)
+    c, r = run(without_po(d, tmp_path), madeup_out, "MU01", "250101")
+    root = d.settings.cases_root
+    assert (r.status, r.supplier, waiting_for_po(c)) == ("review", "S01", "po") and [s.case_id for s in offered_cases(root)] == [c.case_id]
+    finish_replaced(c, "250101_20261112T090100", LATER, "nl")
+    result = CaseResult.model_validate(c.read_step("result"))
+    assert (result.status, result.supplier, result.digest_line) == ("closed", None, "PO 250101: afgesloten, geen schrijfacties")
+    assert result.model_dump(exclude={"status", "supplier", "digest_line"}) == r.model_dump(exclude={"status", "supplier", "digest_line"})
+    record = {"action": "replaced", "at": LATER.isoformat(), "by": "250101_20261112T090100"}
+    assert c.read_step("close") == {"records": [record]} and audit(c)["close"] == [record] and audit(c)["case_id"] == c.case_id
+    assert offered_cases(root) == [] and list_open_cases(root) == [] and selection_from_query(root, {"case": c.case_id}) == (None, None)
+    assert waiting_for_po(c) is None
+    decide(c, "RI1", "keep")                                                          # the stale tab records a decision
+    with pytest.raises(ValueError, match="not in review"):
+        close_case(c, d)
+    assert close_text(c, d, "nl") == (STRINGS["nl"]["not_closed"], False)
+    assert not (c.root / "write_log.jsonl").exists() and not (tmp_path / "prepared_changes.csv").exists()
+    assert c.read_step("close") == {"records": [record]}
+    assert _closed_cases(root, "S01", "another case") == 0
+    first, r2 = run(deps(tmp_path, madeup_out, settings=NEW_SUPPLIER.model_copy(update={"first_cases_review": 1})), madeup_out, "MU01",
+                    "250101", now=LATER + timedelta(minutes=1))
+    assert [item.reason for item in r2.review_items] == ["new supplier"]            # the replaced case is no closed case of S01
+
+
+def test_the_hint_on_a_waiting_case(tmp_path, madeup_out):
+    """Rule 10 and ruling N2: the review tab shows the hint above the documents on a case that waits for its PO, in the page's
+    language, naming what it waits for: the PO by its number, or the version of the PO that the confirmation quotes. It shows on no
+    other case: not on a case opened without a PO number, whose result waits all the same (it waits for nothing the aid can promise,
+    and stays with the buyer), not on a case in review for another reason and not without a case."""
+    d = deps(tmp_path, madeup_out)
+    waiting, _ = run(without_po(d, tmp_path), madeup_out, "MU01", "250101")
+    only_v2 = without_po(d, tmp_path / "v2")
+    only_v2.store.add(madeup_out / "MU03_po_v2.pdf")
+    quoted, r = run(only_v2, madeup_out, "MU03", "250103", now=LATER)
+    assert r.version.reason == "quotes version 1, which is not stored"
+    numberless, r = run(without_po(d, tmp_path), madeup_out, "MU02", None, now=LATER + timedelta(minutes=1))
+    assert numberless.po_number is None and r.version.reason == "no stored version" and waiting_for_po(numberless) is None
+    other, _ = run(d, madeup_out, "MU07", "250107", now=LATER + timedelta(minutes=2))
+    app = build_app(d)
+    [show] = [f for f in app.fns.values() if getattr(f.fn, "__name__", "") == "show"]
+    [relabel] = [f for f in app.fns.values() if getattr(f.fn, "__name__", "") == "relabel"]
+    at = [getattr(block, "elem_id", None) for block in show.outputs].index("review-hint")
+    again = [getattr(block, "elem_id", None) for block in relabel.outputs].index("review-hint")      # the language switch relabels it
+    for case, hint in ((waiting, HINT), (quoted, VERSION_HINT)):
+        shown = show.fn(case.case_id, "nl")
+        assert shown[at] == {"__type__": "update", "value": hint["nl"], "visible": True} and shown[-1] == ""
+        state = shown[[type(block).__name__ for block in show.outputs].index("State")]
+        assert relabel.fn("en", case.case_id, state)[again] == {"__type__": "update", "value": hint["en"], "visible": True}
+    for case_id in (numberless.case_id, other.case_id, None):
+        assert show.fn(case_id, "nl")[at] == {"__type__": "update", "value": "", "visible": False}, case_id
+        assert relabel.fn("en", case_id, None)[again]["visible"] is False, case_id
+    for language in ("nl", "en"):
+        assert STRINGS[language]["waiting_hint:po"].format(number="250101") == HINT[language]
+        assert STRINGS[language]["waiting_hint:version"].format(number="250103", version="1") == VERSION_HINT[language]
+    gr = import_gradio()
+    [block] = [block for block in app.blocks.values() if getattr(block, "elem_id", None) == "review-hint"]
+    assert isinstance(block, gr.Markdown) and block.visible is False
+
+
+GUESSED = {"nl": ("Kijk na of dit de goede inkooporder is: de assistent vond haar niet aan het nummer achter een van de woorden van de "
+                   "nummerherkenning."),
+           "en": ("Check that this is the right purchase order: the assistant did not find it by the number after a word of the number "
+                  "recognition.")}
+
+
+def test_the_reason_of_a_guessed_link(tmp_path, madeup_out):
+    """Ruling N18: a case whose PO was found otherwise than by the one number of the pattern (case.json's po_found_by) is in review with
+    one item for the whole case, as R11 makes one, and nothing written; the page and the digest name its reason by its label, word for
+    word. The same confirmation opened with the pattern's number is closed."""
+    from aid.case import open_case
+    from aid.pipeline import GUESSED_PO
+    from aid.sources.mailbox import FOUND_BY_LINES
+    d = deps(tmp_path, madeup_out)
+    guessed = open_case(d.settings.cases_root, "confirmation", [madeup_out / "MU01_conf.pdf"], "250101", NOW, found_by=FOUND_BY_LINES)
+    result = run_case(guessed, d)
+    assert (result.status, [(item.reason, item.finding_id) for item in result.review_items], result.write_entries) == (
+        "review", [(GUESSED_PO, None)], [])
+    assert json.loads((guessed.root / "case.json").read_text(encoding="utf-8"))["po_found_by"] == FOUND_BY_LINES
+    for language in ("nl", "en"):
+        assert STRINGS[language][f"reason:{GUESSED_PO}"] == GUESSED[language]
+        assert GUESSED[language] in str(page_rows(load_case_view(guessed).flags, language)), language
+    assert [decision["rule_id"] for decision in audit(guessed)["decisions"]] == ["P01"]
+    plain, r = run(d, madeup_out, "MU01", "250101", now=LATER)
+    assert r.status == "closed" and "po_found_by" not in json.loads((plain.root / "case.json").read_text(encoding="utf-8"))
+
+
+def test_the_tables_of_the_review_tab_keep_their_columns_in_view(tmp_path, madeup_out):
+    """Ruling N32 and finding 7 of the second check: the three tables of the review tab (the differences, the matched values and the
+    uncompared items) give each of their eight columns a width, in whole percents that make the page's width together, so that their
+    cells wrap inside their columns and a long reason, as the guess's, never pushes the two source columns out of view. The reason
+    gets the widest column, the two sources the next widest."""
+    gr = import_gradio()
+    nl = STRINGS["nl"]
+    headers = [nl[column] for column in ("item", "field", "line", "po_value", "doc_value", "reason", "po_source", "doc_source")]
+    app = build_app(deps(tmp_path, madeup_out))
+    tables = [block for block in app.blocks.values() if isinstance(block, gr.Dataframe) and block.value["headers"] == headers]
+    assert len(tables) == 3
+    for table in tables:
+        widths = dict(zip(headers, [int(width.rstrip("%")) for width in table.column_widths or []]))
+        assert len(widths) == len(headers) and sum(widths.values()) == 100 and table.wrap
+        ranked = sorted(widths, key=widths.get, reverse=True)
+        assert ranked[0] == nl["reason"] and set(ranked[1:3]) == {nl["po_source"], nl["doc_source"]}
+
+
+def rendered_saves(app, state: dict) -> list:
+    """The events that the decision rows of the review tab make for the case of `state`, as the page renders them when the case is
+    chosen: one per radio and one per tick (gr.render, which a test can only reach through the page's own render function)."""
+    from gradio.context import LocalContext
+    [renderable] = app.default_config.renderables
+    token = LocalContext.blocks_config.set(app.default_config)
+    try:
+        renderable.apply(state, "nl")
+    finally:
+        LocalContext.blocks_config.reset(token)
+    return [f for f in app.default_config.fns.values() if getattr(f, "rendered_in", None) is renderable]
+
+
+def test_the_hint_follows_a_decision_and_the_refresh(tmp_path, madeup_out):
+    """Ruling N8: a decision saved on a waiting case hides the hint at once, as the case then waits no longer and is not checked again;
+    the decision's radio and its tick update the hint with the status line. "Lijst vernieuwen" updates the hint as well, for a decision
+    saved in another browser tab or a case the runner replaced meanwhile. Driven through the page's own wiring: the events the
+    decision rows make, and the refresh button's."""
+    d = deps(tmp_path, madeup_out)
+    waiting, _ = run(without_po(d, tmp_path), madeup_out, "MU01", "250101")
+    second, _ = run(without_po(d, tmp_path), madeup_out, "MU02", "250102", now=LATER)
+    app = build_app(d)
+    [show] = [f for f in app.fns.values() if getattr(f.fn, "__name__", "") == "show"]
+    hint_block = show.outputs[[getattr(block, "elem_id", None) for block in show.outputs].index("review-hint")]
+    shown = show.fn(waiting.case_id, "nl")
+    state = shown[[type(block).__name__ for block in show.outputs].index("State")]
+    saves = rendered_saves(app, state)
+    assert len(saves) == 2 and {app.default_config.blocks[target[0]].__class__.__name__ for f in saves for target in f.targets} == {"Radio", "Checkbox"}
+    for f in saves:                                                          # the radio's and the tick's outputs: the status line and the hint
+        assert [type(block).__name__ for block in f.outputs] == ["Markdown", "Markdown"] and f.outputs[1] is hint_block
+    [radio] = [f for f in saves if app.default_config.blocks[f.targets[0][0]].__class__.__name__ == "Radio"]
+    assert radio.fn(None, False, "nl", state) == ({"__type__": "update"}, {"__type__": "update"})          # nothing chosen: nothing changes
+    message, hint = radio.fn("unresolved", False, "nl", state)
+    assert message == STRINGS["nl"]["saved"].format(item="RI1") and hint == {"__type__": "update", "value": "", "visible": False}
+    assert waiting_for_po(waiting) is None
+    [refresh] = [f for f in app.fns.values() if getattr(f.fn, "__name__", "") == "refreshed"]
+    assert [getattr(block, "label", None) for block in refresh.inputs] == [STRINGS["nl"]["language"], STRINGS["nl"]["case"]]
+    assert refresh.outputs[1] is hint_block and getattr(refresh.outputs[0], "label", None) == STRINGS["nl"]["case"]
+    assert [getattr(app.blocks[target[0]], "value", None) for target in refresh.targets] == [STRINGS["nl"]["refresh"]]
+    choices, hint = refresh.fn("nl", second.case_id)
+    assert hint == {"__type__": "update", "value": HINT["nl"].replace("250101", "250102"), "visible": True}
+    decide(second, "RI1", "keep")                                            # in another browser tab
+    choices, hint = refresh.fn("en", second.case_id)
+    assert hint == {"__type__": "update", "value": "", "visible": False}
+    assert [value for _, value in choices["choices"]] == [summary.case_id for summary in offered_cases(d.settings.cases_root)]
+    finish_replaced(waiting, "250101_20261112T090500", LATER, "nl")          # the runner replaced it
+    assert refresh.fn("nl", waiting.case_id)[1]["visible"] is False and refresh.fn("nl", None)[1]["visible"] is False
+    assert refresh.fn("nl", "250199_20261112T090000")[1]["visible"] is False          # a case whose folder is gone
 
 
 # --- the page's temporary files (Task 30) ---

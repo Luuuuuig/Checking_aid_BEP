@@ -19,6 +19,10 @@ the settings, as plain text and as simple HTML with the same content. Its blocks
   the template of each question in words. A request to the approver to approve a PO again is no question.
 - Mislukt (Failed): the failed cases, each with the first line of its error.
 - Overgeslagen (Skipped): the skipped files grouped by their reason, "<file>: <reason>", the reasons in alphabetical order.
+A case made from a try-out document (tryout_case of aid/tryout_mark.py) has " (proefdocument)" (" (try-out document)") behind its
+line in every block, its own digest line with no count of what to do in Exact, and each of its prepared rows says "(proefdocument)"
+in place of "(voorbereid)" and "(zelf in Exact doen)": the digest never tells the buyer to do anything in Exact for a try-out, and
+the caller leaves its changes out of the count of the changes to enter (aid/runner.py).
 While changes wait on the list "In Exact invoeren" of the review page (aid/execution/by_hand.py), the first line under the title,
 before the blocks, gives their number and the link to that tab: "In Exact in te voeren: 2 wijzigingen. Open het tabblad In Exact
 invoeren: <link>" ("To enter in Exact: 2 changes. Open the tab Enter in Exact: <link>"); the caller counts them (to_enter), and a
@@ -75,6 +79,7 @@ from aid.review.hand_list import TAB
 from aid.review.i18n import STRINGS, reason_label
 from aid.routing import findings_by_id
 from aid.settings import Settings
+from aid.tryout_mark import case_is_tryout
 
 SUBJECT_PREFIX = "[Inkoopassistent]"             # the same in both languages: the Power Automate flow matches it
 DIGEST = "digest"                                # the template of the digest's message, and the start of its case id
@@ -96,7 +101,7 @@ _WORDS = {
            "copilot_refused": "Copilot kon {documents} niet lezen; nieuwe poging bij de volgende ronde",
            "document_one": "1 document", "documents_many": "{n} documenten",
            "undo": "ongedaan maken", "open": "beoordelen", "status": {"prepared": "(voorbereid)", "failed": "(mislukt)"},
-           "yours": "(zelf in Exact doen)", "yours_count": "{n} in Exact zelf te doen",
+           "yours": "(zelf in Exact doen)", "yours_count": "{n} in Exact zelf te doen", "tryout": "(proefdocument)",
            "line": "regel", "lines": "regels", "of_document": "van het document", "unknown": "onbekend", "decimal": ",",
            "kinds": {"po_line_price": "prijs", "po_line_date": "levertijd", "po_line_quantity": "aantal", "article_price": "artikelprijs",
                      "attach_document": "bijlage", "detach_document": "bijlage", "set_status": "status"},
@@ -116,7 +121,7 @@ _WORDS = {
            "copilot_refused": "Copilot could not read {documents}; {again} tried again at the next pass",
            "document_one": "1 document", "documents_many": "{n} documents",
            "undo": "undo", "open": "review", "status": {"prepared": "(prepared)", "failed": "(failed)"},
-           "yours": "(do it in Exact yourself)", "yours_count": "{n} to do in Exact yourself",
+           "yours": "(do it in Exact yourself)", "yours_count": "{n} to do in Exact yourself", "tryout": "(try-out document)",
            "line": "line", "lines": "lines", "of_document": "of the document", "unknown": "unknown", "decimal": ".",
            "kinds": {"po_line_price": "price", "po_line_date": "delivery date", "po_line_quantity": "quantity", "article_price": "article price",
                      "attach_document": "attachment", "detach_document": "attachment", "set_status": "status"},
@@ -205,10 +210,11 @@ def build_digest(results: list[CaseResult], skipped: list[tuple[str, str]], sett
         again = "it is" if copilot_refused == 1 else "they are"
         notes.append([words["copilot_refused"].format(documents=documents, again=again)])
     title = f"{words['digest']} {period:%d-%m-%Y}"
-    blocks = [(words["handled"], [_handled(result, settings, words) for result in results]),
-              (words["review"], [_in_review(result, settings, words) for result in results if result.status == "review"]),
-              (words["waiting"], [_waiting(result, words) for result in results if result.status == "waiting"]),
-              (words["failed"], [_failed(result, words) for result in results if result.status == "failed"]),
+    made_up = {result.case_id for result in results if case_is_tryout(settings.cases_root, result.case_id)}      # the cases of try-outs
+    blocks = [(words["handled"], [_handled(result, settings, words, result.case_id in made_up) for result in results]),
+              (words["review"], [_in_review(result, settings, words, result.case_id in made_up) for result in results if result.status == "review"]),
+              (words["waiting"], [_waiting(result, words, result.case_id in made_up) for result in results if result.status == "waiting"]),
+              (words["failed"], [_failed(result, words, result.case_id in made_up) for result in results if result.status == "failed"]),
               (words["skipped"], [_Item([f"{name}: {reason}"], []) for name, reason in sorted(skipped, key=lambda skip: skip[1])])]
     blocks = [(heading, items) for heading, items in blocks if items]
     return Digest(subject=f"{SUBJECT_PREFIX} {title}", text=_text(title, notes, blocks, words),
@@ -225,9 +231,11 @@ def send_digest(d: Digest, mailer: Mailer, settings: Settings) -> SentRecord:
 
 # --- the lines of the blocks ---
 
-def _handled(result: CaseResult, settings: Settings, words: dict) -> _Item:
-    """A handled case: its line (_case_line), and a line per write under it."""
-    return _Item([_case_line(result, settings, words)], [_write(entry, result.case_id, settings, words) for entry in result.write_entries])
+def _handled(result: CaseResult, settings: Settings, words: dict, tryout: bool = False) -> _Item:
+    """A handled case: its line (_case_line), and a line per write under it; a case made from a try-out has its own digest line with
+    the mark behind it, and its rows the mark (see the module docstring)."""
+    line = f"{result.digest_line} {words['tryout']}" if tryout else _case_line(result, settings, words)
+    return _Item([line], [_write(entry, result.case_id, settings, words, tryout) for entry in result.write_entries])
 
 
 def _case_line(result: CaseResult, settings: Settings, words: dict) -> str:
@@ -249,16 +257,18 @@ def _yours(entry: WriteLogEntry) -> bool:
     return entry.status == "prepared" and entry.op.kind in _YOURS
 
 
-def _write(entry: WriteLogEntry, case_id: str, settings: Settings, words: dict) -> _Line:
+def _write(entry: WriteLogEntry, case_id: str, settings: Settings, words: dict, tryout: bool = False) -> _Line:
     """A write: the field in words and what it changed, then the old and the new value when it has either (an attached file has
     neither), then its undo link when it was made, else whether it was prepared or failed; a confirmation to attach or a status that
-    was prepared says that the buyer does it in Exact himself."""
+    was prepared says that the buyer does it in Exact himself, and any write a try-out's case prepared says "(proefdocument)"."""
     op = entry.op
     text = " ".join(part for part in (words["kinds"].get(op.kind, op.kind), _changed(op, words)) if part)
     if entry.previous is not None or entry.new is not None:
         text += f": {_value(entry.previous, op.kind, words)} → {_value(entry.new, op.kind, words)}"
     if entry.status == "done":
         return [f"{text} ", _Link(words["undo"], undo_link(settings, case_id, entry.entry_id))]
+    if tryout and entry.status == "prepared":
+        return [f"{text} {words['tryout']}"]
     if _yours(entry):
         return [f"{text} {words['yours']}"]
     return [f"{text} {words['status'].get(entry.status, entry.status)}"]
@@ -281,10 +291,10 @@ def _value(value: str | None, kind: str, words: dict) -> str:
     return value.replace(".", words["decimal"]) if kind in _AMOUNTS else value
 
 
-def _in_review(result: CaseResult, settings: Settings, words: dict) -> _Item:
+def _in_review(result: CaseResult, settings: Settings, words: dict, tryout: bool = False) -> _Item:
     """A case in review: the case and its review link, and a line per review item under it."""
     findings = findings_by_id(result.findings) if result.findings is not None else {}
-    return _Item([f"{_case(result, words)}: ", _Link(words["open"], review_link(settings, result.case_id))],
+    return _Item([f"{_case(result, words, tryout)}: ", _Link(words["open"], review_link(settings, result.case_id))],
                  [[_review_item(item, findings, words, settings.language)] for item in result.review_items])
 
 
@@ -301,23 +311,25 @@ def _review_item(item: ReviewItem, findings: dict[str, Flag | Uncompared], words
     return (label or _shown(item.reason)) + (f" ({', '.join(known)})" if known else "")
 
 
-def _waiting(result: CaseResult, words: dict) -> _Item:
+def _waiting(result: CaseResult, words: dict, tryout: bool = False) -> _Item:
     """A case that waits for the supplier: the case, with the template of each of its questions in words."""
     templates = [message.get("template") for message in result.messages]
     asked = [words["questions"].get(template, template) for template in templates if template in QUESTIONS]
-    return _Item([_case(result, words) + (f": {', '.join(asked)}" if asked else "")], [])
+    return _Item([_case(result, words, tryout) + (f": {', '.join(asked)}" if asked else "")], [])
 
 
-def _failed(result: CaseResult, words: dict) -> _Item:
+def _failed(result: CaseResult, words: dict, tryout: bool = False) -> _Item:
     """A failed case: the case, with the first line of its error."""
     error = _shown(result.error)
-    return _Item([_case(result, words) + (f": {error}" if error else "")], [])
+    return _Item([_case(result, words, tryout) + (f": {error}" if error else "")], [])
 
 
-def _case(result: CaseResult, words: dict) -> str:
-    """A case as the blocks name it: "PO 250101", or "PO 250101 (S01)" when its supplier is known."""
+def _case(result: CaseResult, words: dict, tryout: bool = False) -> str:
+    """A case as the blocks name it: "PO 250101", or "PO 250101 (S01)" when its supplier is known, with " (proefdocument)" behind it
+    when it is made from a try-out."""
     po_number = result.case_id.partition("_")[0]
-    return f"PO {words['unknown'] if po_number == 'unknown' else po_number}" + (f" ({result.supplier})" if result.supplier else "")
+    return (f"PO {words['unknown'] if po_number == 'unknown' else po_number}" + (f" ({result.supplier})" if result.supplier else "")
+            + (f" {words['tryout']}" if tryout else ""))
 
 
 def _lines(line_ids: list[str], words: dict) -> str:

@@ -1,7 +1,7 @@
 Dear colleague,
 
-The purchasing assistant has changed purchase order PO {{ po }}, because
-the order confirmation of supplier {{ supplier }} differs from the order:
+Purchase order PO {{ po }} is being changed, because the order
+confirmation of supplier {{ supplier }} differs from the order:
 
 {% set kinds = {"po_line_price": "Price of the PO line", "po_line_date": "Delivery date of the PO line",
                 "po_line_quantity": "Quantity of the PO line", "article_price": "Article price"} %}
@@ -10,7 +10,7 @@ the order confirmation of supplier {{ supplier }} differs from the order:
 {% endfor %}
 
 The order is above the amount that the buyer may approve alone. Could you
-therefore approve the changed order again?
+approve the order again once the change is in Exact?
 
 Kind regards,
 

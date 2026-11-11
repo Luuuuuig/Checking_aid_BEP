@@ -18,7 +18,7 @@ from aid.madeup.generate import main as generate_main
 from aid.po_store import PoStore
 from aid.pricelist import _xlsx_table
 from aid.readers.po_export import (EXPORT_FIELDS, EXPORT_SUFFIXES, REFUSALS, ExportReading, ExportRefused, is_export, is_folder_name,
-                                   read_export)
+                                   read_export, read_export_table)
 from aid.schema import DocLine, DocValue, Document
 from aid.tests.conftest import REPO_ROOT
 
@@ -627,7 +627,8 @@ def test_an_empty_map_reads_the_made_up_exports_as_before(madeup_out, case_id):
                 unit=read(UNIT_WORDS["nl"][line.unit], line.unit), unit_price=read(line.unit_price), price_basis=read(line.price_basis),
                 delivery_date=read(line.delivery_date)) for line in spec.po.versions[-1].lines])
     reading = read_export(path, {})
-    assert reading == ExportReading(documents=[expected], rows=3, passed_over=0, unread={})
+    assert reading == ExportReading(documents=[expected], rows=3, passed_over=0, unread={},
+                                    last_line_po=spec.po.po_number)                # the PO its last line went to (ruling M15)
     assert read_export(path, {field: field for field in EXPORT_COLUMNS}) == reading
 
 
@@ -940,3 +941,55 @@ def test_the_try_out_export_is_written_by_the_generator(tmp_path, capsys):
     assert (tmp_path / "command" / "EXPORT_nl.csv").read_text(encoding="utf-8") == held
     assert not out.exists() and not references.exists()
     assert f"try-out files in {tmp_path / 'command'}" in capsys.readouterr().out
+
+
+# --- what the trial read on the settings page needs (Task 39's review round, rulings M1 and M11) ---
+
+def test_the_rows_passed_over_are_listed_by_their_kind(tmp_path):
+    """The reader passes over the same rows as before, and ExportReading lists them by their kind, so that the trial read on the
+    settings page can say why: the rows whose item code cell is blank, the rows with an item code and a blank quantity, the rows whose
+    item code is a date, a time or an error cell (in unread["item_code"], as before), and the rows that repeat the row of column titles.
+    passed_over counts them all, as before."""
+    rows = [TITLES, ROWS[0],
+            ["250301", "2", "KM-3102", "Hydrauliekslang 12 mm", None, "m", "4.80", "1", "2026-11-24"],    # row 3: no quantity
+            [None, None, None, "Subtotaal"],                                                              # row 4: no item code
+            TITLES,                                                                                       # row 5: the titles again
+            ["250302", "1", datetime(2026, 11, 3), "Pakking", "5", "st", "1.00", "1", "2026-11-26"],     # row 6: an item code that is a date
+            ROWS[2], ["Totaal"]]                                                                          # row 8: no item code
+    reading = read_export(write_xlsx(tmp_path / "kinds.xlsx", rows), NL)
+    assert (reading.without_item_code, reading.without_quantity, reading.titles_again, reading.unread) == ([4, 8], [3], [5], {"item_code": [6]})
+    assert (reading.rows, reading.passed_over) == (2, 5)
+    plain = read_export(write_csv(tmp_path / "plain.csv", [TITLES, *ROWS]), NL)                  # nothing passed over: empty lists
+    assert (plain.without_item_code, plain.without_quantity, plain.titles_again, plain.passed_over) == ([], [], [], 0)
+
+
+def test_the_reader_records_the_po_its_last_line_went_to(tmp_path):
+    """The reader records the PO number of the last row it read as an order line (Task 39's second review round, ruling M15), so that
+    the trial read on the settings page shows that PO: with fill_down a total row at the end of the file joins the PO of the row above
+    it, which in an export sorted by delivery date is not the PO the file names last. What it reads does not change."""
+    from aid.tests.helpers import SORTED_BY_DATE, SORTED_BY_DATE_COLUMNS, SORTED_BY_DATE_LONG
+    reading = read_export(SORTED_BY_DATE, SORTED_BY_DATE_COLUMNS, decimal_comma=True, fill_down=True)
+    assert [doc.po_reference.value for doc in reading.documents] == ["250301", "250302", "250303"]       # in the order first named
+    assert [line.item_code.value for line in reading.documents[1].lines] == ["KM-3201", "KM-3202", "Totaal"]
+    assert reading.last_line_po == "250302" and (reading.rows, reading.passed_over) == (5, 0)
+    long = read_export(SORTED_BY_DATE_LONG, SORTED_BY_DATE_COLUMNS, decimal_comma=True, fill_down=True)
+    assert [doc.po_reference.value for doc in long.documents] == ["250301", "250304", "250306", "250302", "250303", "250305"]
+    assert long.last_line_po == "250306" and long.documents[2].lines[-1].item_code.value == "Totaal" and long.rows == 31
+    with pytest.raises(ExportRefused) as refused:                                 # without the tick the total row refuses the file
+        read_export(SORTED_BY_DATE, SORTED_BY_DATE_COLUMNS, decimal_comma=True)
+    assert (refused.value.reason, refused.value.row) == ("no_po_number", 6)
+    assert read_export(write_csv(tmp_path / "plain.csv", [TITLES, *ROWS]), NL).last_line_po == "250302"
+    assert read_export(write_csv(tmp_path / "back.csv", [TITLES, ROWS[2], ROWS[0]]), NL).last_line_po == "250301"
+    assert read_export(write_csv(tmp_path / "none.csv", [TITLES, ["Totaal"]]), NL).last_line_po is None   # no order line
+
+
+def test_read_export_table_reads_the_file_once_and_gives_its_table(tmp_path, monkeypatch):
+    """read_export_table is read_export with the table it read and the index of its header row, for a caller that needs the cells
+    themselves: the block of the settings tab tells a number cell from a text with them and reads the sample once."""
+    import aid.readers.po_export as po_export
+    path = write_semicolons(tmp_path / "export.csv", [["Openstaande inkooporderregels"], TITLES, *ROWS])
+    reads, real = [], po_export.csv_text
+    monkeypatch.setattr(po_export, "csv_text", lambda file: (reads.append(Path(file).name), real(file))[1])
+    reading, table, header = read_export_table(path, NL)
+    assert reads == ["export.csv"] and header == 1 and [cell.text for cell in table[header]] == TITLES
+    assert [cell.kind for cell in table[header + 1]] == ["text"] * len(TITLES) and reading == read_export(path, NL)

@@ -17,26 +17,71 @@ page's language: a price or a quantity with the decimal comma in Dutch and the p
 "week 47 (2026)", a range as its two days joined by "/", and "onbekend" for a value the aid does not know, such as the old purchase
 price of an article that it never read. An article price shows its article code. The undo of an entered article price whose price
 before it the aid never read (its new value unknown) reads "artikel KM-0801: inkoopprijs 12,70 terugzetten naar de prijs van
-daarvoor": the buyer puts back the price that Exact held before. No rule code is shown.
+daarvoor": the buyer puts back the price that Exact held before. No rule code is shown. A change of try-out documents (Change.tryout:
+the list gives the rows of cases made from a try-out a place of their own, aid/execution/by_hand.py, so a change is all from
+try-outs or not at all) carries "(proefdocument)" behind its row, in the test mode and out of it, so that a made-up change is never
+shown as one to enter in the real Exact.
 
 What the controls of the tab show is made here as well: tick_rows, the group of tick boxes (a row of a PO's block after the first line
 of its heading, so that each tick box names its order), block_choices, the dropdown of the blocks, and intro, the text above them: the
-intro, then the lines that apply, the hint of each order above the authorization, "Er is niets in te voeren." when nothing is open, and
-how many lines of the list could not be read.
+intro, then the lines that apply, in the test mode (the setting test_mode) "Proefstand: voer deze wijzigingen alleen in het test-Exact
+in.", the hint of each order above the authorization, "Er is niets in te voeren." when nothing is open, and how many lines of the list
+could not be read.
+
+A row that puts a change back in Exact (linked by the mark puts_back, aid/execution/by_hand.py) shows "Terugzetten: " before its row,
+"Inkooporder 250108 (S08), Terugzetten: regel 1 (KM-0801): prijs 12,70 → 12,50" among the tick boxes. An open row of a PO line whose
+line shows, in its order as it stands (the latest PDF version or a look from an export filed after it) filed after the change was
+asked, neither its old nor its new value has the note of what Exact shows now after it: "... prijs 12,50 → 12,70. Exact toont nu
+12,80." (note_value of by_hand).
+
+Under the list the tab has two sections. done_rows gives the section "Afgehandeld in de laatste 14 dagen": the changes entered, seen or
+dropped in that time, the newest first, each as label_of names it, followed by how the aid knows it, "(door u afgevinkt op 18-11-2026)",
+"(gezien in versie 2 van de inkooporder)", "(gezien in een export uit Exact)" or "(niet ingevoerd, op 18-11-2026)"; done_text makes the
+section's text of them. take_back is its button "Terugdraaien in Exact": on a change entered or seen it prepares the old value as the
+value to enter, through the undo of the review page's close (aid/review/close.py, undo) for a change of a case, so that the case's
+write log, step 09 and audit record hold it, and through undo_entry on the price list's own write-log folder for a change of a price
+list (<cases_root>/pricelists/<day>, where the import's command keeps it); it links the new row to the entry it puts back and says
+what happened, never "Ongedaan gemaakt": the change stays among the handled ones as it was, next to its put-back. An article price
+whose old price the aid never read, a change that was not entered and a put-back itself are not put back, and the note says so,
+before anything else is looked at. A put-back never replaces a newer change: while a later change of the same line or article that
+another document asked is open, entered or seen (_newer), nothing is prepared, and the note names that change and says what the
+buyer can do: when it asks this change's old value itself, nothing needs putting back (enter it while it is on the list; once it is
+entered or seen, the change was put back already); else drop it while it is on the list, or put it back and tick its put-back off
+once it is entered, or, when the aid can never put it back, put the old value back in Exact himself. An entered or seen newer
+change counts only while the marks say that Exact holds its value and its own put-back is not entered or seen: once its put-back
+is entered or seen, or another row entered after it set another value, it no longer counts. The put-back is worked out first
+(by_hand.put_back_state, nothing written): it is made when it would stand open on the list, "Deze wijziging is al teruggedraaid."
+is said when the marks say that Exact holds the old value already, whatever newer change there is, and the note to pass on to the
+researcher is left for a state the rules cannot give. A put-back that exists already is not made again: open, the note says that it
+is on the list; dropped, it is put on the list again; entered or seen, the change was put back already; replaced by a newer change,
+or dropped with a newer row after it, it does not return to the list while a row after it is open or a newer change of the change
+still counts (as _newer counts it), and is made again, a second undo of the same entry, once nothing stands in its way.
+confirmations gives the section "Bevestigd door de leverancier (laatste 7 dagen)": the rows that attach a confirmation, without a
+tick, while the newest row of their case that attaches it or sets the status is at most 7 days old, each with the day of that row,
+the order, the file and whether the status is to be set to Bevestigd as well (the case's last row that sets the status sets
+Bevestigd); confirmation_lines and confirmations_text show them.
 """
 import re
-from pathlib import Path
+from datetime import datetime, timedelta
+from pathlib import Path, PureWindowsPath
 
 from aid.case import load_case
-from aid.execution.by_hand import ARTICLE_KIND, LINE_KINDS, Change
-from aid.execution.writer import UNDO_RULE_ID
-from aid.pipeline import CaseResult
+from aid.execution.by_hand import (ARTICLE_KIND, EXPORT, FOLDER, KINDS, LINE_KINDS, Change, changes, item_code, link_put_back,
+                                   newest_version, note_value, place_of, prepared_rows, put_back_of, put_back_state, reopen, same_value)
+from aid.execution.writer import LOG_FILE, UNDO_RULE_ID, WriteLog, WriteLogEntry, undo_entry
+from aid.pipeline import CaseResult, Deps
 from aid.po_store import PoStore, PoVersion
+from aid.review.close import undo
 from aid.review.i18n import STRINGS
+from aid.routing import CONFIRMED
 
 TAB = "invoeren"                                 # the id of the tab on the page, and the value of tab= in an address that selects it
 ARTICLES = "articles"                            # the id of the block of the article prices
 PO_BLOCK = "po:"                                 # the start of the id of a PO's block
+DONE_DAYS, CONFIRMATION_DAYS = 14, 7             # how far back the two sections under the list look
+PRICELISTS = "pricelists"                        # under cases_root: the write-log folders of the price-list import (aid/pricelist.py)
+_HELD = ("entered", "seen")                      # the states in which the marks say that Exact holds a change's value
+_ATTACH, _DETACH, _STATUS = "attach_document", "detach_document", "set_status"
 _DECIMAL = {"nl": ",", "en": "."}
 _NUMBERS = ("po_line_price", "po_line_quantity", "article_price")     # the kinds whose values are numbers
 _DAY = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
@@ -57,22 +102,27 @@ def blocks(open_: list[Change], store: PoStore, cases_root: Path, language: str)
     shown = []
     for po_number in sorted(orders, key=_natural):
         changes = sorted(orders[po_number], key=lambda change: (_natural(change.line_id or ""), LINE_KINDS.index(change.kind)))
-        shown.append((f"{PO_BLOCK}{po_number}", _heading(po_number, changes, store, cases_root, strings), _rows(changes, cases_root, language)))
+        shown.append((f"{PO_BLOCK}{po_number}", _heading(po_number, changes, store, cases_root, strings),
+                      _rows(changes, store, cases_root, language)))
     if articles:
         articles.sort(key=lambda change: change.article_code or "")
-        shown.append((ARTICLES, strings["hand_block_articles"], _rows(articles, cases_root, language)))
+        shown.append((ARTICLES, strings["hand_block_articles"], _rows(articles, store, cases_root, language)))
     return shown
 
 
 def row_text(change: Change, cases_root: Path, language: str) -> str:
-    """One change as its row shows it (see the module docstring)."""
+    """One change as its row shows it (see the module docstring), with "Terugzetten: " before the row of a put-back and
+    "(proefdocument)" behind the row of a change of try-out documents."""
     strings = STRINGS[language]
     old, new = (_value(value, change.kind, language) for value in (change.old_value, change.new_value))
+    mark = f" {strings['hand_tryout']}" if change.tryout else ""
     if change.kind == ARTICLE_KIND:
         back = change.rule_id == UNDO_RULE_ID and change.new_value is None
-        return strings["hand_row:article_price_back" if back else "hand_row:article_price"].format(item=change.article_code, old=old, new=new)
-    item = _item_code(change, cases_root) or strings["hand_unknown"]
-    return strings[f"hand_row:{change.kind}"].format(line=change.line_id, item=item, old=old, new=new)
+        text = strings["hand_row:article_price_back" if back else "hand_row:article_price"].format(item=change.article_code, old=old, new=new)
+    else:
+        item = item_code(change, cases_root) or strings["hand_unknown"]
+        text = strings[f"hand_row:{change.kind}"].format(line=change.line_id, item=item, old=old, new=new)
+    return (strings["hand_put_back_row"].format(row=text) if change.puts_back else text) + mark
 
 
 def block_of(change: Change) -> str:
@@ -96,11 +146,12 @@ def block_choices(listed: list[tuple[str, str, list[tuple[str, str]]]]) -> list[
     return [(_title(heading), block_id) for block_id, heading, _ in listed]
 
 
-def intro(listed: list[tuple[str, str, list[tuple[str, str]]]], passed: int, language: str) -> str:
-    """The text above the list, as Markdown: the intro, then a paragraph for each block with a hint (its first line in bold, then the
-    hint), "Er is niets in te voeren." when no block is listed, and how many lines of the list could not be read."""
+def intro(listed: list[tuple[str, str, list[tuple[str, str]]]], passed: int, language: str, test_mode: bool = False) -> str:
+    """The text above the list, as Markdown: the intro, in the test mode the line that the changes go into the test Exact only, then a
+    paragraph for each block with a hint (its first line in bold, then the hint), "Er is niets in te voeren." when no block is listed,
+    and how many lines of the list could not be read."""
     strings = STRINGS[language]
-    lines = [strings["hand_intro"]]
+    lines = [strings["hand_intro"], *([strings["hand_test_mode"]] if test_mode else [])]
     for _, heading, _ in listed:
         title, _, hint = heading.partition("\n")
         if hint:
@@ -114,8 +165,16 @@ def intro(listed: list[tuple[str, str, list[tuple[str, str]]]], passed: int, lan
 
 # --- the parts of a block and of a row ---
 
-def _rows(changes: list[Change], cases_root: Path, language: str) -> list[tuple[str, str]]:
-    return [(row_text(change, cases_root, language), "+".join(change.ids)) for change in changes]
+def _rows(changes: list[Change], store: PoStore, cases_root: Path, language: str) -> list[tuple[str, str]]:
+    """The rows of open changes: each row's text, with the note of what Exact shows now when there is one, and its value."""
+    return [(_noted(change, store, cases_root, language), "+".join(change.ids)) for change in changes]
+
+
+def _noted(change: Change, store: PoStore, cases_root: Path, language: str) -> str:
+    """An open change's row with, after it, the note of what Exact shows now when a newer version of its order shows neither its old
+    nor its new value (note_value of aid/execution/by_hand.py)."""
+    text, other = row_text(change, cases_root, language), note_value(change, store, cases_root)
+    return text if other is None else f"{text}. {STRINGS[language]['hand_exact_shows'].format(value=_value(other, change.kind, language))}"
 
 
 def _heading(po_number: str, changes: list[Change], store: PoStore, cases_root: Path, strings: dict[str, str]) -> str:
@@ -146,21 +205,6 @@ def _supplier(changes: list[Change], cases_root: Path) -> str | None:
             continue
         if supplier:
             return supplier
-    return None
-
-
-def _item_code(change: Change, cases_root: Path) -> str | None:
-    """The item code of the change's line in the version its case was compared with: step 01 of the newest case of the change that
-    holds that version; None when no case does, or the line has no item code there."""
-    for case_id in reversed(change.case_ids):
-        try:
-            versions = [PoVersion.model_validate(version) for version in load_case(cases_root, case_id).read_step("po_versions")["versions"]]
-        except (OSError, ValueError, KeyError, TypeError):
-            continue
-        version = next((version for version in versions if version.version == change.version), None)
-        if version is not None:
-            line = next((line for line in version.document.lines if line.line_id == change.line_id), None)
-            return line.item_code.value if line is not None else None
     return None
 
 
@@ -195,3 +239,297 @@ def _title(heading: str) -> str:
 def _markdown(text: str) -> str:
     """A text with the marks Markdown reads escaped, so that a name shows as it is."""
     return _MARKDOWN.sub(r"\\\1", text)
+
+
+# --- the two sections under the list ---
+
+def done_rows(all_: list[Change], now: datetime, language: str, days: int = DONE_DAYS, store: PoStore | None = None,
+              cases_root: Path | None = None) -> list[tuple[str, str]]:
+    """The section "Afgehandeld in de laatste 14 dagen" (see the module docstring): the changes of all_ entered, seen or dropped at most
+    `days` before now (a mark after now counts too), the newest mark first, each as (its text, its value). The text is the change as
+    label_of names it, followed by how the aid knows it; the value is its entry ids joined by "+", as on the list. Without the store
+    and the cases root an order is named without its supplier and a line without its item code."""
+    strings = STRINGS[language]
+    done = [change for change in all_ if change.state in ("entered", "seen", "dropped") and change.marked_at is not None
+            and _within(change.marked_at, now, days)]
+    done.sort(key=lambda change: _aware(datetime.fromisoformat(change.marked_at)), reverse=True)     # stable: one time keeps the order
+    return [(f"{label_of(change, store, cases_root, language)} {_how(change, strings, language)}", "+".join(change.ids)) for change in done]
+
+
+def done_text(rows: list[tuple[str, str]], language: str) -> str:
+    """The section of the handled changes as Markdown: its heading in bold, then a line per change of done_rows."""
+    heading = f"**{STRINGS[language]['hand_done']}**"
+    return f"{heading}\n\n" + "\n".join(f"- {_markdown(text)}" for text, _ in rows) if rows else heading
+
+
+def label_of(change: Change, store: PoStore | None, cases_root: Path | None, language: str) -> str:
+    """A change as the tick boxes of the list name it: a change of a PO line after the first line of its order's heading, the supplier
+    as the order as it stands names it (newest_version), else as a result of its cases; an article price as its row."""
+    text = row_text(change, cases_root, language)
+    if block_of(change) == ARTICLES:
+        return text
+    strings = STRINGS[language]
+    version = newest_version(store, change.po_number) if store is not None else None
+    supplier = (version.supplier if version is not None else None) or (_supplier([change], cases_root) if cases_root is not None else None)
+    order = (strings["hand_block_po"].format(number=change.po_number, supplier=supplier) if supplier
+             else strings["hand_block_po_alone"].format(number=change.po_number))
+    return f"{order}, {text}"
+
+
+def take_back(deps: Deps, change: Change, now: datetime, language: str) -> str:
+    """"Terugdraaien in Exact" on a handled change (see the module docstring), with the Deps of the page, whose writer prepares into
+    <cases_root>/prepared: prepare the old value as the value to enter, link the new row to the entry it puts back, and return the
+    note of what happened. The entry put back is the newest row of the change whose mark gives its state and whose old value the aid
+    knows; a change of a case is put back through undo() of aid/review/close.py, one of a price list through undo_entry on the
+    list's write-log folder under <cases_root>/pricelists. An entry the write log shows undone already (the manual's recipe) is
+    linked to that undo instead. In this order, with nothing written: a change that can never be put back says so (an article price
+    whose earlier price the aid never read, a put-back itself, an entry whose write log the aid cannot find); a newer change of its
+    place refuses it (_newer), with a note that says what the buyer can do (the newer change asks the old value already, is on the
+    list, was entered, or was entered and can never be put back), unless the marks say that Exact holds the old value already; and
+    the put-back is worked out first (by_hand.put_back_state): one that the marks say Exact holds already gives "Deze wijziging is al
+    teruggedraaid.", and the note for the researcher is left for a state the rules cannot give. A WriterError of the writer, or a
+    write log that cannot be read, is raised."""
+    strings = STRINGS[language]
+    cases_root = Path(deps.settings.cases_root)
+    prepared = cases_root / FOLDER
+    if change.state not in _HELD:
+        return strings["hand_put_back_not_entered"]
+    linked = next((row for row in (put_back_of(prepared, entry_id) for entry_id in reversed(change.ids)) if row is not None), None)
+    if linked is not None:
+        return _put_back_note(deps, linked, now, language, fresh=False)
+    rows = {row.entry_id: row for row in prepared_rows(prepared, KINDS)}
+    if (never := _never(change, rows, cases_root)) is not None:
+        return strings[never]
+    entry_id = _put_back_entry(change, rows)
+    found = changes(prepared)[0]
+    if (newer := _newer(change, found)) is not None:
+        if put_back_state(prepared, entry_id, now) == "already":
+            return strings["hand_put_back_done"]     # the marks say that Exact holds the old value: nothing to put back
+        named = label_of(newer, deps.store, cases_root, language)
+        if same_value(change.kind, newer.new_value, rows[entry_id].old_value):
+            return strings["hand_put_back_not_needed"].format(row=named) if newer.state == "open" else strings["hand_put_back_done"]
+        if newer.state == "open":
+            return strings["hand_put_back_newer_open"].format(row=named)
+        if _never(newer, rows, cases_root) is not None:
+            return strings["hand_put_back_newer_never"].format(row=named)
+        return strings["hand_put_back_newer_entered"].format(row=named)
+    folder = _log_folder(cases_root, rows[entry_id].case_id, entry_id)
+    before = next((entry for entry in WriteLog(folder).entries() if entry.undo_of == entry_id and entry.status != "failed"), None)
+    if before is not None:                       # the manual's recipe undid it before: link that undo
+        link_put_back(prepared, before.entry_id, entry_id, now)
+        return _put_back_note(deps, before.entry_id, now, language, fresh=False)
+    return _put_back_made(deps, folder, entry_id, now, language)
+
+
+def _put_back_made(deps: Deps, folder: Path, entry_id: str, now: datetime, language: str, again: bool = False) -> str:
+    """Prepare the put-back of the entry, whose write log is in `folder`, link it, and say so, when by_hand.put_back_state says it
+    would stand open on the list; "Deze wijziging is al teruggedraaid." when the marks say Exact holds the old value already, and
+    nothing written; the note for the researcher for any other state, which the rules cannot give. With again, an entry whose
+    earlier put-back newer rows replaced is undone once more (_put_back_note)."""
+    strings = STRINGS[language]
+    prepared = Path(deps.settings.cases_root) / FOLDER
+    state = put_back_state(prepared, entry_id, now)
+    if state == "already":
+        return strings["hand_put_back_done"]
+    if state != "open":
+        return strings["hand_put_back_lost"]
+    made = _undone(deps, folder, entry_id, now, again)
+    if made is None:                             # the write log refuses it: not its entry, or nothing was written
+        return strings["hand_put_back_cannot"]
+    link_put_back(prepared, made.entry_id, entry_id, now)
+    return _put_back_note(deps, made.entry_id, now, language, fresh=True)
+
+
+def _never(change: Change, rows: dict, cases_root: Path) -> str | None:
+    """The key of the note that a change can never be put back, or None when it can be: an article price whose earlier price the aid
+    never read ("hand_put_back_unknown"); a change whose entry to put back is a put-back or another undo itself, or whose write log
+    the aid cannot find ("hand_put_back_cannot")."""
+    entry_id = _put_back_entry(change, rows)
+    if entry_id is None:
+        return "hand_put_back_unknown" if change.kind == ARTICLE_KIND else "hand_put_back_cannot"
+    if rows[entry_id].rule_id == UNDO_RULE_ID or _log_folder(cases_root, rows[entry_id].case_id, entry_id) is None:
+        return "hand_put_back_cannot"
+    return None
+
+
+def _put_back_entry(change: Change, rows: dict) -> str | None:
+    """The entry a put-back of the change puts back: the newest row of the change whose mark gives its state and whose old value the
+    aid knows; None when there is none."""
+    known = [entry_id for entry_id in change.marked_ids if entry_id in rows and rows[entry_id].old_value is not None]
+    return known[-1] if known else None
+
+
+def put_back_note(deps: Deps, made: WriteLogEntry, of: str, now: datetime, language: str) -> str:
+    """The note of an undo that the page's writer prepared for an entry `of` (the review tab's own undo of a write made in a system):
+    the row of a change to enter is linked as a put-back and the note says that it is on the list, not undone in Exact; a row that
+    attaches, detaches or sets a status is on no list, and the note says to put the old value back in Exact."""
+    if made.op.kind not in KINDS:
+        return STRINGS[language]["hand_put_back_cannot"]
+    link_put_back(Path(deps.settings.cases_root) / FOLDER, made.entry_id, of, now)
+    return _put_back_note(deps, made.entry_id, now, language, fresh=True)
+
+
+def confirmations(prepared: Path, now: datetime, days: int = CONFIRMATION_DAYS) -> list[dict]:
+    """The section "Bevestigd door de leverancier (laatste 7 dagen)": the rows of the folder's prepared_changes.csv that attach a
+    confirmation, without a tick, while the newest row of their case that attaches it or sets the status was prepared at most `days`
+    before now, so that a status that a close prepares days after the run brings its confirmation back; the newest such row first.
+    Each is {"date": the day of that newest row, "po_number", "file": the name of the file, "set_status": whether the status is to be
+    set to Bevestigd as well, "case_id"}, and "tryout": True for a row of a case made from a try-out, whose line confirmation_lines
+    marks. The status is to be set when the last row of the case that sets the status sets Bevestigd (its undo sets Besteld again); a
+    row whose attachment a later row of its case detaches (an undo) is left out."""
+    rows = prepared_rows(prepared, (_ATTACH, _DETACH, _STATUS))
+    found = []
+    for index, row in enumerate(rows):
+        if row.kind != _ATTACH or row.rule_id == UNDO_RULE_ID:
+            continue
+        if any(other.kind == _DETACH and other.case_id == row.case_id and other.document == row.document for other in rows[index + 1:]):
+            continue
+        own = [other for other in rows if other.case_id == row.case_id and other.kind in (_ATTACH, _STATUS)]
+        newest = max(own, key=lambda other: _aware(datetime.fromisoformat(other.timestamp)))
+        if not _within(newest.timestamp, now, days):
+            continue
+        statuses = [other.new_value for other in own if other.kind == _STATUS]
+        found.append((_aware(datetime.fromisoformat(newest.timestamp)),
+                      {"date": datetime.fromisoformat(newest.timestamp).date().isoformat(), "po_number": row.po_number,
+                       "file": PureWindowsPath(row.document or "").name, "set_status": bool(statuses) and statuses[-1] == CONFIRMED,
+                       "case_id": row.case_id, **({"tryout": True} if row.tryout else {})}))
+    return [item for _, item in sorted(found, key=lambda pair: pair[0], reverse=True)]       # stable: one time keeps the order
+
+
+def confirmation_lines(found: list[dict], cases_root: Path, language: str) -> list[str]:
+    """The confirmations as the section shows them: the day, the order with its supplier as its case's result names it, and the file,
+    with "alleen bijvoegen: er staat nog iets open" after it when the status is not to be set yet, and "(proefdocument)" behind the
+    confirmation of a try-out, which is made up: nothing of it is to be done in the real Exact."""
+    strings = STRINGS[language]
+    lines = []
+    for item in found:
+        day, supplier = _day_or_week(item["date"], language), _case_supplier(item["case_id"], cases_root)
+        line = (strings["hand_confirmation"].format(date=day, number=item["po_number"], supplier=supplier, file=item["file"]) if supplier
+                else strings["hand_confirmation_alone"].format(date=day, number=item["po_number"], file=item["file"]))
+        line = line if item["set_status"] else f"{line} ({strings['hand_attach_only']})"
+        lines.append(f"{line} {strings['hand_tryout']}" if item.get("tryout") else line)
+    return lines
+
+
+def confirmations_text(found: list[dict], cases_root: Path, language: str) -> str:
+    """The section of the confirmations as Markdown: its heading in bold, then a line per confirmation; "" when there is none."""
+    if not found:
+        return ""
+    lines = confirmation_lines(found, cases_root, language)
+    return f"**{STRINGS[language]['hand_confirmations']}**\n\n" + "\n".join(f"- {_markdown(line)}" for line in lines)
+
+
+def _how(change: Change, strings: dict[str, str], language: str) -> str:
+    """How the aid knows that a handled change is handled: the buyer's tick or drop with its day, or the version it was seen in."""
+    day = _day_or_week(datetime.fromisoformat(change.marked_at).date().isoformat(), language)
+    if change.state == "seen" and change.marked_by == EXPORT:
+        return strings["hand_done_seen_export"]
+    if change.state == "seen":
+        return strings["hand_done_seen"].format(n=(change.marked_by or "").removeprefix("version "))
+    return strings["hand_done_dropped" if change.state == "dropped" else "hand_done_ticked"].format(date=day)
+
+
+def _put_back_note(deps: Deps, row_id: str, now: datetime, language: str, fresh: bool) -> str:
+    """The note of a press of "Terugdraaien in Exact" by the state of the put-back row `row_id`: open, the row on the list when it was
+    made now (fresh), else that the put-back is on the list already; dropped, put on the list again; entered or seen, or held by Exact
+    by the marks, or not on the list at all (a writer that made it in a system), the change was put back already. Replaced by newer
+    rows of its place, or dropped with newer rows after it, so that it cannot return to the list: the change was put back already
+    when the marks say that Exact holds its old value; while a row after the put-back is open, or a newer change of the change still
+    counts (_newer: on the list, or entered or seen and still in Exact), that the put-back does not return to the list (the newer
+    change is the decision now); once nothing stands in its way (the rows after it were dropped, are already held, were cancelled or
+    put back), the put-back is made again, a new undo of the same entry, so that a put-back can always be made when nothing newer
+    stands in its way (_in_the_way)."""
+    strings = STRINGS[language]
+    cases_root = Path(deps.settings.cases_root)
+    prepared = cases_root / FOLDER
+    found = changes(prepared)[0]
+    put = next((change for change in found if row_id in change.ids), None)
+    if put is None or put.state in (*_HELD, "already"):
+        return strings["hand_put_back_done"]
+    state = put.state
+    if state == "dropped":                       # put on the list again, when nothing came after it; else as if replaced
+        state = reopen(prepared, put.ids, now)
+        if state == "open":
+            put, fresh = next(change for change in changes(prepared)[0] if row_id in change.ids), True
+        elif state == "already":
+            return strings["hand_put_back_done"]
+    if state == "replaced" and put.puts_back is not None:
+        of = next((row for row in prepared_rows(prepared, KINDS) if row.entry_id == put.puts_back), None)
+        owner = next((change for change in found if put.puts_back in change.ids), None)
+        if of is not None and put_back_state(prepared, of.entry_id, now) == "already":
+            return strings["hand_put_back_done"]
+        folder = _log_folder(cases_root, of.case_id, of.entry_id) if of is not None else None
+        if folder is not None and owner is not None and not _in_the_way(put, owner, found):
+            return _put_back_made(deps, folder, of.entry_id, now, language, again=True)
+    if put.state != "open":
+        return strings["hand_reopen_not"]
+    if not fresh:
+        return strings["hand_put_back_on_list"]
+    return strings["hand_put_back_listed"].format(row=label_of(put, deps.store, cases_root, language))
+
+
+def _newer(change: Change, found: list[Change]) -> Change | None:
+    """The newest change of the change's place asked after it that is open, entered or seen and is no undo: a change that another
+    document asked, which a put-back of `change` must not replace (the put-back would become the last change of the place); None
+    when there is none. An entered or seen newer change counts only while the marks say that Exact holds its value (the last entered
+    or seen change of the place has it) and its own put-back is not entered or seen: once its put-back is entered or seen, or another
+    row entered after it set another value, Exact no longer holds it. So the refusal can always be lifted: by dropping the newer
+    change, by putting it back and ticking its put-back off (a put-back that newer rows replaced is made again once nothing after it
+    stands in its way, _in_the_way), or, for one that can never be put back, by the buyer putting the old value back in Exact himself."""
+    place = place_of(change)
+    at = next((index for index, one in enumerate(found) if change.ids[0] in one.ids), None)
+    put_back = {one.puts_back for one in found if one.puts_back is not None and one.state in _HELD}
+    held = [one.new_value for one in found if place_of(one) == place and one.state in _HELD]       # the last: what Exact holds
+    later = [one for one in found[at + 1:] if place_of(one) == place and one.rule_id != UNDO_RULE_ID and not put_back & set(one.ids)
+             and (one.state == "open" or (one.state in _HELD and same_value(one.kind, one.new_value, held[-1])))] if at is not None else []
+    return later[-1] if later else None
+
+
+def _in_the_way(put: Change, owner: Change, found: list[Change]) -> bool:
+    """Whether something after the put-back `put` of a change of `owner` stands in the way of a new put-back: a row of its place
+    after it that is open (on the list), or a newer change of `owner` that still counts (_newer)."""
+    place = place_of(put)
+    at = next((index for index, one in enumerate(found) if put.ids[0] in one.ids), None)
+    return (at is None or any(place_of(one) == place and one.state == "open" for one in found[at + 1:])
+            or _newer(owner, found) is not None)
+
+
+def _log_folder(cases_root: Path, case_id: str, entry_id: str) -> Path | None:
+    """The folder whose write log holds the entry: the folder of its case, or the price list's write-log folder under
+    <cases_root>/pricelists that holds it (the newest first); None when there is none. A write log that cannot be read is passed by."""
+    if (cases_root / case_id / "case.json").is_file():
+        return cases_root / case_id
+    for log in sorted((cases_root / PRICELISTS).glob(f"*/{LOG_FILE}"), reverse=True):
+        try:
+            if any(entry.entry_id == entry_id for entry in WriteLog(log.parent).entries()):
+                return log.parent
+        except ValueError:
+            continue
+    return None
+
+
+def _undone(deps: Deps, folder: Path, entry_id: str, now: datetime, again: bool = False) -> WriteLogEntry | None:
+    """The undo of the entry, prepared through the page's writer: undo() of the review page's close for an entry of a case, so that
+    the case's write log, step 09 and audit record hold it, and undo_entry on the folder for an entry of a price list; with again,
+    also for an entry undone already. None when the entry cannot be undone (undone already, or an undo itself)."""
+    if (folder / "case.json").is_file():
+        return undo(load_case(folder.parent, folder.name), entry_id, deps, again=again)
+    return undo_entry(folder, entry_id, deps.writer, now, again=again)
+
+
+def _case_supplier(case_id: str, cases_root: Path) -> str | None:
+    """The supplier that the result of the case names; None without one."""
+    try:
+        return CaseResult.model_validate(load_case(cases_root, case_id).read_step("result")).supplier
+    except (OSError, ValueError):
+        return None
+
+
+def _within(text: str, now: datetime, days: int) -> bool:
+    """Whether the time in the text lies at most `days` days before now; a time after now counts as within."""
+    return _aware(now) - _aware(datetime.fromisoformat(text)) <= timedelta(days=days)
+
+
+def _aware(moment: datetime) -> datetime:
+    """A time with its zone; a time without one is local time, so that one with a zone and one without compare."""
+    return moment if moment.utcoffset() is not None else moment.astimezone()

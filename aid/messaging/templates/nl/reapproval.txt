@@ -1,6 +1,6 @@
 Beste collega,
 
-De inkoopassistent heeft inkooporder PO {{ po }} gewijzigd, omdat de
+Inkooporder PO {{ po }} wordt gewijzigd, omdat de
 orderbevestiging van leverancier {{ supplier }} afwijkt van de order:
 
 {% set kinds = {"po_line_price": "Prijs van de orderregel", "po_line_date": "Leverdatum van de orderregel",
@@ -10,7 +10,7 @@ orderbevestiging van leverancier {{ supplier }} afwijkt van de order:
 {% endfor %}
 
 De order ligt boven het bedrag dat de inkoper zelf mag fiatteren. Wilt u
-de gewijzigde order daarom opnieuw fiatteren?
+de order opnieuw fiatteren zodra de wijziging in Exact staat?
 
 Met vriendelijke groet,
 

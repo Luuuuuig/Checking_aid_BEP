@@ -28,6 +28,13 @@ layout at fault is named by its field (po_layout.title_row), never by a word it 
 one address or one domain (the part after the at sign) to each entry; an entry that is neither is refused by its place
 (po_senders.1), never by what it holds. Fill it whenever po_layout is set: without it a supplier's document that repeats the PO's
 page is filed as a PO. With both empty or null the aid works as before, with the made-up layout.
+
+test_mode says that the aid works with the test account of Exact, for the owner's test before the hand-over (false by default). While
+it is true, whatever the authorization limit, the tab "In Exact invoeren" of the review page says that its changes go into the test
+Exact only, and only the switch on the settings tab ends it: setting a limit does not. While it is true and no authorization limit is
+set, the settings tab offers a try-out confirmation made from a purchase order the aid knows (aid/tryout.py), and only then does the
+scan of the watched folder take a try-out (aid/tryout_mark.py). The switch on the settings tab writes it; the first start of the folder
+version writes it true, and the hand-over switches it off on the settings tab as a step of its own.
 """
 import codecs
 import json
@@ -125,6 +132,12 @@ class Settings(BaseModel):
     # The token the browser extension sends to the capture server (aid/capture_server.py) in the header X-Aid-Token. It is
     # company-specific: set it in the real settings.json only, never in a repository. None (or empty) keeps the server from starting.
     capture_token: str | None = None
+    # The test mode: the aid works with the test account of Exact. While it is on, whatever the authorization limit, the tab "In Exact
+    # invoeren" says to enter the changes in the test Exact only, and only the switch on the settings tab ends it. While it is on and no
+    # authorization limit is set, the review page offers a try-out confirmation made from a stored PO (aid/tryout.py) and the watched
+    # folder takes one (aid/tryout_mark.py). Off in the example; the first settings file of the folder version turns it on, and the
+    # hand-over switches it off.
+    test_mode: bool = False
 
     @field_validator("ms_tenant_id", "ms_client_id", "mailbox", "mail_folder", "mail_folder_name", mode="before")
     @classmethod

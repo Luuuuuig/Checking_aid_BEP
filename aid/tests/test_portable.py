@@ -528,6 +528,16 @@ def test_first_start_writes_loadable_settings_once(tmp_path):
     assert path.read_text(encoding="utf-8") == "{ not json"
 
 
+def test_the_first_settings_hold_the_test_mode_on(tmp_path):
+    """Task 33: the first settings file of the folder version has the test mode on, for the owner's test with the test Exact; the
+    example keeps it off, and the hand-over switches it off (MANUAL 3.16 and 3.17). The key stands where the example has it."""
+    path = portable.first_start(tmp_path / "data")
+    written = json.loads(path.read_text(encoding="utf-8"))
+    assert written["test_mode"] is True and load_settings(path).test_mode is True
+    example = json.loads((portable.PACKAGE / "settings.example.json").read_text(encoding="utf-8"))
+    assert example["test_mode"] is False and list(written) == list(example)
+
+
 # --- the start, the stop and the start at logon ---
 
 def test_start_sets_the_start_at_logon_waits_and_opens_the_page(tmp_path, capsys, quick):

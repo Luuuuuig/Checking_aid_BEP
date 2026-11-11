@@ -91,17 +91,46 @@ What happens to a document, by class:
   already is filed as the version it is, and listed all the same. A PDF that the store refuses is an error.
 - confirmation: the PO numbers in the text of the e-mail and on the first page (find_po_numbers with the PO number pattern of the
   settings) decide:
-    two or more different ones: skipped as "more than one PO number", and a review item is written;
-    exactly one: a case is opened for that PO;
-    none: the confirmation is read quickly with the layout template that fits it, and the PO store is asked which POs have at least
-          two of its item codes (PoStore.find_by_lines). If that is exactly one PO, the case is opened for it. Otherwise (no
-          template fits, the template does not fit the PDF, no PO or several) the case is opened with no PO number, which the
-          routing sends to review because no version can be chosen. The pipeline's own reader may still read the file in full.
+    two or more different ones: those count that the PO store holds (a PO it knows a PDF version or a look of) and that have one of
+          the item codes of their PO as it stands on the first page as a word of its own, as held_numbers (below) requires of a held
+          number; when exactly one counts, the case is opened for that one. Otherwise, when none counts or more than one, the document
+          is skipped as "more than one PO number", and a review item is written;
+    exactly one: a case is opened for that PO, whether the store holds it or not;
+    none: the PO numbers that the store holds and that stand in the text of the e-mail or on the first page with an item code of their
+          own PO on the first page (held_numbers, below) decide: exactly one gives the case its PO. Otherwise the confirmation is read
+          quickly with the layout template that fits it, and the PO store is asked which POs have at least two of its item codes
+          (po_by_lines, PoStore.find_by_lines). If that is exactly one PO, the case is opened for it. Otherwise (no template fits, the
+          template does not fit the PDF, no PO or several) the case is opened with no PO number, which the routing sends to review
+          because no version can be chosen. The pipeline's own reader may still read the file in full. po_without_number gives this
+          PO of a document, so that the runner links a case without a number as the scan would link its document.
   The case is opened with the document as its only input file. Cases of one PO opened in the same second would get one case id, so a
-  later case is opened one second after the earlier one, and so on, until its id is free.
+  later case is opened one second after the earlier one, and so on, until its id is free (open_free). A PO found otherwise than as the
+  pattern's one number, a held number among several numbers of the pattern, a held number or the lines, is the aid's guess: its case
+  is opened with po_found_by in its case.json saying how (FOUND_AMONG_NUMBERS, FOUND_HELD_NUMBER, FOUND_BY_LINES), and the pipeline
+  sends it to the buyer (aid/pipeline.py).
+  A case whose PO the store does not hold yet waits in review for that PO, and the runner checks it again as a new case once the PO
+  is filed; a case opened without a PO number waits for nothing and stays in review for the buyer, and the runner links it only when
+  a PO it files is the one po_without_number gives its document (aid/runner.py, _recheck_waiting).
 - any other class: skipped with the name of the class.
+A try-out document of the review page (aid/tryout.py), whose first page begins with the made-up supplier's row "Proefleverancier
+(verzonnen document)", is taken only while the settings offer try-outs (offers_tryouts of aid/tryout_mark.py: test_mode true and no
+authorization limit set); otherwise it is skipped as "try-out document outside the test mode", whatever its class, and moves to
+processed/, so that the digest says why and no case of it can ask the approver or a supplier anything.
 The exports are filed first, then the PO PDFs, and only then are the confirmations matched, so that a PO and its confirmation that
 arrive together find each other.
+
+The PO numbers the store holds. held_pos gives the PO numbers of the store, those it knows a PDF version or a look of, and
+held_numbers those of them that a confirmation names under a word the pattern does not know: a PO number of at least HELD_CHARS
+characters that stands in the text as a token of its own, and only when one of the item codes of that PO as it stands
+(PoStore.as_it_stands) stands on the first page as a word of its own, so that a number that happens to be on the page links no
+document to another supplier's PO. A token of its own has no letter, digit or underscore touching it, and is not joined to one by
+a run of the marks of JOINERS ("-", ".", "/" and ",") on either side: so the year of a date ("21-10-2026"), the digits of an article
+code ("KM-1001") and those of an amount ("1250,00") never count, while a number before a full stop or a comma that a space or the
+end follows does ("Uw referentie 250101.", "250101, 250102"). The colon is no joiner: a number that a label and a colon stand before
+counts ("Ref:250101"), as a time never gives four digits on one side of its colon. Words are compared as the keywords are: without
+regard to case and accents, with no letter, digit or underscore touching them. The first page is the text the scan reads (the lines
+of page 1 of extract_lines of aid/readers/pdf_text.py, as _first_page_text joins them), and a PO number holds a digit in both readers
+of the store.
 
 Filing. A file that was handled, whatever came of it, moves to processed/ in the folder under its own name, or with _2, _3 and so on
 before the extension when processed/ holds that name already. A file that raised an exception (a PDF that cannot be read, an export
@@ -119,7 +148,7 @@ import mimetypes
 import os
 import re
 import unicodedata
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -136,12 +165,15 @@ from aid.case import TEMPORARY, WORK, Case, find_case_by_hash, open_case, sha256
 from aid.decider import MIN_CONFIDENCE, Decider, Decision
 from aid.pipeline import file_answer, is_real_reply
 from aid.po_store import PoStore
+from aid.po_store import _item_codes            # the item codes of a PO's Document, as find_by_lines takes them
 from aid.readers.pdf_text import extract_lines
 from aid.readers.po_export import EXPORT_SUFFIXES, is_export
 from aid.readers.po_layout import PoLayout
 from aid.readers.po_pdf import fits, header_lines, layout_first_page
 from aid.readers.supplier_parser import LayoutTemplate, detect_template, load_templates, read_with_template
+from aid.schema import Document
 from aid.settings import Settings
+from aid.tryout_mark import TRYOUT_OUTSIDE, is_tryout_text, offers_tryouts
 
 DocClass = Literal["po_pdf", "confirmation", "packing_slip", "invoice", "quotation", "other"]
 EXPORT = "export"                                # the kind of an export of the ERP: told apart before the classes, and none of them
@@ -168,6 +200,12 @@ PROCESSED_FOLDER = "processed"
 DOCUMENT_SUFFIXES = (".pdf", ".png")             # the types of file that are classified; an .eml is opened for its attachments
 CONTEXT_CHARS = 4000                             # the most of the e-mail text, and of the first page, that a decision is given
 CASE_ID_TRIES = 1000                             # how many seconds after the time of the scan a free case id is looked for
+HELD_CHARS = 4                                   # the fewest characters of a PO number that held_numbers looks for
+JOINERS = "-./,"                                 # the marks that join a number to the letters or digits beside it (held_numbers)
+_DIGIT = re.compile(r"\d")                       # a digit right after a number found: the number was cut short (find_po_numbers)
+# How the PO of a case was found when not by the one number the pattern found (case.json's po_found_by; ruling N18): a held number
+# chosen among several numbers of the pattern, a held number when the pattern found none, the quick read by lines.
+FOUND_AMONG_NUMBERS, FOUND_HELD_NUMBER, FOUND_BY_LINES = "held number among the pattern's numbers", "held number", "lines"
 NAME_BYTES = 200                                 # the longest name, in UTF-8 bytes, that an attachment is written under
 RESOURCE_TYPES = ("image", "text", "audio", "video", "font")      # what a multipart/related holds besides its body: its pictures and styles
 
@@ -281,13 +319,127 @@ def _begins_with(folded: str, word: str) -> bool:
 def find_po_numbers(text: str, pattern: str) -> list[str]:
     """The PO numbers in the text, each once, in the order in which they first appear. `pattern` is a regular expression whose
     first group is the number (the PO number pattern of the settings); it is matched without regard to case. A pattern without a
-    group gives the whole match."""
+    group gives the whole match. A number that a digit follows directly in the text, at the end of the group, is passed over whatever
+    the pattern, since a number cut short is never a PO number. So under the default pattern and the pattern of the fields
+    (aid/review/exact_settings.py), whose match starts after a word, a longer number is taken whole or not at all; a pattern of another
+    form whose match can start inside a number may still take the tail of a longer one."""
     numbers: list[str] = []
     for found in re.finditer(pattern, text, re.IGNORECASE):
-        number = found.group(1) if found.re.groups else found.group(0)
-        if number and number not in numbers:
+        group = 1 if found.re.groups else 0
+        number = found.group(group)
+        if number and _DIGIT.match(text, found.end(group)) is None and number not in numbers:
             numbers.append(number)
     return numbers
+
+
+def held_pos(store: PoStore) -> list[str]:
+    """The PO numbers the store holds: those it knows a PDF version or a look of (PoStore.as_it_stands), in the order in which
+    find_by_lines takes them, the shorter number first and then by its text; [] for a store without a folder. A PO whose files cannot
+    be read is passed over."""
+    held = []
+    for number in _store_numbers(store):
+        try:
+            if store.as_it_stands(number) is not None:
+                held.append(number)
+        except (OSError, ValueError):
+            continue
+    return held
+
+
+def held_numbers(text: str, first_page: str, store: PoStore) -> list[str]:
+    """The PO numbers the store holds (held_pos) of at least HELD_CHARS characters that stand in `text` as a token of their own, each
+    only when one of the item codes of that PO as it stands stands on `first_page` as a word of its own, in the order of held_pos (see
+    the module docstring). `text` is what the number may stand in, the e-mail's text and the first page for the scan; `first_page` is
+    the first page as the scan reads it."""
+    text, page = _fold(text), _fold(first_page)
+    return [number for number in _store_numbers(store)
+            if len(number) >= HELD_CHARS and _stands_apart(text, _fold(number)) and _coded(store, number, page)]
+
+
+def _stands_apart(folded: str, number: str) -> bool:
+    """Whether the folded text holds the folded number as a token of its own: no letter, digit or underscore touching it, and not
+    joined to one by a run of the marks of JOINERS on either side (see the module docstring)."""
+    marks = re.escape(JOINERS)
+    for found in re.finditer(rf"(?<!\w){re.escape(number)}(?![{marks}]*\w)", folded):
+        if re.search(rf"\w[{marks}]+\Z", folded[:found.start()]) is None:
+            return True
+    return False
+
+
+def _coded(store: PoStore, number: str, page: str) -> bool:
+    """Whether the store holds the PO `number` and one of the item codes of that PO as it stands stands on the folded first page as a
+    word of its own."""
+    standing = store.as_it_stands(number)
+    return standing is not None and any(_has_word(page, _fold(code)) for code in _item_codes(standing.document))
+
+
+def po_without_number(path: Path, text: str, first_page: str, store: PoStore,
+                      templates: Callable[[], list[LayoutTemplate]]) -> tuple[str | None, str | None]:
+    """The PO of a confirmation in which the pattern finds no number, as the scan gives it (see the module docstring), and how it was
+    found: the one number held_numbers finds in `text` with an item code of its PO on `first_page` (FOUND_HELD_NUMBER), else the one PO
+    that a quick read of its lines points to (po_by_lines, FOUND_BY_LINES), else (None, None). `path` is the document, and `templates`
+    gives the layout templates, read only when they are needed."""
+    held = held_numbers(text, first_page, store)
+    if len(held) == 1:
+        return held[0], FOUND_HELD_NUMBER
+    found = po_by_lines(path, first_page, store, templates)
+    return (found, FOUND_BY_LINES) if found is not None else (None, None)
+
+
+def po_by_lines(path: Path, first_page: str, store: PoStore, templates: Callable[[], list[LayoutTemplate]]) -> str | None:
+    """The one PO that the lines of a quick read of the confirmation at `path` point to (quick_read, PoStore.find_by_lines), or None."""
+    reading = quick_read(path, first_page, templates)
+    found = store.find_by_lines(reading) if reading is not None else []
+    return found[0] if len(found) == 1 else None
+
+
+def quick_read(path: Path, first_page: str, templates: Callable[[], list[LayoutTemplate]]) -> Document | None:
+    """The quick read of the confirmation at `path` with the layout template that fits it, whose lines po_by_lines holds against the
+    store; None for a file that has no text layer to read (an empty first page), a document that no template fits and a template that
+    does not fit. That is no error, because the pipeline's reader may still read the file."""
+    if not first_page.strip():
+        return None
+    template = detect_template(path, templates())
+    if template is None:
+        return None
+    try:
+        return read_with_template(path, template)
+    except ValueError:
+        return None
+
+
+def could_be_po(numbers: Iterable[str], first_page: str, reading: Document | None, store: PoStore) -> bool:
+    """Whether one of the PO numbers can be what po_without_number gives a document with this first page and this quick read: the
+    number stands on the page as held_numbers requires (at least HELD_CHARS characters, a token of its own, and an item code of its PO
+    on the page), or its PO as it stands holds two of the item codes of the reading, as PoStore.find_by_lines requires. When none can,
+    po_without_number gives none of them, so a caller may pass over the document for them."""
+    page = _fold(first_page)
+    codes = _item_codes(reading) if reading is not None else set()
+    for number in numbers:
+        if len(number) >= HELD_CHARS and _stands_apart(page, _fold(number)) and _coded(store, number, page):
+            return True
+        if len(codes) >= 2 and (standing := store.as_it_stands(number)) is not None and len(codes & _item_codes(standing.document)) >= 2:
+            return True
+    return False
+
+
+def _store_numbers(store: PoStore) -> list[str]:
+    """The names of the folders of the store, a PO number each when the store holds it, in the order of held_pos."""
+    if not store.root.is_dir():
+        return []
+    return [path.name for path in sorted(store.root.iterdir(), key=lambda path: (len(path.name), path.name)) if path.is_dir()]
+
+
+def open_free(cases_root: Path, kind: str, files: list[Path], po_number: str | None, now: datetime, found_by: str | None = None) -> Case:
+    """open_case (aid/case.py) at `now`, or at the first second after it that gives the case an id no case has, trying CASE_ID_TRIES
+    seconds; the last FileExistsError when none is free. Cases of one PO opened in the same second would get one case id. found_by is
+    how the PO number was found when not as the pattern's one number (case.json's po_found_by)."""
+    for seconds in range(CASE_ID_TRIES):
+        try:
+            return open_case(cases_root, kind, files, po_number, now + timedelta(seconds=seconds), found_by)
+        except FileExistsError as error:
+            taken = error
+    raise taken
 
 
 # --- e-mails ---
@@ -451,11 +603,20 @@ _EXTENSIONS = {"application/pdf": ".pdf", "image/png": ".png", "message/rfc822":
 
 def _attachment_name(part: EmailMessage, number: int) -> str:
     """The name an attachment is written under, before a name that is taken gets a number (see extract_eml)."""
-    last = re.split(r"[\\/]", part.get_filename() or "")[-1]                       # a path in the name leaves only its last part
-    name = re.sub(r"[\x00-\x1f\x7f:*?\"<>|]", "_", last).strip(" .") or f"attachment_{number}"
+    content_type = part.get_content_type()
+    return safe_name(part.get_filename() or "", f"attachment_{number}",
+                     _EXTENSIONS.get(content_type) or mimetypes.guess_extension(content_type) or "")
+
+
+def safe_name(name: str, fallback: str, extension: str = "") -> str:
+    """A name made safe to write a file under, as an attachment's name is (see extract_eml): its last part after any folder, each
+    character that file systems refuse made "_", no dots or spaces at its ends, `fallback` when nothing is left, `extension` added when
+    it has none, and at most NAME_BYTES bytes, cut on a character boundary before its extension of at most 16 characters.
+    aid/sources/dropin.py names a file given to the watched folder by this rule as well."""
+    last = re.split(r"[\\/]", name or "")[-1]                                         # a path in the name leaves only its last part
+    name = re.sub(r"[\x00-\x1f\x7f:*?\"<>|]", "_", last).strip(" .") or fallback
     if not os.path.splitext(name)[1]:
-        content_type = part.get_content_type()
-        name += _EXTENSIONS.get(content_type) or mimetypes.guess_extension(content_type) or ""
+        name += extension
     stem, suffix = os.path.splitext(name)
     suffix = suffix[:16]
     return stem.encode()[:NAME_BYTES - len(suffix.encode())].decode(errors="ignore") + suffix       # cut on a character boundary
@@ -617,9 +778,12 @@ class _Scan:
         return sender is not None and _sent_by(sender, senders)
 
     def handle(self, document: _Document) -> None:
-        """File the export or the PO, open the case or skip the document, by its class."""
+        """File the export or the PO, open the case or skip the document, by its class; a try-out document while the settings take
+        none is skipped whatever its class (see the module docstring)."""
         try:
-            if document.kind == EXPORT:
+            if is_tryout_text(document.text) and not offers_tryouts(self.settings):
+                self.skip(document.place, document.label, TRYOUT_OUTSIDE)
+            elif document.kind == EXPORT:
                 settings, filed = self.settings, []
                 looks = self.store.from_export(document.path, settings.export_columns, settings.export_decimal_comma,
                                                settings.export_fill_down, filed)
@@ -641,38 +805,32 @@ class _Scan:
             return
         pattern = self.settings.po_number_pattern
         numbers = list(dict.fromkeys(find_po_numbers(document.email_text, pattern) + find_po_numbers(document.text, pattern)))
-        if len(numbers) > 1:
-            self.skip(document.place, document.label, "more than one PO number", review=True)
-            return
-        po_number = numbers[0] if numbers else self._po_by_lines(document)
-        self.outcome.new_cases.append(self._open_case(document.path, po_number).case_id)
+        found_by = None                                          # how the PO was found, when not as the pattern's one number
+        if len(numbers) > 1:                                     # those the store holds with an item code of their PO on the page count
+            page = _fold(document.text)
+            numbers = [number for number in numbers if _coded(self.store, number, page)]
+            if len(numbers) != 1:
+                self.skip(document.place, document.label, "more than one PO number", review=True)
+                return
+            found_by = FOUND_AMONG_NUMBERS
+        if numbers:
+            po_number = numbers[0]
+        else:
+            po_number, found_by = po_without_number(document.path, "\n".join(part for part in (document.email_text, document.text) if part),
+                                                    document.text, self.store, self._templates)
+        self.outcome.new_cases.append(self._open_case(document.path, po_number, found_by).case_id)
         self.opened.add(document.sha256)
 
-    def _po_by_lines(self, document: _Document) -> str | None:
-        """The one PO that the lines of a quick read of the confirmation point to, or None. A template that does not fit, and a
-        file that has no text layer to read, give no lines; that is no error, because the pipeline's reader may still read the file."""
-        if not document.text.strip():
-            return None
+    def _templates(self) -> list[LayoutTemplate]:
+        """The layout templates of the quick read, read at their first use in the scan."""
         if self.templates is None:
             self.templates = load_templates()
-        template = detect_template(document.path, self.templates)
-        if template is None:
-            return None
-        try:
-            reading = read_with_template(document.path, template)
-        except ValueError:
-            return None
-        found = self.store.find_by_lines(reading)
-        return found[0] if len(found) == 1 else None
+        return self.templates
 
-    def _open_case(self, path: Path, po_number: str | None) -> Case:
-        """open_case at the time of the scan, or at the first second after it that gives the case an id no case has."""
-        for seconds in range(CASE_ID_TRIES):
-            try:
-                return open_case(self.cases_root, "confirmation", [path], po_number, self.now + timedelta(seconds=seconds))
-            except FileExistsError as error:
-                taken = error
-        raise taken
+    def _open_case(self, path: Path, po_number: str | None, found_by: str | None) -> Case:
+        """open_case at the time of the scan, or at the first second after it that gives the case an id no case has (open_free), with
+        how its PO was found when not as the pattern's one number."""
+        return open_free(self.cases_root, "confirmation", [path], po_number, self.now, found_by)
 
     def skip(self, place: Place, label: str, reason: str, review: bool = False) -> None:
         """Note that the item is left alone. A review item is written first, so that a failure to write it is an error and not a skip."""

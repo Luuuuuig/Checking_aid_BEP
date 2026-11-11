@@ -1,20 +1,31 @@
 """The close of a case on the review page: close_case carries out the buyer's decisions (aid/review/app.py records them), and undo
-reverses one write. The rules are in the docstring of close_case."""
+reverses one write. The rules are in the docstring of close_case.
+
+A case that waits for its PO (waiting_for_po) is one the runner checks again as a new case once its PO is filed (aid/runner.py,
+_recheck_waiting); finish_replaced then finishes the old case, so that it leaves the review page and a decision recorded on it is
+never carried out. Only a case with a PO number of its own, the one number of the PO number pattern, waits: cases_waiting_for_po
+lists those, for the hint of the review tab and the count on the settings tab. A confirmation opened without a PO number waits for
+nothing, as nothing the aid can promise ends its wait, and stays with the buyer, and so does a case whose PO number was the aid's
+guess (case.json's po_found_by); the runner still links a case without a number when it can, and checks a guessed case again once
+the version it quotes is filed (checked_again, cases_checked_again)."""
 import csv
 import json
 from collections.abc import Callable
+from datetime import datetime
+from pathlib import Path
 
 from aid.audit import AUDIT_FILE
-from aid.case import Case
+from aid.case import Case, load_case
 from aid.comparison import Flag, Uncompared
 from aid.execution.ops import WriteOp
-from aid.execution.writer import WriteLog, WriteLogEntry, WriterError, undo_entry
-from aid.messaging import ESCALATED_FILE, MESSAGES, QUESTIONS, REAPPROVAL, REPLIES, record_sent, render, render_reapproval
+from aid.execution.writer import LOG_FILE, WriteLog, WriteLogEntry, WriterError, undo_entry
+from aid.messaging import ESCALATED_FILE, MESSAGES, QUESTIONS, REAPPROVAL, REPLIES, SENT_FILE, record_sent, render, render_reapproval
 from aid.pipeline import (DISPOSITION_COLUMNS, DISPOSITION_FILE, NOT_SENT, RESULT_FILE, SENT, UNADDRESSED, UNSENT, CaseResult, Deps,
-                          ReviewItem, Status, record_dispositions)
-from aid.review.app import _context, _decisions, _line, _saved_result, _selected_version
+                          ReviewItem, Status, record_dispositions, waits_for_po)
+from aid.review.app import DECISIONS_FILE, _context, _decisions, _line, _saved_result, _selected_version
 from aid.routing import CONFIRMED, ORDERED, MessageSpec, findings_by_id
 from aid.schema import DocLine
+from aid.tryout_mark import TRYOUT_NOT_SENT, tryout_case, tryout_writer
 # Private helpers of other modules, so that the close writes what they write in the same form: the case folder's JSON, a value as a
 # question shows it, and the pipeline's names of a write, its waits, its re-approval items, its digest line and the source and note
 # of a disposition row.
@@ -24,7 +35,9 @@ from aid.pipeline import _change, _digest_line, _note, _source, _waits_for_the_b
 from aid.routing import _shown
 
 BUYER_RULE = "B01"                               # the rule id of the buyer's decisions, in the write log and the disposition log
-CLOSE_STEP, CLOSE_NAME = 9, "close"              # steps/09_close.json: the records of the closes and the undos
+CLOSE_STEP, CLOSE_NAME = 9, "close"              # steps/09_close.json: the records of the closes, the undos and a replacement
+REPLACED = "replaced"                            # the action of the record of a case finished as replaced (finish_replaced)
+CAPTURE_FILE = "capture.json"                    # what marks a case of the capture server (aid/capture_server.py), which never waits
 _WRITES = {"price": "po_line_price", "delivery_date": "po_line_date", "quantity": "po_line_quantity"}     # what "confirm" writes
 _QUESTIONS = {"quantity": "quantity_unit", "unit": "quantity_unit", "line_presence": "line_missing_extra", "required_info": "missing_info"}
 _ASKED_OTHERWISE = "missing_info"               # the question about a price, a delivery date or an uncompared item
@@ -47,17 +60,21 @@ def close_case(case: Case, deps: Deps) -> CaseResult:
     - "ask" is a question to the supplier with the template of the field (quantity and unit quantity_unit, a line
       line_missing_extra, anything else missing_info), one message per template, rendered as the pipeline renders a question and sent
       through deps.mailer to the address the settings give the supplier; without a mailer it is recorded as "not sent (no mailer)".
-    Every write goes through deps.writer with the rule B01, the evidence naming the item, the decision and the finding, and is logged
-    in the write log at once. An operation that the write log shows made already (not failed, not waiting for the buyer, not undone)
-    is not made again, so that two items on one finding write it once and a close after a stopped one repeats nothing. A write that
-    raises WriterError, or comes back waiting for the buyer (failed, or prepared after the write route failed), stops the close:
+    Every write goes through deps.writer (for a case made from a try-out through its prepared writer only, aid/tryout_mark.py) with
+    the rule B01, the evidence naming the item, the decision and the finding, and is logged in the write log at once. An operation
+    that the write log shows made already (not failed, not waiting for the buyer, not undone) is not made again, so that two items
+    on one finding write it once and a close after a stopped one repeats nothing. A write that raises WriterError, or comes back
+    waiting for the buyer (failed, or prepared after the write route failed), stops the close:
     nothing after it is done, and the result's error names it as the pipeline does ("WriterError: <why> (write: rule B01, ...)").
     When the PO is above the authorization and the close changed a PO line, the approver is asked to approve it again for the
     changes of this close (render_reapproval, as the pipeline's R10 does), even when the close stopped after them. A request the
     mailer cannot send (or that has no mailer to go through the address of) is recorded "not sent (<class>)", as the pipeline does,
     and the case gets a review item "message not sent" without a finding (once) and stays in review: step 09 keeps the changes of
     the request, and the next close sends it again with the changes it makes itself, until it is sent; then that review item is
-    settled without a decision of its own.
+    settled without a decision of its own. Nothing about a case made from a try-out is sent (aid/tryout_mark.py): a question or a
+    request of such a case is recorded "not sent (try-out document: nothing is sent)" without asking the mailer; the request counts as
+    settled, and a question keeps the case in review, its item on "ask" not carried out (decide refuses "ask" on such a case, so
+    only a decision written before that refusal comes here).
 
     When every review item is decided "confirm" or "keep", nothing stopped or held the close and no question is open, the case
     closes: on a confirmation with a PO number the document is attached and the status set from Besteld to Bevestigd, as R01 makes
@@ -88,14 +105,90 @@ def close_case(case: Case, deps: Deps) -> CaseResult:
     return _Close(case, deps, result).run()
 
 
-def undo(case: Case, entry_id: str, deps: Deps) -> WriteLogEntry | None:
-    """Reverse one entry of the case's write log: undo_entry of aid/execution/writer.py through deps.writer at the clock's time. An
-    undo made is recorded in steps/09_close.json and in the audit record; one that undo_entry refuses (None) records nothing, and its
-    WriterError propagates."""
-    made = undo_entry(case.root, entry_id, deps.writer, deps.clock())
+def undo(case: Case, entry_id: str, deps: Deps, again: bool = False) -> WriteLogEntry | None:
+    """Reverse one entry of the case's write log: undo_entry of aid/execution/writer.py through deps.writer at the clock's time, or for
+    a case made from a try-out through the prepared writer only (tryout_writer of aid/tryout_mark.py), with again for an entry undone
+    already that is to be undone once more (see undo_entry). An undo made is recorded in steps/09_close.json and in the audit record;
+    one that undo_entry refuses (None) records nothing, and its WriterError propagates."""
+    writer = tryout_writer(deps.writer, deps.settings) if tryout_case(case) else deps.writer
+    made = undo_entry(case.root, entry_id, writer, deps.clock(), again=again)
     if made is not None:
         _add_record(case, {"action": "undo", "at": deps.clock().isoformat(), "entry_id": entry_id, "undo": made.model_dump(mode="json")})
     return made
+
+
+# --- a case that waits for its PO, and its finish when it is checked again ---
+
+def waiting_for_po(case: Case) -> str | None:
+    """What the case waits for when it waits for its PO ("po" or "version <n>"), else None: a case with a PO number of its own, the
+    one number of the PO number pattern, that the runner checks again (checked_again). A case opened without a PO number waits for
+    nothing, and nor does a case whose PO number was the aid's guess (case.json's po_found_by): it is the buyer's."""
+    return checked_again(case) if case.po_number is not None and case.po_found_by is None else None
+
+
+def checked_again(case: Case) -> str | None:
+    """What the saved result of the case waits for when the runner checks the case again, as waits_for_po of aid/pipeline.py gives it
+    ("po" or "version <n>"), else None. That is a confirmation, with or without a PO number, whose saved result waits by waits_for_po
+    and on which nothing was done: no line in its write log, no message sent (messages/sent.jsonl), no decision of the buyer
+    (decisions.jsonl), no record in steps/09_close.json (a close, an undo, a replacement), and no case of the capture server
+    (capture.json). A case whose result or whose records cannot be read is not checked again."""
+    if case.kind != "confirmation" or (case.root / CAPTURE_FILE).exists() or (case.root / MESSAGES / SENT_FILE).exists():
+        return None
+    try:
+        if _written(case.root / LOG_FILE) or _written(case.root / DECISIONS_FILE) or _records(case):
+            return None
+        return waits_for_po(_saved_result(case))
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def cases_waiting_for_po(cases_root: Path) -> list[tuple[Case, str]]:
+    """Each case under cases_root that waits for its PO (waiting_for_po), with what it waits for, in the order of the folders' names."""
+    return [(case, waits) for case, waits in cases_checked_again(cases_root) if case.po_number is not None and case.po_found_by is None]
+
+
+def cases_checked_again(cases_root: Path) -> list[tuple[Case, str]]:
+    """Each case under cases_root that the runner checks again (checked_again), with what its result waits for, in the order of the
+    folders' names. A folder whose name starts with a dot, or whose case.json cannot be read, is passed over."""
+    root, found = Path(cases_root), []
+    for path in sorted(root.iterdir()) if root.is_dir() else []:
+        if path.name.startswith(".") or not (path / "steps" / RESULT_FILE).is_file():
+            continue
+        try:
+            case = load_case(root, path.name)
+        except (OSError, ValueError):
+            continue
+        if (waits := checked_again(case)) is not None:
+            found.append((case, waits))
+    return found
+
+
+def replaced(case: Case) -> bool:
+    """Whether the case was finished as replaced: its steps/09_close.json holds the record of a replacement (finish_replaced). A file
+    of records that cannot be read counts as none."""
+    try:
+        return any(isinstance(record, dict) and record.get("action") == REPLACED for record in _records(case))
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+
+
+def finish_replaced(case: Case, by: str, now: datetime, language: str) -> None:
+    """Finish a case that the runner checked again as the new case `by`: its saved result gets the status closed, no supplier and the
+    digest line to match, in `language`, and keeps everything else; then the record {"action": "replaced", "at": now, "by": the new case
+    id} is added to steps/09_close.json and to the audit record. So the review page no longer offers it, close_case refuses it (it is
+    not in review) and a decision recorded on it is never carried out, and it counts toward no supplier's first cases (_closed_cases of
+    aid/pipeline.py counts the closed cases of a supplier). The result is written first: when the record then cannot be added, the
+    case is closed all the same. The runner takes the case out of the digest's list before it calls this (aid/runner.py)."""
+    result = _saved_result(case)
+    case.write_step(8, "result", result.model_copy(update={
+        "status": "closed", "supplier": None,
+        "digest_line": _digest_line(case.po_number, None, "closed", result.write_entries, language, case.kind)}))
+    _add_record(case, {"action": REPLACED, "at": now.isoformat(), "by": by})
+
+
+def _written(path: Path) -> bool:
+    """Whether the file holds anything but white space."""
+    return path.is_file() and bool(path.read_bytes().strip())
 
 
 class _Waiting(Exception):
@@ -107,6 +200,7 @@ class _Close:
 
     def __init__(self, case: Case, deps: Deps, result: CaseResult):
         self.case, self.deps, self.settings, self.result = case, deps, deps.settings, result
+        self.writer = tryout_writer(deps.writer, deps.settings) if tryout_case(case) else deps.writer      # a try-out writes prepared only
         self.ctx = _context(case, result)
         self.decisions = _decisions(case)
         self.done = {}                            # item -> the decision an earlier close carried out last
@@ -207,7 +301,7 @@ class _Close:
         if _target(op) in self.made:
             return False
         self.writing = op
-        entry = self.deps.writer.apply(op, self.case.case_id, BUYER_RULE, evidence, self.deps.clock())
+        entry = self.writer.apply(op, self.case.case_id, BUYER_RULE, evidence, self.deps.clock())
         self.entries.append(entry)                # kept before the log is written, so that no change is without a record
         self.log.append(entry)
         if (reason := _waits_for_the_buyer(entry)) is not None:
@@ -237,7 +331,7 @@ class _Close:
                                           *(f for _, evidence in self.changes for f in evidence["finding_ids"])]))
         item_ids = list(dict.fromkeys([*(earlier["item_ids"] if earlier else []), *(evidence["item_id"] for _, evidence in self.changes)]))
         status = self.send(REAPPROVAL, [_change(op) for op in ops], finding_ids, item_ids, made=ops)
-        if status in (SENT, NOT_SENT):
+        if status in (SENT, NOT_SENT, TRYOUT_NOT_SENT):
             self.pending = None
             if earlier is not None:
                 self.settled.add(earlier["review_item"])
@@ -262,6 +356,10 @@ class _Close:
     def send(self, template: str, items: list[dict], finding_ids: list[str], item_ids: list[str], made: list[WriteOp] | None = None) -> str:
         """Send a message through the mailer and record it, as the pipeline does: a question to the supplier, or with the changes
         made the request to the approver. Returns its status; one that is not sent holds the case in review."""
+        if tryout_case(self.case):              # nothing about a case made from a try-out is sent (aid/tryout_mark.py)
+            if made is None:
+                self.held = True
+            return self.record(template, items, finding_ids, item_ids, TRYOUT_NOT_SENT)
         if self.deps.mailer is None:
             return self.record(template, items, finding_ids, item_ids, NOT_SENT)
         if made is not None:

@@ -56,8 +56,8 @@ or python and app could not be replaced; 2 refused (the system, the out folder);
 
 The start (start) runs with the folder's own Python. It first makes sure that it can write into the data folder and its logs (a
 folder under C:\\Program Files or on a read-only share cannot be written by a user): when it cannot, the window says where to put
-the folder, and nothing is started. first_start writes data/settings.json when it is missing and never overwrites one. Then the
-launcher's --status (aid/start.py) says whether a launcher runs on these settings: when one runs and no STOP file stands beside the
+the folder, and nothing is started. first_start writes data/settings.json when it is missing, with the test mode on for the owner's
+test, and never overwrites one. Then the launcher's --status (aid/start.py) says whether a launcher runs on these settings: when one runs and no STOP file stands beside the
 settings, only the page is opened. Otherwise, in this order: when something answers at either of the launcher's two addresses
 (ADDRESSES, the launcher's own) while no launcher runs on these settings (another aid on this PC, a part started by hand), nothing
 is started; the self-check (self_check) imports the modules the parts need, and each module that cannot be imported is named in
@@ -507,15 +507,16 @@ def _token() -> str:
 def first_start(data: Path, token: Callable[[], str] = _token) -> Path:
     """Write data/settings.json when it is missing, and make the folders inbox, cases, po_store and logs beside it: the example
     settings with the parser as the reader, the folders by their names beside the file (so that the folder may be moved), a capture
-    token of the token function (43 random characters) and the example's addresses on example.com. A settings file that exists is
-    never overwritten, whatever it holds. The path of the settings file."""
+    token of the token function (43 random characters), the example's addresses on example.com, and the test mode on, for the owner's
+    test with the test account of Exact (the hand-over switches it off). A settings file that exists is never overwritten, whatever it
+    holds. The path of the settings file."""
     data = Path(data)
     path = data / SETTINGS_FILE
     if path.exists():
         return path
     settings = json.loads((PACKAGE / "settings.example.json").read_text(encoding="utf-8"))
     settings.update({"reader": "parser", "cases_root": "cases", "po_store_root": "po_store", "watched_folder": "inbox",
-                     "capture_token": token()})
+                     "capture_token": token(), "test_mode": True})
     data.mkdir(parents=True, exist_ok=True)
     for name in DATA_FOLDERS:
         (data / name).mkdir(exist_ok=True)

@@ -42,5 +42,6 @@
   "po_layout": null,
   "po_senders": [],
   "review_url": "http://localhost:7860",
-  "capture_token": null
+  "capture_token": null,
+  "test_mode": false
 }

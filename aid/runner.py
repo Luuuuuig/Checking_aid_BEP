@@ -5,8 +5,10 @@ documents, and the command that runs it on the company platform.
 
 run_loop first empties <cases_root>/tmp/work, where the runner keeps the attachments of an e-mail and the PDF that Copilot reads
 for a moment, so that what a runner that was ended in the middle of such a copy left there never stays (_empty_work; a copy that
-cannot be removed is one line in the log, and the runner goes on). Then it makes a pass every poll_seconds until the stop file
-exists. Each pass, at the time of the Deps clock:
+cannot be removed is one line in the log, and the runner goes on), and in the same way removes from the watched folder the copies
+that drops of the review page cut off left there, drop's own temporary files older than ten minutes (_empty_drops, remove_leftovers
+of aid/sources/dropin.py). Then it makes a pass every poll_seconds until the stop file exists. Each pass, at the time of the Deps
+clock:
 - when the settings name a folder of the work mailbox and the tenant and the client of the Microsoft sign-in (trigger_on of
   aid/sources/microsoft_mail.py), sync_mailbox saves the messages that arrived in that folder into the watched folder as .eml files,
   first, so that a confirmation that arrives opens its case in the same pass. A sign-in that has lapsed (SignInNeeded) is noted in
@@ -21,12 +23,44 @@ exists. Each pass, at the time of the Deps clock:
   store, a case is opened under cases_root for each confirmation, an e-mail that answers a question of the aid is filed into its case
   (a real reply puts the case in review and is reported in the next digest, a bounce waits for the escalation), and the files it
   handled move to processed/;
+- the cases that wait for their PO are checked again (_recheck_waiting), for the POs the scan filed in this pass: the number of each
+  PO PDF it filed, also one the store held already, and of each PO whose look an export filed as new or changed (ScanResult
+  stored_exports). At the first pass of a run of the loop every PO of the store counts as filed, so that a PO filed while the loop
+  did not run is not missed; a later pass makes that sweep again only when it could not be made (the cases root could not be read).
+  The cases checked again are the confirmations in review with no version selected because the store had no version of their PO, or
+  not the version the document quotes, on which nothing was done (checked_again of aid/review/close.py). A case with a PO number of
+  its own waits for that PO (waiting_for_po) and is checked again for that number only, never for another: when that PO was filed and
+  the store now holds a version of it, or the version it quoted (PoStore.candidates, so a look from an export counts while the PO has
+  no PDF). A case opened without a PO number waits for nothing and stays with the buyer, and it is checked again for the PO the scan
+  would give its document now (po_without_number of aid/sources/mailbox.py, on the first page of its input file), when that PO was
+  filed; never once the number recognition finds a number on that page (it was changed after the document came in: the buyer
+  decides). Its first page and its quick read by lines are read once in a run of the loop, and the whole store is asked only when a
+  PO filed in the pass can be its PO (could_be_po), so that the check costs what the POs filed cost. A PO found so is a guess: the new
+  case gets how in its case.json (po_found_by) and goes to the buyer (aid/pipeline.py). Checked again means: the case's state is read
+  from its folder just before the new case is opened, again once it is opened, and a third time right before the old case is
+  finished, and a case decided or closed meanwhile is left alone, back in the digest's list of cases to report when the third read
+  finds it so. Either read then removes the new case when it has not run: the case this check opened, or a successor an earlier pass
+  opened that holds no result and wrote and sent nothing (_not_run); a successor that has run stays. Only a decision saved in the
+  very moment the old case is finished is overridden: the close then refuses the case, which is no longer in review. When the case
+  has a live successor, a case opened after it from input files of the same sha256 and of the same kind that was not itself
+  finished as replaced (the newest of them, whatever its PO number and whether or not it waits: a check again cut off before it
+  finished the old case opened it), the old case is finished as replaced by it and no case is opened; else a new case is opened
+  from the same input files with that PO number, at the pass's time but no earlier than one second after the old case was opened, or
+  the first free second after that (open_free), so that a replacement is always opened after the case it replaces, and runs in this
+  pass like any case. The old case leaves the digest's list of cases to report, and the state is saved, before it is finished as
+  replaced (finish_replaced of aid/review/close.py: closed, no supplier, the new case's id in its record), so that no end of the
+  process leaves a replaced case in that list. An error of one case is logged as "recheck <case id>" once in a run of the loop, as a
+  failing case is, and the others go on; a check again counts as run only when it reached the case's link, so a pass that files
+  another PO logs no recovery, and the stage of the check again only in a pass that filed a PO (at the first pass of a run, when the
+  store holds one), so that a pass that files nothing logs no recovery of the stage. The case is tried again at the next pass that
+  files its PO, or at the next start;
 - every case folder under cases_root without steps/08_result.json is run with run_case and its dispositions recorded: the cases the
   scan opened and those an earlier pass that was cut off left without a result. A case cut off after a write or a message is not
   run again: run_case finishes it as review ("run cut off after writes: check the write log"), and it is reported like any case. A
   case already run is left alone, except that a case with a result and without dispositions.csv (a process that ended between the
-  two) gets its dispositions and is reported. A case folder with a .running file younger than ten minutes is left alone: the
-  capture server (aid/capture_server.py) is running it; an older one is a run that crashed, and the case is resumed. A failure of
+  two) gets its dispositions and is reported, unless it was finished as replaced, which is never reported (_recover). A case folder
+  with a .running file younger than ten minutes is left alone: the capture server (aid/capture_server.py) is running it; an older
+  one is a run that crashed, and the case is resumed. A failure of
   the AI service while a case runs, a CopilotError or a SignInNeeded of its reader or its decider (aid/readers/copilot_client.py),
   is no failure of the case: the case is left without a result, as an interrupted run leaves it, the error is logged as the error
   of a failing case is, and a later pass runs the case again (_run). The cases the service failed are tried after the others, the
@@ -37,18 +71,24 @@ exists. Each pass, at the time of the Deps clock:
   back no other case. A case is finished as failed, "Copilot could not read this document: <error>", after three refusals of the
   document, or three failures once Copilot read another case after its first one; failures while nothing else is read never
   finish a case (_run_cases);
+- every open change of a PO line on the list of changes to enter in Exact (aid/execution/by_hand.py, reconcile) is compared with its
+  PO as it stands, the latest PDF version or a look from an export filed after it, when that was filed after the change was asked,
+  so that a PO PDF that Exact sent after the buyer entered the change, filed by the scan, ticks it off as seen in that version; a
+  change that is ticked, seen or dropped stays so whatever a later PDF shows. An error of this step is logged as the stage "list of
+  changes", once in a run of the loop, and the pass goes on;
 - a case of the capture server (its folder holds capture.json) that has its result and was never reported is reported once: the
   server runs its cases itself and never writes the runner's state;
 - escalate_pending ends the wait of the questions that bounced or had no answer in time;
 - when digest_due says so, the digest of the cases handled and the files skipped since the last digest is made: its HTML is written to
   <cases_root>/digests/<day>.html, for a flow outside the code to pick up, and its text is sent through the mailer of the Deps, or,
   without a mailer, written to <cases_root>/digests/<day>.txt. The digest names the number of changes still to enter in Exact, the
-  open changes of <cases_root>/prepared (aid/execution/by_hand.py), where the command's writer prepares them, with the link to the
-  review page's tab "In Exact invoeren"; a lapse of the mailbox's sign-in, a failing Copilot with the cases waiting for it, and the
-  documents Copilot could not read while it read others, in a line each. In the per-case mode a lapse or a failure of Copilot that no
-  digest has named yet makes a digest too; open changes alone make none. A list that cannot be read, for any reason, is logged with
-  the class of its error, and the digest says in that line that the list could not be read, with the same link; in the per-case
-  mode that line alone makes no digest either. A digest state file that cannot be written is logged
+  open changes of <cases_root>/prepared (aid/execution/by_hand.py), where the command's writer prepares them, as they are after the
+  step above, but those of try-out documents (Change.tryout), which are never to enter in Exact, with the link to the review page's
+  tab "In Exact invoeren"; a lapse of the mailbox's sign-in, a failing Copilot with the cases waiting for it, and the documents
+  Copilot could not read while it read others, in a line each. In the per-case mode a lapse or a failure of Copilot that no digest
+  has named yet makes a digest too; open changes alone make none. A list that cannot be read, for any reason, is logged with the
+  class of its error, and the digest says in that line that the list could not be read, with the same link; in the per-case mode
+  that line alone makes no digest either. A digest state file that cannot be written is logged
   once in a run of the loop and never stops the runner (_save_quietly); a digest made while it cannot be written goes out once all the
   same, as the loop keeps the period it closed until the file holds it (_closed_again). A digest that the work mailbox cannot send
   because the sign-in has lapsed (SignInLapsed of aid/messaging/microsoft_mailer.py) is written through the file mailer into
@@ -108,25 +148,30 @@ from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from aid.case import TEMPORARY, WORK, _write_json, load_case   # _write_json: the state is rewritten whole or not at all, as a case file
+from aid.case import TEMPORARY, WORK, Case, _write_json, load_case    # _write_json: the state is rewritten whole or not at all, as a case file
 from aid.connections.microsoft import SIGN_IN_AGAIN, MicrosoftAccount, SignInNeeded
 from aid.connections.secrets import LazySecretStore, default_secrets_dir
 from aid.decider import LlmDecider, NoDecider
-from aid.execution.by_hand import FOLDER as PREPARED, open_changes
+from aid.execution.by_hand import FOLDER as PREPARED, open_changes, reconcile
 from aid.execution.exact_api import ExactApiWriter
 from aid.execution.writer import PreparedWriter, RetryingWriter, WriterError
 from aid.messaging import FileMailer, Mailer, SmtpMailer
 from aid.messaging.microsoft_mailer import AutoMailer, MicrosoftMailer, SignInLapsed
 from aid.notify import build_digest, digest_due, send_digest
 from aid.pipeline import DISPOSITION_FILE, RESULT_FILE, UNREADABLE, CaseResult, Deps, escalate_pending, read_with_parser, record_dispositions, run_case
+from aid.pipeline import _cut_off_after_writes      # whether a run cut off wrote or sent something, which removing its case would lose
 from aid.po_store import PoStore
 from aid.readers.cart import is_cart_page, read_cart_html
 from aid.readers.copilot_client import CopilotClient, CopilotError
 from aid.readers.llm_client import LlmClient, LlmRequest, LlmResponse, ReaderError
 from aid.readers.supplier_llm import read_supplier_document
+from aid.readers.supplier_parser import load_templates
+from aid.review.close import cases_checked_again, checked_again, finish_replaced, replaced
 from aid.schema import Document
 from aid.settings import Settings, load_settings
-from aid.sources.mailbox import scan_folder
+from aid.sources.dropin import remove_leftovers
+from aid.sources.mailbox import could_be_po, find_po_numbers, held_pos, open_free, po_without_number, quick_read, scan_folder
+from aid.sources.mailbox import _first_page_text     # the first page of a document as the scan reads it, for po_without_number
 from aid.sources.microsoft_mail import forget_connection, sync_mailbox, trigger_on
 
 LOG_FILE = "runner.log"
@@ -140,9 +185,12 @@ TOKEN_ENV = "AID_EXACT_TOKEN"
 PASSWORD_ENV = "AID_MAIL_PASSWORD"
 ALREADY_RUN = "case already run"                 # the start of run_case's ValueError for a case that holds its result
 SCAN = "scan"                                    # the stage of the scan, as runner.log names it
+RECHECK = "recheck"                              # the stage of the check again of the cases that wait for their PO
 MAILBOX = "mailbox"                              # the stage of the work mailbox
 SETTINGS = "settings"                            # the stage of a settings file that changed
+SEEN = "list of changes"                         # the stage that compares the open changes with their POs as they stand
 WORK_FOLDER = "work folder"                      # the stage of <cases_root>/tmp/work, emptied at the start of the runner
+DROPS = "watched folder"                         # the stage of the copies of drops cut off, removed from it at the start of the runner
 OUTBOX = "outbox"                                # under cases_root: the messages written as files instead of sent
 MAILBOX_LAPSED = "mailbox_lapsed"                # the key of the digest state while the sign-in of the mailbox has lapsed
 LAPSE_LOG = timedelta(hours=1)                   # a lapsed sign-in is logged at most once in this time
@@ -165,6 +213,7 @@ def run_loop(deps: Deps, stop_file: Path, poll_seconds: float = 60.0, max_passes
     requests session Graph is called through; without an account one is made of the settings (_microsoft_account)."""
     loop, passes = _Loop(deps, settings_file, rebuild, account, session), 0
     _empty_work(Path(deps.settings.cases_root), deps.clock())
+    _empty_drops(Path(deps.settings.watched_folder), Path(deps.settings.cases_root), deps.clock())
     while (max_passes is None or passes < max_passes) and not Path(stop_file).exists():
         loop.reload()
         _pass(loop)
@@ -202,10 +251,21 @@ def _empty_work(root: Path, now: datetime) -> None:
                                      "could not be removed; the runner goes on")
 
 
+def _empty_drops(folder: Path, root: Path, now: datetime) -> None:
+    """Remove from the watched folder the copies that drops of the review page cut off left there (remove_leftovers of
+    aid/sources/dropin.py: drop's own temporary files older than ten minutes), as _empty_work empties tmp/work. A copy that cannot be
+    removed is counted, and the count is one line in runner.log, which names no file; the runner goes on."""
+    failed = remove_leftovers(folder)
+    if failed:
+        copies = "1 copy of a drop cut off" if len(failed) == 1 else f"{len(failed)} copies of drops cut off"
+        _log(root, now, DROPS, f"{type(failed[0]).__name__}: {copies} could not be removed from the watched folder; the runner goes on")
+
+
 class _Loop:
     """What a run of the loop keeps from one pass to the next: the Deps, the cases and the stages that failed in it (each logged
-    once), the settings file with its modification time, the Microsoft account of the work mailbox, and the period the last digest
-    closed while the state file could not keep it (_closed_again)."""
+    once), the settings file with its modification time, the Microsoft account of the work mailbox, the period the last digest
+    closed while the state file could not keep it (_closed_again), whether its passes have checked the waiting cases against every PO
+    of the store yet (_pass), and the first page and the quick read of each case without a number that it checked again."""
 
     def __init__(self, deps: Deps, settings_file: Path | None = None, rebuild: Callable[[Settings], Deps] | None = None,
                  account: MicrosoftAccount | None = None, session=None):
@@ -215,6 +275,8 @@ class _Loop:
         self.failed: set[str] = set()
         self.made: tuple[tuple, MicrosoftAccount] | None = None     # the account made of the settings, with its tenant and client
         self.closed: dict | None = None          # {"last_sent", "reported", "skipped"} of a digest whose state was not saved
+        self.first = True                        # the next check of the waiting cases takes every PO of the store as filed
+        self.seen: dict[str, tuple[str, Document | None]] = {}   # the first page and the quick read of each case without a number
 
     def reload(self) -> None:
         """Read the settings file again when it has changed since the Deps were built of it (see the module docstring)."""
@@ -273,8 +335,19 @@ def _pass(loop: _Loop) -> None:
             _read_mailbox(loop, root, state, now)
         except Exception as exc:                 # the digest state could not be saved: the pass goes on with the folder
             _log(root, now, MAILBOX, exc)
-    _guarded(root, now, failed, SCAN, lambda: _scan(deps, root, state, now, failed))
+    filed: list[str] = []                        # the POs the scan filed in this pass
+    _guarded(root, now, failed, SCAN, lambda: filed.extend(_scan(deps, root, state, now, failed)))
+
+    def recheck() -> bool:
+        """The waiting cases checked again for the POs filed, and at the first pass of the run for every PO of the store; False when
+        no PO was filed, so that the stage had nothing to do (_guarded)."""
+        pos = [*filed, *(held_pos(deps.store) if loop.first else [])]
+        _recheck_waiting(deps, root, state, now, pos, failed, loop.seen)
+        loop.first = False
+        return bool(pos)
+    _guarded(root, now, failed, RECHECK, recheck)
     _run_cases(deps, root, state, now, failed)
+    _guarded(root, now, failed, SEEN, lambda: reconcile(root / PREPARED, deps.store, root, now))
     for case_id in _without_dispositions(root, deps.clock()):
         _guarded(root, now, failed, case_id, lambda: _recover(root, state, case_id))
     _guarded(root, now, failed, "captures", lambda: _report_captures(root, state, deps.clock()))
@@ -294,9 +367,11 @@ def _pass(loop: _Loop) -> None:
 
 def _guarded(root: Path, now: datetime, failed: set[str], case_id: str, work) -> Exception | None:
     """Do the work on the case, and return the exception that stopped it, if any. Its first failure in this run of the loop is
-    logged, and so is its first success after one."""
+    logged, and so is its first success after one. A work that returns False had nothing to do (a check again that did not reach the
+    case's link, or the stage of the check again in a pass that filed no PO): that is no success, so an earlier failure stays noted
+    and nothing is logged."""
     try:
-        work()
+        done = work()
     except Exception as exc:
         if isinstance(exc, ValueError) and str(exc).startswith(ALREADY_RUN):
             return None
@@ -304,7 +379,7 @@ def _guarded(root: Path, now: datetime, failed: set[str], case_id: str, work) ->
             _log(root, now, case_id, exc)
             failed.add(case_id)
         return exc
-    if case_id in failed:
+    if done is not False and case_id in failed:
         _log(root, now, case_id, "ran after an earlier failure")
         failed.discard(case_id)
     return None
@@ -457,9 +532,11 @@ def _elapsed(earlier: datetime, now: datetime) -> timedelta:
     return now - earlier
 
 
-def _scan(deps: Deps, root: Path, state: dict, now: datetime, failed: set[str]) -> None:
+def _scan(deps: Deps, root: Path, state: dict, now: datetime, failed: set[str]) -> list[str]:
     """Scan the watched folder, report each case that a supplier's reply put in review, and note what the scan skipped in the state,
-    each (file, reason) once, since a file that stays in the inbox as an error is tried again at every pass. Such an error is logged once in a run of the loop, as a failing case is."""
+    each (file, reason) once, since a file that stays in the inbox as an error is tried again at every pass. Such an error is logged once in a run of the loop, as a failing case is.
+    Returns the POs the scan filed, each once: the number of each PO PDF it filed, also one the store held already, then of each PO
+    whose look an export filed as new or changed."""
     settings = deps.settings
     inbox = Path(settings.watched_folder)
     inbox.mkdir(parents=True, exist_ok=True)
@@ -475,6 +552,147 @@ def _scan(deps: Deps, root: Path, state: dict, now: datetime, failed: set[str]) 
             _log(root, now, key, reason)
             failed.add(key)
     _save_quietly(root, state, now, failed)
+    return list(dict.fromkeys([*scan.stored_pos, *(number for _, _, new in scan.stored_exports for number in new)]))
+
+
+def _recheck_waiting(deps: Deps, root: Path, state: dict, now: datetime, filed: list[str], failed: set[str],
+                     seen: dict[str, tuple[str, Document | None]]) -> list[str]:
+    """Check the cases that wait for their PO, and the cases without a PO number, again for the POs `filed` in this pass (see the module
+    docstring), and return the ids of the new cases, which _run_cases runs next. `seen` keeps, for the run of the loop, the first page
+    and the quick read of each case without a number that was checked already. An error of one case is logged as "recheck <case id>"
+    once in a run of the loop, as a failing case is (_guarded), and the next case is checked."""
+    filed = list(dict.fromkeys(filed))
+    if not filed:
+        return []
+    new, read = [], []
+
+    def templates() -> list:
+        """The layout templates of the quick read by lines, read once, at their first use (load_templates)."""
+        if not read:
+            read.append(load_templates())
+        return read[0]
+
+    def check(case: Case, waits: str) -> bool:
+        """Check the case again; whether it reached the case's link (a PO found and the finish tried), so that a recovery is logged
+        only then (_guarded). The case's state is read three times (see the module docstring): a decision saved meanwhile wins."""
+        found = _checked_for(case, waits, deps, filed, templates, seen)
+        if found is None or checked_again(case) != waits:        # nothing filed for it, or decided or closed meanwhile
+            return False
+        po_number, how = found
+        renewed = _successor(root, case) or open_free(root, case.kind, case.input_files, po_number, _not_before(case.root, now),
+                                                      case.po_found_by or how)
+
+        def left_alone() -> bool:
+            """The old case is left alone, and the new case removed when it has not run (_not_run); one that has run stays."""
+            if _not_run(renewed):
+                _remove_unrun(renewed.root)
+            return False
+        if checked_again(case) != waits:                         # decided or closed while its new case was opened
+            return left_alone()
+        listed = case.case_id in state["reported"]
+        if listed:                                               # out of the digest's list before its result is closed
+            state["reported"] = [case_id for case_id in state["reported"] if case_id != case.case_id]
+            _save_state(root, state)
+        if checked_again(case) != waits:                         # decided or closed after the second read: back in the digest's list
+            if listed:
+                _report(root, state, case.case_id)
+            return left_alone()
+        new.append(renewed.case_id)
+        finish_replaced(case, renewed.case_id, now, deps.settings.language)
+        return True
+    for case, waits in cases_checked_again(root):
+        _guarded(root, now, failed, f"{RECHECK} {case.case_id}", lambda: check(case, waits))
+    return new
+
+
+def _checked_for(case: Case, waits: str, deps: Deps, filed: list[str], templates: Callable[[], list],
+                 seen: dict[str, tuple[str, Document | None]]) -> tuple[str, str | None] | None:
+    """The PO a case is checked again for, with how it was found when not as the number of the case (po_found_by), or None. A case with
+    a PO number of its own is checked again for that number only, never for another: when that PO was filed and the store now holds
+    what the case waits for, a version of the PO ("po") or the version it quoted ("version <n>"), among the candidates its document is
+    matched against. A case without a PO number is checked again for the PO the scan would give its document now (po_without_number of
+    aid/sources/mailbox.py, on the first page of its input file, which is all the case keeps of its e-mail), when that PO was filed;
+    but never once the number recognition finds a number on that page, which the buyer then decides on, and the whole store is asked
+    only when a PO filed can be its PO (could_be_po), so that the check costs what the POs filed cost. `seen` keeps the first page and
+    the quick read of the case for the run of the loop."""
+    store = deps.store
+    if case.po_number is not None:
+        if case.po_number not in filed:
+            return None
+        stored = [f"version {version.version}" for version in store.candidates(case.po_number, case.kind)]
+        return (case.po_number, None) if (stored and waits == "po") or waits in stored else None
+    if not case.input_files:
+        return None
+    path = case.input_files[0]
+    if case.case_id not in seen:
+        page = _first_page_text(path)
+        seen[case.case_id] = (page, quick_read(path, page, templates))
+    page, reading = seen[case.case_id]
+    if find_po_numbers(page, deps.settings.po_number_pattern) or not could_be_po(filed, page, reading, store):
+        return None
+    found, how = po_without_number(path, page, page, store, templates)
+    return (found, how) if found is not None and found in filed else None
+
+
+def _not_before(folder: Path, now: datetime) -> datetime:
+    """When to open the case that replaces the case of the folder: at `now`, the time of the pass, but no earlier than one second after
+    the old case was opened (by its case.json), so that a replacement is always opened after the case it replaces and _successor finds
+    it; `now` when the time of opening cannot be read."""
+    try:
+        opened = datetime.fromisoformat(json.loads((folder / "case.json").read_text(encoding="utf-8"))["opened_at"])
+        gap = _elapsed(opened, now)
+    except (OSError, ValueError, KeyError, TypeError, OverflowError):
+        return now
+    return now if gap >= timedelta(seconds=1) else now + (timedelta(seconds=1) - gap)
+
+
+def _not_run(case: Case) -> bool:
+    """Whether the case has not run, so that removing it loses nothing: it holds no result, and no run of it that was cut off wrote or
+    sent anything (_cut_off_after_writes of aid/pipeline.py). A run cut off before that leaves steps that the next run writes again."""
+    return not (case.root / "steps" / RESULT_FILE).exists() and not _cut_off_after_writes(case)
+
+
+def _remove_unrun(folder: Path) -> None:
+    """Remove the folder of a case that has not run (_not_run): its case.json first, so that a folder the removal leaves half way is
+    no case (_case_folders), then the rest. An error propagates, for the stage's log."""
+    (folder / "case.json").unlink()
+    shutil.rmtree(folder)
+
+
+def _successor(root: Path, old: Case) -> Case | None:
+    """The live successor of a case that is checked again: the newest case opened after it (by the time of opening in case.json) from
+    input files of the same sha256, in the same order, and of the same kind, whatever its PO number and whether or not it waits, that
+    was not itself finished as replaced (replaced of aid/review/close.py); None when there is none. It is the case that a check again
+    cut off before it finished the old case opened, or one opened since from the same document. A case folder whose case.json cannot
+    be read is passed over."""
+    mine = _identity(old.root)
+    if mine is None:
+        return None
+    files, opened = mine
+    later = []
+    for path in _case_folders(root):
+        theirs = _identity(path)
+        if path.name == old.case_id or theirs is None or theirs[0] != files or theirs[1] <= opened:
+            continue
+        try:
+            case = load_case(root, path.name)
+        except (OSError, ValueError):
+            continue
+        if case.kind == old.kind and not replaced(case):
+            later.append((theirs[1], path.name, case))
+    return max(later, key=lambda entry: entry[:2])[2] if later else None
+
+
+def _identity(folder: Path) -> tuple[list[str], datetime] | None:
+    """The sha256 of each input file of the case folder as its case.json names them, and the time the case was opened, with a zone (a
+    time without one is local time, as _elapsed takes it, so that any two compare); None for a folder whose case.json cannot be read
+    as such."""
+    try:
+        meta = json.loads((folder / "case.json").read_text(encoding="utf-8"))
+        opened = datetime.fromisoformat(meta["opened_at"])
+        return [entry["sha256"] for entry in meta["files"]], opened.astimezone() if opened.utcoffset() is None else opened
+    except (OSError, ValueError, KeyError, TypeError, OverflowError):
+        return None
 
 
 def _run(deps: Deps, root: Path, state: dict, case_id: str, answered: list[bool] | None = None) -> None:
@@ -541,11 +759,13 @@ class _CarryingClient:
 
 
 def _recover(root: Path, state: dict, case_id: str) -> None:
-    """Record the dispositions of a case that has its result and none, and report it."""
+    """Record the dispositions of a case that has its result and none, and report it, unless it was finished as replaced (replaced of
+    aid/review/close.py): its dispositions are recorded as for any case, and the case that replaced it is the one reported."""
     case = load_case(root, case_id)
     result = CaseResult.model_validate_json((case.root / "steps" / RESULT_FILE).read_text(encoding="utf-8"))
     record_dispositions(case, result)
-    _report(root, state, case_id)
+    if not replaced(case):
+        _report(root, state, case_id)
 
 
 def _digest(loop: _Loop, root: Path, state: dict, now: datetime) -> None:
@@ -570,7 +790,7 @@ def _digest(loop: _Loop, root: Path, state: dict, now: datetime) -> None:
         except (OSError, ValueError) as exc:
             _log(root, now, case_id, exc)
     try:
-        to_enter = len(open_changes(root / PREPARED))
+        to_enter = sum(1 for change in open_changes(root / PREPARED) if not change.tryout)       # a try-out's changes are not to enter
     except Exception as exc:                     # the list cannot be read now: the digest says so, and is not held back for it
         _log(root, now, "digest", f"{type(exc).__name__}: the list of changes to enter cannot be read; the digest says so in the "
                                   f"line of the list")

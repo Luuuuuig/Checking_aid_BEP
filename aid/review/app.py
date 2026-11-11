@@ -41,6 +41,7 @@ from aid.readers.pdf_text import page_count, render_page
 from aid.routing import CaseContext, findings_by_id
 from aid.routing import _shown                   # a value as the routing's questions show it
 from aid.schema import DocValue
+from aid.tryout_mark import case_is_tryout, tryout_case
 
 DECISIONS_FILE = "decisions.jsonl"
 DPI = 100
@@ -55,6 +56,7 @@ class CaseSummary(BaseModel):
     status: str
     opened_at: str                               # from case.json
     items: int                                   # the number of review items
+    tryout: bool = False                         # whether the case is made from a try-out (aid/tryout_mark.py)
 
 
 class FlagRow(BaseModel):
@@ -92,7 +94,8 @@ def list_open_cases(cases_root: Path) -> list[CaseSummary]:
 
 
 def _list_cases(cases_root: Path, listed: Callable[[Path, CaseResult], bool]) -> list[CaseSummary]:
-    """The cases under cases_root for which listed(case root, saved result) is true, as list_open_cases gives them."""
+    """The cases under cases_root for which listed(case root, saved result) is true, as list_open_cases gives them, each with whether
+    it is made from a try-out (case_is_tryout of aid/tryout_mark.py), which is asked of these cases only."""
     summaries = []
     for path in Path(cases_root).glob(f"*/steps/{RESULT_FILE}"):
         root = path.parents[1]
@@ -103,7 +106,7 @@ def _list_cases(cases_root: Path, listed: Callable[[Path, CaseResult], bool]) ->
         except (OSError, ValueError, KeyError):
             continue
         if listed(root, result):
-            summaries.append(summary)
+            summaries.append(summary.model_copy(update={"tryout": case_is_tryout(cases_root, root.name)}))
     return sorted(summaries, key=lambda summary: (summary.opened_at, summary.case_id))
 
 
@@ -119,7 +122,8 @@ def load_case_view(case: Case, store: PoStore | None = None) -> CaseView:
     pdf = version.pdf_path if version is not None else None
     if version is not None and store is not None and Path(pdf).name == "po.pdf" and not Path(pdf).is_file():
         pdf = next((stored.pdf_path for stored in store.versions(version.po_number) if stored.version == version.version), pdf)
-    return CaseView(summary=_summary(case.case_id, meta, result), doc_pages=_pages(case.input_files[0] if case.input_files else None),
+    summary = _summary(case.case_id, meta, result).model_copy(update={"tryout": tryout_case(case)})
+    return CaseView(summary=summary, doc_pages=_pages(case.input_files[0] if case.input_files else None),
                     po_pages=_pages(pdf), flags=flags, matches=matches, uncompared=uncompared,
                     decisions={item_id: record["decision"] for item_id, record in _decisions(case).items()},
                     reapproval_banner=bool(_context(case, result).po_above_authorization))
@@ -235,6 +239,10 @@ def _decisions(case: Case) -> dict[str, dict]:
 
 # --- the decisions ---
 
+class NothingAsked(ValueError):
+    """"ask" on a case made from a try-out document (aid/tryout_mark.py): the aid sends nothing about it to a supplier."""
+
+
 def decide(case: Case, item_id: str, decision: Decision, article_update: bool = False) -> None:
     """Record the buyer's decision on a review item: append {"item_id", "decision", "article_update", "at"} to <case
     root>/decisions.jsonl, "at" being the time now to the second. The last decision of an item counts; close_case carries it out.
@@ -243,12 +251,15 @@ def decide(case: Case, item_id: str, decision: Decision, article_update: bool = 
     the item open. On an item without a finding, "confirm" and "keep" both acknowledge it. article_update, on a price, also updates
     the article's price. Refused with ValueError, recording nothing: a decision that is not one of the four, an item that is not a
     review item of the case, and "ask" on an item without a finding (there is no value to ask about) or on a cart (the buyer
-    corrects a cart or its PO before ordering)."""
+    corrects a cart or its PO before ordering). "ask" on any item of a case made from a try-out document is refused with
+    NothingAsked, a ValueError of its own, since the aid sends nothing about a try-out (aid/tryout_mark.py)."""
     if decision not in get_args(Decision):
         raise ValueError(f"unknown decision {decision!r}: expected one of {', '.join(get_args(Decision))}")
     item = next((item for item in _saved_result(case).review_items if item.item_id == item_id), None)
     if item is None:
         raise ValueError(f"case {case.case_id} has no review item {item_id!r}")
+    if decision == "ask" and tryout_case(case):
+        raise NothingAsked(f"case {case.case_id} is made from a try-out document, so nothing about it is sent to a supplier")
     if decision == "ask" and item.finding_id is None:
         raise ValueError(f"{item_id} is about the whole case and names no value, so there is no question to ask the supplier")
     if decision == "ask" and case.kind == "cart":

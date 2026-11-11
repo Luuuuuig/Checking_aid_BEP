@@ -18,7 +18,9 @@ these entries and the undo works from them. A writer that cannot make a change r
 The undo applies the inverse of a logged entry through a writer and logs the result with undo_of naming the entry. It
 reverses a case's entries one at a time, newest first, so that a case that stops half way has logged each undo it made and
 a second call carries on with the rest. An entry is undone once (an undo that came back "failed" reversed nothing, so it does
-not count), an entry that wrote nothing (status "failed") is not undone, and an undo entry is never undone.
+not count), but for the review page's "Terugdraaien in Exact", which undoes an entry a second time once its first put-back
+was replaced or dropped and nothing newer stands in the way (undo_entry's again); an entry that wrote nothing (status
+"failed") is not undone, and an undo entry is never undone.
 """
 import csv
 import os
@@ -193,20 +195,22 @@ def inverse(op: WriteOp) -> WriteOp:
     return op.model_copy(update={"kind": _INVERSE_KIND.get(op.kind, op.kind), "old_value": op.new_value, "new_value": op.old_value})
 
 
-def undo_entry(case_root: Path, entry_id: str, writer: Writer, now: datetime) -> WriteLogEntry | None:
+def undo_entry(case_root: Path, entry_id: str, writer: Writer, now: datetime, again: bool = False) -> WriteLogEntry | None:
     """Reverse one entry of the case's log: apply the inverse of its operation through `writer` with the rule id "undo" and
     the evidence {"undo_of": entry_id}, append the writer's entry to the log with undo_of set to entry_id, and return it.
 
     It returns None, and writes and logs nothing, when the id is not in the log, when an undo entry with undo_of naming it
     exists (it was undone already; an undo that came back with status "failed" reversed nothing and does not count), when
-    its status is "failed" (nothing was written) or when it is an undo entry itself (an undo is never undone). A WriterError
-    from the writer propagates and nothing is logged."""
+    its status is "failed" (nothing was written) or when it is an undo entry itself (an undo is never undone). With again,
+    an entry undone already is undone once more: the review page's "Terugdraaien in Exact" asks it when the put-back it
+    prepared before can no longer return to the list (newer rows came after it) and those rows no longer ask anything
+    (aid/review/hand_list.py). A WriterError from the writer propagates and nothing is logged."""
     log = WriteLog(case_root)
     entries = log.entries()
     entry = next((e for e in entries if e.entry_id == entry_id), None)
     if entry is None or entry.undo_of is not None or entry.status == "failed":
         return None                                  # not in the log, an undo entry, or nothing was written
-    if any(e.undo_of == entry_id and e.status != "failed" for e in entries):
+    if not again and any(e.undo_of == entry_id and e.status != "failed" for e in entries):
         return None                                  # undone already
     made = writer.apply(inverse(entry.op), entry.case_id, UNDO_RULE_ID, {"undo_of": entry_id}, now)
     undo = made.model_copy(update={"undo_of": entry_id})

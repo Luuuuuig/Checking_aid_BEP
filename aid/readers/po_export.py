@@ -20,18 +20,21 @@ that stands twice in the header row is refused, because it is not clear which co
 
 The rows below the header row. A blank row is ignored. These filled rows are no order line, and each is passed over and counted in
 ExportReading.passed_over: a row that holds every column title of the map again (the header row repeated lower down, as in a report
-saved page by page or in two exports pasted into one file); a row without an item code, such as a total, a group row or a text line;
-a row whose item code is a date, a time, a duration or an error cell (see the values); and, when a quantity column is read, a row with
-an item code and a blank quantity, such as a total or a group row that prints its word in the item code column. Every other row is one order
-line of the PO whose number it holds. A row with an item code and no PO number takes, when `fill_down` is set, the PO number of the
-nearest row above it whose PO cell is filled, whether that row is an order line or a row that was passed over, a repeated header row
-excepted. So an overview that prints the number once for each PO, on its first line or on a group row or a text line above its
-lines, gives each line its own PO. Without `fill_down`, or with no such row above it, a row with an item code and no PO number refuses
-the whole file. The POs come in the order in which the file first names them, each with its lines in the order of the file. A
-line has the line id of its row when the map names line_id; a line id that is blank, or that an earlier line of the same PO has,
-refuses the file. Without a line_id column the lines of each PO are numbered 1, 2, 3. When the map names supplier, the PO's supplier
-is the first filled supplier cell of its rows: its order lines and, with `fill_down`, the rows they take its number from (a text line
-or a group row that names the supplier gives it to the PO of the lines below it).
+saved page by page or in two exports pasted into one file); a row without an item code, such as a total, a group row or a text line; a
+row whose item code is a date, a time, a duration or an error cell (see the values); and, when a quantity column is read, a row with an
+item code and a blank quantity, such as a total or a group row that prints its word in the item code column. ExportReading lists them
+by their kind as well: without_item_code, without_quantity and titles_again, and an item code that is no value under
+unread["item_code"]. Every other row is one order line of the PO whose number it holds. A row with an item code and no PO number takes,
+when `fill_down` is set, the PO number of the nearest row above it whose PO cell is filled, whether that row is an order line or a row
+that was passed over, a repeated header row excepted. So an overview that prints the number once for each PO, on its first line or on a
+group row or a text line above its lines, gives each line its own PO. Without `fill_down`, or with no such row above it, a row with an
+item code and no PO number refuses the whole file. The POs come in the order in which the file first names them, each with its lines in
+the order of the file, and ExportReading.last_line_po names the PO that the last row read as an order line went to: with `fill_down`,
+the PO a total row at the end of the file joins, which in an export not sorted by PO number is not the PO the file names last. A line
+has the line id of its row when the map names line_id; a line id that is blank, or that an earlier line of the same PO has, refuses the
+file. Without a line_id column the lines of each PO are numbered 1, 2, 3. When the map names supplier, the PO's supplier is the first
+filled supplier cell of its rows: its order lines and, with `fill_down`, the rows they take its number from (a text line or a group row
+that names the supplier gives it to the PO of the lines below it).
 
 The PO number of a line is the text of its PO cell, or of the cell it takes with `fill_down`, without the spaces around it. A date,
 a time, a duration or an error cell of a workbook is no PO number; a PO number holds at least one digit, so the word of a total in the
@@ -78,6 +81,11 @@ same PO. The text of the error names the
 file with the column or the row (where it is known), or the field of the map, and never what a cell holds, nor the text of an error
 underneath it, which a traceback does not show either; ExportRefused.reason, .column and .row give the same to a caller that words
 the refusal itself. A file that cannot be opened raises its OSError.
+
+The table. export_table gives every row of a file as its cells with the header row the map finds, csv_text the text of a CSV file,
+csv_rows that text cut at one mark, and workbook_rows the rows of a workbook, each cell with its text and its kind, as this reader reads
+them: the block "Koppeling met Exact" of the settings tab (aid/review/exact_settings.py) shows a sample with them and tells a number
+cell from a text. read_export_table is read_export with the table it read, so that the block reads a sample once for a trial.
 """
 import codecs
 import csv
@@ -130,6 +138,12 @@ class ExportReading(BaseModel):
     rows: int                             # the rows read as order lines
     passed_over: int                      # the filled rows below the header row that are no order line (see the module docstring)
     unread: dict[str, list[int]]          # field -> the rows whose cell holds no value of it; the fields in the order of EXPORT_FIELDS
+    # The rows passed over by their kind (passed_over counts them all, with the rows of unread["item_code"], whose item code is a date,
+    # a time or an error cell): an item code cell that is blank; an item code and a blank quantity; the row of column titles again.
+    without_item_code: list[int] = []
+    without_quantity: list[int] = []
+    titles_again: list[int] = []
+    last_line_po: str | None = None       # the PO number that the last row read as an order line went to; None without an order line
 
 
 class ExportRefused(ValueError):
@@ -161,14 +175,22 @@ class _PoCell(NamedTuple):
 
 def read_export(path: Path, columns: dict[str, str], decimal_comma: bool = False, fill_down: bool = False) -> ExportReading:
     """Read the export at `path` with the column map `columns`: one Document of kind "po" per PO number, with how many rows were read
-    as order lines, how many filled rows below the header row were passed over, and the rows of the cells that are no value.
-    `decimal_comma` is the convention of the numbers the file writes as text, and `fill_down` lets a row without a PO number take the
-    one that stands nearest above it. See the module docstring for the file, the map, the rows, the values and the refusals."""
+    as order lines, how many filled rows below the header row were passed over (and which, by their kind), and the rows of the cells
+    that are no value. `decimal_comma` is the convention of the numbers the file writes as text, and `fill_down` lets a row without a
+    PO number take the one that stands nearest above it. See the module docstring for the file, the map, the rows, the values and the
+    refusals."""
+    return read_export_table(path, columns, decimal_comma, fill_down)[0]
+
+
+def read_export_table(path: Path, columns: dict[str, str], decimal_comma: bool = False,
+                      fill_down: bool = False) -> tuple[ExportReading, list[list[_Cell]], int]:
+    """read_export, with the table it read (export_table: every row of the file as its cells) and the index of the header row in it, for
+    a caller that needs the cells themselves and reads the file once: the block of the settings tab tells a number cell from a text."""
     path = Path(path)
     name = path.name
     _check_map(columns)
     titles = {field: title.strip() for field, title in columns.items()} or {field: field for field in REQUIRED}
-    table, header = _table(path, titles)
+    table, header = export_table(path, titles)
     where = _columns(name, table[header], header + 1, titles if columns else None)
     wanted = {_folded(title) for title in titles.values()}          # a row below the header row that holds them all repeats it
     lines: dict[str, list[DocLine]] = {}             # PO number -> its lines; the POs and the lines in the order of the file
@@ -176,12 +198,17 @@ def read_export(path: Path, columns: dict[str, str], decimal_comma: bool = False
     suppliers: dict[str, DocValue] = {}              # PO number -> the first filled supplier cell of its rows
     read_rows: set[int] = set()                      # the rows whose supplier cell has been read
     unread: dict[str, list[int]] = {}
+    without_item_code: list[int] = []                # the rows passed over by their kind (ExportReading)
+    without_quantity: list[int] = []
+    titles_again: list[int] = []
     passed_over, above = 0, None                     # `above`: the _PoCell of the nearest row above whose PO cell is filled
+    last_line_po: str | None = None                  # the PO number of the last row read as an order line
     for number, row in enumerate(table[header + 1:], header + 2):
         if not any(cell.text.strip() for cell in row):
             continue                                 # a blank row
         if wanted <= {_folded(cell.text) for cell in row}:
             passed_over += 1                         # the header row again, which gives the rows below it no PO number
+            titles_again.append(number)
             continue
         cells = {field: row[at] if at < len(row) else _BLANK for field, at in where.items()}
         own = _PoCell(cells["po_number"], number, cells.get("supplier", _BLANK)) if cells["po_number"].text.strip() else None
@@ -190,6 +217,8 @@ def read_export(path: Path, columns: dict[str, str], decimal_comma: bool = False
             unread.setdefault("item_code", []).append(number)
         if item_code.missing or ("quantity" in where and not cells["quantity"].text.strip()):
             passed_over += 1                         # a total, a group row, a text line, an item code that is no value
+            if not item_code.uncertain:              # an item code that is a date, a time or an error cell is in unread already
+                (without_item_code if item_code.missing else without_quantity).append(number)
             above = own or above
             continue
         if own is None and (not fill_down or above is None):
@@ -207,6 +236,7 @@ def read_export(path: Path, columns: dict[str, str], decimal_comma: bool = False
             if value.uncertain:
                 unread.setdefault(field, []).append(number)
         po_lines.append(DocLine(line_id=line_id, **values))
+        last_line_po = po_number
         if "supplier" in where:
             # The PO's supplier is the first filled supplier cell of its rows: the row its PO number is taken from with fill_down (a
             # text line or a group row, read once), then this order line.
@@ -220,8 +250,10 @@ def read_export(path: Path, columns: dict[str, str], decimal_comma: bool = False
                     suppliers.setdefault(po_number, supplier)
     documents = [Document(kind="po", po_reference=DocValue(value=po_number, text=po_number), supplier=suppliers.get(po_number, DocValue()),
                           lines=po_lines, source_file=name, reader=f"export:{name}") for po_number, po_lines in lines.items()]
-    return ExportReading(documents=documents, rows=sum(len(po_lines) for po_lines in lines.values()), passed_over=passed_over,
-                         unread={field: unread[field] for field in EXPORT_FIELDS if field in unread})
+    reading = ExportReading(documents=documents, rows=sum(len(po_lines) for po_lines in lines.values()), passed_over=passed_over,
+                            unread={field: unread[field] for field in EXPORT_FIELDS if field in unread}, without_item_code=without_item_code,
+                            without_quantity=without_quantity, titles_again=titles_again, last_line_po=last_line_po)
+    return reading, table, header
 
 
 def is_export(path: Path, columns: dict[str, str]) -> bool:
@@ -234,7 +266,7 @@ def is_export(path: Path, columns: dict[str, str]) -> bool:
     if not titles:
         return False
     try:
-        _table(Path(path), titles)
+        export_table(Path(path), titles)
     except ValueError:                               # a file of another type, one that cannot be read, one without the titles
         return False
     return True
@@ -270,19 +302,19 @@ def _check_map(columns: dict[str, str]) -> None:
             raise ExportRefused(f"the export columns name no column for {field}", "map")
 
 
-def _table(path: Path, titles: dict[str, str]) -> tuple[list[list[_Cell]], int]:
+def export_table(path: Path, titles: dict[str, str]) -> tuple[list[list[_Cell]], int]:
     """Every row of the file as its cells, blank rows included, and the index in it of the header row: the first row that holds every
     title of `titles` (field -> column title). A CSV file is cut at the first of DELIMITERS under which such a row is found. Refuses a
     file of another type, a file that cannot be read, and a file in no row of which the titles stand: a CSV file for its delimiter or
     its encoding when no mark cuts a row of it into two cells or its text holds NUL characters, any file else for the first title of
-    the map it lacks."""
+    the map it lacks. Each cell has its text and its kind ("text" for every cell of a CSV file; see _workbook_cell)."""
     name, suffix = path.name, path.suffix.lower()
     if suffix not in EXPORT_SUFFIXES:
         raise ExportRefused(f"{name} is neither a .csv nor an .xlsx file", "file_type")
     wanted = {_folded(title) for title in titles.values()}
-    text = _csv_text(path) if suffix == ".csv" else None
+    text = csv_text(path) if suffix == ".csv" else None
     tables = []
-    for table in (_csv_rows(text, mark) for mark in DELIMITERS) if text is not None else [_workbook_rows(path)]:
+    for table in (csv_rows(text, mark) for mark in DELIMITERS) if text is not None else [workbook_rows(path)]:
         if table is None:
             continue                                 # the csv module cannot cut the text at this mark
         header = next((index for index, row in enumerate(table) if wanted <= {_folded(cell.text) for cell in row}), None)
@@ -304,7 +336,7 @@ def _table(path: Path, titles: dict[str, str]) -> tuple[list[list[_Cell]], int]:
     raise ExportRefused(f"{name} has no column {missing!r}", "no_column", column=missing)
 
 
-def _csv_text(path: Path) -> str:
+def csv_text(path: Path) -> str:
     """The text of a CSV file: UTF-16 behind a UTF-16 byte order mark, else UTF-8 (a UTF-8 byte order mark left out) or else
     Windows-1252. A file in none of these encodings is refused for its encoding."""
     data = path.read_bytes()
@@ -320,7 +352,7 @@ def _csv_text(path: Path) -> str:
                             "delimiter_or_encoding") from None
 
 
-def _csv_rows(text: str, mark: str) -> list[list[_Cell]] | None:
+def csv_rows(text: str, mark: str) -> list[list[_Cell]] | None:
     """The rows of a CSV text cut at `mark`, blank rows included; None when the csv module cannot cut it so (a cell longer than it
     takes)."""
     try:
@@ -329,7 +361,7 @@ def _csv_rows(text: str, mark: str) -> list[list[_Cell]] | None:
         return None
 
 
-def _workbook_rows(path: Path) -> list[list[_Cell]]:
+def workbook_rows(path: Path) -> list[list[_Cell]]:
     """The rows of the first sheet of a workbook, read as the price list reads one (_xlsx_table) but cell by cell, so that each cell
     keeps its kind. A workbook that openpyxl cannot read, or that holds a cell it cannot convert, is refused: the error names the file,
     and the row when it is known, and neither a cell nor the text of the error underneath, which holds the cell's content. openpyxl
@@ -346,6 +378,10 @@ def _workbook_rows(path: Path) -> list[list[_Cell]]:
             # The price list's ValueError for a workbook openpyxl cannot open, and what openpyxl raises, before it gives the row, for a
             # cell it cannot convert: a number or an ISO date that is a text (ValueError), a shared text that is not there (IndexError).
             raise ExportRefused(f"{name} {_UNREADABLE}", "unreadable") from None
+
+
+# The names by which these helpers were known before the block "Koppeling met Exact" of the settings tab read a sample with them.
+_table, _csv_text, _csv_rows, _workbook_rows = export_table, csv_text, csv_rows, workbook_rows
 
 
 def _workbook_cell(cell: Any, name: str) -> _Cell:

@@ -31,6 +31,14 @@ reader names the reader's model, with the version and the hash of its prompt. Ea
 read (RULE_SETTINGS of aid/routing.py; for R10 also those of the rule it took its writes from) and the findings the action covers,
 by the ids the routing gives them.
 
+A case whose PO number was found otherwise than as the one number of the PO number pattern (case.json's po_found_by: a held number
+chosen among the pattern's numbers, a held number when the pattern found none, the quick read by lines, or the runner's check again of
+a case without a number; aid/sources/mailbox.py) is the aid's guess, so it goes to the buyer. Like R11, but outside the routing, one
+REVIEW action of the pipeline's own rule GUESSED_RULE covers the whole case, with the reason GUESSED_PO and every finding in the order
+the routing gives them, and takes the place of the routing's actions: nothing is written or asked, and the case is in review. When
+no version was selected, an action of R09 with the reason "no version selected" (NO_VERSION), as the routing makes it, follows it, so
+that the buyer sees that nothing was compared and decides that item as any other.
+
 The context of the routing. The supplier is the PO's: that of the selected version, else of the latest stored version (a PO keeps its
 supplier), else the name the document prints, as for a cart whose export names no supplier. Its lead time is the one the settings
 give it, and cases_seen_for_supplier counts the other cases under cases_root whose steps/08_result.json is closed for that supplier.
@@ -60,7 +68,11 @@ time and refused copies (refused_cc, the buyer's copy that the server refused, w
 which then goes to the case's messages/sent.jsonl. Without a mailer each message is "not sent (no mailer)". A question to a supplier
 the settings give no address is "not sent (no address for the supplier)", and a message the mailer cannot send, whatever it raises,
 is "not sent (<the error's class>)", the audit keeping the error's text: each finding of the message is then a review item, "no
-address for the supplier" or "message not sent", and the run goes on.
+address for the supplier" or "message not sent", and the run goes on. No message about a case made from a try-out document is sent
+(tryout_case of aid/tryout_mark.py: its document's first row is the try-out's): without asking the mailer, each is recorded as "not
+sent (try-out document: nothing is sent)", and each finding of the message is a review item with the reason "try-out document:
+nothing is sent", so that the case comes to the buyer instead of waiting for an answer. Such a case writes through the prepared
+writer only, never through the Exact writer (tryout_writer), and it is not counted among a supplier's closed cases.
 
 The status: review when the case has a review item, from a REVIEW action, a write or a message not sent (a question of the same case
 is sent all the same, but the buyer has to act), else waiting when an action is ASK, else closed; a request for re-approval does not
@@ -77,6 +89,12 @@ escalate_pending ends the wait for the suppliers' answers, when the batch or the
 bounced, or has no reply after settings.ask_wait_working_days working days (ended_waits of aid/messaging), gets a review item in its
 saved result and the escalation in its audit record, once per question. A case whose files cannot be read is named, and the others
 go on.
+
+waits_for_po tells from a saved result whether its case waits for its PO: in review with no version selected because version
+selection had no candidate, no version of the PO stored ("po"), or no stored version that the document quotes ("version <n>"). The
+runner checks such a case again once the PO, or that version, is filed (aid/runner.py); checked_again of aid/review/close.py adds
+what the case folder must hold for that, and waiting_for_po that the case has a PO number of its own, without which it waits for
+nothing.
 
 file_answer files an e-mail that answers a question of the aid into its case: the mailbox (aid/sources/mailbox.py) calls it for each
 e-mail in the watched folder. The e-mail answers a question when its In-Reply-To or References header names a Message-ID whose part
@@ -119,8 +137,10 @@ from aid.readers.supplier_llm import reading_request
 from aid.readers.supplier_parser import detect_template, load_templates, read_with_template
 from aid.routing import (NO_VERSION, RULE_SETTINGS, Action, CaseContext, MessageSpec, findings_by_id, route,
                          _shown)                 # _shown: a value as the routing's questions show it
+from aid.routing import _id_order, _uncompared_ids    # the order of the finding ids in an action, as the routing gives it
 from aid.schema import DocLine, DocValue, Document
 from aid.settings import Settings
+from aid.tryout_mark import NOTHING_SENT, TRYOUT_NOT_SENT, case_is_tryout, tryout_case, tryout_writer
 from aid.versioning import VersionChoice, select_version
 
 Status = Literal["closed", "review", "waiting", "failed"]
@@ -135,6 +155,11 @@ PREPARED_BY_HAND = "prepared change: apply by hand"
 NOT_APPLIED = "not applied: an earlier write failed"
 CUT_OFF = "run cut off after writes: check the write log"     # the review item of a case whose run was cut off after a write or a message
 ANSWERED = "supplier answered: read the reply"   # the review item of a case whose supplier replied
+# The reasons of version selection (aid/versioning.py) when it had no candidate: no version of the PO stored, and a quoted version
+# that is not stored ("quotes version 2, which is not stored").
+NO_STORED_VERSION, QUOTES_VERSION = "no stored version", "quotes version "
+GUESSED_PO = "PO found otherwise than by the number recognition"     # the reason of a case whose PO was guessed (case.json's po_found_by)
+GUESSED_RULE = "P01"                             # the pipeline's own rule of that reason: one REVIEW action for the whole case, as R11
 DISPOSITION_FILE = "dispositions.csv"
 DISPOSITION_COLUMNS = ("case_id", "version_selected", "line_id", "field", "decision", "source", "note")   # evaluation/templates/dispositions.csv
 
@@ -305,6 +330,10 @@ class _Run:
         findings = self.findings if self.findings is not None else nothing
         self.ctx = ctx = self.context(po)
         self.actions = route(findings, ctx, self.settings)
+        if self.case.po_found_by is not None:        # a guessed PO: the buyer checks it first (see the module docstring)
+            finding_ids = [flag.flag_id for flag in sorted(findings.flags, key=_id_order)] + _uncompared_ids(findings)
+            unversioned = [Action(route="REVIEW", rule_id="R09", finding_ids=[], reason=NO_VERSION)] if findings.version is None else []
+            self.actions = [Action(route="REVIEW", rule_id=GUESSED_RULE, finding_ids=finding_ids, reason=GUESSED_PO), *unversioned]
         self.by_id = findings_by_id(findings)
         for action in self.actions:
             self.audit.decision(action.rule_id, _thresholds(action, ctx, self.settings), self.inputs(action, ctx), action.route)
@@ -367,8 +396,10 @@ class _Run:
                             "supplier_lead_time_days": ctx.supplier_lead_time_days, "po_above_authorization": ctx.po_above_authorization}}
 
     def execute(self) -> None:
-        """Step 07: the actions in their order (see the module docstring)."""
+        """Step 07: the actions in their order (see the module docstring). A case made from a try-out writes through the prepared writer
+        only (tryout_writer of aid/tryout_mark.py)."""
         log = WriteLog(self.case.root)
+        writer = tryout_writer(self.deps.writer, self.settings) if tryout_case(self.case) else self.deps.writer
         stopped = False                              # a write waits for the buyer: no later operation goes to the writer
         for action in self.actions:
             if action.route == "AUTO":
@@ -380,7 +411,7 @@ class _Run:
                         self.review(f"{NOT_APPLIED} ({_write_name(action.rule_id, op)})", finding_id)
                         continue
                     self.writing = _write_name(action.rule_id, op)
-                    entry = self.deps.writer.apply(op, self.case.case_id, action.rule_id, evidence, self.deps.clock())
+                    entry = writer.apply(op, self.case.case_id, action.rule_id, evidence, self.deps.clock())
                     self.entries.append(entry)       # recorded before the log is written, so that no change is without a record
                     self.audit.write(entry)
                     if (reason := _waits_for_the_buyer(entry)) is not None:
@@ -412,7 +443,12 @@ class _Run:
 
     def message(self, action: Action, template: str, items: list[dict], made: list[WriteOp] | None = None) -> None:
         """Send a message of the action through the mailer and record it (see the module docstring): the question of an ASK action to
-        the supplier, or, given the changes it made, the request of an R10 action to the approver."""
+        the supplier, or, given the changes it made, the request of an R10 action to the approver. Nothing about a case made from a
+        try-out is sent (aid/tryout_mark.py)."""
+        if tryout_case(self.case):
+            self.record(action, template, items, TRYOUT_NOT_SENT)
+            self.review_findings(NOTHING_SENT, action.finding_ids)
+            return
         if self.deps.mailer is None:
             self.record(action, template, items, NOT_SENT)
             return
@@ -520,7 +556,8 @@ def _by_line(lines: list[DocLine], field: str) -> dict[str, str]:
 
 def _closed_cases(cases_root: Path, supplier: str, this_case: str) -> int:
     """The number of the other cases under cases_root whose steps/08_result.json is closed for this supplier; 0 for an unknown
-    supplier. A result that cannot be read is not counted."""
+    supplier. A result that cannot be read is not counted, and neither is a case made from a try-out (aid/tryout_mark.py), which is
+    no supplier's first case, nor a case finished as replaced, which has no supplier (finish_replaced of aid/review/close.py)."""
     if not supplier:
         return 0
     count = 0
@@ -531,7 +568,8 @@ def _closed_cases(cases_root: Path, supplier: str, this_case: str) -> int:
             result = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        if isinstance(result, dict) and result.get("status") == "closed" and result.get("supplier") == supplier:
+        if (isinstance(result, dict) and result.get("status") == "closed" and result.get("supplier") == supplier
+                and not case_is_tryout(cases_root, path.parents[1].name)):
             count += 1
     return count
 
@@ -642,6 +680,20 @@ def escalate_pending(cases_root: Path, now: datetime, settings: Settings) -> lis
         record_escalation(case, reason, now, wait.message_id)    # last: a case whose result is in review is not escalated again anyway
         outcome.append((wait.case_id, reason))
     return sorted(outcome, key=lambda pair: pair[0])
+
+
+def waits_for_po(result: CaseResult) -> str | None:
+    """What the saved result of a case waits for (see the module docstring): "po" when it is in review with no version selected because
+    no version of its PO was stored; "version <n>" when it is in review with no version selected because the document quotes version n,
+    a whole number, that was not stored; None for any other result, a quoted version that is no whole number among them, which no PO
+    PDF can be filed as."""
+    choice = result.version
+    if result.status != "review" or choice is None or choice.version is not None:
+        return None
+    if choice.reason == NO_STORED_VERSION:
+        return "po"
+    quoted = choice.reason.removeprefix(QUOTES_VERSION).partition(",")[0] if choice.reason.startswith(QUOTES_VERSION) else ""
+    return f"version {int(quoted)}" if quoted.isdecimal() else None
 
 
 # --- the answers of the suppliers ---

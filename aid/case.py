@@ -2,7 +2,9 @@
 messages, the writes and the audit record.
 
     <cases_root>/<case_id>/
-        case.json         case id, kind, PO number, time of opening, and the input files with their sha256 (this module)
+        case.json         case id, kind, PO number, time of opening, and the input files with their sha256 (this module); and
+                          po_found_by, only when the PO number was found otherwise than as the one number of the PO number
+                          pattern (aid/sources/mailbox.py), so that the case goes to the buyer (aid/pipeline.py)
         input/            copies of the input files (this module)
         steps/            the JSON output of each step: 01_<name>.json to 08_result.json (aid/pipeline.py)
         messages/         the messages of the case (aid/messaging):
@@ -45,6 +47,7 @@ class Case:
     kind: CaseKind
     po_number: str | None
     input_files: list[Path]      # the copies in input/, in the order they were given
+    po_found_by: str | None = None   # how the PO number was found when not as the pattern's one number (case.json); else None
 
     def write_step(self, n: int, name: str, payload: BaseModel | dict) -> Path:
         """Write the output of a step to steps/{n:02d}_{name}.json and return the path.
@@ -73,8 +76,9 @@ def sha256_file(path: Path) -> str:
         return hashlib.file_digest(f, "sha256").hexdigest()
 
 
-def open_case(cases_root: Path, kind: str, files: list[Path], po_number: str | None, now: datetime) -> Case:
-    """Create the folder of a new case, copy the input files into it and write case.json.
+def open_case(cases_root: Path, kind: str, files: list[Path], po_number: str | None, now: datetime, found_by: str | None = None) -> Case:
+    """Create the folder of a new case, copy the input files into it and write case.json. found_by says how the PO number was found
+    when not as the one number of the PO number pattern (aid/sources/mailbox.py); case.json holds it as po_found_by, and only then.
 
     Nothing is created when the call is refused. It raises ValueError for a kind that does not exist,
     a PO number that cannot be part of a folder name, or two files with the same name; FileNotFoundError
@@ -104,7 +108,7 @@ def open_case(cases_root: Path, kind: str, files: list[Path], po_number: str | N
         shutil.copy2(f, copy)                      # copy2 keeps the modification time, the capture date of a saved cart page
         entries.append({"name": copy.name, "sha256": sha256_file(copy), "bytes": copy.stat().st_size})
     meta = {"case_id": case_id, "kind": kind, "po_number": po_number,
-            "opened_at": now.isoformat(), "files": entries}
+            "opened_at": now.isoformat(), "files": entries} | ({"po_found_by": found_by} if found_by is not None else {})
     _write_json(root / "case.json", meta)         # last: a folder without a case.json is not a case
     return _case_from_meta(root, meta)
 
@@ -163,7 +167,8 @@ def _case_from_meta(root: Path, meta: dict) -> Case:
     """The one place that builds a Case from disk, so that open_case, find_case_by_hash and
     load_case return the same shape. The case id is the folder name, so a link built from it always resolves."""
     return Case(case_id=root.name, root=root, kind=meta["kind"], po_number=meta["po_number"],
-                input_files=[root / "input" / f["name"] for f in meta["files"]])
+                input_files=[root / "input" / f["name"] for f in meta["files"]],
+                po_found_by=found if isinstance(found := meta.get("po_found_by"), str) else None)
 
 
 def _write_json(path: Path, data) -> None:

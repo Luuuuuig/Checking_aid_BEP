@@ -184,6 +184,29 @@ def test_the_request_to_the_approver():
         assert str(amount) not in dutch.body + english.body
 
 
+@pytest.mark.parametrize("language, changed, asked", [
+    ("nl", "Inkooporder PO 250108 wordt gewijzigd, omdat de orderbevestiging van leverancier S08 afwijkt van de order:",
+     "De order ligt boven het bedrag dat de inkoper zelf mag fiatteren. Wilt u de order opnieuw fiatteren zodra de wijziging in Exact staat?"),
+    ("en", "Purchase order PO 250108 is being changed, because the order confirmation of supplier S08 differs from the order:",
+     "The order is above the amount that the buyer may approve alone. Could you approve the order again once the change is in Exact?")])
+def test_the_request_to_the_approver_is_true_for_a_prepared_change(language, changed, asked):
+    """Every change is prepared and the buyer enters it in Exact: the request says that the order is being changed and asks to approve
+    it again once the change is in Exact, and no longer that the aid changed it (Task 35, rule 11). The rest of the request, its
+    greeting, its changes and its signature, is what it was, and its lines keep the width of the other templates."""
+    settings = NAMED.model_copy(update={"language": language})
+    message = render_reapproval(CHANGES, ctx("250108", "S08"), settings)
+    flat = " ".join(message.body.split())
+    assert changed in flat and asked in flat
+    for said in ("heeft inkooporder", "gewijzigde order", "has changed", "the changed order", "inkoopassistent heeft", "assistant has"):
+        assert said not in flat, said
+    greeting, change, signature = (("Beste collega,\n\n", "- Prijs van de orderregel, regel 1: oude waarde 12.50, nieuwe waarde 12.70\n",
+                                    "\n\nMet vriendelijke groet,\n\nInkoop\nA. Koper\n") if language == "nl" else
+                                   ("Dear colleague,\n\n", "- Price of the PO line, line 1: old value 12.50, new value 12.70\n",
+                                    "\n\nKind regards,\n\nPurchasing\nA. Koper\n"))
+    assert message.body.startswith(greeting) and change in message.body and message.body.endswith(signature)
+    assert max(len(line) for line in message.body.splitlines() if not line.startswith("- ")) <= 76     # as wide as the other templates
+
+
 # --- the mailers ---
 
 def test_the_file_mailer_writes_a_complete_email(tmp_path):

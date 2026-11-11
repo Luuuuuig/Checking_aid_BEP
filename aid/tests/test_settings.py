@@ -51,6 +51,14 @@ def test_the_example_holds_the_export_settings_with_their_defaults():
     assert (fields["export_decimal_comma"].default, fields["export_fill_down"].default) == (False, False)
 
 
+def test_the_example_holds_the_test_mode_off():
+    """The test mode (Task 33) stands in the example with its default, off: a settings file made from the example is a real one. The
+    first settings file of the folder version turns it on (aid/portable.py)."""
+    values = json.loads(Path("aid/settings.example.json").read_text(encoding="utf-8"))
+    assert values["test_mode"] is False and list(values)[-1] == "test_mode"
+    assert load_settings(Path("aid/settings.example.json")).test_mode is False and Settings.model_fields["test_mode"].default is False
+
+
 def test_relative_paths_resolve_against_the_settings_file(tmp_path, monkeypatch):
     drive = tmp_path / "drive"; drive.mkdir()
     elsewhere = tmp_path / "elsewhere"; elsewhere.mkdir()

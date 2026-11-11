@@ -26,7 +26,7 @@ from aid.readers.po_pdf import fits
 from aid.readers.supplier_parser import load_templates
 from aid.sources import mailbox
 from aid.sources.mailbox import (CASE_ID_TRIES, CONTEXT_CHARS, KEYWORDS, NOT_AN_EXPORT, TITLE_CLASSES, TITLE_LINES, ScanResult,
-                                 classify_attachment, extract_eml, find_po_numbers, scan_folder, sender_of, titled_confirmation)
+                                 classify_attachment, extract_eml, find_po_numbers, held_numbers, scan_folder, sender_of, titled_confirmation)
 from aid.tests.conftest import REPO_ROOT, SETTINGS
 from aid.tests.fakes import FakeDecider
 from aid.tests.helpers import ANDERS_LAYOUT, ANDERS_PO, EXPORT_COLUMNS, MADEUP_LAYOUT, first_page
@@ -1207,7 +1207,7 @@ def test_a_case_that_exists_is_not_touched_by_a_later_scan_at_the_same_time(tmp_
 
 def test_when_no_id_is_free_the_file_stays_as_an_error(tmp_path, monkeypatch):
     tried = []
-    def taken(cases_root, kind, files, po_number, now):
+    def taken(cases_root, kind, files, po_number, now, found_by=None):
         tried.append(now)
         raise FileExistsError("the case exists")
     monkeypatch.setattr("aid.sources.mailbox.open_case", taken)
@@ -1898,3 +1898,232 @@ def test_the_exports_of_a_pass_are_filed_in_the_order_of_their_times(tmp_path):
     store = PoStore(folder / "store")
     r = scan_folder(inbox, store, folder / "cases", EXPORTS, NOW)
     assert [label for label, _, _ in r.stored_exports] == ["a.csv", "b.csv"] and first_prices(store) == ["0.99", "0.95"]
+
+
+# --- the PO numbers the store holds (Task 36) ---
+
+def worded(path: Path, case_id: str = "MU01", reference: str = "Uw referentie 250101", title: str | None = None) -> Path:
+    """The made-up confirmation of `case_id` with the text of its PO reference row replaced: the number under a word that the default
+    pattern does not know, for one."""
+    pages = confirmation_pages(SPECS[case_id])
+    next(row for row in pages[0] if row.ref == "po_reference").texts[0].text = reference
+    path.write_bytes(pdf_bytes(pages, title or path.name))
+    return path
+
+
+def unreadable_lines(path: Path, *lines: str) -> Path:
+    """A confirmation whose lines no layout template reads, so that the quick read by lines finds no PO: a title and free text."""
+    return drawn(path, page_of("S01", "Orderbevestiging", *lines))
+
+
+def test_of_several_numbers_the_one_the_store_holds_is_the_po(tmp_path, madeup_out):
+    """Rule 2: the pattern finds two numbers, one in the e-mail and one on the page; the one the store holds is the PO, and no review
+    item is written. A PO the store knows from an export only is held as well."""
+    inbox = inbox_of(tmp_path)
+    store = PoStore(tmp_path / "store")
+    store.add(madeup_out / "MU01_po_v1.pdf")
+    write_eml(inbox / "m.eml", subject="Bevestiging PO 250199", attachments=[madeup_out / "MU01_conf.pdf"])      # the page names 250101
+    r = scan(tmp_path, inbox)
+    assert r.new_cases == ["250101_20261116T080000"] and r.skipped == [] and review_items(tmp_path) == []
+    (tmp_path / "export.csv").write_text(export_csv(SPECS["MU02"]), encoding="utf-8")
+    store.from_export(tmp_path / "export.csv", EXPORT_COLUMNS)                                       # PO 250102, a look and no PDF
+    write_eml(inbox / "n.eml", subject="Uw PO 250102", body="Onze order 250188", attachments=[madeup_out / "MU02_conf.pdf"])
+    write_eml(inbox / "o.eml", subject="Bevestiging", body="PO 250188 en PO 250102",
+              attachments=[drawn_confirmation(tmp_path / "c.pdf", "MU02", drop=("po_reference",))])
+    r = scan(tmp_path, inbox, now=NOW + timedelta(hours=1))
+    assert r.new_cases == ["250102_20261116T090000", "250102_20261116T090001"] and r.skipped == [] and review_items(tmp_path) == []
+
+
+def test_several_numbers_none_or_two_of_them_held_are_skipped_as_before(tmp_path, madeup_out):
+    """Rule 2 and ruling N5: when the store holds none of the numbers, or more than one with an item code of its PO on the first page,
+    the document is skipped with its review item, as before. (A held number without an item code of its PO on the page does not count:
+    test_of_several_pattern_numbers_a_held_one_counts_only_with_an_item_code_on_the_page.)"""
+    both = unreadable_lines(tmp_path / "both.pdf", "Wij leveren 10 stuks KM-1001 en 2 stuks KM-0201.")
+    for name, held, page in (("none", (), madeup_out / "MU01_conf.pdf"), ("both", ("MU01_po_v1.pdf", "MU02_po_v1.pdf"), both)):
+        folder = tmp_path / name
+        folder.mkdir()
+        inbox = inbox_of(folder)
+        for pdf in held:
+            PoStore(folder / "store").add(madeup_out / pdf)
+        write_eml(inbox / "m.eml", subject="Bevestiging PO 250101 en PO 250102", attachments=[page])
+        r = scan(folder, inbox)
+        assert r.new_cases == [] and r.skipped == [(f"m.eml/{page.name}", "more than one PO number")] and case_names(folder) == [], name
+        assert [item["reason"] for item in review_items(folder)] == ["more than one PO number"], name
+
+
+def test_a_number_under_another_word_is_found_when_the_store_holds_it_and_an_item_code_agrees(tmp_path, madeup_out):
+    """Rule 3: the pattern finds no number, as "Uw referentie" is no word of it. A number the store holds that stands in the e-mail's
+    text or on the first page as a word of its own gives the case its PO, when one of that PO's item codes stands on the first page
+    as a word of its own. The quick read by lines cannot read these pages, so the number alone decides; a number with letters, as an
+    ERP may give one, is held as well."""
+    inbox = inbox_of(tmp_path)
+    store = PoStore(tmp_path / "store")
+    store.add(madeup_out / "MU01_po_v1.pdf")
+    store.add(ANDERS_PO, ANDERS_LAYOUT)                                                             # PO IB-2600417, item KM-2301 among them
+    on_page = unreadable_lines(tmp_path / "a.pdf", "Uw referentie: 250101", "Wij leveren 10 stuks KM-1001 op 16-11-2026.")
+    assert find_po_numbers(first_page(on_page), SETTINGS.po_number_pattern) == []
+    assert held_numbers(first_page(on_page), first_page(on_page), store) == ["250101"]
+    put(inbox, on_page)
+    write_eml(inbox / "m.eml", subject="Bevestiging", body="Uw referentie 250101", attachments=[
+        unreadable_lines(tmp_path / "b.pdf", "Wij leveren 4 stuks KM-1002.")])                       # the number in the e-mail, the code on the page
+    put(inbox, unreadable_lines(tmp_path / "c.pdf", "Uw ordernummer: IB-2600417", "10 st KM-2301 Kogelkraan DN25 messing"))
+    r = scan(tmp_path, inbox)
+    assert r.new_cases == ["250101_20261116T080000", "IB-2600417_20261116T080000", "250101_20261116T080001"] and r.skipped == []
+    assert [load_case(tmp_path / "cases", case).input_files[0].name for case in r.new_cases] == ["a.pdf", "c.pdf", "b.pdf"]
+    # the made-up confirmation itself with the number under another word: the same PO as with "Uw inkooporder"
+    put(inbox, worded(tmp_path / "d.pdf"))
+    assert scan(tmp_path, inbox, now=NOW + timedelta(hours=1)).new_cases == ["250101_20261116T090000"]
+
+
+def test_a_held_number_without_an_item_code_of_that_po_decides_nothing(tmp_path, madeup_out):
+    """Rule 3: a held number counts only with an item code of its own PO on the first page, as a word of its own; a code in the e-mail
+    does not count, nor a code that is part of a longer word. A number that is part of a longer word, and a held number of fewer than
+    four characters, count for nothing. Two held numbers decide nothing either. Each document then goes to the quick read by lines,
+    which cannot read these pages: the case is opened without a PO number, as before."""
+    store = PoStore(tmp_path / "store")
+    store.add(madeup_out / "MU01_po_v1.pdf")
+    store.add(madeup_out / "MU02_po_v1.pdf")
+    (tmp_path / "short.csv").write_text(export_csv(SPECS["MU01"]).replace("250101", "123"), encoding="utf-8")
+    store.from_export(tmp_path / "short.csv", EXPORT_COLUMNS)                                         # PO 123, with MU01's item codes
+    pages = {"other code": ("Uw referentie: 250101", "Wij leveren 10 stuks KM-9999."),
+             "code in a word": ("Uw referentie: 250101", "Wij leveren 10 stuks KM-10011."),
+             "number in a word": ("Uw referentie: 2501019", "Wij leveren 10 stuks KM-1001."),
+             "short number": ("Uw referentie: 123", "Wij leveren 10 stuks KM-1001."),
+             "two numbers": ("Uw referenties: 250101 en 250102", "Wij leveren KM-1001 en KM-0201.")}
+    inbox = inbox_of(tmp_path)
+    for n, (what, lines) in enumerate(pages.items()):
+        pdf = unreadable_lines(tmp_path / f"{n}.pdf", *lines)
+        assert held_numbers(first_page(pdf), first_page(pdf), store) == (["250101", "250102"] if what == "two numbers" else []), what
+        put(inbox, pdf)
+    write_eml(inbox / "m.eml", subject="Uw referentie 250101", body="Artikel KM-1001",
+              attachments=[unreadable_lines(tmp_path / "e.pdf", "Wij leveren 10 stuks.")])
+    assert held_numbers("Uw referentie 250101\nArtikel KM-1001\nS01", "S01\nWij leveren 10 stuks.", store) == []
+    r = scan(tmp_path, inbox)
+    assert r.new_cases == [f"unknown_20261116T08000{n}" for n in range(6)] and r.skipped == [] and review_items(tmp_path) == []
+    assert all(load_case(tmp_path / "cases", case).po_number is None for case in r.new_cases)
+
+
+def test_a_held_number_counts_only_as_a_token_of_its_own(tmp_path, madeup_out):
+    """Rulings N4 and N16: a held number counts only where it stands apart, not joined to letters or digits by "-", ".", "/" or "," on
+    either side. So the year of a date ("21-10-2026"), the digits of an article code ("KM-1001") and those of an amount ("1250,00")
+    never count, while a number before a full stop or a comma that a space or the end follows ("Uw referentie 250101.", "250101,
+    250102") does. The colon is no joiner: a number that a label and a colon stand before counts ("Ref:250101", "Uw
+    referentie:250101"), as a time never gives four digits on one side of its colon. The reviewers' year_word.py: MU01's confirmation
+    that names its new order 2040, not filed yet, and is dated
+    21-10-2026 holds no held number when the store holds PO 2026 with MU01's item codes (the quick read by lines still finds that PO by
+    its item codes, as before Task 36); a page the quick read cannot read is opened without a PO number."""
+    store = PoStore(tmp_path / "store")
+    store.add(madeup_out / "MU01_po_v1.pdf")
+    store.add(madeup_out / "MU02_po_v1.pdf")
+    for number in ("2026", "1001", "1250"):                                     # POs of four digits with MU01's item codes
+        (tmp_path / f"{number}.csv").write_text(export_csv(SPECS["MU01"]).replace("250101", number), encoding="utf-8")
+        store.from_export(tmp_path / f"{number}.csv", EXPORT_COLUMNS)
+    for text, numbers in (("Datum: 21-10-2026", []), ("Leverdatum 2026-10-21", []), ("Artikel KM-1001", []), ("Totaal 1250,00", []),
+                          ("Bedrag 1250.00", []), ("Periode 2026/27", []), ("Ref:250101", ["250101"]), ("Uw ref.:2026", ["2026"]),
+                          ("Uw referentie:250101", ["250101"]), ("Levering om 12:30, 2026-11-23", []),
+                          ("Uw referentie 250101.", ["250101"]), ("Uw referenties 250101, 250102", ["250101", "250102"]),
+                          ("Uw ref.: 2026", ["2026"]), ("Uw referentie 1250, levering in week 47", ["1250"]), ("(2026)", ["2026"]),
+                          ("Uw referentie: 250101.\nMet vriendelijke groet", ["250101"]), ("Uw referentie 250101", ["250101"])):
+        page = f"{text}\nWij leveren 10 stuks KM-1001 en KM-0201."                # KM-1001 holds the held number 1001 too
+        assert held_numbers(page, page, store) == numbers, text
+    year = worded(tmp_path / "year.pdf", reference="Uw referentie 2040")
+    assert "Datum: 21-10-2026" in first_page(year) and held_numbers(first_page(year), first_page(year), store) == []
+    inbox = inbox_of(tmp_path)
+    put(inbox, unreadable_lines(tmp_path / "a.pdf", "Uw referentie 2040", "Datum: 21-10-2026", "Wij leveren 10 stuks KM-1002."))
+    put(inbox, unreadable_lines(tmp_path / "b.pdf", "Totaal 1250,00", "Wij leveren 10 stuks KM-1002."))
+    assert scan(tmp_path, inbox).new_cases == ["unknown_20261116T080000", "unknown_20261116T080001"]
+
+
+def test_of_several_pattern_numbers_a_held_one_counts_only_with_an_item_code_on_the_page(tmp_path, madeup_out):
+    """Ruling N5: a held number among several numbers the pattern finds counts only when one of the item codes of its PO as it stands
+    stands on the first page as a word of its own, as held_numbers requires; exactly one such number gives the case its PO, otherwise
+    the document is skipped with its review item, as before Task 36. "Uw inkooporder 250121 (vervangt 250101)" on MU02's page, with
+    250101 held and none of its item codes on the page, is skipped; on MU01's page, with the item codes of 250101, it is a case of
+    250101. (The default pattern finds 250101 only after one of its words, so the default's page says "vervangt inkooporder 250101";
+    a pattern of the fields that knows "vervangt" finds it in the ruling's own words.)"""
+    store = PoStore(tmp_path / "store")
+    store.add(madeup_out / "MU01_po_v1.pdf")
+    replacing = SETTINGS.model_copy(update={"po_number_pattern": r"(?i:Uw\s+inkooporder|vervangt)[\s:#.-]*(\d{6,8})(?!\d)"})
+    for n, (settings, reference) in enumerate(((SETTINGS, "Uw inkooporder 250121 (vervangt inkooporder 250101)"),
+                                               (replacing, "Uw inkooporder 250121 (vervangt 250101)"))):
+        folder = tmp_path / f"pattern{n}"
+        shutil.copytree(store.root, folder / "store")
+        inbox = inbox_of(folder)
+        assert find_po_numbers(reference, settings.po_number_pattern) == ["250121", "250101"]
+        put(inbox, worded(tmp_path / "other.pdf", "MU02", reference))                    # MU02's item codes: none of 250101
+        r = scan(folder, inbox, settings=settings)
+        assert r.new_cases == [] and r.skipped == [("other.pdf", "more than one PO number")], reference
+        assert [item["reason"] for item in review_items(folder)] == ["more than one PO number"], reference
+        put(inbox, worded(tmp_path / "same.pdf", "MU01", reference))                     # MU01's item codes, those of 250101
+        assert scan(folder, inbox, now=NOW + timedelta(hours=1), settings=settings).new_cases == ["250101_20261116T090000"], reference
+    both = tmp_path / "both"                                                             # two held numbers, each with its item codes
+    shutil.copytree(store.root, both / "store")
+    (tmp_path / "repeat.csv").write_text(export_csv(SPECS["MU01"]).replace("250101", "250121"), encoding="utf-8")
+    PoStore(both / "store").from_export(tmp_path / "repeat.csv", EXPORT_COLUMNS)
+    put(inbox_of(both), worded(tmp_path / "same.pdf", "MU01", "Uw inkooporder 250121 (vervangt inkooporder 250101)"))
+    r = scan(both, both / "inbox")
+    assert r.new_cases == [] and r.skipped == [("same.pdf", "more than one PO number")]
+
+
+def test_a_number_that_a_digit_follows_is_never_cut_short(tmp_path, madeup_out):
+    """Rulings N7 and N26: find_po_numbers passes over a number that a digit follows directly in the text, at the end of the pattern's
+    group, whatever the pattern: the default, an own pattern and the pattern of the fields alike. So under the default and the fields'
+    form, whose match starts after a word, a longer number is taken whole or not at all; an own pattern whose match can start inside a
+    number may still take a number's tail. The reviewers' run: MU01's confirmation whose reference reads "Order 1234567890" opens no case
+    of a PO 12345678; with PO 250101 in the store the quick read by lines links it to that PO, as it links a confirmation without a
+    number."""
+    default = SETTINGS.po_number_pattern
+    assert default == r"(?i:PO|Inkooporder|Bestelling|Bestellung|Order)[\s:#-]*(\d{6,8})"         # the default stays as it is
+    for text, numbers in (("Order 1234567890", []), ("Uw inkooporder 1234567890", []), ("PO 123456789", []), ("Order 12345678", ["12345678"]),
+                          ("Order 12345678.", ["12345678"]), ("Order 1234567890 en PO 250101", ["250101"]), ("PO 250101-2", ["250101"]),
+                          ("PO 250101/1", ["250101"]), ("Order 250101AB", ["250101"])):
+        assert find_po_numbers(text, default) == numbers, text
+    fields = r"(?i:Order)[\s:#.-]*(\d{6,8})(?!\d)"
+    assert find_po_numbers("Order 1234567890", fields) == [] and find_po_numbers("Order. 250101", fields) == ["250101"]
+    assert find_po_numbers("Order. 250101", default) == []                     # the one difference: the fields' form passes a full stop
+    own = r"REF-(\d{6})"
+    assert find_po_numbers("REF-2501019 en REF-250102", own) == ["250102"] and find_po_numbers("REF-250101-9", own) == ["250101"]
+    assert find_po_numbers("nr 1234567 en 250101", r"\d{6}") == ["250101"]                            # no group: the whole match
+    assert find_po_numbers("Factuur 1234567", r"(\d{6})(?!\d)") == ["234567"]          # a match that starts inside a number: its tail
+    inbox = inbox_of(tmp_path)
+    PoStore(tmp_path / "store").add(madeup_out / "MU01_po_v1.pdf")
+    put(inbox, worded(tmp_path / "cut.pdf", reference="Order 1234567890"))
+    assert scan(tmp_path, inbox).new_cases == ["250101_20261116T080000"]
+
+
+# What the scan gave each made-up confirmation before Task 36 (the code of ee7b12b): with its PO reference the PO the reference names,
+# whatever the store holds, and the scans none; without it (the row of the reference taken out and the page drawn again, the scans
+# with a text layer then) the PO the quick read by lines finds in a store of every made-up PO, which is none for MU19, whose merged
+# line leaves one item code of its PO, and none in an empty store. A decider classes the two scans as confirmations.
+GOT = {case_id: f"2501{case_id[2:]}" for case_id in (f"MU{n:02d}" for n in range(1, 21))}
+GOT_WITHOUT_REFERENCE = GOT | {"MU19": None}
+
+
+def test_every_made_up_confirmation_gets_the_po_it_got(tmp_path, madeup_out):
+    """Rule 4: for every made-up confirmation the scan gives the PO it gave before, with its PO reference and without it, with the
+    store empty and with every made-up PO in it."""
+    specs = [spec for spec in SPECS.values() if spec.confirmation is not None]
+    assert len(specs) == 20
+    full = PoStore(tmp_path / "full")
+    for pdf in sorted(madeup_out.glob("*_po_v*.pdf")):
+        full.add(pdf)
+    for reference in ("with", "without"):
+        for stored in ("empty", "full"):
+            folder = tmp_path / f"{reference}_{stored}"
+            folder.mkdir()
+            inbox = inbox_of(folder)
+            for spec in specs:
+                name = f"{spec.case_id}_conf.pdf"
+                if reference == "with":
+                    put(inbox, madeup_out / name)
+                else:
+                    drawn_confirmation(inbox / name, spec.case_id, drop=("po_reference",))
+            if stored == "full":
+                shutil.copytree(full.root, folder / "store")
+            r = scan(folder, inbox, decider=FakeDecider("confirmation", 0.9))
+            got = {load_case(folder / "cases", case).input_files[0].name[:4]: load_case(folder / "cases", case).po_number for case in r.new_cases}
+            if reference == "with":
+                expected = GOT | {"MU05": None, "MU16": None}
+            else:
+                expected = GOT_WITHOUT_REFERENCE if stored == "full" else dict.fromkeys(GOT)
+            assert got == expected and r.skipped == [], (reference, stored)

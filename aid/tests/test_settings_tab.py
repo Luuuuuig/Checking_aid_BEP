@@ -17,20 +17,27 @@ import requests
 
 from aid.connections.microsoft import COPILOT_SCOPES, MAIL_SCOPES, SHARED_SCOPES, MicrosoftAccount
 from aid.connections.secrets import SecretStore
+from aid.execution.by_hand import mark, open_changes
 from aid.madeup.generate import TRYOUT_PO_LAYOUT, Row, Text, pdf_bytes, tryout_po_pages
 from aid.po_store import PoStore
+from aid.readers.po_export import read_export
 from aid.review.__main__ import company_values, refuse_share
 from aid.review.buyer_settings import BUYER_FIELDS, SUPPLIER_FIELDS, supplier_rows
 from aid.review.exact_settings import FORM as EXACT_FORM
-from aid.review.exact_settings import MEANINGS, SLOTS, line_headers, page_lines
+from aid.review.exact_settings import (EXPORT_FORM, MEANINGS, NO_COLUMN, SLOTS, export_headers, field_label, line_headers, page_lines,
+                                       table_head)
 from aid.review.i18n import STRINGS
 from aid.review.page import NEW_SUPPLIER, build_app, import_gradio
 from aid.settings import Settings, SettingsInvalid, is_address, load_settings, read_settings, update_settings_file
-from aid.sources.mailbox import scan_folder
+from aid.sources.mailbox import NOT_AN_EXPORT, scan_folder
 from aid.tests.conftest import SETTINGS, ReachedMicrosoft, deps
 from aid.tests.fakes import (ACCESS_TOKEN, CLIENT_ID, COPILOT, GRAPH, TENANT_ID, USERNAME, FakeApp, FakeResponse, FakeSession,
                              copilot_answer, copilot_session, sent_text, sign_in_event)
-from aid.tests.helpers import ANDERS_FORM, ANDERS_LAYOUT, ANDERS_MEANINGS, ANDERS_PO, ERP_FORM, ERP_MEANINGS, MADEUP_LAYOUT, SAMPLES
+from aid.tests.helpers import (ANDERS_FORM, ANDERS_LAYOUT, ANDERS_MEANINGS, ANDERS_PO, COMMAS_TITLES, ERP_FORM, ERP_MEANINGS, EXPORT_COLUMNS,
+                               EXPORT_NL, EXPORT_NL_COLUMNS, EXPORT_NL_FORM, EXPORT_NL_ORDERS, EXPORT_NL_READ, EXPORT_NL_READ_EN,
+                               EXPORT_NL_TITLES, MADEUP_LAYOUT, SAMPLES, SORTED_BY_DATE, SORTED_BY_DATE_COLUMNS, SORTED_BY_DATE_LONG, TABS_TITLES, TIE_TITLES,
+                               TITLE_COMMAS, WIDE_TITLES, write_cut_samples, write_sheet, write_title_samples)
+from aid.tryout import CHANGES, confirmation_pdf
 
 FOLDER = "AAMkADMadeUpFolder0001="
 SIX = {"ms_tenant_id": TENANT_ID, "ms_client_id": CLIENT_ID, "mailbox": None, "mail_folder": FOLDER, "mail_folder_name": "Orderbevestigingen",
@@ -1133,7 +1140,8 @@ def test_the_note_of_a_supplier_save_is_cleared_by_the_buyers_own_choice_only(tm
     cleared by the dropdown's input event, the buyer's own choice."""
     gr = import_gradio()
     path, page, made = tab(tmp_path, madeup_out, **BUYER)
-    [dropdown] = [block for block in page.blocks.values() if isinstance(block, gr.Dropdown) and block.label == STRINGS["nl"]["settings_supplier_choice"]]
+    [dropdown] = [block for block in page.blocks.values() if isinstance(block, gr.Dropdown) and block.label == STRINGS["nl"]["settings_supplier_choice"]
+                  and not (block.elem_id or "").startswith("export-field-")]        # not the supplier's column of the export (Task 39)
     [note] = [block for block in page.blocks.values() if getattr(block, "elem_id", None) == "settings-supplier-note"]
     bound = {(getattr(f.fn, "__name__", ""), event): f for f in page.fns.values() for block, event in f.targets if block == dropdown._id}
     assert sorted(bound) == [("supplier_chosen", "change"), ("supplier_picked", "input")]
@@ -2042,11 +2050,13 @@ def test_the_exact_block_is_wired_as_the_page_shows_it(tmp_path, madeup_out):
     sample, word, senders, page_language = nl["exact_sample"], nl["exact_field:title_word"], nl["exact_field:senders"], nl["language"]
     order = [block for block in inside(exact) if isinstance(block, (gr.Markdown, gr.Textbox, gr.Radio, gr.Button, gr.Dataframe, gr.Dropdown,
                                                                      gr.Checkbox, gr.File))]
-    assert [name(block) for block in order] == [
+    names = [name(block) for block in order]
+    assert names[:names.index(f"### {nl['exact_part_export']}")] == [                # part 1, up to part 2 (Task 39)
         nl["exact_intro"], f"### {nl['exact_state_title']}", "exact-state", f"button {nl['exact_refresh']}", f"### {nl['exact_part_po']}", sample,
         "exact-page", "exact-sample-note", *fields, word, f"button {nl['exact_find']}", "exact-title-note", *slots, nl["exact_field:table_end"],
         nl["exact_field:numbers"], nl["exact_field:per_piece"], senders, f"button {nl['exact_test']}", f"button {nl['exact_save']}", "exact-note",
-        f"### {nl['exact_reading']}", *reading]
+        f"### {nl['exact_reading']}", *reading, f"### {nl['exact_numbers_title']}", nl["exact_field:po_words"], nl["exact_field:po_digits_least"],
+        nl["exact_field:po_digits_most"], f"button {nl['exact_po_number_save']}", "exact-number-note"]
     # the fill at the load and at each select of the settings tab, as the buyer's part (ruling L6)
     assert bound("exact_opened") == ([(nl["settings_tab"], "select"), ("page", "load")], [page_language],
                                      ["exact-state", *form, word, "title row", *slots, senders, "filled", "exact-title-note"])
@@ -2065,9 +2075,9 @@ def test_the_exact_block_is_wired_as_the_page_shows_it(tmp_path, madeup_out):
     assert [shown[label].info for label in fields[1:3] + fields[4:]] == [nl["exact_help:label"]] * 5
     assert (shown[nl["exact_field:table_end"]].info, shown[senders].info) == (nl["exact_help:table_end"], nl["exact_help:senders"])
     assert shown[nl["exact_field:numbers"]].choices == [(nl["exact_numbers:comma"], "comma"), (nl["exact_numbers:point"], "point")]
-    assert shown[sample].file_types == [".pdf"] and shown[nl["exact_page"]].elem_id == "exact-page"
+    assert shown[sample].file_types is None and shown[nl["exact_page"]].elem_id == "exact-page"      # any file reaches the handler (M3)
     assert all(block.interactive is False for block in inside(exact) if isinstance(block, gr.Dataframe))
-    assert [block.visible for block in inside(exact) if isinstance(block, gr.Dropdown)] == [False] * SLOTS     # until a title row is found
+    assert [block.visible for block in inside(exact) if isinstance(block, gr.Dropdown)][:SLOTS] == [False] * SLOTS     # until a title row is found
 
 
 RELABELLED = ("block", "intro", "state_title", "state", "refresh", "part", "sample", "page", "sample_note", "po_label", "date_label",
@@ -2242,3 +2252,1290 @@ def test_the_manual_says_how_the_review_round_reads_a_sample():
     assert "the first 60 lines" in exact and "\"1000 (1.000)\"" in exact and "\"1 (1.000)\"" in exact
     assert "\"Inkooporder:\"" in exact and "which is two purchase orders in one PDF" not in exact
     assert "another browser tab" in exact and "\"Klopt alles, druk dan op Opslaan\"" in exact
+
+
+# --- the number recognition of part 1, and the count of the cases that wait for their purchase order (Task 36) ---
+
+from aid.tests.helpers import cases_for_the_count  # noqa: E402
+
+NUMBERS_OPENED = ("words", "least", "most", "filled")                        # the fill of the two fields, in its order
+NUMBERS_SAVED = ("note", "words", "least", "most", "filled")                 # what "Nummerherkenning opslaan" gives
+DEFAULT_PATTERN = Settings.model_fields["po_number_pattern"].default
+DEFAULT_WORDS = "PO, Inkooporder, Bestelling, Bestellung, Order"
+NUMBER_HANDLERS = {"exact_numbers_opened", "exact_numbers_saved", "exact_numbers_relabel"}
+
+
+def words_shown(value: str, placeholder: str = "") -> dict:
+    """The field of the words as a fill or a save gives it: its text, and the line that stands in it while it is empty."""
+    return {"__type__": "update", "value": value, "placeholder": placeholder}
+
+
+def test_the_two_fields_write_the_po_number_pattern_only(tmp_path, madeup_out):
+    """Rule 11 and amendment 3: the two fields are filled from the file at the load and at each select of the settings tab, here with
+    the five words and the six to eight digits of the default, which the file does not hold. "Nummerherkenning opslaan" writes
+    po_number_pattern and nothing else, through update_settings_file: every other key keeps its bytes, the key the file lacks is added
+    at its end, and the fields then show what the file holds. Fields as they were filled write nothing. A refused field writes nothing
+    and is named by its label with its problem. A save from fields filled before the file's pattern changed is refused with the block's
+    note, and the tab selected again fills them with the file as it is."""
+    path, page, made = tab(tmp_path, madeup_out, **BUYER)
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    fill = named(NUMBERS_OPENED, handler(page, "exact_numbers_opened")("nl"))
+    assert fill == {"words": words_shown(DEFAULT_WORDS), "least": "6", "most": "8", "filled": DEFAULT_PATTERN}
+    text, before = path.read_text(encoding="utf-8"), held(path)
+    os.utime(path, ns=(1_700_000_000_000_000_000, 1_700_000_000_000_000_000))
+    same = named(NUMBERS_SAVED, handler(page, "exact_numbers_saved")(f" {DEFAULT_WORDS},", "6", " 8", DEFAULT_PATTERN, "nl"))
+    assert same == {"note": nl["settings_buyer_unchanged"], "words": SAME, "least": SAME, "most": SAME, "filled": DEFAULT_PATTERN}
+    assert path.stat().st_mtime_ns == 1_700_000_000_000_000_000
+    pattern = r"(?i:Inkooporder|Uw\s+referentie)[\s:#.-]*(\d{6,10})(?!\d)"
+    saved = named(NUMBERS_SAVED, handler(page, "exact_numbers_saved")("Inkooporder,Uw referentie", "6", "10", DEFAULT_PATTERN, "nl"))
+    assert saved == {"note": nl["settings_buyer_saved"], "words": words_shown("Inkooporder, Uw referentie"), "least": "6", "most": "10",
+                     "filled": pattern}
+    after = held(path)
+    assert list(after) == [*before, "po_number_pattern"] and {key: after[key] for key in before} == before and after["po_number_pattern"] == pattern
+    assert path.read_text(encoding="utf-8").startswith(text[:text.rindex("\n}")]) and load_settings(path).po_number_pattern == pattern
+    # refused: each problem by the label of its field, nothing written
+    words, digits = nl["exact_field:po_words"], f"{nl['exact_field:po_digits_least']} {nl['exact_field:po_digits_most']}"
+    written = path.read_bytes()
+    for typed, problems in ((("", "6", "8"), [(words, nl["exact_problem:po_words"])]), (("Inkooporder", "0", "8"), [(digits, nl["exact_problem:po_digits"])]),
+                            (("Inkooporder", "9", "8"), [(digits, nl["exact_problem:po_digits"])]),
+                            (("", "", ""), [(words, nl["exact_problem:po_words"]), (digits, nl["exact_problem:po_digits"])])):
+        refused = named(NUMBERS_SAVED, handler(page, "exact_numbers_saved")(*typed, pattern, "nl"))
+        assert refused["note"] == nl["settings_buyer_refused"].format(fields="; ".join(f"{label}: {problem}" for label, problem in problems)), typed
+        assert (refused["words"], refused["least"], refused["most"], refused["filled"]) == (SAME, SAME, SAME, pattern) and path.read_bytes() == written
+    assert nl["settings_buyer_refused"].format(fields=f"{words}: {nl['exact_problem:po_words']}") == (
+        "Niet opgeslagen: Woorden waar leveranciers uw inkoopordernummer achter zetten: vul minstens een woord in.")
+    # the file's pattern changed after the fill (another browser tab, or the file itself): refused with the fields' own note (ruling N12)
+    by_hand(path, po_number_pattern=r"(?i:Order)[\s:#.-]*(\d{6,8})(?!\d)")
+    changed = path.read_bytes()
+    stale = named(NUMBERS_SAVED, handler(page, "exact_numbers_saved")("Inkooporder", "6", "8", pattern, "nl"))
+    assert (stale["note"], stale["filled"]) == (nl["exact_number_changed"], pattern) and path.read_bytes() == changed
+    assert named(NUMBERS_SAVED, handler(page, "exact_numbers_saved")("Inkooporder", "6", "8", pattern, "en"))["note"] == en["exact_number_changed"]
+    again = named(NUMBERS_OPENED, handler(page, "exact_numbers_opened")("en"))
+    assert again == {"words": words_shown("Order"), "least": "6", "most": "8", "filled": r"(?i:Order)[\s:#.-]*(\d{6,8})(?!\d)"}
+    english = named(NUMBERS_SAVED, handler(page, "exact_numbers_saved")("Order, PO", "6", "8", again["filled"], "en"))
+    assert english["note"] == en["settings_buyer_saved"] and held(path)["po_number_pattern"] == r"(?i:Order|PO)[\s:#.-]*(\d{6,8})(?!\d)"
+    by_hand(path, price_pct="x")                                                            # a settings file that cannot be read
+    broken = path.read_bytes()
+    result = named(NUMBERS_SAVED, handler(page, "exact_numbers_saved")("Inkooporder", "6", "8", english["filled"], "nl"))
+    assert result["note"] == unreadable("nl", nl["settings_field:price_pct"]) and path.read_bytes() == broken
+
+
+def test_a_pattern_of_another_form_is_shown_as_an_own_pattern_and_left_alone_while_the_fields_are_empty(tmp_path, madeup_out):
+    """Rule 11: a pattern the fields cannot show is not taken apart: the fields are empty, the field of the words says "eigen patroon (in
+    het instellingenbestand)", and a save with the fields empty writes nothing. Filled in, the fields replace it with a pattern of
+    their form."""
+    own = r"REF-(\d{6})"
+    path, page, made = tab(tmp_path, madeup_out, **(BUYER | {"po_number_pattern": own}))
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    fill = named(NUMBERS_OPENED, handler(page, "exact_numbers_opened")("nl"))
+    assert fill == {"words": words_shown("", nl["exact_po_number_own"]), "least": "", "most": "", "filled": own}
+    before = path.read_bytes()
+    os.utime(path, ns=(1_700_000_000_000_000_000, 1_700_000_000_000_000_000))
+    left = named(NUMBERS_SAVED, handler(page, "exact_numbers_saved")(" ", "", "", own, "nl"))
+    assert left["note"] == nl["settings_buyer_unchanged"] and path.read_bytes() == before and path.stat().st_mtime_ns == 1_700_000_000_000_000_000
+    half = named(NUMBERS_SAVED, handler(page, "exact_numbers_saved")("Uw referentie", "", "", own, "nl"))
+    assert half["note"] == nl["settings_buyer_refused"].format(
+        fields=f"{nl['exact_field:po_digits_least']} {nl['exact_field:po_digits_most']}: {nl['exact_problem:po_digits']}") and path.read_bytes() == before
+    relabelled = handler(page, "exact_numbers_relabel")("en", own)
+    assert relabelled[0] == f"### {en['exact_numbers_title']}"                                   # the heading of the fields (ruling N11)
+    assert relabelled[1] == {"__type__": "update", "label": en["exact_field:po_words"], "info": en["exact_help:po_words"],
+                             "placeholder": en["exact_po_number_own"]}
+    assert [update["label"] for update in relabelled[2:4]] == [en["exact_field:po_digits_least"], en["exact_field:po_digits_most"]]
+    assert relabelled[4] == {"__type__": "update", "value": en["exact_po_number_save"]} and relabelled[5] == ""
+    assert handler(page, "exact_numbers_relabel")("nl", DEFAULT_PATTERN)[1]["placeholder"] == ""
+    saved = named(NUMBERS_SAVED, handler(page, "exact_numbers_saved")("Uw referentie", "6", "8", own, "nl"))
+    assert saved["note"] == nl["settings_buyer_saved"] and held(path)["po_number_pattern"] == r"(?i:Uw\s+referentie)[\s:#.-]*(\d{6,8})(?!\d)"
+    assert {key: value for key, value in held(path).items() if key != "po_number_pattern"} == settings_file_values(tmp_path / "again", BUYER)
+
+
+def settings_file_values(folder: Path, values: dict) -> dict:
+    """What settings_file writes for these values, as JSON."""
+    return held(settings_file(folder, **values))
+
+
+def test_the_texts_of_the_number_recognition_and_the_count_of_the_waiting_cases(tmp_path, madeup_out):
+    """The texts of the two fields, of their heading (ruling N11) and of their note when the pattern was changed elsewhere (ruling N12)
+    word for word, and the state line that counts the cases that wait for their purchase order (rule 10): of seven confirmations only
+    the two run while the store does not hold their POs, not a closed, a replaced or a decided one, one in review for another reason,
+    nor one opened without a PO number (ruling N10)."""
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    assert (nl["exact_numbers_title"], en["exact_numbers_title"]) == (
+        "Hoe de assistent het inkoopordernummer op een orderbevestiging vindt", "How the assistant finds the purchase order number on an order confirmation")
+    assert (nl["exact_number_changed"], en["exact_number_changed"]) == (
+        "Niet opgeslagen: de nummerherkenning is intussen op een andere plek gewijzigd. Open het tabblad Instellingen opnieuw en kijk de woorden "
+        "en de cijfers na.",
+        "Not saved: the number recognition was changed elsewhere meanwhile. Open the tab Settings again and check the words and the digits.")
+    assert (nl["exact_field:po_words"], en["exact_field:po_words"]) == ("Woorden waar leveranciers uw inkoopordernummer achter zetten",
+                                                                      "Words after which suppliers print your purchase order number")
+    assert (nl["exact_help:po_words"], en["exact_help:po_words"]) == ("Met een komma ertussen, bijvoorbeeld: Inkooporder, Uw referentie, Uw ordernummer.",
+                                                                    "With a comma between them, for example: Inkooporder, Uw referentie, Uw ordernummer.")
+    assert (nl["exact_field:po_digits_least"], nl["exact_field:po_digits_most"]) == ("Een inkoopordernummer heeft minstens zoveel cijfers",
+                                                                                    "en hoogstens zoveel cijfers")
+    assert (en["exact_field:po_digits_least"], en["exact_field:po_digits_most"]) == ("A purchase order number has at least this many digits",
+                                                                                    "and at most this many digits")
+    assert (nl["exact_po_number_save"], en["exact_po_number_save"]) == ("Nummerherkenning opslaan", "Save number recognition")
+    assert (nl["exact_problem:po_words"], en["exact_problem:po_words"]) == ("vul minstens een woord in", "fill in at least one word")
+    assert (nl["exact_problem:po_digits"], en["exact_problem:po_digits"]) == (
+        "een heel getal van 1 tot 20, en het kleinste niet groter dan het grootste", "a whole number from 1 to 20, the smallest not above the largest")
+    assert (nl["exact_state_waiting"], en["exact_state_waiting"]) == ("Zaken die op hun inkooporder wachten: {n}.",
+                                                                    "Cases that wait for their purchase order: {n}.")
+    path, page, made = tab(tmp_path, madeup_out, **BUYER)
+    assert nl["exact_state_waiting"].format(n=0) in handler(page, "exact_state_shown")("nl")
+    assert load_settings(path).cases_root == tmp_path / "cases"
+    cases_for_the_count(tmp_path / "cases", madeup_out, deps(tmp_path / "run", madeup_out))
+    state = handler(page, "exact_state_shown")("en")
+    assert en["exact_state_waiting"].format(n=2) in state and "250101" not in state and "S01" not in state
+    assert nl["exact_state_waiting"].format(n=2) in named(EXACT_OPENED, handler(page, "exact_opened")("nl"))["state"]
+
+
+def test_the_number_recognition_is_wired_in_part_1_of_the_block(tmp_path, madeup_out):
+    """The two fields and their button stand at the end of part 1 of the block (the order of the whole block is held in
+    test_the_exact_block_is_wired_as_the_page_shows_it); the fill runs at the load and at each select of the settings tab, the save at
+    its button, and the language switch relabels them. On a share link and without a settings file they are not there."""
+    gr = import_gradio()
+    path, page, made = tab(tmp_path, madeup_out, **BUYER)
+    nl = STRINGS["nl"]
+
+    def bound(fn_name: str) -> tuple:
+        [f] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == fn_name]
+        names = [getattr(page.blocks[block], "label", None) or getattr(page.blocks[block], "value", None) if block != page._id else "page"
+                 for block, _ in f.targets]
+        return sorted(zip(names, [event for _, event in f.targets])), f
+    targets, fill = bound("exact_numbers_opened")
+    assert targets == [(nl["settings_tab"], "select"), ("page", "load")]
+    assert [getattr(block, "label", None) for block in fill.outputs[:3]] == [nl["exact_field:po_words"], nl["exact_field:po_digits_least"],
+                                                                         nl["exact_field:po_digits_most"]]
+    assert isinstance(fill.outputs[3], gr.State) and fill.inputs[0].label == nl["language"]
+    targets, save = bound("exact_numbers_saved")
+    assert targets == [(nl["exact_po_number_save"], "click")]
+    assert [*save.inputs[:3], save.inputs[3]] == [*fill.outputs[:3], fill.outputs[3]] and save.inputs[4].label == nl["language"]
+    assert save.outputs[0].elem_id == "exact-number-note" and [*save.outputs[1:]] == [*fill.outputs]
+    targets, relabel = bound("exact_numbers_relabel")
+    assert targets == [(nl["language"], "change")] and relabel.inputs[1] is fill.outputs[3]
+    assert relabel.outputs[0].value == f"### {nl['exact_numbers_title']}" and [*relabel.outputs[1:4]] == [*fill.outputs[:3]]
+    words = fill.outputs[0]
+    assert words.info == nl["exact_help:po_words"] and isinstance(words, gr.Textbox)
+    for share, file in ((True, True), (False, False)):
+        other = tab(tmp_path / f"{share}", madeup_out, share=share, **BUYER)[1] if file else build_app(deps(tmp_path / "nofile", madeup_out))
+        assert not {getattr(f.fn, "__name__", "") for f in other.fns.values()} & NUMBER_HANDLERS
+
+
+def test_the_manual_says_when_a_case_is_checked_again():
+    """The manual after the review round of Task 36: the two hints word for word (2.2) and the guide's word that a decision ends the
+    check again (7, ruling N8); the heading and the note of the fields, and what the default and the fields' form take (3.17, rulings
+    N7, N11 and N12); when a case is checked again, and that a changed number recognition counts for documents that come in after it,
+    with no promise that a restart or an order given again links a case by a new recognition (2.2, 4.4 and 5, ruling N9); that a case
+    without a number waits for nothing (3.17, ruling N2); that a replaced case keeps its files and is passed over by a count (3.1,
+    ruling N14); and the stage of a failing check again in the log (3.6, ruling N13). The second review round: what a restart does
+    (2.2, 3.17, 4.4 and 5, ruling N24), the reason of a guessed link (2.4, 3.17 and 5, ruling N18), and the guard of 3.2's list of what
+    only the installation sets (ruling N25). The third: a decision saved while the runner checks a case again, and the new case that
+    has not run removed then (3.17, rulings N28 and N35), and a guessed case without a version (2.2, 2.4, 3.17 and 7, ruling N29)."""
+    nl, manual = STRINGS["nl"], manual_sections()
+    whole = Path("aid/MANUAL.md").read_text(encoding="utf-8")
+    assert f"\"{nl['waiting_hint:po'].format(number='250101')}\"" in manual["2.2"]
+    assert f"\"{nl['waiting_hint:version'].format(number='250103', version='1')}\"" in manual["2.2"]
+    assert "Inkooporder 250101 kent de assistent nog niet." in manual["7"] and "niet meer vanzelf opnieuw" in manual["7"]
+    exact = manual["3.17"]
+    for key in ("exact_numbers_title", "exact_number_changed", "exact_po_number_save", "exact_field:po_words", "exact_state_waiting"):
+        assert f"\"{nl[key].split('{')[0].rstrip(': ')}" in exact, key
+    assert "a longer number is taken whole or not at all, in the default as in the fields' form" in exact
+    assert "the two differ only in that the fields' form also passes a full stop between the word and the number" in exact
+    assert "waits for nothing" in exact and "never for another" in exact
+    assert "is not joined to letters or digits by a dash, a full stop, a slash or a comma:" in exact and "(\"Uw referentie:250101\")" in exact
+    for number in ("2.2", "3.17", "4.4", "5"):                  # ruling N24: what a restart does
+        assert "every order of the store counts as filed" in manual[number], number
+    for number in ("4.4", "5"):
+        assert "counts for documents that come in after" in manual[number], number
+    for promise in ("is checked again at the first pass after the runner starts, or when the order's e-mail is given again",
+                    "set the number recognition (section 3.17) and restart the runner", "De inkooporder van deze zaak kent de assistent",
+                    "and at the first pass after the runner starts: it checks the confirmation", "and at the first pass after the runner "
+                    "starts, a new case is opened", "and at the first pass after the runner starts, the runner checks"):
+        assert promise not in whole, promise
+    # ruling N18: the reason of a guessed link, its row in 2.4, the advice in 3.17 and the troubleshooting in 5
+    from aid.pipeline import GUESSED_PO
+    en = STRINGS["en"]
+    label, english = nl[f"reason:{GUESSED_PO}"], en[f"reason:{GUESSED_PO}"]
+    assert f"| {GUESSED_PO} | {label} | {english} |" in manual["2.4"]
+    assert f"\"{label}\"" in exact and "keep coming with" in exact and f"\"{label}\"" in manual["5"] and f"\"{label}\"" in manual["7"]
+    # ruling N25 (the guard of N15b): the settings tab writes po_number_pattern, so 3.2 does not list it as the installation's alone
+    installation = manual["3.2"].split("Only the installation sets the rest:")[1].split("Set these in the file")[0]
+    assert "`po_number_pattern`" not in installation and "`export_columns`" not in installation and "`capture_token`" in installation
+    assert "keeps all its files" in manual["3.1"] and "passes over a case whose `steps/09_close.json` holds the record \"replaced\"" in manual["3.1"]
+    assert "`recheck <case>`" in manual["3.6"]
+    # the third review round: a decision saved during the check again wins (3.17, ruling N28), and a guessed case without a version
+    # says so (2.2, 2.4, 3.17 and 7, ruling N29)
+    assert "also when you decide on it while the runner checks it again" not in whole
+    assert ("A decision you save while the runner checks the case again stops that check, unless you save it in the very moment the "
+            f"runner closes the old case as replaced; the close then says so: \"{nl['not_closed']}\" When the check stops, the new case "
+            "it opened for the confirmation is removed, and so is a new case that an earlier check opened when it has not run yet (it "
+            "has no result and wrote or sent nothing); a new case that has run stays.") in exact                  # ruling N35
+    for number in ("2.2", "2.4", "3.17"):
+        assert "\"Geen versie van de inkooporder gekozen\"" in manual[number] and "once that version is filed" in manual[number], number
+        assert "no hint" in manual[number] and "not counted" in manual[number] and "order pane" in manual[number], number
+    assert ("Staat er ook \"Geen versie van de inkooporder gekozen\", dan kent de assistent de versie niet die de bevestiging noemt"
+            in manual["7"]) and "zodra die versie binnenkomt" in manual["7"]
+    # the merge with Task 33: the try-out's read-back finds the order as the scan does, by a held number as well
+    read_back = exact.split("**The read-back.**")[1].split("\n")[0]
+    assert "or else by a held number, the number of an order the aid knows, of at least four characters" in read_back
+    assert "one line whose number has fewer than four characters and is not one the pattern reads" in read_back
+
+
+# --- the connection to Exact, part 2: the columns of an export of order lines set from a sample (Task 39) ---
+
+CHOSEN = tuple(f"field:{field}" for field in EXPORT_FORM)                                   # the twelve dropdowns, by the field of each
+EXPORT_OPENED = (*CHOSEN, "numbers", "fill_down", "offered", "export_filled")                # the fill of part 2, in its order
+EXPORT_SAMPLE_SHOWN = ("head", "sample_note", "row", *CHOSEN, "offered", "reading", "lines", "note")   # what choosing a sample gives
+EXPORT_HEADER_SHOWN = (*CHOSEN, "offered", "sample_note")                                   # what another row with the column titles gives
+EXPORT_TESTED = ("reading", "lines", "note")                                                 # what "Testen" gives
+EXPORT_SAVED = ("note", "state", "export_filled", "reading", "lines")                        # what "Opslaan" gives
+RELABELLED_EXPORT = ("part", "intro", "sample", "head", "sample_note", "row", *CHOSEN, "numbers", "fill_down", "test", "save", "note", "reading",
+                     "lines")
+NOTHING_EXPORTED = {"export_columns": {}, "export_decimal_comma": False, "export_fill_down": False}    # a file without the three settings
+SAVED_EXPORT = {"export_columns": EXPORT_NL_COLUMNS, "export_decimal_comma": True, "export_fill_down": True}    # what EXPORT_NL_FORM saves
+EXPORT_MINE = {"export_opened", "export_sample_shown", "export_header_shown", "export_tested", "export_saved", "export_relabel"}
+NONE_CHOSEN = [NO_COLUMN] * len(EXPORT_FORM)
+
+
+def export_args(sample, form: dict | None = None, filled: dict | None = NOTHING_EXPORTED, language: str = "nl") -> list:
+    """The inputs of "Testen" and "Opslaan" of part 2: the sample as the page library hands it over (a path), the column chosen in each
+    dropdown, the number convention, the tick, what the part was filled with (the three settings as the file held them), then the
+    page's language."""
+    form = EXPORT_NL_FORM if form is None else form
+    return [None if sample is None else str(sample), *[form[field] for field in EXPORT_FORM], form["numbers"], form["fill_down"], filled,
+            language]
+
+
+def offered(titles: list[str], language: str = "nl") -> list[tuple[str, str]]:
+    """The choices of a dropdown of part 2 while these titles are offered: the choice for no column first."""
+    return [(STRINGS[language]["exact_export_no_column"], NO_COLUMN), *[(title, title) for title in titles]]
+
+
+def test_the_export_sample_fills_the_dropdowns(tmp_path, madeup_out):
+    path, page, made = tab(tmp_path, madeup_out, **BUYER)
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    shown = named(EXPORT_SAMPLE_SHOWN, handler(page, "export_sample_shown")(str(EXPORT_NL), *NONE_CHOSEN, "nl"))
+    assert shown["head"] == {"headers": ["Rij", *"ABCDEFGHIJ"], "data": table_head(EXPORT_NL)} and shown["sample_note"] == ""
+    assert shown["row"] == 3 and shown["offered"] == EXPORT_NL_TITLES                      # the row with the column titles, found
+    assert [shown[name]["choices"] for name in CHOSEN] == [offered(EXPORT_NL_TITLES)] * 12
+    assert [shown[name]["value"] for name in CHOSEN] == NONE_CHOSEN
+    assert (shown["reading"], shown["note"], shown["lines"]["value"]["data"]) == ("", "", [])      # an earlier reading goes
+    # a column chosen before stays chosen where the sample has it (compared as the reader compares titles), and stays offered where
+    # the sample lacks it, so that "Testen" names it
+    chosen = [EXPORT_NL_FORM[field] for field in EXPORT_FORM]
+    chosen[EXPORT_FORM.index("item_code")], chosen[EXPORT_FORM.index("net_price")] = "ARTIKEL", "Netto"
+    again = named(EXPORT_SAMPLE_SHOWN, handler(page, "export_sample_shown")(str(EXPORT_NL), *chosen, "nl"))
+    assert again["offered"] == [*EXPORT_NL_TITLES, "Netto"] and again["field:net_price"]["choices"] == offered([*EXPORT_NL_TITLES, "Netto"])
+    assert [again[name]["value"] for name in CHOSEN] == [*chosen[:2], "Artikel", *chosen[3:]]
+    # another row with the column titles offers its titles; back on row 3 the columns chosen are taken again
+    first = named(EXPORT_HEADER_SHOWN, handler(page, "export_header_shown")(str(EXPORT_NL), 1, *NONE_CHOSEN, "nl"))
+    assert first["offered"] == ["Openstaande inkooporderregels (verzonnen voorbeeld)"] and first["sample_note"] == ""
+    assert first["field:supplier"]["choices"] == offered(["Openstaande inkooporderregels (verzonnen voorbeeld)"])
+    back = named(EXPORT_HEADER_SHOWN, handler(page, "export_header_shown")(str(EXPORT_NL), 3, *chosen, "nl"))
+    assert [back[name]["value"] for name in CHOSEN][:3] == ["Inkooporder", NO_COLUMN, "Artikel"] and back["offered"][-1] == "Netto"
+    assert named(EXPORT_HEADER_SHOWN, handler(page, "export_header_shown")(None, 3, *chosen, "nl")) == dict.fromkeys(EXPORT_HEADER_SHOWN, SAME)
+    # a file of another type is named by its sentence, and the dropdowns stay as they are; so does a sample taken away
+    old = tmp_path / "export.xls"
+    old.write_bytes(EXPORT_NL.read_bytes())
+    refused = named(EXPORT_SAMPLE_SHOWN, handler(page, "export_sample_shown")(str(old), *chosen, "en"))
+    assert (refused["sample_note"], refused["head"]["data"], refused["row"]) == (en["exact_export_refused:file_type"], [], None)
+    assert refused["head"]["headers"] == ["Row"] and [refused[name] for name in (*CHOSEN, "offered")] == [SAME] * 13
+    gone = named(EXPORT_SAMPLE_SHOWN, handler(page, "export_sample_shown")(None, *chosen, "nl"))
+    assert (gone["head"]["data"], gone["sample_note"], gone["row"]) == ([], "", None) and [gone[name] for name in (*CHOSEN, "offered")] == [SAME] * 13
+    assert (nl["exact_export_sample"], nl["exact_export_head"], nl["exact_export_header_row"], nl["exact_export_no_column"]) == (
+        "Voorbeeld: een export van orderregels uit Exact", "De eerste rijen van het voorbeeld", "Rij met de kolomnamen", "(staat niet in het bestand)")
+    assert (en["exact_export_sample"], en["exact_export_head"], en["exact_export_header_row"], en["exact_export_no_column"]) == (
+        "Sample: an export of order lines from Exact", "The first rows of the sample", "Row with the column titles", "(not in the file)")
+
+
+def test_testing_the_export_writes_nothing(tmp_path, madeup_out):
+    path, page, made = tab(tmp_path, madeup_out, authorization_limit="777.77", **BUYER)
+    os.utime(path, ns=(1_700_000_000_000_000_000, 1_700_000_000_000_000_000))
+    before = path.read_bytes()
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    result = named(EXPORT_TESTED, handler(page, "export_tested")(*export_args(EXPORT_NL)))
+    assert result["reading"] == EXPORT_NL_READ and result["note"] == ""
+    assert result["lines"]["value"]["headers"] == export_headers(SAVED_EXPORT, "nl") and result["lines"]["value"]["data"] == EXPORT_NL_ORDERS
+    english = named(EXPORT_TESTED, handler(page, "export_tested")(*export_args(EXPORT_NL, language="en")))
+    assert english["reading"] == EXPORT_NL_READ_EN and english["lines"]["value"]["headers"][:2] == ["Purchase order number", "Line number"]
+    # a form that gives no map reads nothing and says why in the note, and so does a missing sample
+    refused = named(EXPORT_TESTED, handler(page, "export_tested")(*export_args(EXPORT_NL, EXPORT_NL_FORM | {"po_number": NO_COLUMN,
+                                                                                                              "net_price": "Prijs"})))
+    assert refused["note"] == " ".join([nl["exact_export_problem:po_number"], nl["exact_export_problem:more_than_once"].format(column="\"Prijs\"")])
+    assert (refused["reading"], refused["lines"]["value"]["data"]) == ("", [])
+    assert named(EXPORT_TESTED, handler(page, "export_tested")(*export_args(None)))["note"] == nl["exact_problem:no_sample"]
+    # a refusal of the reader stands where the reading stands, by its sentence
+    unticked = named(EXPORT_TESTED, handler(page, "export_tested")(*export_args(EXPORT_NL, EXPORT_NL_FORM | {"fill_down": False})))
+    assert (unticked["reading"], unticked["lines"]["value"]["data"], unticked["note"]) == (nl["exact_export_refused:no_po_number"].format(row=5),
+                                                                                         [], "")
+    assert "777" not in json.dumps([result, english, refused, unticked], ensure_ascii=False)      # never the authorization limit
+    assert path.read_bytes() == before and path.stat().st_mtime_ns == 1_700_000_000_000_000_000
+    assert not (tmp_path / "po_store").exists() and not (tmp_path / "inbox").exists()
+
+
+def test_saving_writes_the_three_settings_and_keeps_every_other_key(tmp_path, madeup_out):
+    path, page, made = tab(tmp_path, madeup_out, **(BUYER | NOTHING_EXPORTED | {"review_url": "http://localhost:7860"}))
+    text, before = path.read_text(encoding="utf-8"), held(path)
+    nl = STRINGS["nl"]
+    result = named(EXPORT_SAVED, handler(page, "export_saved")(*export_args(EXPORT_NL)))
+    assert result["note"] == nl["exact_export_saved"] == "Opgeslagen." and STRINGS["en"]["exact_export_saved"] == "Saved."
+    assert nl["exact_state_columns_set"] in result["state"] and nl["exact_state_columns_unset"] not in result["state"]
+    assert result["export_filled"] == SAVED_EXPORT                                            # what the part now holds
+    assert result["reading"] == EXPORT_NL_READ and result["lines"]["value"]["data"] == EXPORT_NL_ORDERS
+    after = held(path)
+    assert {key: after[key] for key in SAVED_EXPORT} == SAVED_EXPORT and list(after) == list(before)
+    assert list(after["export_columns"]) == list(EXPORT_NL_COLUMNS)
+
+    def written(value) -> str:
+        return json.dumps(value, indent=4).replace("\n", "\n    ")
+    assert path.read_text(encoding="utf-8") == text.replace('"export_columns": {}', f'"export_columns": {written(EXPORT_NL_COLUMNS)}').replace(
+        '"export_decimal_comma": false', '"export_decimal_comma": true').replace('"export_fill_down": false', '"export_fill_down": true')
+    assert load_settings(path).export_columns == EXPORT_NL_COLUMNS and company_values(load_settings(path)) == ["export_columns is not empty"]
+    # the same save again, from the part as the first save left it, writes nothing
+    os.utime(path, ns=(1_700_000_000_000_000_000, 1_700_000_000_000_000_000))
+    again = named(EXPORT_SAVED, handler(page, "export_saved")(*export_args(EXPORT_NL, filled=result["export_filled"])))
+    assert again["note"] == nl["exact_export_saved"] and path.stat().st_mtime_ns == 1_700_000_000_000_000_000
+    # a file without the three keys gets them at its end, in this order
+    path, page, made = tab(tmp_path / "lacking", madeup_out, **BUYER)
+    before = held(path)
+    assert named(EXPORT_SAVED, handler(page, "export_saved")(*export_args(EXPORT_NL)))["note"] == nl["exact_export_saved"]
+    after = held(path)
+    assert list(after) == [*before, "export_columns", "export_decimal_comma", "export_fill_down"] and {key: after[key] for key in before} == before
+
+
+def test_a_save_of_the_columns_is_refused_while_the_sample_cannot_be_read_with_them(tmp_path, madeup_out):
+    """Rules 1 and 2, with amendment 2: each problem is named in the page's language and nothing is written: no sample, a field that
+    must be chosen, a column chosen twice, a refusal of the reader, a text column of numbers in the other convention, a file of another
+    type, and a sample that gives no order line; and a settings file that cannot be read."""
+    path, page, made = tab(tmp_path, madeup_out, **BUYER)
+    before = path.read_bytes()
+    nl = STRINGS["nl"]
+    old = tmp_path / "export.xls"
+    old.write_bytes(EXPORT_NL.read_bytes())
+    empty = write_sheet(tmp_path / "empty.csv", [["Inkooporder", "Artikel"], ["250301", ""]])
+    least = dict.fromkeys(EXPORT_FORM, NO_COLUMN) | {"po_number": "Inkooporder", "item_code": "Artikel", "numbers": "comma", "fill_down": False}
+    convention = nl["exact_problem:convention_comma"].format(column="\"Prijs\"")
+    cases = [(export_args(None), [nl["exact_problem:no_sample"]]),
+             (export_args(EXPORT_NL, EXPORT_NL_FORM | {"item_code": NO_COLUMN}), [nl["exact_export_problem:item_code"]]),
+             (export_args(EXPORT_NL, EXPORT_NL_FORM | {"unit": "Aantal"}), [nl["exact_export_problem:more_than_once"].format(column="\"Aantal\"")]),
+             (export_args(EXPORT_NL, EXPORT_NL_FORM | {"fill_down": False}), [nl["exact_export_refused:no_po_number"].format(row=5)]),
+             (export_args(EXPORT_NL, EXPORT_NL_FORM | {"numbers": "point"}), [convention]),
+             (export_args(EXPORT_NL, EXPORT_NL_FORM | {"net_price": "Netto"}), [nl["exact_export_refused:no_column"].format(column="\"Netto\"")]),
+             (export_args(old), [nl["exact_export_refused:file_type"]]),
+             (export_args(empty, least), [nl["exact_export_problem:no_lines"]])]
+    for args, problems in cases:
+        result = named(EXPORT_SAVED, handler(page, "export_saved")(*args))
+        assert result["note"] == nl["exact_not_saved"].format(problems=" ".join(problems)), problems
+        assert result["state"] == SAME and result["export_filled"] == NOTHING_EXPORTED and path.read_bytes() == before, problems
+    point = named(EXPORT_SAVED, handler(page, "export_saved")(*export_args(EXPORT_NL, EXPORT_NL_FORM | {"numbers": "point"})))
+    assert point["lines"]["value"]["data"][0][4] == "1 (1.000)"                     # the reading shows what the wrong choice would file
+    assert point["reading"].split("\n\n") == [EXPORT_NL_READ, convention]
+    english = named(EXPORT_SAVED, handler(page, "export_saved")(*export_args(None, language="en")))
+    assert english["note"] == "Not saved: Choose a sample first."
+    by_hand(path, price_pct="x")                                                          # a settings file that cannot be read
+    broken = path.read_bytes()
+    result = named(EXPORT_SAVED, handler(page, "export_saved")(*export_args(EXPORT_NL)))
+    assert result["note"] == unreadable("nl", nl["settings_field:price_pct"]) and path.read_bytes() == broken
+
+
+def test_the_part_reopens_with_the_saved_map(tmp_path, madeup_out):
+    path, page, made = tab(tmp_path, madeup_out, **BUYER)
+    nl = STRINGS["nl"]
+    empty = named(EXPORT_OPENED, handler(page, "export_opened")(None, None, "nl"))
+    assert [empty[name]["value"] for name in CHOSEN] == NONE_CHOSEN and [empty[name]["choices"] for name in CHOSEN] == [offered([])] * 12
+    assert (empty["numbers"], empty["fill_down"], empty["offered"], empty["export_filled"]) == ("point", False, [], NOTHING_EXPORTED)
+    handler(page, "export_saved")(*export_args(EXPORT_NL))
+    again = build_app(deps(tmp_path, madeup_out).model_copy(update={"settings": load_settings(path)}), settings_file=path, session=FakeSession())
+    shown = named(EXPORT_OPENED, handler(again, "export_opened")(None, None, "en"))      # no sample: the dropdowns hold the saved titles
+    saved_titles = list(EXPORT_NL_COLUMNS.values())
+    assert shown["offered"] == saved_titles and [shown[name]["choices"] for name in CHOSEN] == [offered(saved_titles, "en")] * 12
+    assert [shown[name]["value"] for name in CHOSEN] == [EXPORT_NL_FORM[field] for field in EXPORT_FORM]
+    assert (shown["numbers"], shown["fill_down"], shown["export_filled"]) == ("comma", True, SAVED_EXPORT)
+    # the reopened part is tested as it is: no column needs to be chosen again
+    form = {field: shown[f"field:{field}"]["value"] for field in EXPORT_FORM} | {"numbers": shown["numbers"], "fill_down": shown["fill_down"]}
+    tested = named(EXPORT_TESTED, handler(again, "export_tested")(*export_args(EXPORT_NL, form, shown["export_filled"])))
+    assert tested["reading"] == EXPORT_NL_READ and tested["lines"]["value"]["data"] == EXPORT_NL_ORDERS
+    # the tab selected again while a sample is chosen: the sample's titles are offered and the saved map is chosen
+    with_sample = named(EXPORT_OPENED, handler(again, "export_opened")(str(EXPORT_NL), 3, "nl"))
+    assert with_sample["offered"] == EXPORT_NL_TITLES and [with_sample[name]["value"] for name in CHOSEN] == [EXPORT_NL_FORM[field]
+                                                                                                             for field in EXPORT_FORM]
+    # a map written into the file by hand opens the same way
+    path, page, made = tab(tmp_path / "by_hand", madeup_out, **(BUYER | {"export_columns": {"item_code": "Artikel", "po_number": "Order"},
+                                                                       "export_decimal_comma": True}))
+    by_file = named(EXPORT_OPENED, handler(page, "export_opened")(None, None, "nl"))
+    assert by_file["offered"] == ["Order", "Artikel"] and (by_file["field:po_number"]["value"], by_file["field:item_code"]["value"]) == ("Order",
+                                                                                                                                       "Artikel")
+    assert (by_file["numbers"], by_file["fill_down"], by_file["field:supplier"]["value"]) == ("comma", False, NO_COLUMN)
+
+
+def test_the_part_offers_nothing_on_a_share_link(tmp_path, madeup_out):
+    columns = {"po_number": "Bestelnummer-voorbeeld", "item_code": "Artikelnummer-voorbeeld"}
+    path, page, made = tab(tmp_path, madeup_out, share=True, **(BUYER | {"export_columns": columns}))
+    assert not {getattr(f.fn, "__name__", "") for f in page.fns.values()} & EXPORT_MINE
+    flat = json.dumps(page.config, default=str, ensure_ascii=False)
+    assert not any(text in flat for text in (STRINGS["nl"]["exact_part_export"], STRINGS["nl"]["exact_export_sample"], *columns.values()))
+    assert not {getattr(f.fn, "__name__", "") for f in build_app(deps(tmp_path / "nofile", madeup_out)).fns.values()} & EXPORT_MINE
+    own = tab(tmp_path / "own", madeup_out, **BUYER)[1]                                      # the page of this PC has them all
+    assert EXPORT_MINE <= {getattr(f.fn, "__name__", "") for f in own.fns.values()}
+
+
+def test_a_save_of_the_columns_from_a_form_the_file_no_longer_holds_is_refused_and_selecting_the_tab_fills_it_again(tmp_path, madeup_out):
+    """Amendment 2 (ruling L6 of part 1): part 2 keeps what its form was filled with, the three export settings as the file held them
+    (at the load, at each select of the settings tab and after each save). A save from a form that another browser tab overtook, or
+    after the three settings changed in the file itself, writes nothing and says so; a change of part 1's settings does not count."""
+    nl = STRINGS["nl"]
+    path, page, made = tab(tmp_path, madeup_out, **(BUYER | {"export_columns": {"po_number": "Inkooporder", "item_code": "Artikel"},
+                                                           "export_fill_down": True}))
+    first, second = (named(EXPORT_OPENED, handler(page, "export_opened")(None, None, "nl")) for _ in range(2))     # two browser tabs
+    assert first["export_filled"] == second["export_filled"] == {"export_columns": {"po_number": "Inkooporder", "item_code": "Artikel"},
+                                                                 "export_decimal_comma": False, "export_fill_down": True}
+    saved = named(EXPORT_SAVED, handler(page, "export_saved")(*export_args(EXPORT_NL, filled=first["export_filled"])))
+    assert saved["note"] == nl["exact_export_saved"] and saved["export_filled"] == SAVED_EXPORT
+    before = path.read_bytes()
+    stale = named(EXPORT_SAVED, handler(page, "export_saved")(*export_args(EXPORT_NL, EXPORT_NL_FORM | {"description": NO_COLUMN},
+                                                                           second["export_filled"])))
+    assert (stale["note"], stale["state"], stale["export_filled"]) == (nl["exact_export_changed"], SAME, second["export_filled"])
+    assert path.read_bytes() == before
+    again = named(EXPORT_OPENED, handler(page, "export_opened")(None, None, "nl"))       # the settings tab selected again in tab 2
+    assert again["export_filled"] == SAVED_EXPORT and again["field:description"]["value"] == "Omschrijving"
+    landed = named(EXPORT_SAVED, handler(page, "export_saved")(*export_args(EXPORT_NL, EXPORT_NL_FORM | {"description": NO_COLUMN},
+                                                                            again["export_filled"])))
+    assert landed["note"] == nl["exact_export_saved"] and "description" not in held(path)["export_columns"]
+    by_hand(path, export_decimal_comma=False)                                              # changed in the file itself
+    refused = named(EXPORT_SAVED, handler(page, "export_saved")(*export_args(EXPORT_NL, filled=landed["export_filled"])))
+    assert refused["note"] == nl["exact_export_changed"] and held(path)["export_decimal_comma"] is False
+    assert handler(page, "export_saved")(*export_args(EXPORT_NL, filled=None))[0] == nl["exact_export_changed"]   # a fill the page lost
+    fresh = named(EXPORT_OPENED, handler(page, "export_opened")(None, None, "nl"))
+    by_hand(path, po_senders=["inkoop@example.org"])                                       # part 1's settings, changed meanwhile
+    assert named(EXPORT_SAVED, handler(page, "export_saved")(*export_args(EXPORT_NL, filled=fresh["export_filled"])))["note"] == nl[
+        "exact_export_saved"]
+    assert nl["exact_export_changed"] == ("Niet opgeslagen: de koppeling is intussen op een andere plek gewijzigd. Open het tabblad Instellingen "
+                                          "opnieuw en kijk de kolommen na.")
+    assert STRINGS["en"]["exact_export_changed"] == ("Not saved: the connection was changed elsewhere meanwhile. Open the tab Settings again "
+                                                     "and check the columns.")
+
+
+def test_the_export_part_is_wired_as_the_page_shows_it(tmp_path, madeup_out):
+    """The built page itself: part 2 below part 1 in the folded block, its controls in their order, and each handler's trigger, inputs
+    and outputs; the fill at the load and at each select of the settings tab, as part 1's (amendment 2)."""
+    gr = import_gradio()
+    path, page, made = tab(tmp_path, madeup_out, **BUYER)
+    nl = STRINGS["nl"]
+    [settings] = [block for block in page.blocks.values() if isinstance(block, gr.Tab) and block.label == nl["settings_tab"]]
+    [exact] = [block for block in settings.children if isinstance(block, gr.Accordion) and block.label == nl["exact_title"]]
+
+    def inside(block) -> list:
+        return [block, *[found for child in getattr(block, "children", []) for found in inside(child)]]
+    [fill] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == "export_opened"]
+    states = {id(fill.outputs[EXPORT_OPENED.index("offered")]): "offered", id(fill.outputs[EXPORT_OPENED.index("export_filled")]): "export filled"}
+    assert all(isinstance(fill.outputs[EXPORT_OPENED.index(state)], gr.State) for state in ("offered", "export_filled"))
+
+    def name(component) -> str:
+        if id(component) in states:
+            return states[id(component)]
+        if isinstance(component, gr.Button):
+            return f"button {component.value}"
+        if isinstance(component, (gr.Dataframe, gr.Markdown)) and component.elem_id:
+            return component.elem_id
+        return getattr(component, "label", None) or str(getattr(component, "value", ""))
+
+    def bound(fn_name: str) -> tuple:
+        [f] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == fn_name]
+        return (sorted((name(page.blocks[block]) if block != page._id else "page", event) for block, event in f.targets),
+                [name(component) for component in f.inputs], [name(component) for component in f.outputs])
+
+    order = [block for block in inside(exact) if isinstance(block, (gr.Markdown, gr.Textbox, gr.Radio, gr.Button, gr.Dataframe, gr.Dropdown,
+                                                                     gr.Checkbox, gr.File, gr.Number))]
+    names = [name(block) for block in order]
+    part = names[names.index(f"### {nl['exact_part_export']}"):names.index(f"### {nl['tryout_title']}")]    # Task 33's part follows, last
+    labels = [field_label(field, "nl") for field in EXPORT_FORM]
+    sample, row, numbers, tick, page_language = (nl["exact_export_sample"], nl["exact_export_header_row"], nl["exact_export_field:numbers"],
+                                                 nl["exact_export_field:fill_down"], nl["language"])
+    assert part == [f"### {nl['exact_part_export']}", nl["exact_export_intro"], sample, "export-head", "export-sample-note", row, *labels, numbers,
+                    tick, f"button {nl['exact_test']}", f"button {nl['exact_save']}", "export-note", "export-read", "export-lines"]
+    assert bound("export_opened") == ([(nl["settings_tab"], "select"), ("page", "load")], [sample, row, page_language],
+                                      [*labels, numbers, tick, "offered", "export filled"])
+    assert bound("export_sample_shown") == ([(sample, "change")], [sample, *labels, page_language],
+                                            ["export-head", "export-sample-note", row, *labels, "offered", "export-read", "export-lines", "export-note"])
+    assert bound("export_header_shown") == ([(row, "input")], [sample, row, *labels, page_language], [*labels, "offered", "export-sample-note"])
+    inputs = [sample, *labels, numbers, tick, "export filled", page_language]
+    assert bound("export_tested") == ([(f"button {nl['exact_test']}", "click")], inputs, ["export-read", "export-lines", "export-note"])
+    assert bound("export_saved") == ([(f"button {nl['exact_save']}", "click")], inputs,
+                                     ["export-note", "exact-state", "export filled", "export-read", "export-lines"])
+    assert bound("export_relabel")[0] == [(page_language, "change")]
+    shown = {name(block): block for block in order[names.index(f"### {nl['exact_part_export']}"):]}
+    assert shown[sample].file_types is None and (shown[row].precision, shown[row].minimum, shown[row].value) == (0, None, None)   # M3, M4
+    assert shown[nl["exact_meaning:line_id"]].info == nl["exact_export_help:line_id"]
+    assert [shown[label].info for label in labels if label != nl["exact_meaning:line_id"]] == [None] * 11
+    assert [(shown[label].choices, shown[label].value) for label in labels] == [([(nl["exact_export_no_column"], NO_COLUMN)], NO_COLUMN)] * 12
+    assert shown[numbers].choices == [(nl["exact_numbers:comma"], "comma"), (nl["exact_numbers:point"], "point")]
+    assert all(shown[table].interactive is False for table in ("export-head", "export-lines")) and shown["export-head"].label == nl["exact_export_head"]
+
+
+def test_switching_the_language_relabels_the_export_part_and_keeps_what_is_chosen(tmp_path, madeup_out):
+    path, page, made = tab(tmp_path, madeup_out, **BUYER)
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    chosen = [EXPORT_NL_FORM[field] for field in EXPORT_FORM]
+    shown = named(RELABELLED_EXPORT, handler(page, "export_relabel")("en", str(EXPORT_NL), 3, *chosen, EXPORT_NL_TITLES, "comma"))
+    assert (shown["part"], shown["intro"]) == (f"### {en['exact_part_export']}", en["exact_export_intro"])
+    assert (shown["sample"]["label"], shown["row"]["label"], shown["head"]["label"]) == (en["exact_export_sample"], en["exact_export_header_row"],
+                                                                                         en["exact_export_head"])
+    assert shown["head"]["value"] == {"headers": ["Row", *"ABCDEFGHIJ"], "data": table_head(EXPORT_NL)} and shown["sample_note"] == ""
+    assert [shown[name]["label"] for name in CHOSEN] == [field_label(field, "en") for field in EXPORT_FORM]
+    assert [shown[name]["choices"] for name in CHOSEN] == [offered(EXPORT_NL_TITLES, "en")] * 12
+    assert [shown[name]["value"] for name in CHOSEN] == chosen and shown["field:line_id"]["info"] == en["exact_export_help:line_id"]
+    assert (shown["numbers"]["label"], shown["numbers"]["value"]) == (en["exact_export_field:numbers"], "comma")
+    assert shown["numbers"]["choices"] == [(en["exact_numbers:comma"], "comma"), (en["exact_numbers:point"], "point")]
+    assert (shown["fill_down"]["label"], shown["test"]["value"], shown["save"]["value"]) == (en["exact_export_field:fill_down"], "Test", "Save")
+    assert (shown["note"], shown["reading"], shown["lines"]["value"]) == ("", "", {"headers": export_headers(None, "en"), "data": []})
+    flat = json.dumps(shown, default=str, ensure_ascii=False)
+    assert nl["exact_export_sample"] not in flat and nl["exact_export_no_column"] not in flat and nl["exact_export_help:line_id"] not in flat
+    assert (nl["exact_part_export"], en["exact_part_export"]) == ("2. Inkooporders als export uit Exact (voor de controle voor het bestellen)",
+                                                                  "2. Purchase orders as an export from Exact (for the check before ordering)")
+    assert nl["exact_export_intro"] == ("Voor het bestellen bestaat de pdf van de inkooporder nog niet. Geef de assistent dan een export van de "
+                                        "orderregels uit Exact (Excel of csv). Hier stelt u een keer in welke kolom wat bevat.")
+    assert en["exact_export_intro"] == ("Before ordering the PDF of the purchase order does not exist yet. Then give the assistant an export of "
+                                        "the order lines from Exact (Excel or CSV). Here you set once which column holds what.")
+    assert (nl["exact_export_field:numbers"], en["exact_export_field:numbers"]) == ("Getallen die als tekst in het bestand staan",
+                                                                                    "Numbers that stand in the file as text")
+    assert (nl["exact_export_field:fill_down"], en["exact_export_field:fill_down"]) == (
+        "Het inkoopordernummer staat alleen op de eerste regel van elke inkooporder",
+        "The purchase order number stands on the first line of each purchase order only")
+    assert (nl["exact_export_help:line_id"], en["exact_export_help:line_id"]) == (
+        "Zonder kolom telt de assistent de regels van elke inkooporder in de volgorde van het bestand.",
+        "Without a column the assistant counts the lines of each purchase order in the order of the file.")
+    refused = named(RELABELLED_EXPORT, handler(page, "export_relabel")("en", str(tmp_path / "gone.xls"), None, *NONE_CHOSEN, [], "point"))
+    assert refused["sample_note"] == en["exact_export_refused:file_type"] and refused["head"]["value"]["data"] == []
+
+
+def test_the_export_sample_is_read_where_the_page_library_put_it_and_copied_nowhere(tmp_path, madeup_out):
+    """Rule 6: the page library hands the sample over as a file of its own temporary folder (the folder version of Task 30 puts that
+    folder inside the aid's folder). Choosing, testing and saving read it there: no copy of it is made, nothing is filed in the PO store
+    and no case is opened."""
+    path, page, made = tab(tmp_path, madeup_out, **BUYER)
+    upload = tmp_path / "gradio" / "1b2c3d4e"
+    upload.mkdir(parents=True)
+    sample = upload / "EXPORT_nl.csv"
+    shutil.copy(EXPORT_NL, sample)
+    digest = hashlib.sha256(sample.read_bytes()).hexdigest()
+    handler(page, "export_sample_shown")(str(sample), *NONE_CHOSEN, "nl")
+    handler(page, "export_header_shown")(str(sample), 3, *NONE_CHOSEN, "nl")
+    handler(page, "export_tested")(*export_args(sample))
+    assert named(EXPORT_SAVED, handler(page, "export_saved")(*export_args(sample)))["note"] == STRINGS["nl"]["exact_export_saved"]
+    copies = [p for p in tmp_path.rglob("*") if p.is_file() and hashlib.sha256(p.read_bytes()).hexdigest() == digest]
+    assert copies == [sample] and sorted(p.name for p in upload.iterdir()) == ["EXPORT_nl.csv"]
+    assert not (tmp_path / "po_store").exists() and not (tmp_path / "inbox").exists() and not list(tmp_path.glob("cases/2503*"))
+
+
+def test_after_a_save_the_runner_files_the_export_and_the_state_says_when(tmp_path, madeup_out):
+    """With the columns saved, an export in the watched folder is filed as looks at its POs at the next pass (Task 40), and the state
+    lines of the block say that the columns are set and when the last export was filed (amendment 3)."""
+    path, page, made = tab(tmp_path, madeup_out, **BUYER)
+    nl = STRINGS["nl"]
+    assert named(EXPORT_SAVED, handler(page, "export_saved")(*export_args(EXPORT_NL)))["note"] == nl["exact_export_saved"]
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    shutil.copy(EXPORT_NL, inbox / "EXPORT_nl.csv")
+    store = PoStore(tmp_path / "po_store")
+    scanned = scan_folder(inbox, store, tmp_path / "cases", load_settings(path), datetime(2026, 11, 12, 9, 0))
+    assert [look.po_number for look in store.snapshots("250301")] == ["250301"] and store.versions("250301") == []
+    assert not (inbox / "EXPORT_nl.csv").exists() and scanned.skipped == []
+    state = handler(page, "exact_state_shown")("nl")
+    moment = store.filed_at("250301", "e1").strftime("%Y-%m-%d %H:%M")
+    assert nl["exact_state_columns_set"] in state and nl["exact_state_export"].format(time=moment) in state
+    # an export whose column titles differ from those saved is no export to the runner: the digest lists it with this reason
+    write_sheet(inbox / "other.csv", [["Order", "Artikel"], ["250301", "KM-3101"]])
+    other = scan_folder(inbox, store, tmp_path / "cases", load_settings(path), datetime(2026, 11, 12, 9, 1))
+    assert other.skipped == [("other.csv", NOT_AN_EXPORT)]
+
+
+def test_the_manual_says_how_the_columns_are_set_and_what_the_digest_says_of_another_spreadsheet():
+    """Step 6 with amendment 4: MANUAL 3.17 has part 2 (quoting the page word for word, the worked example on EXPORT_nl.csv, the advice
+    to compare three lines with Exact, the test walk B4), says that an export whose titles differ from those saved is listed in the
+    digest under "Overgeslagen" as a spreadsheet without the export's column titles, and 3.2 says that the block writes the three
+    settings. The review round (rulings M1 to M3, M7, M8 and M13): part 2's own advice is asserted within part 2's text; step 5 tells the
+    rows passed over apart; the first and the last order are shown, and a "Totaal" line in the last one means a total row; any file
+    reaches the block's sentences; each refusal names the column or the row where the reader gives one and says what to do; a purchase
+    order known from an export counts among those the assistant knows; and part 1's test walk reports the lines without a count. The
+    second review round (rulings M15 to M18): the last order shown is the order of the file's last order line, also the PO the file
+    names last when that is another, and a "Totaal" line in it means a total row to which the tick gives the number of the order
+    above it; a CSV file is cut at the mark that gives the whole file the most filled cells (ruling M21); the sentence for a file that
+    is no PDF says that its name is the cause; and part 2's test walk reports every line the block shows above the table."""
+    nl, manual = STRINGS["nl"], manual_sections()
+    exact = manual["3.17"]
+    part2 = exact[exact.index(f"**Part 2, \"{nl['exact_part_export']}\".**"):]
+    for key in ("exact_part_export", "exact_export_sample", "exact_export_head", "exact_export_header_row", "exact_export_field:po_number",
+                "exact_export_field:item_code", "exact_export_no_column", "exact_export_help:line_id", "exact_export_field:numbers",
+                "exact_numbers:comma", "exact_export_field:fill_down", "exact_test", "exact_save", "exact_export_saved", "exact_state_columns_set",
+                "exact_state_columns_unset", "exact_state_no_export", "exact_export_first_and_last"):
+        assert f"\"{nl[key]}\"" in exact, key                                                # quoted word for word
+    assert EXPORT_NL_READ in part2 and "Laatste export opgenomen" in exact
+    assert "EXPORT_nl.csv" in part2 and "B4" in part2 and "later parts are to follow" not in exact
+    assert "Compare three lines of that order at least with the same order in Exact" in part2                  # M13: part 2's own advice
+    assert "Compare three lines of the first and the last order with Exact's screen" in part2
+    assert "report the lines under \"Stand van de koppeling\" in words" in exact and "report the three lines" not in exact
+    assert f"\"{NOT_AN_EXPORT}\"" in part2 and "\"Overgeslagen\"" in part2                   # amendment 4
+    # M1: step 5 tells the rows passed over apart
+    assert "the rows without an item code" in part2 and "rows with an item code but no quantity" in part2
+    assert "a date, a time or an error value" in part2 and "Excel can turn a code into a date" in part2
+    # M2: the first and the last order, and what a "Totaal" line in the last one means
+    assert "the first and the last order" in part2 and "make the export without totals" in part2
+    # M3: any file reaches the block, which answers by its own sentences
+    assert f"\"{nl['exact_export_refused:file_type']}\"" in part2 and f"\"{nl['exact_problem:not_pdf']}\"" in exact
+    assert "Invalid file type" not in exact
+    # M7: each refusal names the column or the row where the reader gives one, and says what to do
+    assert "names the column or the row where the reader gives one, and says what to do" in part2
+    assert nl["exact_export_refused:no_column"].format(column="\"Netto\"") in part2
+    # M8: a purchase order known from an export counts among those the assistant knows
+    assert "not counted there" not in exact and "\"uit een export\"" in exact
+    # M15: the order of the file's last order line is shown, also when the file names another PO last
+    assert "the order of the file's last order line" in part2 and "the order the file names last when that is another one" in part2
+    assert "a total row to which the tick gives the number of the order above it" in part2 and "a total row which the tick" not in part2
+    # M16 and M21: the mark that gives the whole file the most filled cells, then the mark of the widest row
+    assert "at the mark under which the whole file holds the most filled cells" in part2 and "most rows of three cells" not in part2
+    assert "on a tie, at the mark under which the widest row holds the most filled cells" in part2
+    # M17: part 1's sentence for a file that is no PDF names the cause, its name
+    assert "a file whose name does not end in .pdf" in exact
+    # M18: part 2's test walk reports every line above the table
+    assert ("report in words every line the block shows above the table: the line \"Gelezen: ...\", the line on rows with an item code "
+            "but no quantity, each line \"Niet gelezen\" and each problem (check B4)") in part2
+    settings = manual["3.2"]
+    assert "`export_columns`, `export_decimal_comma` and `export_fill_down`" in settings
+    rest = settings[settings.index("Only the installation sets the rest"):settings.index("Set these in the file")]
+    assert "export_" not in rest
+
+
+# --- the review round of part 2 (rulings M3, M4, M5 and M11) ---
+
+def test_every_file_reaches_the_sentences_of_the_block(tmp_path, madeup_out):
+    """Ruling M3 (findings 2 and 9): the sample fields of part 1 and of part 2 take any file, so that the page library refuses none in
+    English before a handler runs, and the block answers in the page's language: part 2 with the brief's sentence for a file that is
+    neither .xlsx nor .csv, part 1 with its own sentence for a file whose name does not end in .pdf, which says so (ruling M17: it is
+    true for a PDF saved without its suffix too, which the runner passes by as well)."""
+    from gradio.data_classes import FileData
+    gr = import_gradio()
+    path, page, made = tab(tmp_path, madeup_out, **BUYER)
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    [part1] = [block for block in page.blocks.values() if isinstance(block, gr.File) and block.label == nl["exact_sample"]]
+    [part2] = [block for block in page.blocks.values() if isinstance(block, gr.File) and block.elem_id == "export-sample"]
+    before = path.read_bytes()
+    for name in ("export.xls", "notes.txt", "order.docx"):
+        other = tmp_path / name
+        other.write_bytes(b"made-up")
+        for field in (part1, part2):                                      # the page library lets the file through to the handler
+            assert field.file_types is None and field.preprocess(FileData(path=str(other))) == str(other), name
+        shown = named(EXPORT_SAMPLE_SHOWN, handler(page, "export_sample_shown")(str(other), *NONE_CHOSEN, "nl"))
+        assert shown["sample_note"] == nl["exact_export_refused:file_type"], name
+        assert named(EXPORT_TESTED, handler(page, "export_tested")(*export_args(other)))["reading"] == nl["exact_export_refused:file_type"]
+        assert named(SAMPLE_SHOWN, handler(page, "exact_sample_shown")(str(other), "en"))["sample_note"] == en["exact_problem:not_pdf"]
+        found = named(TITLE_FOUND, handler(page, "exact_title_found")(str(other), "Artikelcode", [], *[None] * SLOTS, "nl"))
+        assert found["title_note"] == nl["exact_problem:not_pdf"]
+        assert named(TESTED, handler(page, "exact_tested")(*exact_args(other)))["note"] == nl["exact_problem:not_pdf"]
+        saved = named(EXACT_SAVED, handler(page, "exact_saved")(*exact_args(other)))
+        assert saved["note"] == nl["exact_not_saved"].format(problems=nl["exact_problem:not_pdf"]), name
+        relabelled = named(RELABELLED, handler(page, "exact_relabel")("en", str(other), "comma", [], *[None] * SLOTS))
+        assert relabelled["sample_note"] == en["exact_problem:not_pdf"]
+    assert path.read_bytes() == before
+    cut = tmp_path / "cut.pdf"                                            # a .pdf that cannot be opened keeps ruling L11's sentence
+    cut.write_bytes(ANDERS_PO.read_bytes()[:1500])
+    assert named(SAMPLE_SHOWN, handler(page, "exact_sample_shown")(str(cut), "nl"))["sample_note"] == nl["exact_problem:unopenable"]
+    unnamed = tmp_path / "inkooporder"                                    # a PDF saved without its suffix: refused by its name
+    unnamed.write_bytes(ANDERS_PO.read_bytes())
+    assert named(SAMPLE_SHOWN, handler(page, "exact_sample_shown")(str(unnamed), "nl"))["sample_note"] == nl["exact_problem:not_pdf"]
+    assert nl["exact_problem:not_pdf"] == ("Dit bestand is geen pdf-bestand: zijn naam eindigt niet op .pdf. Kies de pdf van een inkooporder "
+                                           "zoals Exact die verstuurt.")
+    assert en["exact_problem:not_pdf"] == ("This file is no PDF: its name does not end in .pdf. Choose the PDF of a purchase order as Exact "
+                                           "sends it.")
+
+
+def test_the_row_field_takes_no_value_or_0_and_part_2_is_filled_and_relabelled(tmp_path, madeup_out):
+    """Ruling M4 (finding 8): the row field has no minimum, and an empty value, 0 or a negative number counts as no row typed, so that
+    the row is found by itself. The events that take the row (each select of the settings tab, the language switch and the row's own
+    change) run through the page library's own preprocessing with these values, and part 2 is filled again and relabelled."""
+    import asyncio
+
+    from gradio.state_holder import SessionState
+    path, page, made = tab(tmp_path, madeup_out, **(BUYER | {"export_columns": {"po_number": "Inkooporder", "item_code": "Artikel"}}))
+    en = STRINGS["en"]
+    [row] = [block for block in page.blocks.values() if getattr(block, "elem_id", None) == "export-row"]
+    assert row.minimum is None and [row.preprocess(value) for value in (None, 0, -2)] == [None, 0, -2]
+
+    def run(name: str, inputs: list) -> list:
+        [fn] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == name]
+        return asyncio.run(page.process_api(block_fn=fn, inputs=inputs, state=SessionState(page)))["data"]
+
+    for typed in (None, 0, -1):
+        opened = dict(zip(EXPORT_OPENED, run("export_opened", [None, typed, "nl"])))          # a select of the settings tab
+        assert (opened["field:po_number"]["value"], opened["field:item_code"]["value"]) == ("Inkooporder", "Artikel"), typed
+        assert ["Inkooporder", "Inkooporder"] in opened["field:po_number"]["choices"] and opened["numbers"] == "point"
+        relabelled = dict(zip(RELABELLED_EXPORT, run("export_relabel", ["en", None, typed, *NONE_CHOSEN, None, "point"])))
+        assert relabelled["part"] == f"### {en['exact_part_export']}" and relabelled["row"]["label"] == en["exact_export_header_row"], typed
+        assert relabelled["field:line_id"]["info"] == en["exact_export_help:line_id"]
+        changed = dict(zip(EXPORT_HEADER_SHOWN, run("export_header_shown", [None, typed, *NONE_CHOSEN, "nl"])))
+        assert changed["field:po_number"] == {"__type__": "update"}, typed                     # no sample: nothing to offer, no error
+    # with a sample, an empty row and 0 both find the row with the column titles by themselves
+    sample = tmp_path / "EXPORT_nl.csv"
+    shutil.copy(EXPORT_NL, sample)
+    for typed in (None, 0, -1):
+        offered = named(EXPORT_HEADER_SHOWN, handler(page, "export_header_shown")(str(sample), typed, *NONE_CHOSEN, "nl"))["offered"]
+        assert offered == EXPORT_NL_TITLES, typed
+
+
+def test_a_sample_cut_at_tabs_or_commas_offers_its_titles_on_row_1(tmp_path, madeup_out):
+    """Ruling M5 (findings 3 and 11): a tab-separated export with decimal commas, one in UTF-16 with its byte order mark, and a
+    comma-separated one with semicolons in a description: the table of the first rows shows each title in a cell of its own, the row
+    field shows 1, the dropdowns offer the titles, and "Testen" reads what the export reader reads."""
+    path, page, made = tab(tmp_path, madeup_out, **BUYER)
+    tabs, wide, commas = write_cut_samples(tmp_path / "samples")      # the reviewers' three samples, as they hold them
+    for sample, shown_titles, form in ((tabs, TABS_TITLES, ("Inkooporder", "Artikel", "Aantal", "comma")),
+                                       (wide, WIDE_TITLES, ("Inkooporder", "Artikel", "Aantal", "comma")),
+                                       (commas, COMMAS_TITLES, ("PO Number", "Item", "Qty", "point"))):
+        shown = named(EXPORT_SAMPLE_SHOWN, handler(page, "export_sample_shown")(str(sample), *NONE_CHOSEN, "nl"))
+        assert shown["head"]["data"][0] == ["1", *shown_titles] and shown["row"] == 1 and shown["offered"] == shown_titles, sample.name
+        assert shown["field:item_code"]["choices"] == offered(shown_titles)
+        po_number, item_code, quantity, numbers = form
+        chosen = dict.fromkeys(EXPORT_FORM, NO_COLUMN) | {"po_number": po_number, "item_code": item_code, "quantity": quantity,
+                                                          "numbers": numbers, "fill_down": False}
+        tested = named(EXPORT_TESTED, handler(page, "export_tested")(*export_args(sample, chosen)))
+        reading = read_export(sample, {"po_number": po_number, "item_code": item_code, "quantity": quantity}, numbers == "comma")
+        assert [line[:3] for line in tested["lines"]["value"]["data"]] == [
+            [doc.po_reference.value, line.line_id, line.item_code.value] for doc in reading.documents[:1] + reading.documents[1:][-1:]
+            for line in doc.lines], sample.name
+        assert [line[3].split(" (")[0] for line in tested["lines"]["value"]["data"]] == [
+            str(line.quantity.value) for doc in reading.documents[:1] + reading.documents[1:][-1:] for line in doc.lines], sample.name
+        assert tested["note"] == "" and tested["reading"].startswith("Gelezen: "), sample.name
+
+
+# --- the second review round of part 2 (rulings M15 to M18) ---
+
+def test_testing_an_export_sorted_by_delivery_date_shows_the_order_that_holds_its_total(tmp_path, madeup_out):
+    """Ruling M15 (finding 1 of the check of the fix round): "Testen" on an export sorted by delivery date that ends in a total row, with
+    the tick, shows the order that the total row joins, which is neither the first order nor the PO the file names last, beside those
+    two; on a longer one too, whose total row stands far below the first rows the block shows."""
+    path, page, made = tab(tmp_path, madeup_out, **BUYER)
+    chosen = dict.fromkeys(EXPORT_FORM, NO_COLUMN) | SORTED_BY_DATE_COLUMNS | {"numbers": "comma", "fill_down": True}
+    for sample, orders, total in ((SORTED_BY_DATE, ["250301", "250302", "250303"], "250302"),
+                                  (SORTED_BY_DATE_LONG, ["250301", "250306", "250305"], "250306")):
+        tested = named(EXPORT_TESTED, handler(page, "export_tested")(*export_args(sample, chosen)))
+        table = tested["lines"]["value"]["data"]
+        assert list(dict.fromkeys(row[0] for row in table)) == orders and tested["note"] == "", sample.name
+        assert [row[0] for row in table if row[2] == "Totaal"] == [total], sample.name
+        assert tested["reading"].endswith(STRINGS["nl"]["exact_export_first_and_last"]), sample.name
+
+
+def test_a_sample_with_commas_in_its_title_line_or_footer_offers_its_titles(tmp_path, madeup_out):
+    """Rulings M16 and M21 (findings 2 and 5 of the check of the fix round): a semicolon export with a title line and a footer that hold
+    commas, one with the title line only, a tab export with such a title (also in UTF-16) and a sample whose last title holds two
+    commas: the table of the first rows shows each title in a cell of its own, the row field shows the row of the titles, the dropdowns
+    offer them, and "Testen" reads what the export reader reads."""
+    path, page, made = tab(tmp_path, madeup_out, **BUYER)
+    footer, title, tabs, wide, tie = write_title_samples(tmp_path / "samples")      # the checkers' five samples, as they hold them
+    for sample, row, titles, fill_down in ((footer, 3, EXPORT_NL_TITLES, True), (title, 3, EXPORT_NL_TITLES, True), (tabs, 3, TITLE_COMMAS, False),
+                                           (wide, 3, TITLE_COMMAS, False), (tie, 1, TIE_TITLES, False)):
+        shown = named(EXPORT_SAMPLE_SHOWN, handler(page, "export_sample_shown")(str(sample), *NONE_CHOSEN, "nl"))
+        assert shown["head"]["data"][row - 1][:len(titles) + 1] == [str(row), *titles], sample.name
+        assert shown["row"] == row and shown["offered"] == titles and shown["field:item_code"]["choices"] == offered(titles), sample.name
+        chosen = dict.fromkeys(EXPORT_FORM, NO_COLUMN) | {"po_number": "Inkooporder", "item_code": "Artikel", "unit_price": "Prijs",
+                                                          "numbers": "comma", "fill_down": fill_down}
+        tested = named(EXPORT_TESTED, handler(page, "export_tested")(*export_args(sample, chosen)))
+        reading = read_export(sample, {"po_number": "Inkooporder", "item_code": "Artikel", "unit_price": "Prijs"}, True, fill_down)
+        assert [row[:3] for row in tested["lines"]["value"]["data"]] == [
+            [doc.po_reference.value, line.line_id, line.item_code.value] for doc in reading.documents[:1] + reading.documents[1:][-1:]
+            for line in doc.lines] and tested["note"] == "", sample.name
+
+
+def test_a_select_of_the_tab_or_a_language_switch_with_the_same_sample_reads_it_no_more(tmp_path, madeup_out, monkeypatch):
+    """Ruling M11 (finding 5): choosing a sample reads it once, for its first rows and its titles; a select of the settings tab and a
+    language switch with the same sample (the same path, size and modification time) use what was read; "Testen" reads it once; a sample
+    changed on disk is read again."""
+    import aid.readers.po_export as po_export
+    import aid.review.exact_settings as exact
+    path, page, made = tab(tmp_path, madeup_out, **BUYER)
+    sample = tmp_path / "EXPORT_nl.csv"
+    shutil.copy(EXPORT_NL, sample)
+    reads, real = [], po_export.csv_text
+
+    def counted(file):
+        reads.append(Path(file).name)
+        return real(file)
+
+    for module in (po_export, exact):
+        monkeypatch.setattr(module, "csv_text", counted)
+    shown = named(EXPORT_SAMPLE_SHOWN, handler(page, "export_sample_shown")(str(sample), *NONE_CHOSEN, "nl"))
+    assert reads == ["EXPORT_nl.csv"] and shown["row"] == 3
+    opened = named(EXPORT_OPENED, handler(page, "export_opened")(str(sample), shown["row"], "nl"))        # a select of the settings tab
+    relabelled = named(RELABELLED_EXPORT, handler(page, "export_relabel")("en", str(sample), shown["row"], *NONE_CHOSEN, shown["offered"],
+                                                                          "point"))
+    named(EXPORT_OPENED, handler(page, "export_opened")(str(sample), None, "nl"))                        # the row field emptied
+    assert reads == ["EXPORT_nl.csv"] and opened["offered"] == EXPORT_NL_TITLES
+    assert relabelled["head"]["value"]["data"] == table_head(EXPORT_NL)
+    reads.clear()
+    handler(page, "export_tested")(*export_args(sample))
+    assert reads == ["EXPORT_nl.csv"]                                                                     # one read for a trial
+    stamp = sample.stat().st_mtime_ns + 2_000_000_000
+    os.utime(sample, ns=(stamp, stamp))                                                                   # the same file saved again
+    reads.clear()
+    named(EXPORT_OPENED, handler(page, "export_opened")(str(sample), 3, "nl"))
+    assert reads == ["EXPORT_nl.csv"]
+
+
+def test_the_tables_of_part_2_keep_their_titles_whole_and_scroll_inside_the_block(tmp_path, madeup_out):
+    """Ruling M12 (as Task 32's ruling L10 for part 1): at 1366 by 768 a column title of part 2's two tables breaks between its words
+    only, never inside one ("Rij" stays whole), and a table wider than the block scrolls sideways inside it: a style rule of the page for
+    the two tables, which the browser check of the review round measured (no title broken inside a word, both tables scrolling)."""
+    gr = import_gradio()
+    path, page, made = tab(tmp_path, madeup_out, **BUYER)
+    heads = [block.head for block in page.blocks.values() if isinstance(block, gr.HTML) and block.head and "#export-head" in block.head]
+    assert heads == ["<style>#export-head th, #export-head th *, #export-lines th, #export-lines th * { word-break: normal; overflow-wrap: "
+                     "normal; }</style>"]
+    without = tab(tmp_path / "share", madeup_out, share=True, **BUYER)[1]          # nothing of part 2 on a share link, its style neither
+    assert not [block for block in without.blocks.values() if isinstance(block, gr.HTML) and block.head and "#export-head" in block.head]
+
+
+# --- the part "Proefdraaien" at the end of the block, and the switch of the test mode (Task 33) ---
+
+TRYOUT_OPENED = ("switch", "filled", "why", "controls", "po", "download", "note")    # the fill of the part, in the order of its outputs
+TRYOUT_MADE = ("po", "download", "note")                    # what "Proefbevestiging maken (pdf)" and "... direct aan de assistent geven" give
+SWITCHED = ("switch", "filled", "why", "controls", "po", "note")                      # what the switch gives
+TRYOUT_RELABELLED = ("title", "intro", "switch", "why", "po", "change", "make", "give", "note")
+TRYOUT_HANDLERS = {"tryout_opened", "tryout_refreshed", "tryout_made", "tryout_given", "tryout_chosen", "test_mode_saved", "tryout_relabel"}
+NOW = datetime(2026, 11, 12, 9, 0)                    # the page's clock in these tests (deps())
+SHOWN_PART, HIDDEN_PART = {"__type__": "update", "visible": True}, {"__type__": "update", "visible": False}
+NO_DOWNLOAD = {"__type__": "update", "value": None, "visible": False}
+
+
+def files(folder: Path) -> dict[Path, bytes]:
+    """Every file under the folder, with its bytes."""
+    return {path: path.read_bytes() for path in folder.rglob("*") if path.is_file()}
+
+
+def test_the_try_out_is_offered_in_the_test_mode_without_a_limit_only(tmp_path, madeup_out, monkeypatch):
+    """Rule 1: the part "Proefdraaien" offers a try-out only while test_mode is true and no authorization limit is set; otherwise it
+    shows one line that says why, and its two buttons say the same and write nothing. Offered, its dropdown holds the POs the store
+    knows; "Proefbevestiging maken (pdf)" makes the PDF for the download in the page library's temporary folder, and "Proefbevestiging
+    direct aan de assistent geven" puts it into the watched folder: no other file is written. A PO that gives no try-out is refused
+    with its sentence, and nothing is written."""
+    monkeypatch.setenv("GRADIO_TEMP_DIR", str(tmp_path / "gradio"))              # the page library's temporary folder of this test
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    for n, values in enumerate(({}, {"test_mode": False}, {"test_mode": True, "authorization_limit": "5000.00"})):
+        folder = tmp_path / f"not_offered_{n}"
+        path, page, made = tab(folder, madeup_out, **(BUYER | values))
+        PoStore(folder / "po_store").add(madeup_out / "MU08_po_v1.pdf")
+        shown = named(TRYOUT_OPENED, handler(page, "tryout_opened")("nl"))
+        assert (shown["why"], shown["controls"], shown["note"]) == (nl["tryout_not_offered"], HIDDEN_PART, ""), values
+        before = files(tmp_path)
+        assert named(TRYOUT_MADE, handler(page, "tryout_made")("250108", "price_small", "nl")) == {
+            "po": SAME, "download": NO_DOWNLOAD, "note": nl["tryout_not_offered"]}
+        assert named(TRYOUT_MADE, handler(page, "tryout_given")("250108", "price_small", "en"))["note"] == en["tryout_not_offered"]
+        assert files(tmp_path) == before, values
+    folder = tmp_path / "offered"
+    path, page, made = tab(folder, madeup_out, **(BUYER | {"test_mode": True}))
+    shown = named(TRYOUT_OPENED, handler(page, "tryout_opened")("nl"))
+    assert (shown["switch"], shown["filled"], shown["why"], shown["controls"]) == (True, True, "", SHOWN_PART)
+    assert shown["po"] == {"__type__": "update", "choices": [], "value": None} and shown["note"] == nl["tryout_none_known"]
+    assert named(TRYOUT_MADE, handler(page, "tryout_given")(None, "none", "nl")) == {
+        "po": {"__type__": "update", "choices": [], "value": None}, "download": NO_DOWNLOAD, "note": nl["tryout_none_known"]}
+    po = PoStore(folder / "po_store").add(madeup_out / "MU08_po_v1.pdf")
+    shown = named(TRYOUT_OPENED, handler(page, "tryout_opened")("nl"))
+    assert shown["po"] == {"__type__": "update", "choices": [("250108 (S08)", "250108")], "value": "250108"} and shown["note"] == ""
+    assert shown["download"] == NO_DOWNLOAD
+    before = files(tmp_path)
+    made_now = named(TRYOUT_MADE, handler(page, "tryout_made")("250108", "price_small", "nl"))
+    download = Path(made_now["download"]["value"])
+    assert made_now["note"] == nl["tryout_made"] and made_now["download"]["visible"] is True
+    assert download.name == "PROEF orderbevestiging 250108 20261112-090000.pdf" and download.parent.parent == tmp_path / "gradio"
+    assert download.read_bytes() == confirmation_pdf(po, "price_small", NOW) and made_now["po"] == SAME     # made at the page's clock
+    assert set(files(tmp_path)) - set(before) == {download}                     # the read-back's own folder is gone again
+    assert named(TRYOUT_MADE, handler(page, "tryout_given")("250108", "price_small", "nl")) == {
+        "po": SAME, "download": NO_DOWNLOAD, "note": nl["tryout_given"]}          # the download of the choice before goes (ruling Y14)
+    inbox = folder / "inbox"
+    assert [p.name for p in inbox.iterdir()] == [download.name] and (inbox / download.name).read_bytes() == download.read_bytes()
+    assert set(files(tmp_path)) - set(before) == {download, inbox / download.name}               # the work copy is gone again
+    # a PO whose item code is too long for the try-out's column, known from an export: refused with its sentence, nothing written
+    export = folder / "long_code.csv"
+    export.write_text("po_number,line_id,item_code,description,quantity,unit,unit_price,price_basis,delivery_date\n"
+                      "250150,1,KM-0801-WWWWWWWWWWWWWWWWWWWWWWWWWWWWWW,Manometer 0-10 bar,3,st,12.50,1,2026-11-16\n", encoding="utf-8")
+    PoStore(folder / "po_store").from_export(export, EXPORT_COLUMNS)
+    before = files(tmp_path)
+    assert named(TRYOUT_MADE, handler(page, "tryout_made")("250150", "none", "nl")) == {
+        "po": SAME, "download": NO_DOWNLOAD, "note": nl["tryout_refused"].format(reason=nl["tryout_reason:item_code"])}
+    assert named(TRYOUT_MADE, handler(page, "tryout_given")("250150", "none", "en"))["note"] == en["tryout_refused"].format(
+        reason=en["tryout_reason:item_code"])
+    assert files(tmp_path) == before
+    assert nl["tryout_not_offered"] == "Proefdraaien kan alleen in de proefstand en zolang er geen fiatteringsgrens is ingesteld."
+    assert en["tryout_not_offered"] == "Trying out is possible only in the test mode and while no authorization limit is set."
+    assert nl["tryout_made"] == ("De proefbevestiging is gemaakt. Stuur haar als bijlage naar uw eigen postvak, naar de map die de assistent "
+                                 "leest, of geef haar direct aan de assistent.")
+    assert en["tryout_made"] == ("The try-out confirmation was made. Send it as an attachment to your own mailbox, to the folder the assistant "
+                                 "reads, or give it to the assistant directly.")
+    assert nl["tryout_given"] == ("De proefbevestiging ligt in de bewaakte map. De assistent opent de zaak bij de volgende ronde, binnen een "
+                                  "minuut.")
+    assert en["tryout_given"] == "The try-out confirmation lies in the watched folder. The assistant opens the case at its next pass, within a minute."
+    assert nl["tryout_none_known"] == "De assistent kent nog geen inkooporders. Laat eerst een inkooporder uit Exact binnenkomen."
+    assert en["tryout_none_known"] == "The assistant knows no purchase orders yet. Let a purchase order from Exact come in first."
+    assert (nl["tryout_refused"], en["tryout_refused"]) == ("Van deze inkooporder kan geen proefdocument worden gemaakt: {reason}.",
+                                                            "No try-out document can be made of this purchase order: {reason}.")
+
+
+def test_the_switch_writes_the_test_mode_only(tmp_path, madeup_out):
+    """Rule 10: the switch "Proefstand: de assistent werkt met het test-Exact" writes test_mode into the settings file and nothing else:
+    the key is added at the end of a file that lacks it and replaced where it stands after that, every other key keeping its place and
+    its bytes. The part follows the switch: offered while the test mode is on (no limit is set here), the line that says why when off."""
+    path, page, made = tab(tmp_path, madeup_out, **BUYER)
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    before = path.read_text(encoding="utf-8")
+    shown = named(TRYOUT_OPENED, handler(page, "tryout_opened")("nl"))
+    assert (shown["switch"], shown["filled"], shown["why"], shown["controls"]) == (False, False, nl["tryout_not_offered"], HIDDEN_PART)
+    on = named(SWITCHED, handler(page, "test_mode_saved")(True, shown["filled"], "nl"))
+    assert (on["switch"], on["filled"], on["why"], on["controls"], on["note"]) == (True, True, "", SHOWN_PART, nl["tryout_saved"])
+    after = path.read_text(encoding="utf-8")
+    assert after == before[:-2] + ',\n    "test_mode": true\n}' and held(path) == json.loads(before) | {"test_mode": True}
+    assert load_settings(path).test_mode is True
+    off = named(SWITCHED, handler(page, "test_mode_saved")(False, on["filled"], "en"))
+    assert (off["switch"], off["filled"], off["why"], off["controls"], off["note"]) == (False, False, en["tryout_not_offered"], HIDDEN_PART,
+                                                                                        en["tryout_saved"])
+    assert path.read_text(encoding="utf-8") == after.replace('"test_mode": true', '"test_mode": false')
+    assert (nl["tryout_switch"], nl["tryout_saved"]) == ("Proefstand: de assistent werkt met het test-Exact", "Opgeslagen.")
+    assert (en["tryout_switch"], en["tryout_saved"]) == ("Test mode: the assistant works with the test Exact", "Saved.")
+
+
+def test_the_switch_refuses_a_save_when_the_file_changed_meanwhile(tmp_path, madeup_out):
+    """Amendment 3: the switch keeps the value it was filled with, as Task 32's block keeps its form (ruling L6). When the file no
+    longer holds that value (another browser tab, or the file itself, changed it meanwhile), a toggle writes nothing and the switch is
+    filled again from the file, which the note says in the switch's own sentence (ruling Y6); so is a switch whose fill the page no
+    longer knows (the page was started again), and a file that cannot be read refuses with its line and writes nothing."""
+    path, page, made = tab(tmp_path, madeup_out, **BUYER)
+    nl = STRINGS["nl"]
+    shown = named(TRYOUT_OPENED, handler(page, "tryout_opened")("nl"))
+    by_hand(path, test_mode=True)
+    before = path.read_bytes()
+    refused = named(SWITCHED, handler(page, "test_mode_saved")(True, shown["filled"], "nl"))
+    assert (refused["switch"], refused["filled"], refused["note"]) == (True, True, nl["tryout_switch_refilled"]) and path.read_bytes() == before
+    assert (refused["why"], refused["controls"]) == ("", SHOWN_PART)                       # the part as the file now gives it
+    again = named(SWITCHED, handler(page, "test_mode_saved")(False, None, "nl"))
+    assert (again["switch"], again["filled"], again["note"]) == (True, True, nl["tryout_switch_refilled"]) and path.read_bytes() == before
+    english = named(SWITCHED, handler(page, "test_mode_saved")(True, False, "en"))
+    assert (english["switch"], english["note"]) == (True, STRINGS["en"]["tryout_switch_refilled"]) and path.read_bytes() == before
+    # ruling Y6 (finding 8): the switch's own sentence, which asks the buyer to redo nothing
+    assert nl["tryout_switch_refilled"] == ("De proefstand is intussen op een andere plek gewijzigd; de schakelaar toont nu wat het "
+                                            "instellingenbestand bevat.")
+    assert STRINGS["en"]["tryout_switch_refilled"] == "The test mode was changed elsewhere meanwhile; the switch now shows what the settings file holds."
+    path.write_text("{ not json", encoding="utf-8")
+    broken = named(SWITCHED, handler(page, "test_mode_saved")(False, True, "nl"))
+    assert (broken["switch"], broken["note"]) == (True, unreadable("nl")) and path.read_text(encoding="utf-8") == "{ not json"
+
+
+def test_the_try_out_part_stands_at_the_end_of_the_exact_block(tmp_path, madeup_out):
+    """Amendment 5: the part is the last of the block "Koppeling met Exact", built by functions of its own, each handler bound as the
+    page shows it, with strings of its own in one block after the block's own strings in each language, so that the parts other tasks
+    add to the block merge beside it. The language switch relabels it and keeps what is chosen. On a share link and without a settings
+    file it is not there."""
+    gr = import_gradio()
+    path, page, made = tab(tmp_path, madeup_out, **BUYER)
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    [settings] = [block for block in page.blocks.values() if isinstance(block, gr.Tab) and block.label == nl["settings_tab"]]
+    [exact, _] = [block for block in settings.children if isinstance(block, gr.Accordion)]
+
+    def inside(block) -> list:
+        return [block, *[found for child in getattr(block, "children", []) for found in inside(child)]]
+    [fill] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == "tryout_opened"]
+    filled = fill.outputs[1]
+    assert isinstance(filled, gr.State)
+
+    def name(component) -> str:
+        if component is filled:
+            return "filled"
+        if isinstance(component, gr.Button):
+            return f"button {component.value}"
+        if getattr(component, "elem_id", None):
+            return component.elem_id
+        return getattr(component, "label", None) or str(getattr(component, "value", ""))
+
+    def bound(fn_name: str) -> tuple:
+        [f] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == fn_name]
+        return (sorted((name(page.blocks[block]) if block != page._id else "page", event) for block, event in f.targets),
+                [name(component) for component in f.inputs], [name(component) for component in f.outputs])
+
+    shown = [block for block in inside(exact) if isinstance(block, (gr.Markdown, gr.Checkbox, gr.Dropdown, gr.Radio, gr.Button, gr.File))]
+    part = [name(block) for block in shown][[name(block) for block in shown].index(f"### {nl['tryout_title']}"):]
+    assert part == [f"### {nl['tryout_title']}", nl["tryout_intro"], nl["tryout_switch"], "tryout-why", nl["tryout_po"], nl["tryout_change"],
+                    f"button {nl['tryout_make']}", f"button {nl['tryout_give']}", "tryout-download", "tryout-note"]
+    [controls] = [block for block in inside(exact) if getattr(block, "elem_id", None) == "tryout-controls"]
+    assert controls.visible is False and [name(block) for block in inside(controls) if block in shown] == [
+        nl["tryout_po"], nl["tryout_change"], f"button {nl['tryout_make']}", f"button {nl['tryout_give']}", "tryout-download"]
+    [change] = [block for block in inside(exact) if getattr(block, "label", None) == nl["tryout_change"]]
+    assert change.choices == [(nl[f"tryout_change:{value}"], value) for value in CHANGES] and change.value == "none"
+    language = nl["language"]
+    part_outputs = [nl["tryout_switch"], "filled", "tryout-why", "tryout-controls", nl["tryout_po"]]
+    assert bound("tryout_opened") == ([(nl["settings_tab"], "select"), ("page", "load")], [language], [*part_outputs, "tryout-download", "tryout-note"])
+    assert bound("tryout_made") == ([(f"button {nl['tryout_make']}", "click")], [nl["tryout_po"], nl["tryout_change"], language],
+                                    [nl["tryout_po"], "tryout-download", "tryout-note"])
+    assert bound("tryout_given") == ([(f"button {nl['tryout_give']}", "click")], [nl["tryout_po"], nl["tryout_change"], language],
+                                     [nl["tryout_po"], "tryout-download", "tryout-note"])
+    assert bound("tryout_refreshed") == ([(f"button {nl['exact_refresh']}", "click")], [language, nl["tryout_po"]],
+                                         [*part_outputs, "tryout-download", "tryout-note"])           # ruling Y7: "Stand vernieuwen"
+    assert bound("tryout_chosen") == ([(nl["tryout_po"], "input"), (nl["tryout_change"], "input")], [], ["tryout-download"])   # ruling Y14
+    assert bound("test_mode_saved") == ([(nl["tryout_switch"], "input")], [nl["tryout_switch"], "filled", language], [*part_outputs, "tryout-note"])
+    assert bound("tryout_relabel")[0] == [(language, "change")]
+    assert bound("tryout_relabel")[1] == [language, nl["tryout_change"]]
+    relabelled = named(TRYOUT_RELABELLED, handler(page, "tryout_relabel")("en", "price_small"))
+    assert (relabelled["title"], relabelled["intro"], relabelled["why"], relabelled["note"]) == (
+        f"### {en['tryout_title']}", en["tryout_intro"], en["tryout_not_offered"], "")
+    assert (relabelled["switch"]["label"], relabelled["po"]["label"], relabelled["make"]["value"], relabelled["give"]["value"]) == (
+        en["tryout_switch"], en["tryout_po"], en["tryout_make"], en["tryout_give"])
+    assert relabelled["change"] == {"__type__": "update", "label": en["tryout_change"], "value": "price_small",
+                                    "choices": [(en[f"tryout_change:{value}"], value) for value in CHANGES]}
+    # the strings: one block of their own right after the block's own strings, in the same order in both languages
+    for strings in (nl, en):
+        keys = list(strings)
+        mine = ["exact_state_to_enter", "hand_test_mode", "hand_tryout", *[key for key in keys if key.startswith("tryout_")]]
+        start = keys.index(mine[0])                  # after the block's own strings, those of its parts (part 2 of Task 39) included
+        assert keys[start:start + len(mine)] == mine and keys[start - 1].startswith("exact_")
+        assert not [key for key in keys[start + len(mine):] if key.startswith("exact_")]
+    assert [key for key in nl if key.startswith("tryout_")] == [key for key in en if key.startswith("tryout_")]
+    assert [nl[f"tryout_change:{value}"] for value in CHANGES] == [
+        "Niets: alles komt overeen", "De prijs van de eerste regel is 1 procent hoger", "De prijs van de eerste regel is 10 procent hoger",
+        "De leverdatum van de eerste regel is drie dagen later", "De leverdatum van de eerste regel is zestig dagen later"]
+    assert [en[f"tryout_change:{value}"] for value in CHANGES] == [
+        "Nothing: everything agrees", "The price of the first line is 1 percent higher", "The price of the first line is 10 percent higher",
+        "The delivery date of the first line is three days later", "The delivery date of the first line is sixty days later"]
+    assert (nl["tryout_title"], en["tryout_title"]) == ("Proefdraaien met een inkooporder uit Exact", "Trying out with a purchase order from Exact")
+    assert nl["tryout_intro"] == ("Zonder leverancier kunt u de assistent toch proberen: bij een inkooporder die de assistent kent, maakt de "
+                                  "assistent een verzonnen orderbevestiging. U kiest wat er afwijkt. Het proefdocument blijft op deze pc.")
+    assert en["tryout_intro"] == ("Without a supplier you can still try the assistant: for a purchase order it knows, the assistant makes a "
+                                  "made-up order confirmation. You choose what differs. The try-out document stays on this PC.")
+    assert (nl["tryout_po"], en["tryout_po"], nl["tryout_change"], en["tryout_change"]) == ("Inkooporder", "Purchase order", "Wat wijkt af?",
+                                                                                            "What differs?")
+    assert (nl["tryout_make"], en["tryout_make"]) == ("Proefbevestiging maken (pdf)", "Make try-out confirmation (PDF)")
+    assert (nl["tryout_give"], en["tryout_give"]) == ("Proefbevestiging direct aan de assistent geven",
+                                                      "Give the try-out confirmation to the assistant directly")
+    for key in [key for key in nl if key.startswith("tryout_")]:
+        assert re.findall(r"\{(\w+)\}", nl[key]) == re.findall(r"\{(\w+)\}", en[key]) and not re.search(r"[—–_]", nl[key] + en[key]), key
+    # not there on a share link, nor without a settings file
+    assert not {getattr(f.fn, "__name__", "") for f in tab(tmp_path / "share", madeup_out, share=True, **BUYER)[1].fns.values()} & TRYOUT_HANDLERS
+    assert not {getattr(f.fn, "__name__", "") for f in build_app(deps(tmp_path / "nofile", madeup_out)).fns.values()} & TRYOUT_HANDLERS
+    assert TRYOUT_HANDLERS <= {getattr(f.fn, "__name__", "") for f in page.fns.values()}
+
+
+def offered_page(tmp_path: Path, madeup_out: Path, **values):
+    """The page on a made-up settings file in the test mode without a limit, its PO store empty: (the folder, the page)."""
+    path, page, made = tab(tmp_path, madeup_out, **(BUYER | {"test_mode": True} | values))
+    return path.parent, page
+
+
+def export_of(folder: Path, rows: str) -> None:
+    """File the rows of an export (with the title row of the made-up exports) in the folder's PO store, as looks."""
+    export = folder / "rows.csv"
+    export.write_text("po_number,line_id,item_code,description,quantity,unit,unit_price,price_basis,delivery_date\n" + rows, encoding="utf-8")
+    PoStore(folder / "po_store").from_export(export, EXPORT_COLUMNS)
+
+
+def test_the_part_follows_the_store(tmp_path, madeup_out, monkeypatch):
+    """Ruling Y7, finding 9: "Stand vernieuwen" fills the part again as the store now stands, the dropdown and its note, keeping the
+    order chosen while the store knows it; and a button pressed with no order chosen fills the dropdown from the store before it
+    answers, so that it never says that the assistant knows no purchase order while the store holds one."""
+    monkeypatch.setenv("GRADIO_TEMP_DIR", str(tmp_path / "gradio"))
+    folder, page = offered_page(tmp_path, madeup_out)
+    nl = STRINGS["nl"]
+    shown = named(TRYOUT_OPENED, handler(page, "tryout_opened")("nl"))
+    assert (shown["po"]["choices"], shown["note"]) == ([], nl["tryout_none_known"])
+    store = PoStore(folder / "po_store")
+    store.add(madeup_out / "MU08_po_v1.pdf")                # the next pass of the runner files a PO
+    refreshed = named(TRYOUT_OPENED, handler(page, "tryout_refreshed")("nl", None))
+    assert refreshed["po"] == {"__type__": "update", "choices": [("250108 (S08)", "250108")], "value": "250108"} and refreshed["note"] == ""
+    assert (refreshed["switch"], refreshed["filled"], refreshed["why"], refreshed["controls"], refreshed["download"]) == (
+        True, True, "", SHOWN_PART, NO_DOWNLOAD)
+    os.utime(store.root / "250108" / "v1" / "po.json", (1_700_000_000, 1_700_000_000))
+    store.add(madeup_out / "MU01_po_v1.pdf")                # filed after 250108: the one filed last, but 250108 stays chosen
+    kept = named(TRYOUT_OPENED, handler(page, "tryout_refreshed")("nl", "250108"))
+    assert kept["po"]["value"] == "250108" and [number for _, number in kept["po"]["choices"]] == ["250101", "250108"]
+    assert kept["download"] == SAME                         # the choice shown is the same, so is the download
+    # a press with no order chosen: the dropdown filled from the store (the one filed last chosen) and the try-out of that order
+    made = named(TRYOUT_MADE, handler(page, "tryout_made")(None, "none", "nl"))
+    assert made["po"] == {"__type__": "update", "choices": [("250101 (S01)", "250101"), ("250108 (S08)", "250108")], "value": "250101"}
+    assert made["note"] == nl["tryout_made"] and Path(made["download"]["value"]).name == "PROEF orderbevestiging 250101 20261112-090000.pdf"
+    given = named(TRYOUT_MADE, handler(page, "tryout_given")(None, "none", "en"))
+    assert given["po"]["value"] == "250101" and given["note"] == STRINGS["en"]["tryout_given"]
+
+
+def test_the_language_switch_keeps_the_note_that_no_order_is_known(tmp_path, madeup_out):
+    """Ruling Y13, finding 14: switching the page's language gives the note that the assistant knows no purchase order in the new
+    language, while the part is offered and the store knows none; once the store knows one, the note is emptied as before."""
+    folder, page = offered_page(tmp_path, madeup_out)
+    for language in ("en", "nl"):
+        assert named(TRYOUT_RELABELLED, handler(page, "tryout_relabel")(language, "none"))["note"] == STRINGS[language]["tryout_none_known"]
+    PoStore(folder / "po_store").add(madeup_out / "MU08_po_v1.pdf")
+    assert named(TRYOUT_RELABELLED, handler(page, "tryout_relabel")("en", "none"))["note"] == ""
+    path, closed, made = tab(tmp_path / "off", madeup_out, **BUYER)                   # not offered: the line why, and no note
+    relabelled = named(TRYOUT_RELABELLED, handler(closed, "tryout_relabel")("en", "none"))
+    assert (relabelled["why"], relabelled["note"]) == (STRINGS["en"]["tryout_not_offered"], "")
+
+
+def test_the_download_follows_the_choice(tmp_path, madeup_out, monkeypatch):
+    """Ruling Y14: a new choice of the order or of the change, by the buyer, and a press of "Proefbevestiging direct aan de assistent
+    geven" clear the download shown, so that the file offered is always the one of the choice shown."""
+    monkeypatch.setenv("GRADIO_TEMP_DIR", str(tmp_path / "gradio"))
+    folder, page = offered_page(tmp_path, madeup_out)
+    PoStore(folder / "po_store").add(madeup_out / "MU08_po_v1.pdf")
+    made = named(TRYOUT_MADE, handler(page, "tryout_made")("250108", "price_small", "nl"))
+    assert made["download"]["visible"] is True
+    assert handler(page, "tryout_chosen")() == NO_DOWNLOAD
+    assert named(TRYOUT_MADE, handler(page, "tryout_given")("250108", "price_small", "nl"))["download"] == NO_DOWNLOAD
+
+
+def test_the_order_filed_last_is_chosen(tmp_path, madeup_out):
+    """Ruling Y10, mutant M12: with two purchase orders in the store, the dropdown offers both, the one filed last first and chosen."""
+    folder, page = offered_page(tmp_path, madeup_out)
+    store = PoStore(folder / "po_store")
+    store.add(madeup_out / "MU08_po_v1.pdf")
+    store.add(madeup_out / "MU01_po_v1.pdf")
+    os.utime(store.root / "250108" / "v1" / "po.json", (1_700_000_000, 1_700_000_000))
+    os.utime(store.root / "250101" / "v1" / "po.json", (1_700_000_060, 1_700_000_060))
+    shown = named(TRYOUT_OPENED, handler(page, "tryout_opened")("nl"))
+    assert shown["po"] == {"__type__": "update", "choices": [("250101 (S01)", "250101"), ("250108 (S08)", "250108")], "value": "250101"}
+    os.utime(store.root / "250108" / "v1" / "po.json", (1_700_000_120, 1_700_000_120))
+    assert named(TRYOUT_OPENED, handler(page, "tryout_opened")("nl"))["po"]["value"] == "250108"
+
+
+def test_a_try_out_the_read_back_refuses_says_why_and_writes_nothing(tmp_path, madeup_out, monkeypatch):
+    """Rulings Y1 and Y12 on the page, findings 1, 12 and 15: a try-out is read back before it leaves the page; one refused says why
+    by the sentence of its reason, on both buttons and in both languages, and writes nothing: no download, nothing in the watched
+    folder, and nothing left of the read-back. Never does the page say "Dit is niet gelukt (ValueError)." of a try-out the code
+    knows."""
+    monkeypatch.setenv("GRADIO_TEMP_DIR", str(tmp_path / "gradio"))
+    folder, page = offered_page(tmp_path, madeup_out)
+    export_of(folder, "260001,1,KM-0801,Manometer,3,st,12.50,1,2026-11-16\n"                     # a unit the font cannot print
+                      "260001,2,KM-0802,Bout,3,\u03bcm,0.50,1,2026-11-16\n"
+                      "260006,1,KM-0801,Manometer,3,verpakkingseenheid,12.50,1,2026-11-16\n"     # finding 15: a unit too wide
+                      "260007,1,KM-0802,Bout,3,st,12.50,10000,2026-11-16\n"                      # and a price basis too wide
+                      "IB5,1,KM-5001,Kogelkraan DN25,10,st,12.50,1,2026-11-16\n")                # finding 12: one line, a short number
+    reasons = {"260001": "character", "260006": "value", "260007": "value", "IB5": "not_found"}
+    before = files(tmp_path)
+    for po_number, reason in reasons.items():
+        for language in ("nl", "en"):
+            strings = STRINGS[language]
+            sentence = strings["tryout_refused"].format(reason=strings[f"tryout_reason:{reason}"])
+            assert named(TRYOUT_MADE, handler(page, "tryout_made")(po_number, "price_small", language)) == {
+                "po": SAME, "download": NO_DOWNLOAD, "note": sentence}, (po_number, language)
+            assert named(TRYOUT_MADE, handler(page, "tryout_given")(po_number, "none", language))["note"] == sentence
+    assert files(tmp_path) == before and not (folder / "inbox").exists() and not (folder / "cases").exists()
+
+
+def test_switching_the_test_mode_off_names_the_changes_of_try_outs_still_open(tmp_path, madeup_out):
+    """Ruling Y4(d), finding 5 (the reviewers' s3_switch_off.py): when the switch turns the test mode off while the list "In Exact
+    invoeren" still holds changes that only try-out documents asked, its note says how many and that they are to be dropped, not
+    entered in the real Exact; it still writes test_mode and nothing else (rule 10). It counts the try-out's changes only (ruling Y21):
+    a supplier's own confirmation of the same order (MU08's) stands on the list beside them and is not counted. One change is named in
+    the singular (ruling Y24). Without such changes the note is "Opgeslagen."."""
+    from aid.decider import NoDecider
+    from aid.execution.writer import PreparedWriter
+    from aid.pipeline import Deps, read_with_parser, run_case
+    from aid.sources.upload import open_upload_case
+    from aid.tryout import made_from
+
+    folder, page = offered_page(tmp_path, madeup_out)
+    path = folder / "settings.json"
+    settings = load_settings(path)
+    store = PoStore(settings.po_store_root, settings.authorization_limit)
+    store.add(madeup_out / "MU08_po_v1.pdf")
+    made = folder / "made.pdf"
+    made.write_bytes(confirmation_pdf(made_from(store, "250108"), "price_small", NOW))
+    d = Deps(settings=settings, store=store, reader=read_with_parser, decider=NoDecider(), writer=PreparedWriter(settings.cases_root / "prepared"),
+             mailer=None, clock=lambda: NOW)
+    run_case(open_upload_case(settings.cases_root, [madeup_out / "MU08_conf.pdf"], "250108", "confirmation", NOW), d)    # the supplier's own
+    run_case(open_upload_case(settings.cases_root, [made], "250108", "confirmation", NOW.replace(minute=1)), d)
+    assert len(open_changes(settings.cases_root / "prepared")) == 4                # two of the supplier's, two of the try-out's
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    shown = named(TRYOUT_OPENED, handler(page, "tryout_opened")("nl"))
+    before = held(path)
+    off = named(SWITCHED, handler(page, "test_mode_saved")(False, shown["filled"], "nl"))
+    assert off["note"] == nl["tryout_saved_open"].format(n=2) and held(path) == before | {"test_mode": False}
+    assert off["note"] == ("Opgeslagen. Op de lijst In Exact invoeren staan nog 2 wijzigingen uit proefdocumenten. Voer die niet in het echte "
+                           "Exact in; laat ze vallen.")
+    on = named(SWITCHED, handler(page, "test_mode_saved")(True, off["filled"], "en"))
+    assert on["note"] == en["tryout_saved"]                                     # switched on: nothing to say
+    off = named(SWITCHED, handler(page, "test_mode_saved")(False, on["filled"], "en"))
+    assert off["note"] == ("Saved. The list Enter in Exact still holds 2 changes from try-out documents. Do not enter them in the real Exact; "
+                           "drop them.")
+    tryout_ids = [change.ids for change in open_changes(settings.cases_root / "prepared") if change.tryout]
+    mark(settings.cases_root / "prepared", tryout_ids[0], "dropped", NOW)        # one of the try-out's two left: the singular
+    for language, sentence in (("nl", "Opgeslagen. Op de lijst In Exact invoeren staat nog 1 wijziging uit een proefdocument. Voer die niet in "
+                                      "het echte Exact in; laat die vallen."),
+                               ("en", "Saved. The list Enter in Exact still holds 1 change from a try-out document. Do not enter it in the real "
+                                      "Exact; drop it.")):
+        on = named(SWITCHED, handler(page, "test_mode_saved")(True, off["filled"], language))
+        off = named(SWITCHED, handler(page, "test_mode_saved")(False, on["filled"], language))
+        assert off["note"] == sentence == STRINGS[language]["tryout_saved_open_one"]
+    mark(settings.cases_root / "prepared", tryout_ids[1], "dropped", NOW)
+    on = named(SWITCHED, handler(page, "test_mode_saved")(True, off["filled"], "nl"))
+    assert named(SWITCHED, handler(page, "test_mode_saved")(False, on["filled"], "nl"))["note"] == nl["tryout_saved"]
+    assert len(open_changes(settings.cases_root / "prepared")) == 2               # the supplier's own changes stay, to enter
+
+
+def test_the_documents_say_what_the_second_review_round_of_the_try_out_settled():
+    """The rulings of the second review round of Task 33 in the documents: MANUAL 2.1 says how the digest marks a try-out (Y17);
+    tryout_mark's docstring and the README say that a try-out writes through the prepared writer only (Y18); 3.17 says how wide an
+    item code may be (Y20), names the reason of a version the aid could not choose (Y22), says that the demo folder knows the made-up
+    orders already (Y23), and begins the hand-over's step 1 by opening the block, which step 2 no longer does (Y25)."""
+    nl, manual = STRINGS["nl"], manual_sections()
+    digest, exact = manual["2.1"], manual["3.17"]
+    assert '"(proefdocument)"' in digest and '"(zelf in Exact doen)"' in digest and "leaves its changes out" in digest
+    mark_doc = " ".join(Path("aid/tryout_mark.py").read_text(encoding="utf-8").split())
+    readme = Path("aid/README.md").read_text(encoding="utf-8")
+    for text in (mark_doc, readme):
+        assert "the prepared writer only, never through the Exact writer" in text
+    assert "about 100 points" in exact and '"KM-08-00417-ABC-2026"' in exact and "such as twenty capitals" in exact
+    assert "an item code of up to 20 characters prints whole" not in exact
+    assert f'"{nl["tryout_reason:version"]}"' in exact
+    assert "The demo folder knows the made-up orders already" in exact and 'such as 250108 under "Inkooporder"' in exact
+    assert '1. Open "Koppeling met Exact (bij de installatie)" and switch the test mode off' in exact
+    assert '2. Open "Koppeling met Exact' not in exact
+
+
+def test_the_manual_walks_the_owners_test_and_the_hand_over_starts_empty_with_the_test_mode_off():
+    """Step 5 and amendment 4: section 3.17 walks the owner's test (a purchase order from the test Exact, a try-out, the result) and
+    names the part's controls as the page does; the hand-over lists of sections 3.16 and 3.17 say that the hand-over starts with an
+    empty data folder and the test mode off; section 3.2 describes the setting."""
+    nl, manual = STRINGS["nl"], manual_sections()
+    exact, folder = manual["3.17"], manual["3.16"]
+    for key in ("tryout_title", "tryout_switch", "tryout_po", "tryout_change", "tryout_change:price_small", "tryout_make", "tryout_give",
+                "tryout_not_offered", "tryout_given", "hand_test_mode"):
+        assert f"\"{nl[key]}\"" in exact, key                                               # quoted word for word
+    assert "B3" in exact and "test Exact" in exact and "nothing made up" in exact
+    for section in (exact, folder):
+        assert "The hand-over starts with an empty data folder and the test mode off" in section
+    assert "`test_mode`" in manual["3.2"] and "`test_mode`" in manual["3.16"]
+
+
+def test_the_documents_say_what_the_review_round_of_the_try_out_settled():
+    """The rulings of the review round of Task 33, in the manual, the README and settings.py: the try-out's reasons and notes quoted
+    word for word in 3.17 (rulings Y1, Y4, Y6, Y12), the sentence on another number as it is after the read-back (Y5), when the
+    dropdown is filled (Y7), the own-PC walk with the launcher and the first cases of a supplier (Y8), the tab's line of the test mode
+    whatever the limit, ended by the switch alone (Y11), and switching the test mode off as a step of its own of the hand-over in 3.16
+    and 3.17 (Y11)."""
+    nl, manual = STRINGS["nl"], manual_sections()
+    exact, folder, settings_section, tab_section = manual["3.17"], manual["3.16"], manual["3.2"], manual["2.6"]
+    sentence = nl["tryout_refused"].format(reason=nl["tryout_reason:no_lines"])
+    assert f"\"{sentence}\"" in exact
+    for reason in ("no_price", "no_date", "character", "item_code", "value", "read_back", "not_found"):
+        assert f"\"{nl[f'tryout_reason:{reason}']}\"" in exact, reason
+    for key in ("tryout_switch_refilled", "tryout_nothing_sent", "tryout_none_known"):
+        assert f"\"{nl[key]}\"" in exact, key
+    assert f"\"{nl['tryout_saved_open'].format(n=2)}\"" in exact and "\"try-out document outside the test mode\"" in exact
+    assert "\"not sent (try-out document: nothing is sent)\"" in exact and "\"(proefdocument)\"" in exact and "(proefdocument)" in tab_section
+    for gone in ("Dit is niet gelukt (ValueError).", nl["settings_buyer_refilled"], "another number finds its order by the lines",
+                 "so that no request to approve an order again can come of it", "prints wrong, which only the owner's own order shows"):
+        assert gone not in exact, gone
+    assert "a try-out is made only when the assistant would find its order" in exact and "refused with its reason" in exact     # Y5
+    assert "with \"Stand vernieuwen\", so press \"Stand vernieuwen\" once the state names the order" in exact                      # Y7
+    assert "python3 -m aid.start --settings live/settings.json" in exact and "section 3.4.1" in exact                               # Y8
+    assert f"\"{nl['settings_field:first_cases_review']}\" to 5" in exact and "with 0 the aid takes the price over by itself" in exact
+    assert "only its rows on the tab \"In Exact invoeren\" show the change" in exact
+    assert "whatever `authorization_limit` holds" in settings_section and "only the switch ends it" in settings_section            # Y11
+    assert "whatever the authorization limit" in tab_section
+    readme = Path("aid/README.md").read_text(encoding="utf-8")
+    assert "whatever the authorization limit" in readme and "only the switch on the settings tab ends it" in readme
+    assert "only the switch on the settings tab ends it" in " ".join(Path("aid/settings.py").read_text(encoding="utf-8").split())
+    assert "2. Switch the test mode off on the settings tab" in folder
+    assert '1. Open "Koppeling met Exact (bij de installatie)" and switch the test mode off' in exact          # ruling Y25 of the second round
+    for section in (exact, folder, settings_section, tab_section):
+        assert not re.search(r"[—–]", section)
