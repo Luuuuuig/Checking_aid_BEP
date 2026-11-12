@@ -21,8 +21,32 @@ clock:
   (forget_connection), so that a folder connected again later is read from that moment;
 - scan_folder (aid/sources/mailbox.py) handles the watched folder of the settings, created when it is missing: PO PDFs go into the
   store, a case is opened under cases_root for each confirmation, an e-mail that answers a question of the aid is filed into its case
-  (a real reply puts the case in review and is reported in the next digest, a bounce waits for the escalation), and the files it
-  handled move to processed/;
+  (a real reply puts the case in review and is reported in the next digest, a bounce waits for the escalation, and an automatic
+  reply or an e-mail of the aid's own side, the address of the account signed in to the work mailbox among them, changes
+  nothing), and the files it handled move to processed/;
+- what became of each document of the scan (ScanResult.events) is appended to <cases_root>/intake.jsonl, a line each, which the review
+  page's tab "Bestanden" shows (aid/review/intake.py): the file as the skipped list names it, the outcome and its detail, at the time
+  of the pass, written first, before the scan's cases are reported and its skipped list is noted. A file that stays in the watched
+  folder (an error, or a file that was handled and could not be moved) is handled again at every pass, so its lines are written once
+  (_intake). The record of what was written keeps, for each file that stayed after a pass, by its name: its sha256, or none while
+  its content cannot be read (another program holds it), the time of the pass that wrote its first line as a staying file, and the
+  lines of it that intake.jsonl holds; a line that waits to be written (below) is added once it is written. Within a run of the loop
+  the loop's own record decides, its lines that wait counted (_Intake, as a closed digest period is kept), so that a state that cannot
+  be saved repeats no line; the copy in the digest state, under "intake", is what a new run starts from, so that a run that ended while
+  lines waited writes the line of a file that still stays. While a
+  file of that name has that content (read before the scan; a file whose content cannot be read counts as the same file until it can
+  be read), a line that says the same as the last line written of its document is not written again, and "received before" of a
+  document is kept back when its last line told a filing (FILINGS) and written after any other line, such as an error, so that the
+  table's last word on a document is true. A file with another content under the same name gets its lines as a new one, and a file
+  that left the folder is forgotten, so that the same file given again later has its line again. A file that stays is not tried for
+  ever: a pass that tries it again, finds it still an error, and comes STAY_DAYS days or more after its first line as a staying file,
+  moves it to processed/ as a handled file with one line, the outcome "set_aside" with the whole days since then, says so in
+  runner.log ("set aside <file>", with its days) and names it once in the state's skipped list for the next digest, as "set aside
+  after <n> days without being read" (SET_ASIDE_REASON) in place of its earlier reasons; one that cannot be moved then is tried again
+  at the next pass, and its failure logged once in a run of the loop as "set aside <file>". Lines that
+  cannot be written wait in the loop, each with the time of its own pass, and are written before the lines of the next write, in
+  their order; the stage "intake file" is logged once in a run of the loop with the number of lines that wait, and once more when they
+  are written. They are lost only when the process ends before they could be written;
 - the cases that wait for their PO are checked again (_recheck_waiting), for the POs the scan filed in this pass: the number of each
   PO PDF it filed, also one the store held already, and of each PO whose look an export filed as new or changed (ScanResult
   stored_exports). At the first pass of a run of the loop every PO of the store counts as filed, so that a PO filed while the loop
@@ -49,14 +73,18 @@ clock:
   the first free second after that (open_free), so that a replacement is always opened after the case it replaces, and runs in this
   pass like any case. The old case leaves the digest's list of cases to report, and the state is saved, before it is finished as
   replaced (finish_replaced of aid/review/close.py: closed, no supplier, the new case's id in its record), so that no end of the
-  process leaves a replaced case in that list. An error of one case is logged as "recheck <case id>" once in a run of the loop, as a
-  failing case is, and the others go on; a check again counts as run only when it reached the case's link, so a pass that files
+  process leaves a replaced case in that list; once it is finished, the intake file gets the line "recheck" of its document, named
+  alone, without its e-mail, with the new case's id, or the line waits in the loop as the scan's lines do. An error of one case is logged as "recheck <case id>" once in a run of the loop, as a failing case is, and the
+  others go on; a check again counts as run only when it reached the case's link, so a pass that files
   another PO logs no recovery, and the stage of the check again only in a pass that filed a PO (at the first pass of a run, when the
   store holds one), so that a pass that files nothing logs no recovery of the stage. The case is tried again at the next pass that
   files its PO, or at the next start;
 - every case folder under cases_root without steps/08_result.json is run with run_case and its dispositions recorded: the cases the
   scan opened and those an earlier pass that was cut off left without a result. A case cut off after a write or a message is not
   run again: run_case finishes it as review ("run cut off after writes: check the write log"), and it is reported like any case. A
+  case opened from a scan that fails at reading, because Copilot reads the text layer only (unread_scan of aid/notify.py), gets a
+  line of its own in the intake file, its document with the outcome "unread" and the case's id, so that the tab "Bestanden" says
+  what became of the scan. A
   case already run is left alone, except that a case with a result and without dispositions.csv (a process that ended between the
   two) gets its dispositions and is reported, unless it was finished as replaced, which is never reported (_recover). A case folder
   with a .running file younger than ten minutes is left alone: the capture server (aid/capture_server.py) is running it; an older
@@ -77,8 +105,13 @@ clock:
   change that is ticked, seen or dropped stays so whatever a later PDF shows. An error of this step is logged as the stage "list of
   changes", once in a run of the loop, and the pass goes on;
 - a case of the capture server (its folder holds capture.json) that has its result and was never reported is reported once: the
-  server runs its cases itself and never writes the runner's state;
-- escalate_pending ends the wait of the questions that bounced or had no answer in time;
+  server runs its cases itself and never writes the runner's state. A capture case that the server replaced by a new case of the
+  same page or cart (its capture.json holds replaced_by, which the server writes before it closes the case's result; or, while
+  that file cannot be read, its close records hold the replacement) is never reported, and leaves the digest's list of cases to
+  report when it stands there; the digest looks at that mark again for each case it is about to name, after it has read the
+  case's result, so that no digest names a replaced capture case as closed, whatever step the server's process is at or ended at;
+- escalate_pending ends the wait of the questions that bounced or had no answer in time, and end_empty_waits brings a case
+  back to the buyer that waits while no question of it is out;
 - when digest_due says so, the digest of the cases handled and the files skipped since the last digest is made: its HTML is written to
   <cases_root>/digests/<day>.html, for a flow outside the code to pick up, and its text is sent through the mailer of the Deps, or,
   without a mailer, written to <cases_root>/digests/<day>.txt. The digest names the number of changes still to enter in Exact, the
@@ -102,7 +135,8 @@ at fault, if any, and never a value. So a save on the settings tab of the review
 
 What the next digest is to report is kept in <cases_root>/digest_state.json, so that it survives the end of a session: {"last_sent":
 the time of the last digest or null, "reported": the ids of the cases handled since then, "skipped": the [file, reason] pairs of the
-files skipped since then, each pair once, and, once there is one, "captures": the ids of the capture server's cases reported}. A case escalated by escalate_pending is reported again, as it now waits for the buyer. In
+files skipped since then, each pair once, and, once there is one, "captures": the ids of the capture server's cases reported, and
+while a file stays in the watched folder, "intake": the record of the lines of the intake file written of it, by its name (_intake)}. A case escalated by escalate_pending is reported again, as it now waits for the buyer. In
 the per-case mode a digest is made only when there is something to report; daily, the digest of a day without cases says so. A state
 file that cannot be read, or that lacks a key, starts a fresh state, with a line in the log. An error of one case, of the scan, of
 the escalation, of the digest, of the mailbox ("mailbox") or of a changed settings file ("settings") is written to
@@ -116,9 +150,10 @@ The command builds the Deps for company documents with build_deps and runs the l
 file. A settings file that cannot be read or validated stops it with exit code 2 and the fields at fault, never their values. With
 reader "parser" in the settings the reader is the parser and the decider NoDecider; with reader "llm" both ask Microsoft 365 Copilot
 (the paragraph below), and without the tenant and the client in the settings the command refuses reader "llm" with exit code 2
-(NO_LLM). The writer is RetryingWriter over the ExactApiWriter, with PreparedWriter into <cases_root>/prepared as its fallback,
-when exact_base_url is set, the token read from the environment variable AID_EXACT_TOKEN at each call; else the PreparedWriter
-alone. The mailer follows send_via: "microsoft" is the MicrosoftMailer (aid/messaging/microsoft_mailer.py), which sends from
+(NO_LLM). The writer is always the PreparedWriter into <cases_root>/prepared: no command builds a write route into Exact, and a
+settings file in which exact_base_url is set is refused as a file that cannot be used, with the one sentence of aid/settings.py
+(WRITE_ROUTE_SET). The mailer follows send_via, and is made by mailer_of of aid/messaging/microsoft_mailer.py, the one builder that
+the review page makes the mailer of a close with too: "microsoft" is the MicrosoftMailer, which sends from
 settings.mailbox, or from the signed-in account's own mailbox when it is empty; "smtp" is SmtpMailer when smtp_host and smtp_user
 are set and AID_MAIL_PASSWORD is in the environment, else FileMailer into <cases_root>/outbox; "file" is FileMailer; and "auto",
 when mail_folder is set and the tenant and the client too, is the AutoMailer, which sends each message through the mailbox while an
@@ -148,17 +183,17 @@ from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from aid.case import TEMPORARY, WORK, Case, _write_json, load_case    # _write_json: the state is rewritten whole or not at all, as a case file
+from aid.case import TEMPORARY, WORK, Case, _write_json, load_case, sha256_file    # _write_json: the state is rewritten whole or not at all
 from aid.connections.microsoft import SIGN_IN_AGAIN, MicrosoftAccount, SignInNeeded
 from aid.connections.secrets import LazySecretStore, default_secrets_dir
 from aid.decider import LlmDecider, NoDecider
 from aid.execution.by_hand import FOLDER as PREPARED, open_changes, reconcile
-from aid.execution.exact_api import ExactApiWriter
-from aid.execution.writer import PreparedWriter, RetryingWriter, WriterError
-from aid.messaging import FileMailer, Mailer, SmtpMailer
-from aid.messaging.microsoft_mailer import AutoMailer, MicrosoftMailer, SignInLapsed
-from aid.notify import build_digest, digest_due, send_digest
-from aid.pipeline import DISPOSITION_FILE, RESULT_FILE, UNREADABLE, CaseResult, Deps, escalate_pending, read_with_parser, record_dispositions, run_case
+from aid.execution.writer import PreparedWriter
+from aid.messaging import FileMailer
+from aid.messaging.microsoft_mailer import OUTBOX, SignInLapsed, mailer_of
+from aid.notify import build_digest, digest_due, send_digest, unread_scan
+from aid.pipeline import (DISPOSITION_FILE, RESULT_FILE, UNREADABLE, CaseResult, Deps, end_empty_waits, escalate_pending, read_with_parser,
+                          record_dispositions, run_case)
 from aid.pipeline import _cut_off_after_writes      # whether a run cut off wrote or sent something, which removing its case would lose
 from aid.po_store import PoStore
 from aid.readers.cart import is_cart_page, read_cart_html
@@ -167,10 +202,13 @@ from aid.readers.llm_client import LlmClient, LlmRequest, LlmResponse, ReaderErr
 from aid.readers.supplier_llm import read_supplier_document
 from aid.readers.supplier_parser import load_templates
 from aid.review.close import cases_checked_again, checked_again, finish_replaced, replaced
+from aid.review.intake import line_of
+from aid.review.intake import write as write_intake
 from aid.schema import Document
 from aid.settings import Settings, load_settings
 from aid.sources.dropin import remove_leftovers
-from aid.sources.mailbox import could_be_po, find_po_numbers, held_pos, open_free, po_without_number, quick_read, scan_folder
+from aid.sources.mailbox import (PROCESSED_FOLDER, ScanResult, could_be_po, find_po_numbers, held_pos, open_free, po_without_number,
+                                 quick_read, scan_folder, to_processed)
 from aid.sources.mailbox import _first_page_text     # the first page of a document as the scan reads it, for po_without_number
 from aid.sources.microsoft_mail import forget_connection, sync_mailbox, trigger_on
 
@@ -181,8 +219,6 @@ CAPTURE_FILE = "capture.json"                    # what marks a case of the capt
 STATE_FILE = "digest_state.json"
 DIGESTS_FOLDER = "digests"
 STOP_FILE = "STOP"                               # next to the settings file, for the command
-TOKEN_ENV = "AID_EXACT_TOKEN"
-PASSWORD_ENV = "AID_MAIL_PASSWORD"
 ALREADY_RUN = "case already run"                 # the start of run_case's ValueError for a case that holds its result
 SCAN = "scan"                                    # the stage of the scan, as runner.log names it
 RECHECK = "recheck"                              # the stage of the check again of the cases that wait for their PO
@@ -191,7 +227,6 @@ SETTINGS = "settings"                            # the stage of a settings file 
 SEEN = "list of changes"                         # the stage that compares the open changes with their POs as they stand
 WORK_FOLDER = "work folder"                      # the stage of <cases_root>/tmp/work, emptied at the start of the runner
 DROPS = "watched folder"                         # the stage of the copies of drops cut off, removed from it at the start of the runner
-OUTBOX = "outbox"                                # under cases_root: the messages written as files instead of sent
 MAILBOX_LAPSED = "mailbox_lapsed"                # the key of the digest state while the sign-in of the mailbox has lapsed
 LAPSE_LOG = timedelta(hours=1)                   # a lapsed sign-in is logged at most once in this time
 ERROR = "error: "                                # the start of the reason of a file the scan left in the inbox after an exception
@@ -201,6 +236,12 @@ COPILOT_DOWN = "copilot"                         # the key of the digest state w
 COPILOT_CASES = "copilot_cases"                  # the key of the cases the AI service failed, in the order they are tried last
 COPILOT_CAP = 3                                  # the failures after which a case is finished as failed (_run_cases)
 COULD_NOT_READ = "Copilot could not read this document: {error}"
+INTAKE = "intake"                                # the key of the digest state that keeps the lines written of the files that stay
+INTAKE_STAGE = "intake file"                     # the stage of the intake file of the review page's tab "Bestanden", as runner.log names it
+STAY_DAYS = 30                                   # the days after which a file that stays as an error is set aside (see the module docstring)
+SET_ASIDE = "set aside"                          # the stage of a file set aside, with its name, as runner.log names it
+SET_ASIDE_REASON = "set aside after {n} days without being read"     # its reason in the state's skipped list, for the next digest
+FILINGS = ("po", "export", "case", "guess", "answer", "bounce", "auto", "own", "recheck")     # the outcomes that tell a filing (_intake)
 
 
 def run_loop(deps: Deps, stop_file: Path, poll_seconds: float = 60.0, max_passes: int | None = None, *, settings_file: Path | None = None,
@@ -265,7 +306,8 @@ class _Loop:
     """What a run of the loop keeps from one pass to the next: the Deps, the cases and the stages that failed in it (each logged
     once), the settings file with its modification time, the Microsoft account of the work mailbox, the period the last digest
     closed while the state file could not keep it (_closed_again), whether its passes have checked the waiting cases against every PO
-    of the store yet (_pass), and the first page and the quick read of each case without a number that it checked again."""
+    of the store yet (_pass), the first page and the quick read of each case without a number that it checked again, and the record
+    of the files that stay with the lines of the intake file that wait (_Intake)."""
 
     def __init__(self, deps: Deps, settings_file: Path | None = None, rebuild: Callable[[Settings], Deps] | None = None,
                  account: MicrosoftAccount | None = None, session=None):
@@ -277,6 +319,7 @@ class _Loop:
         self.closed: dict | None = None          # {"last_sent", "reported", "skipped"} of a digest whose state was not saved
         self.first = True                        # the next check of the waiting cases takes every PO of the store as filed
         self.seen: dict[str, tuple[str, Document | None]] = {}   # the first page and the quick read of each case without a number
+        self.intake = _Intake()                  # the record of the files that stay and the lines that wait (_intake)
 
     def reload(self) -> None:
         """Read the settings file again when it has changed since the Deps were built of it (see the module docstring)."""
@@ -292,7 +335,7 @@ class _Loop:
             return
         try:
             deps = self.rebuild(settings) if self.rebuild is not None else self.deps.model_copy(update={"settings": settings})
-        except Exception as exc:                 # its text may quote a value of the settings (the Exact writer's checks do)
+        except Exception as exc:                 # its text may quote a value of the settings
             _log(root, now, SETTINGS, f"{type(exc).__name__}: the changed settings cannot be used; the settings in use are kept")
             return
         if _connection(settings) != _connection(self.deps.settings):
@@ -307,6 +350,17 @@ class _Loop:
         if self.made is None or self.made[0] != key:
             self.made = (key, _microsoft_account(settings))
         return self.made[1]
+
+    def signed_in(self, settings: Settings) -> str | None:
+        """The address of the account signed in to the work mailbox, read from its store without the network; None without the
+        tenant and the client of the sign-in, without an account, and when the store cannot be read. An e-mail from that address
+        is of the aid's own side (scan_folder of aid/sources/mailbox.py)."""
+        if not (settings.ms_tenant_id and settings.ms_client_id):
+            return None
+        try:
+            return self.account(settings).account()
+        except Exception:                        # the store refused or cannot be read: the settings' own addresses still count
+            return None
 
 
 def _pass(loop: _Loop) -> None:
@@ -336,18 +390,18 @@ def _pass(loop: _Loop) -> None:
         except Exception as exc:                 # the digest state could not be saved: the pass goes on with the folder
             _log(root, now, MAILBOX, exc)
     filed: list[str] = []                        # the POs the scan filed in this pass
-    _guarded(root, now, failed, SCAN, lambda: filed.extend(_scan(deps, root, state, now, failed)))
+    _guarded(root, now, failed, SCAN, lambda: filed.extend(_scan(deps, root, state, now, failed, loop.intake, loop.signed_in(settings))))
 
     def recheck() -> bool:
         """The waiting cases checked again for the POs filed, and at the first pass of the run for every PO of the store; False when
         no PO was filed, so that the stage had nothing to do (_guarded)."""
         pos = [*filed, *(held_pos(deps.store) if loop.first else [])]
-        _recheck_waiting(deps, root, state, now, pos, failed, loop.seen)
+        _recheck_waiting(deps, root, state, now, pos, failed, loop.seen, loop.intake)
         loop.first = False
         return bool(pos)
     _guarded(root, now, failed, RECHECK, recheck)
-    _run_cases(deps, root, state, now, failed)
-    _guarded(root, now, failed, SEEN, lambda: reconcile(root / PREPARED, deps.store, root, now))
+    _run_cases(deps, root, state, now, failed, loop.intake)
+    _guarded(root, now, failed, SEEN, lambda: reconcile(root / PREPARED, deps.store, root, deps.clock()))      # marked when it is seen
     for case_id in _without_dispositions(root, deps.clock()):
         _guarded(root, now, failed, case_id, lambda: _recover(root, state, case_id))
     _guarded(root, now, failed, "captures", lambda: _report_captures(root, state, deps.clock()))
@@ -357,6 +411,8 @@ def _pass(loop: _Loop) -> None:
                 _log(root, now, case_id, reason)
             else:
                 _report(root, state, case_id)
+        for case_id, _ in end_empty_waits(root, now, settings):          # a case that waits while no question of it is out
+            _report(root, state, case_id)
     except Exception as exc:
         _log(root, now, "escalation", exc)
     try:
@@ -385,8 +441,11 @@ def _guarded(root: Path, now: datetime, failed: set[str], case_id: str, work) ->
     return None
 
 
-def _run_cases(deps: Deps, root: Path, state: dict, now: datetime, failed: set[str]) -> None:
-    """Run every case without a result (_run), each guarded, and keep in the state what the AI service's failures call for.
+def _run_cases(deps: Deps, root: Path, state: dict, now: datetime, failed: set[str], intake: "_Intake | None" = None) -> None:
+    """Run every case without a result (_run), each guarded, and keep in the state what the AI service's failures call for. A case
+    opened from a scan that failed at reading (unread_scan of aid/notify.py) gets a line of its own in the intake file, for the
+    review page's tab "Bestanden": its document, named alone as a case checked again is, the outcome "unread" and the case's id,
+    written as the scan's lines are, or waiting in the loop (`intake`) as they do.
 
     The order: the cases the AI service has not failed come first, by name; then the cases it failed (COPILOT_CASES), the case
     failed last at the end, so that a case that keeps failing never holds back the others. Only a failure of the chat that carries
@@ -409,12 +468,16 @@ def _run_cases(deps: Deps, root: Path, state: dict, now: datetime, failed: set[s
     records = {case_id: dict(record) for case_id, record in state.get(COPILOT_CASES, {}).items() if case_id in pending}
     before = (state.get(COPILOT_DOWN), state.get(COPILOT_CASES))
     down, read, outage, whole, waiting = False, False, None, False, 0
+    intake = intake if intake is not None else _Intake()
     for case_id in [case_id for case_id in pending if case_id not in records] + list(records):
         if down:
             waiting += 1
             continue
         answered: list[bool] = []
-        failure = _guarded(root, now, failed, case_id, lambda: _run(deps, root, state, case_id, answered))
+        unread: list[tuple[str, str, str]] = []
+        failure = _guarded(root, now, failed, case_id, lambda: _run(deps, root, state, case_id, answered, unread))
+        if unread:                                                       # a scan that failed at reading: its line on the tab
+            _write_intake(root, now, failed, intake, unread, state)
         if not isinstance(failure, SERVICE_FAILURES):
             if answered:
                 read = True
@@ -532,19 +595,27 @@ def _elapsed(earlier: datetime, now: datetime) -> timedelta:
     return now - earlier
 
 
-def _scan(deps: Deps, root: Path, state: dict, now: datetime, failed: set[str]) -> list[str]:
-    """Scan the watched folder, report each case that a supplier's reply put in review, and note what the scan skipped in the state,
-    each (file, reason) once, since a file that stays in the inbox as an error is tried again at every pass. Such an error is logged once in a run of the loop, as a failing case is.
-    Returns the POs the scan filed, each once: the number of each PO PDF it filed, also one the store held already, then of each PO
-    whose look an export filed as new or changed."""
+def _scan(deps: Deps, root: Path, state: dict, now: datetime, failed: set[str], intake: "_Intake | None" = None,
+          signed_in: str | None = None) -> list[str]:
+    """Scan the watched folder (with the address of the signed-in account, when there is one, among those of the aid's own side),
+    write what became of each document to the intake file first (_intake, with what the loop keeps of it,
+    `intake`; a call without one keeps nothing beyond the call), then report each case that a supplier's reply put in review, and note
+    what the scan skipped in the state, each (file, reason) once, since a file that stays in the inbox as an error is tried again at
+    every pass. Such an error is logged once in a run of the loop, as a failing case is. The lines come first, so that a failure of the
+    reports (the state cannot be saved) loses none. Returns the POs the scan filed, each once: the number of each PO PDF it filed, also
+    one the store held already, then of each PO whose look an export filed as new or changed."""
     settings = deps.settings
     inbox = Path(settings.watched_folder)
     inbox.mkdir(parents=True, exist_ok=True)
-    scan = scan_folder(inbox, deps.store, root, settings, now, deps.decider)
+    intake = intake if intake is not None else _Intake()
+    record = intake.record if intake.record is not None else state.get(INTAKE, {})
+    stayed = _contents(inbox, record)            # the files that stayed after the last pass, as they are before this scan
+    scan = scan_folder(inbox, deps.store, root, settings, now, deps.decider, own=[signed_in])
+    _intake(root, inbox, state, scan, stayed, now, failed, intake)
     for case_id in scan.answered:                # a real reply put its case in review: the next digest reports it
         _report(root, state, case_id)
     for name, reason in scan.skipped:
-        if _hidden(name.split("/")[0]):
+        if _hidden(name.split("/")[0]) or name.split("/")[0] in intake.set_aside:     # a file set aside is named as such (_intake)
             continue
         if [name, reason] not in state["skipped"]:
             state["skipped"].append([name, reason])
@@ -555,16 +626,165 @@ def _scan(deps: Deps, root: Path, state: dict, now: datetime, failed: set[str]) 
     return list(dict.fromkeys([*scan.stored_pos, *(number for _, _, new in scan.stored_exports for number in new)]))
 
 
+class _Intake:
+    """What a run of the loop keeps of the intake file (see the module docstring): the record of each file that stays in the watched
+    folder, by its name, which decides within the run (None until a pass has read it from the state, the copy a new run starts from),
+    each with the lines of it that intake.jsonl holds ("written") and those that wait to be written ("waiting", the loop's alone); the
+    lines that could not be written yet, each with the time of its own pass (line_of), in their order; and the files the last scan step
+    set aside."""
+
+    def __init__(self):
+        self.record: dict[str, dict] | None = None
+        self.waiting: list[dict] = []
+        self.set_aside: set[str] = set()
+
+
+def _intake(root: Path, inbox: Path, state: dict, scan: ScanResult, stayed: dict[str, str | None], now: datetime, failed: set[str],
+            intake: _Intake) -> None:
+    """Write a line to the intake file for each event of the scan (aid/review/intake.py), but of a file that stays (see the module
+    docstring) none that says the same as the last line of its document, written or waiting (O1), and no "received before" after a line
+    that told a filing (O2); set aside each file that stayed STAY_DAYS days as an error (O8), which the state's skipped list then names
+    once, for the next digest, in place of its earlier reasons (SET_ASIDE_REASON); and keep the record of each file that stays, in the
+    loop (`intake`) and, without the lines that wait, in the state under INTAKE: {"sha256": its content, or None while it cannot be read,
+    "since": the time of the pass that wrote its first line as a staying file, "written": [[file, outcome, detail], ...], the lines that
+    intake.jsonl holds}. A line that waits is added to "written" once its write succeeds (_write_intake), so that a run that ends while
+    lines wait leaves a record from which the next run writes the line of a file that still stays. `stayed` gives the content of each file
+    the record names that is in the folder, read before the scan: None for one that cannot be read. A file stays when the scan left it in
+    the folder, as an error or because it could not be moved (an error in the skipped list)."""
+    record = intake.record if intake.record is not None else state.get(INTAKE, {})
+    stays = {name.split("/")[0] for name, reason in scan.skipped if reason.startswith(ERROR)}
+    by_file: dict[str, list[tuple[str, str, str]]] = {}
+    for event in scan.events:
+        if not _hidden(event[0].split("/")[0]):
+            by_file.setdefault(event[0].split("/")[0], []).append(event)
+    events, kept, aside = [], {}, {}
+    for name, its in by_file.items():
+        old = record.get(name)
+        same = old is not None and name in stayed and (old["sha256"] is None or stayed[name] is None or stayed[name] == old["sha256"])
+        written = [tuple(line) for line in old["written"]] if same else []
+        waiting = [tuple(line) for line in old.get("waiting", [])] if same else []
+        last = {line[0]: line for line in written + waiting}      # the last line of each document of the file, written or waiting
+        for event in its:
+            before = last.get(event[0])
+            if before is not None and (event == before or (event[1:] == ("skipped", "duplicate") and before[1] in FILINGS)):
+                continue
+            events.append(event)
+            waiting.append(event)
+            last[event[0]] = event
+        if name not in stays or not (inbox / name).is_file():
+            continue
+        since = datetime.fromisoformat(old["since"]) if same else now
+        if same and any(outcome == "error" for _, outcome, _ in its) and (days := _elapsed(since, now).days) >= STAY_DAYS:
+            if _set_aside(root, inbox / name, now, failed, days):
+                events.append((name, "set_aside", str(days)))
+                aside[name] = days
+                continue
+        content = stayed[name] if name in stayed else _content(inbox / name)
+        if content is None and same:
+            content = old["sha256"]
+        kept[name] = {"sha256": content, "since": since.isoformat(), "written": [list(line) for line in written],
+                      "waiting": [list(line) for line in waiting]}
+    intake.record, intake.set_aside = kept, set(aside)
+    _write_intake(root, now, failed, intake, events)
+    _keep_record(state, intake)
+    for name, days in aside.items():                   # the next digest names the file once, as set aside
+        state["skipped"] = [pair for pair in state["skipped"] if pair[0].split("/")[0] != name]
+        state["skipped"].append([name, SET_ASIDE_REASON.format(n=days)])
+
+
+def _keep_record(state: dict, intake: _Intake) -> None:
+    """Put the loop's record into the state under INTAKE without the lines that wait (_intake); none when no file stays."""
+    if intake.record:
+        state[INTAKE] = {name: {"sha256": entry["sha256"], "since": entry["since"], "written": list(entry["written"])}
+                         for name, entry in intake.record.items()}
+    else:
+        state.pop(INTAKE, None)
+
+
+def _set_aside(root: Path, path: Path, now: datetime, failed: set[str], days: int) -> bool:
+    """Move a file that stayed STAY_DAYS days as an error to processed/, as a handled file (to_processed), say so in runner.log with the
+    file and its whole days, and say whether it went. One that cannot be moved stays, to be tried again at the next pass; that is
+    logged once in a run of the loop, with the class of the error and never its text."""
+    key = f"{SET_ASIDE} {path.name}"
+    try:
+        to_processed(path)
+    except OSError as exc:
+        if key not in failed:
+            _log(root, now, key, f"{type(exc).__name__}: the file stays in the watched folder and is tried again at the next pass")
+            failed.add(key)
+        return False
+    failed.discard(key)
+    _log(root, now, key, f"not read after {days} days; moved to {PROCESSED_FOLDER}/")
+    return True
+
+
+def _write_intake(root: Path, now: datetime, failed: set[str], intake: _Intake, events: list[tuple[str, str, str]],
+                  state: dict | None = None) -> None:
+    """Write the lines that wait (intake.waiting), then a line for each event at the time `now`, in one write. When they cannot be
+    written they all wait, each with the time of its own pass, for the next write, at the next pass or at the check again of this one;
+    the failure is logged once in a run of the loop, with the number of lines that wait and the class of the error, never a path, and
+    the write after it says how many lines that waited it wrote. Once they are written, the lines that waited of each file that stays
+    are written ones in its record (_intake); given the `state`, its copy of the record is brought up to date and saved then."""
+    lines = [*intake.waiting, *(line_of(event, now) for event in events)]
+    if not lines:
+        return
+    try:
+        write_intake(root, lines)
+    except OSError as exc:
+        intake.waiting = lines
+        if INTAKE_STAGE not in failed:
+            count = len(lines)
+            _log(root, now, INTAKE_STAGE, f"{type(exc).__name__}: {_lines(count)} could not be written; "
+                                          f"{'it waits' if count == 1 else 'they wait'} for the next pass")
+            failed.add(INTAKE_STAGE)
+        return
+    waited, intake.waiting = len(intake.waiting), []
+    moved = False
+    for entry in (intake.record or {}).values():
+        if entry.get("waiting"):
+            entry["written"], entry["waiting"], moved = entry["written"] + entry["waiting"], [], True
+    if moved and state is not None:
+        _keep_record(state, intake)
+        _save_quietly(root, state, now, failed)
+    if INTAKE_STAGE in failed:
+        _log(root, now, INTAKE_STAGE, f"ran after an earlier failure; {_lines(waited)} that waited {'is' if waited == 1 else 'are'} written")
+        failed.discard(INTAKE_STAGE)
+
+
+def _lines(count: int) -> str:
+    return "1 line" if count == 1 else f"{count} lines"
+
+
+def _contents(inbox: Path, record: dict) -> dict[str, str | None]:
+    """The sha256 of each file of the watched folder that the record names and that is there, by its name: None for one whose content
+    cannot be read (another program holds it), which counts as the same file as its record (see the module docstring)."""
+    found = {}
+    for name in record:
+        if (inbox / name).is_file():
+            found[name] = _content(inbox / name)
+    return found
+
+
+def _content(path: Path) -> str | None:
+    """The sha256 of the file; None when it is not there or cannot be read."""
+    try:
+        return sha256_file(path) if path.is_file() else None
+    except OSError:
+        return None
+
+
 def _recheck_waiting(deps: Deps, root: Path, state: dict, now: datetime, filed: list[str], failed: set[str],
-                     seen: dict[str, tuple[str, Document | None]]) -> list[str]:
+                     seen: dict[str, tuple[str, Document | None]], intake: _Intake | None = None) -> list[str]:
     """Check the cases that wait for their PO, and the cases without a PO number, again for the POs `filed` in this pass (see the module
     docstring), and return the ids of the new cases, which _run_cases runs next. `seen` keeps, for the run of the loop, the first page
-    and the quick read of each case without a number that was checked already. An error of one case is logged as "recheck <case id>"
-    once in a run of the loop, as a failing case is (_guarded), and the next case is checked."""
+    and the quick read of each case without a number that was checked already, and `intake` the lines of the intake file that wait
+    (_write_intake). An error of one case is logged as "recheck <case id>" once in a run of the loop, as a failing case is (_guarded),
+    and the next case is checked."""
     filed = list(dict.fromkeys(filed))
     if not filed:
         return []
     new, read = [], []
+    intake = intake if intake is not None else _Intake()
 
     def templates() -> list:
         """The layout templates of the quick read by lines, read once, at their first use (load_templates)."""
@@ -599,6 +819,8 @@ def _recheck_waiting(deps: Deps, root: Path, state: dict, now: datetime, filed: 
             return left_alone()
         new.append(renewed.case_id)
         finish_replaced(case, renewed.case_id, now, deps.settings.language)
+        name = case.input_files[0].name if case.input_files else case.case_id      # the document alone, without its e-mail
+        _write_intake(root, now, failed, intake, [(name, "recheck", renewed.case_id)], state)
         return True
     for case, waits in cases_checked_again(root):
         _guarded(root, now, failed, f"{RECHECK} {case.case_id}", lambda: check(case, waits))
@@ -695,17 +917,21 @@ def _identity(folder: Path) -> tuple[list[str], datetime] | None:
         return None
 
 
-def _run(deps: Deps, root: Path, state: dict, case_id: str, answered: list[bool] | None = None) -> None:
+def _run(deps: Deps, root: Path, state: dict, case_id: str, answered: list[bool] | None = None,
+         unread: list[tuple[str, str, str]] | None = None) -> None:
     """Run a case, report it and record its dispositions. run_case makes any exception of a step the failure of the case; a failure of
     the AI service (SERVICE_FAILURES) in the reader or in the decider is carried past it instead (_carrying), as an interruption is,
     so that the case keeps no result and no audit record of the attempt, and it is raised here for _guarded to log, the case not
     reported. Such a failure comes before any write or message of the case: the steps that ask a model come before them. True is
-    appended to `answered` when the model answered during the run."""
+    appended to `answered` when the model answered during the run, and the line of the intake file to `unread` when the case failed
+    at reading a scan (unread_scan of aid/notify.py): (its document, "unread", the case id)."""
     case = load_case(root, case_id)
     try:
         result = run_case(case, _carrying(deps, answered if answered is not None else []))
     except _ServiceFailed as failed:
         raise failed.error from None
+    if unread is not None and unread_scan(result):
+        unread.append((case.input_files[0].name if case.input_files else case_id, "unread", case_id))
     _report(root, state, case_id)
     record_dispositions(case, result)
 
@@ -759,12 +985,13 @@ class _CarryingClient:
 
 
 def _recover(root: Path, state: dict, case_id: str) -> None:
-    """Record the dispositions of a case that has its result and none, and report it, unless it was finished as replaced (replaced of
-    aid/review/close.py): its dispositions are recorded as for any case, and the case that replaced it is the one reported."""
+    """Record the dispositions of a case that has its result and none, and report it, unless it was replaced (_replaced_case:
+    finished as replaced, or a capture case marked as replaced): its dispositions are recorded as for any case, and the case that
+    replaced it is the one reported."""
     case = load_case(root, case_id)
     result = CaseResult.model_validate_json((case.root / "steps" / RESULT_FILE).read_text(encoding="utf-8"))
     record_dispositions(case, result)
-    if not replaced(case):
+    if not _replaced_case(case.root):
         _report(root, state, case_id)
 
 
@@ -781,14 +1008,23 @@ def _digest(loop: _Loop, root: Path, state: dict, now: datetime) -> None:
     refused = sum(1 for record in state.get(COPILOT_CASES, {}).values() if record["refused"] or (record["read_after"] and record["failed"]))
     unnamed = any(note is not None and (last_sent is None or _elapsed(last_sent, datetime.fromisoformat(note["since"])) > timedelta(0))
                   for note in (lapse, copilot))
-    if settings.digest == "per_case" and not state["reported"] and not state["skipped"] and not unnamed:
-        return
-    results = []
+    results, replaced_meanwhile = [], []
     for case_id in state["reported"]:
         try:
-            results.append(CaseResult.model_validate_json((root / case_id / "steps" / RESULT_FILE).read_text(encoding="utf-8")))
+            result = CaseResult.model_validate_json((root / case_id / "steps" / RESULT_FILE).read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
             _log(root, now, case_id, exc)
+            continue
+        # Looked at after the result was read: the capture server marks a case before it closes its result, so a case that is not
+        # marked now was read as it stood before any replacement. A case whose mark cannot be read is known by its close record.
+        if _replaced_case(root / case_id):
+            replaced_meanwhile.append(case_id)
+        else:
+            results.append(result)
+    if replaced_meanwhile:                       # replaced since this pass looked at the capture cases: named in no digest
+        state["reported"] = [case_id for case_id in state["reported"] if case_id not in replaced_meanwhile]
+    if settings.digest == "per_case" and not state["reported"] and not state["skipped"] and not unnamed:
+        return
     try:
         to_enter = sum(1 for change in open_changes(root / PREPARED) if not change.tryout)       # a try-out's changes are not to enter
     except Exception as exc:                     # the list cannot be read now: the digest says so, and is not held back for it
@@ -865,11 +1101,44 @@ def _running(folder: Path, now: datetime) -> bool:
 def _report_captures(root: Path, state: dict, now: datetime) -> None:
     """Report each case of the capture server that has its result, is no longer running and was never reported, once: the server
     runs its cases itself and never writes the runner's state, so the runner reports them. The ids reported are kept in the state's
-    "captures" list."""
+    "captures" list. A capture case that the server replaced (_replaced_case: marked in its capture.json, or finished with the
+    record of a replacement) is not reported, and is taken out of the cases the next digest reports when it stands among them, the
+    state saved at once. Only a case that is not reported yet, or that stands among the cases to report, has its capture.json and
+    its close records read, so that a pass costs what the captures not yet reported cost."""
+    listed, known = set(state["reported"]), set(state.get("captures", []))
     for path in _case_folders(root):
-        if ((path / CAPTURE_FILE).is_file() and (path / "steps" / RESULT_FILE).exists() and path.name not in state.get("captures", [])
-                and not _running(path, now)):
-            _report(root, state, path.name)
+        name = path.name
+        if not (path / CAPTURE_FILE).is_file() or (name in known and name not in listed):
+            continue
+        if _replaced_case(path):
+            if name in listed:
+                state["reported"] = [case_id for case_id in state["reported"] if case_id != name]
+                _save_state(root, state)
+        elif name not in known and (path / "steps" / RESULT_FILE).exists() and not _running(path, now):
+            _report(root, state, name)
+
+
+def _replaced_capture(folder: Path) -> bool:
+    """Whether the case of the folder is a capture case that the capture server replaced by a new case of the same page or cart: its
+    capture.json holds replaced_by, which the server writes before it closes the case's result (aid/capture_server.py, _replace). A
+    folder without the file, or whose file cannot be read, holds none."""
+    try:
+        meta = json.loads((folder / CAPTURE_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(meta, dict) and meta.get("replaced_by") is not None
+
+
+def _replaced_case(folder: Path) -> bool:
+    """Whether the case of the folder was replaced by a new case: a capture case marked as replaced (_replaced_capture), or a case
+    whose close records hold a replacement (replaced of aid/review/close.py), by which a capture case that was finished is still
+    known while its capture.json cannot be read. A folder whose case.json cannot be read holds none."""
+    if _replaced_capture(folder):
+        return True
+    try:
+        return replaced(load_case(folder.parent, folder.name))
+    except (OSError, ValueError):
+        return False
 
 
 def _case_folders(root: Path) -> list[Path]:
@@ -930,10 +1199,27 @@ def _load_state(root: Path, now: datetime) -> dict:
                     and type(record["refused"]) is int and type(record["failed"]) is int and type(record["read_after"]) is bool
                     for record in cases.values())):
                 raise ValueError(f"its {COPILOT_CASES} are not the failures of the AI service by case")
+        if (intake := state.get(INTAKE)) is not None:                    # only while a file stays in the watched folder
+            if not (isinstance(intake, dict) and all(_staying(record) for record in intake.values())):
+                raise ValueError(f"its {INTAKE} is not the lines written of the files that stay in the watched folder")
     except (OSError, ValueError, TypeError) as exc:
         _log(root, now, STATE_FILE, f"{type(exc).__name__}: {' '.join(str(exc).split())}; a fresh state is started")
         return fresh
     return state
+
+
+def _staying(record) -> bool:
+    """Whether a record of the state's INTAKE has its form (_intake): its sha256 a text or None, its since a time, and its lines
+    written, each three texts."""
+    if not (isinstance(record, dict) and set(record) == {"sha256", "since", "written"} and isinstance(record["sha256"], str | None)
+            and isinstance(record["since"], str) and isinstance(record["written"], list)
+            and all(isinstance(line, list) and len(line) == 3 and all(isinstance(part, str) for part in line) for line in record["written"])):
+        return False
+    try:
+        datetime.fromisoformat(record["since"])
+    except ValueError:
+        return False
+    return True
 
 
 def _save_state(root: Path, state: dict) -> None:
@@ -954,11 +1240,11 @@ def _log(root: Path, now: datetime, what: str, error: Exception | str) -> None:
 # --- the command on the company platform ---
 
 def build_deps(settings: Settings, environ: Mapping[str, str], account: MicrosoftAccount | None = None, session=None) -> Deps:
-    """The Deps of the command for company documents (see the module docstring); `environ` is the environment that the Exact token
-    and the mailbox password are looked up in, `account` the Microsoft account that Copilot is asked with and a MicrosoftMailer
-    sends through, made of the settings when none is given, and `session` the requests session that Copilot is called through
-    (None: requests). Raises ValueError for reader "llm" without the tenant and the client (NO_LLM) and for Exact settings the
-    writer refuses."""
+    """The Deps of the command for company documents (see the module docstring); `environ` is the environment that the mailbox
+    password is looked up in, `account` the Microsoft account that Copilot is asked with and a MicrosoftMailer sends through, made
+    of the settings when none is given, and `session` the requests session that Copilot is called through (None: requests). The
+    writer is the prepared writer, whatever the settings hold. Raises ValueError for reader "llm" without the tenant and the
+    client (NO_LLM)."""
     reader, decider = read_with_parser, NoDecider()
     if settings.reader == "llm":
         if not (settings.ms_tenant_id and settings.ms_client_id):
@@ -966,13 +1252,9 @@ def build_deps(settings: Settings, environ: Mapping[str, str], account: Microsof
         account = account or _microsoft_account(settings)
         client = CopilotClient(account, session=session, work=settings.cases_root / TEMPORARY / WORK)     # a PDF's copy: under the cases
         reader, decider = llm_reader(client), LlmDecider(client)
-    prepared = PreparedWriter(settings.cases_root / "prepared")
-    writer = prepared
-    if settings.exact_base_url:
-        writer = RetryingWriter(ExactApiWriter(settings.exact_base_url, settings.exact_endpoints, lambda: _token(environ),
-                                               fields=settings.exact_fields), prepared)
     return Deps(settings=settings, store=PoStore(settings.po_store_root, settings.authorization_limit), reader=reader,
-                decider=decider, writer=writer, mailer=_mailer(settings, environ, account), clock=datetime.now)
+                decider=decider, writer=PreparedWriter(settings.cases_root / "prepared"),
+                mailer=mailer_of(settings, environ, lambda: account or _microsoft_account(settings)), clock=datetime.now)
 
 
 def llm_reader(client: LlmClient) -> Callable[[Path, str], Document | tuple[Document, LlmResponse]]:
@@ -985,33 +1267,11 @@ def llm_reader(client: LlmClient) -> Callable[[Path, str], Document | tuple[Docu
     return reader
 
 
-def _mailer(settings: Settings, environ: Mapping[str, str], account: MicrosoftAccount | None) -> Mailer:
-    """The mailer that send_via names (see the module docstring). Nothing here asks Microsoft anything: "auto" and the From of the
-    work mailbox are decided at each message."""
-    # SmtpMailer reads the password from os.environ at each send, not from `environ`; main passes os.environ, so the two agree.
-    if settings.send_via != "file" and settings.smtp_host and settings.smtp_user and PASSWORD_ENV in environ:
-        other = SmtpMailer(settings.smtp_host, settings.smtp_port, settings.smtp_user, password_env=PASSWORD_ENV, sender=settings.aid_email)
-    else:
-        other = FileMailer(settings.cases_root / OUTBOX, sender=settings.aid_email)
-    if settings.send_via == "microsoft" or (settings.send_via == "auto" and trigger_on(settings)):
-        microsoft = MicrosoftMailer(account or _microsoft_account(settings), settings.mailbox, "", clock=datetime.now)
-        return microsoft if settings.send_via == "microsoft" else AutoMailer(microsoft, other)
-    return other
-
-
 def _microsoft_account(settings: Settings) -> MicrosoftAccount:
     """The Microsoft account of the settings' tenant and client, with the token cache of the store in default_secrets_dir(), made
     at its first use (LazySecretStore): a store this process may not use is then an error of the mailbox, logged, and never a
     reason for the runner not to start."""
     return MicrosoftAccount(settings.ms_tenant_id, settings.ms_client_id, LazySecretStore(default_secrets_dir()))
-
-
-def _token(environ: Mapping[str, str]) -> str:
-    """The Exact token, read from the environment at each call."""
-    token = environ.get(TOKEN_ENV)
-    if not token:
-        raise WriterError(f"the environment variable {TOKEN_ENV} is not set")
-    return token
 
 
 def main(argv: list[str] | None = None) -> int:

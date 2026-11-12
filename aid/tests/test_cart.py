@@ -1,6 +1,7 @@
 """Tests of the pre-check on captured cart pages: the cart reader (aid/readers/cart.py), the capture source (aid/sources/capture.py)
 and a cart case through the pipeline (aid/pipeline.py), on the made-up set. No test calls an AI service: the screenshot is read
 only through the recorded answers."""
+import json
 import os
 import shutil
 from datetime import datetime, timedelta
@@ -9,11 +10,13 @@ from pathlib import Path
 import pytest
 
 from aid.evalscripts.score_reading import expected_fields, score_reading
-from aid.pipeline import read_with_parser, run_case
-from aid.readers.cart import is_cart_page, read_cart_html, read_cart_image
+from aid.pipeline import GUESSED_CART, GUESSED_PO, GUESSED_RULE, read_with_parser, run_case
+from aid.pricelist import RULE_ID as PRICE_LIST_RULE
+from aid.readers.cart import first_heading, is_cart_page, read_cart_html, read_cart_image
 from aid.readers.llm_client import ReaderError, RecordedClient
 from aid.schema import DocLine, DocValue, Document, SourceRef
-from aid.sources.capture import open_capture_case
+from aid.review.i18n import STRINGS, reason_label
+from aid.sources.capture import ALREADY_SENT, GUESSES, NOT_SURE, open_capture_case
 from aid.tests.conftest import REPO_ROOT, deps
 from aid.tests.helpers import EXPORT_COLUMNS, document_from_spec
 
@@ -198,6 +201,26 @@ def test_a_po_number_needs_a_label_of_its_own_and_ends_with_its_digits(tmp_path)
         assert cart_page(tmp_path, ROW, before=f"<p>{text}</p>").po_reference == DocValue(), text
 
 
+def test_a_number_that_goes_on_is_no_po_number(tmp_path):
+    """A number of six to eight digits that goes on is another number, of which the reader reads no part: one followed directly by
+    a letter, or by a separator (a hyphen, an en dash, a slash, a full stop, an underscore, a comma, a colon) with a letter or a
+    digit right behind it. A separator at the end of the text or before a space ends the number, as the full stop of a sentence
+    does, and a label written against its number is still a label."""
+    for text in ("Uw referentie: 250301-01", "Uw referentie: 250301A", "Uw referentie: 250301/2", "Uw referentie: 250301.1",
+                 "Uw referentie: 2503011a", "Uw referentie: 250301-b", "Uw referentie: 250301/ab", "Uw referentie: IB-2600417",
+                 "Uw referentie: 25030", "Uw referentie: 250301001",
+                 "Uw referentie: 250301_01", "Uw referentie: 250301,5", "Uw referentie: 250301:2", "Uw referentie: 250301\u20132",
+                 "Uw referentie: 250301_a", "Uw referentie: 250301,b", "Uw referentie: 250301:c", "Uw referentie: 250301\u2013d"):
+        assert cart_page(tmp_path, ROW, before=f"<p>{text}</p>").po_reference == DocValue(), text
+    for text in ("Uw referentie: 250301.", "Uw referentie: 250301. Dank voor uw bestelling", "Uw referentie: 250301- zie hieronder",
+                 "Uw referentie: 250301-", "Uw referentie: 250301/", "Uw referentie: 250301, met dank", "Uw referentie: PO250301",
+                 "Uw referentie: 250301 a", "Uw referentie: 250301",
+                 "Uw referentie: 250301,", "Uw referentie: 250301:", "Uw referentie: 250301: zie hieronder", "Uw referentie: 250301_",
+                 "Uw referentie: 250301\u2013", "Uw referentie: 250301 \u2013 2 regels", "Uw referentie: 250301, 5 regels"):
+        assert cart_page(tmp_path, ROW, before=f"<p>{text}</p>").po_reference.value == "250301", text
+    assert cart_page(tmp_path, ROW, before="<p>Uw referentie: 250301-01</p><p>Inkooporder 250302</p>").po_reference.value == "250302"
+
+
 def test_form_controls_give_the_text_they_show(tmp_path):
     """An input gives its value and a hidden input none; a select gives the text of its selected option. A cell that holds only a
     control without a value (a select with no option selected, an empty field) gives no value."""
@@ -216,6 +239,24 @@ def test_a_heading_in_a_table_row_of_its_own_is_the_supplier(tmp_path):
     """The heading's text is the value, and the line of its row the source."""
     doc = cart_page(tmp_path, ROW, before="<table><tr><td><h1>S40</h1></td><td>Winkelwagen</td></tr></table>")
     assert doc.supplier == DocValue(value="S40", text="S40", source=SourceRef(page=1, line=1, text="S40 | Winkelwagen"))
+
+
+def test_the_first_heading_of_a_page_is_given_as_the_supplier_is_read(tmp_path, madeup_out):
+    """first_heading gives the text of the first heading of a page saved as HTML, the one read_cart_html takes the supplier from: in
+    a block of its own or in a table row, never the title of the page, a heading the browser does not show, or a later heading. A
+    page without a heading, with or without a cart table, has none."""
+    assert first_heading(madeup_out / "CART02.html") == "S22" == read_cart_html(madeup_out / "CART02.html").supplier.value
+
+    def saved(html: str) -> Path:
+        path = tmp_path / "page.html"
+        path.write_text(html, encoding="utf-8")
+        return path
+    assert first_heading(saved("<html><head><title>Shop</title></head><body><p>Welkom</p><h3>Eerste  <b>kop</b></h3><h1>Tweede</h1>"
+                               "</body></html>")) == "Eerste kop"
+    assert first_heading(saved("<table><tr><td><h2>S40</h2></td><td>Winkelwagen</td></tr></table><h1>Later</h1>")) == "S40"
+    assert first_heading(saved("<template><h1>Verborgen</h1></template><noscript><h1>Ook</h1></noscript><h2>Zichtbaar</h2>")) == "Zichtbaar"
+    assert first_heading(saved("<html><head><title>Alleen een titel</title></head><body><p>Geen kop</p></body></html>")) == ""
+    assert first_heading(saved("")) == ""
 
 
 def test_a_total_or_shipping_row_without_a_quantity_is_no_cart_line(tmp_path):
@@ -285,6 +326,33 @@ def test_open_capture_case(tmp_path, madeup_out):
     assert copy.read_bytes() == original.read_bytes() and copy.stat().st_mtime_ns == original.stat().st_mtime_ns   # the capture date may fall back on it
     unknown = open_capture_case(tmp_path / "cases", madeup_out / "CART02.png", "", NOW)
     assert (unknown.case_id, unknown.kind, unknown.po_number) == ("unknown_20261112T090000", "cart", None)
+    assert c.po_found_by is None and "po_found_by" not in json.loads((c.root / "case.json").read_text(encoding="utf-8"))
+    guessed = open_capture_case(tmp_path / "cases", madeup_out / "CART02.html", "250202", NOW, found_by=NOT_SURE)
+    assert guessed.po_found_by == NOT_SURE == json.loads((guessed.root / "case.json").read_text(encoding="utf-8"))["po_found_by"]
+
+
+def test_a_cart_whose_order_was_a_guess_goes_to_the_buyer_with_a_reason_of_its_own(tmp_path, madeup_out):
+    """A capture case opened with how its order was guessed (case.json's po_found_by) gets the pipeline's one REVIEW action for the
+    whole case, rule G01, as a confirmation whose order was guessed does, with a reason of its own, by which the review page and the
+    digest name the guess of a cart in its own words. Nothing is written, also where the rules would take a price over. The rule's
+    id is the pipeline's own: P01 is the price list's rule (aid/pricelist.py), and one id names one rule."""
+    d = deps(tmp_path, madeup_out)
+    d.store.from_export(madeup_out / "CART01_export.csv", EXPORT_COLUMNS)
+    page_ = tmp_path / "CART01.html"
+    page_.write_text((madeup_out / "CART01.html").read_text(encoding="utf-8").replace("€ 4,10", "€ 4,15"), encoding="utf-8")
+    found = run_case(open_capture_case(d.settings.cases_root, page_, "250201", NOW), d)
+    assert [(a.rule_id, a.route) for a in found.actions] == [("R04", "AUTO")] and found.status == "closed"
+    for minute, how in enumerate(GUESSES, 1):
+        r = run_case(open_capture_case(d.settings.cases_root, page_, "250201", NOW + timedelta(minutes=minute), found_by=how), d)
+        assert [(a.rule_id, a.route, a.reason, a.finding_ids) for a in r.actions] == [("G01", "REVIEW", GUESSED_CART, ["F1"])]
+        assert (r.status, r.write_entries, [(i.finding_id, i.reason) for i in r.review_items]) == ("review", [], [("F1", GUESSED_CART)])
+    assert GUESSED_CART == "PO chosen by the items in the cart" and GUESSED_CART != GUESSED_PO
+    assert GUESSES == (NOT_SURE, ALREADY_SENT) == ("cart items, not sure", "cart items of an order already sent")
+    assert (GUESSED_RULE, PRICE_LIST_RULE) == ("G01", "P01")
+    assert reason_label(GUESSED_CART, STRINGS["nl"]) == ("Kijk na of dit de goede inkooporder is: de assistent koos haar op de artikelen in "
+                                                         "de winkelwagen.")
+    assert reason_label(GUESSED_CART, STRINGS["en"]) == ("Check that this is the right purchase order: the assistant chose it by the items in "
+                                                         "the cart.")
 
 
 def test_is_cart_page():

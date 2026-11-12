@@ -25,11 +25,14 @@ from aid.readers.pdf_text import extract_lines
 from aid.readers.po_pdf import fits
 from aid.readers.supplier_parser import load_templates
 from aid.sources import mailbox
-from aid.sources.mailbox import (CASE_ID_TRIES, CONTEXT_CHARS, KEYWORDS, NOT_AN_EXPORT, TITLE_CLASSES, TITLE_LINES, ScanResult,
-                                 classify_attachment, extract_eml, find_po_numbers, held_numbers, scan_folder, sender_of, titled_confirmation)
+from aid.sources.mailbox import (CASE_ID_TRIES, CONTEXT_CHARS, FOUND_HELD_NUMBER, KEYWORDS, NO_ORDER_LINES, NOT_AN_EXPORT, TITLE_CLASSES,
+                                 TITLE_LINES,
+                                 ScanResult, classify_attachment, extract_eml, find_po_numbers, held_numbers, scan_folder, sender_of,
+                                 titled_confirmation)
 from aid.tests.conftest import REPO_ROOT, SETTINGS
 from aid.tests.fakes import FakeDecider
 from aid.tests.helpers import ANDERS_LAYOUT, ANDERS_PO, EXPORT_COLUMNS, MADEUP_LAYOUT, first_page
+from aid.tryout_mark import TRYOUT_OUTSIDE
 
 SPECS = {spec.case_id: spec for spec in load_specs(Path(__file__).resolve().parents[1] / "madeup" / "spec")}
 
@@ -938,7 +941,8 @@ def test_a_document_of_another_class_is_skipped_with_its_class(tmp_path, lines, 
     inbox = inbox_of(tmp_path)
     drawn(inbox / "doc.pdf", page_of(*lines))
     r = scan(tmp_path, inbox, FakeDecider(None, 0.0))
-    assert r == ScanResult(new_cases=[], stored_pos=[], skipped=[("doc.pdf", reason)]) and review_items(tmp_path) == []
+    assert r == ScanResult(new_cases=[], stored_pos=[], skipped=[("doc.pdf", reason)], events=[("doc.pdf", "skipped", reason)])
+    assert review_items(tmp_path) == []
     assert (inbox / "processed" / "doc.pdf").exists() and case_names(tmp_path) == [] and not (tmp_path / "store").exists()
 
 
@@ -1685,9 +1689,9 @@ class Recording(PoStore):
         super().__init__(root)
         self.given: list[str] = []
 
-    def add(self, pdf, layout=None):
+    def add(self, pdf, *args, **kwargs):
         self.given.append(Path(pdf).name)
-        return super().add(pdf, layout)
+        return super().add(pdf, *args, **kwargs)
 
     def from_export(self, path, *args, **kwargs):
         self.given.append(Path(path).name)
@@ -1854,6 +1858,32 @@ def test_a_locked_export_file_is_not_filed_again(tmp_path, monkeypatch):
         assert first_prices(store) == (["0.95"] if number == 1 else ["0.95", "0.99"]), number
         assert store.as_it_stands("250201").document.lines[0].unit_price.value == ("0.95" if number == 1 else "0.99"), number
     assert sorted(p.name for p in inbox.iterdir() if p.is_file()) == sorted(locked)
+
+
+def test_a_file_that_stays_in_the_folder_is_given_once_and_one_put_there_anew_again(tmp_path, madeup_out):
+    """Task 43, W16 with ruling E1: an export or a PO PDF that files nothing is still a look at the order at the time it was given
+    (PoStore.given_at), and the list of changes to enter in Exact judges a tick against that time. A kept e-mail is handled again
+    at every pass, its export and its PO PDF included: they were given once, so the passes that follow note nothing, and no tick
+    made meanwhile is ended by a file that only lay there. The same export put into the folder anew is given again."""
+    inbox = inbox_of(tmp_path)
+    (tmp_path / "Inkooporderregels.csv").write_text(cart_export("0.95"), encoding="utf-8")
+    note = drawn(tmp_path / "notitie.pdf", page_of("Hallo, zie de bijlage."))                    # no keyword: the e-mail stays
+    kept = write_eml(inbox / "20261116T075500_aaaa.eml", subject="Export en order",
+                     attachments=[tmp_path / "Inkooporderregels.csv", madeup_out / "MU01_po_v1.pdf", note])
+    store = PoStore(tmp_path / "store")
+    for number in range(1, 4):
+        scan_folder(inbox, store, tmp_path / "cases", EXPORTS, NOW + timedelta(minutes=number), UnreachableDecider())
+        assert kept.exists() and len(store.snapshots("250201")) == len(store.versions("250101")) == 1, number
+        for po_number, name in (("250201", "e1"), ("250101", "v1")):
+            assert store.given_at(po_number, name) == store.filed_at(po_number, name), (number, name)
+            assert not (store.root / po_number / name / "given.txt").exists(), (number, name)
+    anew = inbox / "Inkooporderregels van vandaag.csv"                                           # the same rows, saved anew
+    anew.write_text(cart_export("0.95"), encoding="utf-8")
+    after = store.filed_at("250201", "e1").timestamp() + 60
+    os.utime(anew, (after, after))
+    r = scan_folder(inbox, store, tmp_path / "cases", EXPORTS, NOW + timedelta(minutes=5), UnreachableDecider())
+    assert (anew.name, ["250201"], []) in r.stored_exports and len(store.snapshots("250201")) == 1
+    assert store.given_at("250201", "e1") > store.filed_at("250201", "e1") and store.given_at("250101", "v1") == store.filed_at("250101", "v1")
 
 
 def test_the_exports_of_a_pass_are_filed_in_the_order_of_their_times(tmp_path):
@@ -2127,3 +2157,238 @@ def test_every_made_up_confirmation_gets_the_po_it_got(tmp_path, madeup_out):
             else:
                 expected = GOT_WITHOUT_REFERENCE if stored == "full" else dict.fromkeys(GOT)
             assert got == expected and r.skipped == [], (reference, stored)
+
+
+# --- the events of a scan: what the tab 'Bestanden' shows of each file (Task 37) ---
+
+def test_the_scan_records_an_event_for_each_outcome(tmp_path, madeup_out):
+    """ScanResult.events holds (the file as the skipped list names it, the outcome, the detail) for each document the scan handled, in
+    the order of the files and of the attachments of an e-mail: a PO PDF filed ("po", its number and version), a confirmation's case
+    ("case", its id), an answer to a question of the aid ("answer", its case), a duplicate, a file of another type, a document of
+    another class and an e-mail without an attachment ("skipped", the scan's reason), and an error ("error", never with its text). The
+    fields the result had before stay as they were."""
+    c = asked_case(tmp_path, madeup_out)
+    inbox = inbox_of(tmp_path)
+    put(inbox, madeup_out / "MU01_po_v1.pdf", "a_po.pdf")
+    put(inbox, madeup_out / "MU01_conf.pdf", "b_conf.pdf")
+    answer_eml(inbox / "c_antwoord.eml", "Re: Vraag over orderbevestiging PO 250117")
+    put(inbox, madeup_out / "MU17_conf.pdf", "d_again.pdf")                       # the document of the asked case: a duplicate
+    (inbox / "e_notes.docx").write_bytes(b"made-up")
+    drawn(inbox / "f_factuur.pdf", page_of("Factuur 77", "Factuurdatum 16-11-2026"))
+    (inbox / "g_bad.pdf").write_bytes(b"not a PDF")
+    write_eml(inbox / "h_mail.eml", subject="Orderbevestiging", attachments=[madeup_out / "MU02_conf.pdf"])
+    write_eml(inbox / "i_leeg.eml", subject="Re: iets anders")
+    r = scan(tmp_path, inbox)
+    assert r.events == [("a_po.pdf", "po", "250101 v1"), ("b_conf.pdf", "case", "250101_20261116T080000"),
+                        ("c_antwoord.eml", "answer", c.case_id), ("d_again.pdf", "skipped", "duplicate"),
+                        ("e_notes.docx", "skipped", "unsupported file type: .docx"), ("f_factuur.pdf", "skipped", "invoice"),
+                        ("g_bad.pdf", "error", ""), ("h_mail.eml/MU02_conf.pdf", "case", "250102_20261116T080000"),
+                        ("i_leeg.eml", "skipped", "no attachment")]
+    # rule 8: the fields of the result as they were
+    assert r.new_cases == ["250101_20261116T080000", "250102_20261116T080000"] and r.stored_pos == ["250101"]
+    assert r.replies == [("c_antwoord.eml", c.case_id)] and r.answered == [c.case_id] and r.stored_exports == []
+    assert [(name, "error" if reason.startswith("error: ") else reason) for name, reason in r.skipped] == [
+        ("d_again.pdf", "duplicate"), ("e_notes.docx", "unsupported file type: .docx"), ("f_factuur.pdf", "invoice"), ("g_bad.pdf", "error"),
+        ("i_leeg.eml", "no attachment")]
+    assert list(ScanResult.model_fields) == ["new_cases", "stored_pos", "skipped", "replies", "answered", "stored_exports", "events"]
+    assert (inbox / "g_bad.pdf").exists() and ScanResult().events == []
+
+
+def test_a_file_the_scan_filed_before_is_received_before(tmp_path, madeup_out):
+    """Amendment 1: a file the scan has filed before records "skipped" with the reason "duplicate", which the tab shows as 'Al eerder
+    ontvangen: niets gedaan': a confirmation by the duplicate rule, a PO PDF that the store holds already (filed as the version it is,
+    which files nothing) and an export file that the store has taken before (ruling E1: it files nothing more). The fields the result
+    had before are as they were: the PO PDF is listed in stored_pos and the export in stored_exports all the same, and neither is in the
+    skipped list. A new file with the rows of the latest look is an export filed with no PO new or changed."""
+    inbox = inbox_of(tmp_path)
+    put(inbox, madeup_out / "MU01_po_v1.pdf", "a_po.pdf")
+    put(inbox, madeup_out / "MU02_conf.pdf", "b_conf.pdf")
+    (inbox / "c_export.csv").write_text(export_csv(SPECS["MU01"]), encoding="utf-8")
+    r = scan(tmp_path, inbox, settings=EXPORTS)
+    assert r.events == [("a_po.pdf", "po", "250101 v1"), ("b_conf.pdf", "case", "250102_20261116T080000"), ("c_export.csv", "export", "1 1")]
+    for name in ("a_po.pdf", "b_conf.pdf", "c_export.csv"):
+        shutil.copy(inbox / "processed" / name, inbox / name)
+    (inbox / "d_export.csv").write_text(export_csv(SPECS["MU01"]) + "\n", encoding="utf-8")       # the same rows in another file
+    r = scan(tmp_path, inbox, settings=EXPORTS, now=NOW + timedelta(hours=1))
+    assert r.events == [("a_po.pdf", "skipped", "duplicate"), ("b_conf.pdf", "skipped", "duplicate"), ("c_export.csv", "skipped", "duplicate"),
+                        ("d_export.csv", "export", "1 0")]
+    assert r.stored_pos == ["250101"] and r.new_cases == [] and r.skipped == [("b_conf.pdf", "duplicate")]
+    assert sorted(r.stored_exports) == [("c_export.csv", ["250101"], []), ("d_export.csv", ["250101"], [])]
+    assert [look.document.reader for look in PoStore(tmp_path / "store").snapshots("250101")] == ["export:c_export.csv"]
+    # a PO PDF and an export that came before in an e-mail are received before as attachments too
+    write_eml(inbox / "m.eml", subject="Inkooporder en export", attachments=[madeup_out / "MU01_po_v1.pdf", inbox / "processed" / "c_export.csv"])
+    r = scan(tmp_path, inbox, settings=EXPORTS, now=NOW + timedelta(hours=2))
+    assert r.events == [("m.eml/MU01_po_v1.pdf", "skipped", "duplicate"), ("m.eml/c_export.csv", "skipped", "duplicate")]
+
+
+def test_an_export_in_a_workbook_with_two_filled_sheets_is_refused_and_not_filed(tmp_path):
+    """Ruling Z17 of the second review round of the price list: an export of order lines that comes through the inbox as a workbook
+    with more than one visible sheet with data is refused, by the outcome an export that cannot be read has, with this reason; no
+    export is filed and the file stays. The same rows on a hidden first sheet are never read: the sheet that is seen is filed."""
+    from aid.review import intake
+    from aid.tests.test_po_export import NL as COLUMNS
+    from aid.tests.test_po_export import ROWS, TITLES, sheets
+    inbox = inbox_of(tmp_path)
+    sheets(inbox / "twee.xlsx", [("Open", [TITLES, ROWS[0]], "visible"), ("Geleverd", [TITLES, ROWS[2]], "visible")])
+    with_columns = SETTINGS.model_copy(update={"export_columns": COLUMNS})
+    r = scan(tmp_path, inbox, settings=with_columns)
+    assert r.events == [("twee.xlsx", "error", "export: several_sheets")] and r.stored_exports == []
+    assert r.skipped == [("twee.xlsx", "error: twee.xlsx has more than one visible sheet with data")]
+    assert (inbox / "twee.xlsx").exists() and not (tmp_path / "store").exists()
+    assert intake.ERRORS["export: several_sheets"] == "files_error:sheets"                     # ruling Z31: a line of its own
+    (inbox / "twee.xlsx").unlink()
+    sheets(inbox / "verborgen.xlsx", [("vorige week", [TITLES, ROWS[2]], "hidden"), ("Orderregels", [TITLES, ROWS[0]], "visible")])
+    r = scan(tmp_path, inbox, settings=with_columns, now=NOW + timedelta(hours=1))
+    assert r.stored_exports == [("verborgen.xlsx", ["250301"], ["250301"])] and r.skipped == []
+    [look] = PoStore(tmp_path / "store").snapshots("250301")
+    assert [line.item_code.value for line in look.document.lines] == ["KM-3101"]
+    # ruling Z16, through the inbox: a comma file with a row of more cells than its titles is refused the same way, by its reason
+    (inbox / "komma.csv").write_text(",".join(TITLES) + "\n250302,1,KM-3102,Slangklem,1000,st,12,50,100,2026-11-24\n", encoding="utf-8")
+    r = scan(tmp_path, inbox, settings=with_columns, now=NOW + timedelta(hours=2))
+    assert r.events == [("komma.csv", "error", "export: cell_count")] and r.stored_exports == []
+    assert r.skipped == [("komma.csv", "error: komma.csv, row 2: another number of cells than the row of column titles")]
+    assert (inbox / "komma.csv").exists() and not (tmp_path / "store" / "250302").exists()
+    assert intake.ERRORS["export: surplus_cells"] == intake.ERRORS["export: cell_count"] == "files_error:cells"
+    # ruling Z30 through the inbox: a row with room at its end (the check's c16b) is refused as well
+    (inbox / "komma.csv").write_text(",".join(TITLES) + ",Opmerking\n250302,1,KM-3102,Slangklem,1000,st,12,50,100,2026-11-24,\n", encoding="utf-8")
+    r = scan(tmp_path, inbox, settings=with_columns, now=NOW + timedelta(hours=3))
+    assert r.events == [("komma.csv", "error", "export: cell_count")] and not (tmp_path / "store" / "250302").exists()
+    (inbox / "komma.csv").unlink()
+    # ruling Z33 through the inbox: the order lines stand on a hidden sheet only
+    sheets(inbox / "alleen verborgen.xlsx", [("vorige week", [TITLES, ROWS[2]], "hidden"), ("Blad2", [], "visible")])
+    r = scan(tmp_path, inbox, settings=with_columns, now=NOW + timedelta(hours=4))
+    assert r.events == [("alleen verborgen.xlsx", "error", "export: hidden_sheet")] and r.stored_exports == []
+    assert (inbox / "alleen verborgen.xlsx").exists() and intake.ERRORS["export: hidden_sheet"] == "files_error:hidden_sheet"
+
+
+def test_a_refused_export_records_the_reason_of_its_refusal_and_no_text(tmp_path):
+    """Amendment 1: an export that the store refuses stays in the folder as an error, and its event names the reason of the export
+    reader (ExportRefused.reason, one of REFUSALS), by which the tab shows its label, and never the text of the error."""
+    inbox = inbox_of(tmp_path)
+    shutil.copy(EXPORT_NL, inbox / EXPORT_NL.name)
+    write_eml(inbox / "m.eml", subject="Export uit Exact", attachments=[EXPORT_NL])
+    dutch = SETTINGS.model_copy(update={"export_columns": TRYOUT_EXPORT_COLUMNS, "export_decimal_comma": True})
+    r = scan(tmp_path, inbox, settings=dutch)
+    assert r.events == [("EXPORT_nl.csv", "error", "export: no_po_number"), ("m.eml/EXPORT_nl.csv", "error", "export: no_po_number")]
+    assert r.skipped == [("EXPORT_nl.csv", "error: EXPORT_nl.csv, row 5: an item code without a PO number"),
+                         ("m.eml/EXPORT_nl.csv", "error: EXPORT_nl.csv, row 5: an item code without a PO number")]
+    (inbox / "dubbel.csv").write_text(EXPORT_NL.read_text(encoding="utf-8").replace(";Bedrag", ";Prijs", 1), encoding="utf-8")
+    r = scan(tmp_path, inbox, settings=dutch.model_copy(update={"export_fill_down": True}), now=NOW + timedelta(hours=1))
+    assert ("dubbel.csv", "error", "export: double_column") in r.events
+    assert ("EXPORT_nl.csv", "export", "2 2") in r.events and ("m.eml/EXPORT_nl.csv", "skipped", "duplicate") in r.events
+
+
+def test_a_try_out_outside_the_test_mode_and_a_guessed_link_record_their_own_outcome(tmp_path, madeup_out):
+    """Amendment 9: a try-out document while the settings take none is skipped with the reason of Task 33, and a case whose PO the scan
+    found otherwise than by the one number of the pattern (po_found_by in its case.json, Task 36's ruling N18) records the outcome
+    "guess". A try-out in the test mode opens its case as any file does."""
+    from aid.tryout import confirmation_pdf, made_from
+    store = PoStore(tmp_path / "store")
+    store.add(madeup_out / "MU01_po_v1.pdf")
+    store.add(madeup_out / "MU08_po_v1.pdf")
+    inbox = inbox_of(tmp_path)
+    (inbox / "proef.pdf").write_bytes(confirmation_pdf(made_from(store, "250108"), "none", NOW))
+    worded(inbox / "referentie.pdf")                                                 # "Uw referentie 250101": a held number
+    r = scan(tmp_path, inbox)
+    assert r.events == [("proef.pdf", "skipped", TRYOUT_OUTSIDE), ("referentie.pdf", "guess", "250101_20261116T080000")]
+    assert load_case(tmp_path / "cases", "250101_20261116T080000").po_found_by == FOUND_HELD_NUMBER
+    (inbox / "proef2.pdf").write_bytes(confirmation_pdf(made_from(store, "250108"), "none", NOW + timedelta(minutes=1)))
+    r = scan(tmp_path, inbox, now=NOW + timedelta(hours=1), settings=SETTINGS.model_copy(update={"test_mode": True, "authorization_limit": None}))
+    assert r.events == [("proef2.pdf", "case", "250108_20261116T090000")]
+
+
+# --- the review round of the events (rulings O5, O6, O7 and O11) ---
+
+def test_a_bounce_and_an_automatic_reply_are_recorded_as_what_they_are(tmp_path, madeup_out):
+    """Ruling O5 (findings 5 and 9): an e-mail that file_answer files into its case is recorded by what file_reply makes of it (is_bounce
+    and is_auto_reply tell them apart): a bounce as "bounce", an automatic reply as "auto" and a real reply as "answer", each with the
+    id of its case. The fields of the result as before."""
+    from email import message_from_bytes, policy
+    c = asked_case(tmp_path, madeup_out)
+    inbox = inbox_of(tmp_path)
+    answer_eml(inbox / "a_bounce.eml", "Mail delivery failed: returning message to sender", sender="MAILER-DAEMON@example.com")
+    auto = message_from_bytes(answer_eml(inbox / "b_afwezig.eml", "Automatisch antwoord: afwezig").read_bytes(), policy=policy.default)
+    auto["Auto-Submitted"] = "auto-replied"
+    (inbox / "b_afwezig.eml").write_bytes(auto.as_bytes())
+    answer_eml(inbox / "c_antwoord.eml", "Re: Vraag over orderbevestiging PO 250117")
+    r = scan(tmp_path, inbox)
+    assert r.events == [("a_bounce.eml", "bounce", c.case_id), ("b_afwezig.eml", "auto", c.case_id), ("c_antwoord.eml", "answer", c.case_id)]
+    assert r.replies == [("a_bounce.eml", c.case_id), ("b_afwezig.eml", c.case_id), ("c_antwoord.eml", c.case_id)]
+    assert r.answered == [c.case_id] and r.skipped == []
+    assert [sorted(p.name for p in (c.root / "messages" / sub).iterdir()) for sub in ("bounces", "auto", "replies")] == [
+        ["a_bounce.eml"], ["b_afwezig.eml"], ["c_antwoord.eml"]]
+
+
+def test_a_message_of_the_aids_own_side_is_recorded_as_such(tmp_path, madeup_out):
+    """Ruling S21 of the review round of Task 44: an e-mail that names a question and whose sender is the buyer's address, the
+    aid's, the mailbox's of the settings or one the caller adds (the signed-in account's) is filed with its case under own/ and
+    recorded as "own": it is no supplier's answer, so its case is not among the answered ones and keeps its result."""
+    c = asked_case(tmp_path, madeup_out)
+    before = c.read_step("result")
+    inbox = inbox_of(tmp_path)
+    settings = SETTINGS.model_copy(update={"mailbox": "orders@example.com"})
+    for name, sender in (("a.eml", "buyer@example.com"), ("b.eml", "De assistent <AID@example.com>"), ("c.eml", "orders@example.com"),
+                         ("d.eml", "inkoop@example.com")):
+        answer_eml(inbox / name, "RE: Vraag over orderbevestiging PO 250117", sender=sender)
+    r = scan_folder(inbox, PoStore(tmp_path / "store"), tmp_path / "cases", settings, NOW, None, own=["Inkoop@example.com", None])
+    assert r.events == [(name, "own", c.case_id) for name in ("a.eml", "b.eml", "c.eml", "d.eml")]
+    assert r.answered == [] and r.skipped == [] and c.read_step("result") == before
+    assert sorted(p.name for p in (c.root / "messages" / "own").iterdir()) == ["a.eml", "b.eml", "c.eml", "d.eml"]
+    assert not (c.root / "messages" / "replies").exists() and [p.name for p in inbox.iterdir()] == ["processed"]
+    answer_eml(inbox / "d.eml", "RE: Vraag over orderbevestiging PO 250117", sender="inkoop@example.com")       # without the caller's address
+    r = scan(tmp_path, inbox, settings=settings)
+    assert r.events == [("d.eml", "answer", c.case_id)] and r.answered == [c.case_id]
+
+
+def test_a_version_the_store_holds_from_another_file_is_an_error_of_its_own(tmp_path, madeup_out):
+    """Ruling O6 (finding 11): a PO PDF that prints the version number of a version the store holds from another file, the same order
+    printed again with other bytes, is refused by the store with VersionHeld, and the scan records it as an error with the detail
+    "version", without a layout in the settings and with one; it stays in the folder, as any error does, and the skipped list names it
+    as before. Any other error keeps the empty detail."""
+    reprint = (madeup_out / "MU03_po_v1.pdf").read_bytes() + b"\n% printed again\n"
+    for name, settings in (("plain", SETTINGS), ("layout", SETTINGS.model_copy(update={"po_layout": MADEUP_LAYOUT}))):
+        folder = tmp_path / name
+        folder.mkdir()
+        inbox = inbox_of(folder)
+        put(inbox, madeup_out / "MU03_po_v1.pdf", "Inkooporder 250103.pdf")
+        assert scan(folder, inbox, settings=settings).events == [("Inkooporder 250103.pdf", "po", "250103 v1")], name
+        (inbox / "Inkooporder 250103 opnieuw.pdf").write_bytes(reprint)
+        (inbox / "kapot.pdf").write_bytes(b"not a PDF")
+        r = scan(folder, inbox, settings=settings, now=NOW + timedelta(minutes=1))
+        assert r.events == [("Inkooporder 250103 opnieuw.pdf", "error", "version"), ("kapot.pdf", "error", "")], name
+        assert [reason.startswith("error: ") for _, reason in r.skipped] == [True, True] and r.stored_pos == [], name
+        assert (inbox / "Inkooporder 250103 opnieuw.pdf").exists() and (inbox / "kapot.pdf").exists(), name
+
+
+def test_a_file_that_cannot_be_moved_has_no_event_of_an_error(tmp_path, madeup_out, monkeypatch):
+    """Ruling O7 (finding 6): a file that the scan handled and cannot move to processed/ (on Windows another program holds it) keeps the
+    event of what it became as its only event, so that the tab never says that it could not be read; it stays in the folder, and the
+    skipped list names the failure of the move as before, for the digest and runner.log. The next scan finds it received before and
+    moves it once it can."""
+    rename = Path.rename
+
+    def refused(self, target):
+        if self.name == "po.pdf" and self.parent.name == "inbox":
+            raise PermissionError(13, "made-up: the file is in use by another program")
+        return rename(self, target)
+    inbox = inbox_of(tmp_path)
+    put(inbox, madeup_out / "MU01_po_v1.pdf", "po.pdf")
+    monkeypatch.setattr(Path, "rename", refused)
+    r = scan(tmp_path, inbox)
+    assert r.events == [("po.pdf", "po", "250101 v1")] and r.stored_pos == ["250101"]
+    assert [(name, reason.startswith("error: ")) for name, reason in r.skipped] == [("po.pdf", True)] and (inbox / "po.pdf").exists()
+    monkeypatch.setattr(Path, "rename", rename)
+    r = scan(tmp_path, inbox, now=NOW + timedelta(minutes=1))
+    assert r.events == [("po.pdf", "skipped", "duplicate")] and (inbox / "processed" / "po.pdf").exists() and r.skipped == []
+
+
+def test_an_export_without_order_lines_is_skipped_with_a_reason_of_its_own(tmp_path):
+    """Ruling O11 (finding 16): an export that holds the column titles of the map and no order line (an overview exported with a filter
+    that matches nothing) files nothing: it is skipped with the reason NO_ORDER_LINES, which the digest lists, and moved to
+    processed/ as any skipped file; stored_exports lists it as before, with no PO."""
+    inbox = inbox_of(tmp_path)
+    (inbox / "leeg.csv").write_text(",".join(EXPORT_COLUMNS.values()) + "\n", encoding="utf-8")
+    r = scan(tmp_path, inbox, settings=EXPORTS)
+    assert r.events == [("leeg.csv", "skipped", NO_ORDER_LINES)] and r.skipped == [("leeg.csv", NO_ORDER_LINES)]
+    assert r.stored_exports == [("leeg.csv", [], [])] and (inbox / "processed" / "leeg.csv").exists() and not (tmp_path / "store").exists()
+    assert NO_ORDER_LINES == "export without order lines"

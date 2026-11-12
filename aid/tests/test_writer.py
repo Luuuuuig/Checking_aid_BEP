@@ -9,7 +9,8 @@ import pytest
 from pydantic import ValidationError
 
 from aid.execution.ops import OpKind, WriteOp
-from aid.execution.writer import PreparedWriter, RetryingWriter, WriteLog, WriteLogEntry, WriterError, inverse, undo_case, undo_entry
+from aid.execution.writer import (PreparedWriter, RetryingWriter, UnknownWrite, UnverifiedWrite, WriteLog, WriteLogEntry, WriterError, inverse,
+                                  outcome_not_known, undo_case, undo_entry)
 
 
 def test_prepared_writer_logs_previous(tmp_path):
@@ -57,7 +58,8 @@ def make_entry(entry_id, op=None, status="prepared", **more) -> WriteLogEntry:
 
 class FakeLive:
     """Stands in for the live writer of a later task. `script` has one item per call: None to make the change, "failed" to return
-    an entry with status "failed" (nothing written), or the exception to raise. Calls beyond the script make the change."""
+    an entry with status "failed" (nothing written), the entry to return, or the exception to raise. Calls beyond the script make
+    the change."""
     name = "fake_live"
 
     def __init__(self, *script):
@@ -69,6 +71,8 @@ class FakeLive:
         step = self.script.pop(0) if self.script else None
         if isinstance(step, Exception):
             raise step
+        if isinstance(step, WriteLogEntry):
+            return step
         return WriteLogEntry(entry_id=f"live{self.calls}", case_id=case_id, op=op, status="failed" if step == "failed" else "done",
                              previous=op.old_value, new=op.new_value, rule_id=rule_id, evidence=evidence, timestamp=now.isoformat())
 
@@ -367,6 +371,139 @@ def test_retrying_writer_needs_at_least_one_attempt(tmp_path):
     assert single.calls == 1
 
 
+# --- a write the system accepted whose check failed ---
+
+def unchecked(entry_id: str, previous: str, failed: str, op: WriteOp | None = None) -> UnverifiedWrite:
+    """What a writer into a system raises when the system accepted its write and the check after it failed: the entry of that
+    attempt, made, with the value it read before the write as its previous and the failed check as its error."""
+    return UnverifiedWrite(failed, make_entry(entry_id, op or make_op(), status="done", previous=previous, error=failed))
+
+
+def test_an_accepted_write_whose_checks_fail_is_logged_as_made_with_the_value_read(tmp_path):
+    """The document says 12.50 and the system held 12.60. Both attempts are accepted and neither can be checked; a writer without a
+    memory of its own reads, at the second attempt, the 12.70 that the first one wrote. The entry of the call is the first
+    attempt's as it is, so that its previous is the value read before the change and its error the check that failed; the
+    fallback is never asked, so nothing is prepared."""
+    first, second = unchecked("attempt1", "12.60", "check 1 failed"), unchecked("attempt2", "12.70", "check 2 failed")
+    primary = FakeLive(first, second)
+    e = RetryingWriter(primary, PreparedWriter(tmp_path)).apply(make_op(), "c1", "R04", {"flag_id": "f1"}, NOW)
+    assert primary.calls == 2
+    assert (e.entry_id, e.status, e.previous, e.new, e.error) == ("attempt1", "done", "12.60", "12.70", "check 1 failed")
+    assert e == first.entry
+    assert not (tmp_path / "prepared_changes.csv").exists()        # never handed to the fallback, never prepared
+    WriteLog(tmp_path).append(e)
+    assert WriteLog(tmp_path).entries() == [e]                     # and it can be logged
+
+
+@pytest.mark.parametrize("script, calls, error", [
+    pytest.param(lambda: (unchecked("attempt1", "12.60", "check failed"), WriterError("503")), 2, "check failed", id="then a failed attempt"),
+    pytest.param(lambda: (WriterError("503"), unchecked("attempt1", "12.60", "check failed")), 2, "check failed", id="after a failed attempt"),
+    pytest.param(lambda: (unchecked("attempt1", "12.60", "check failed"), WriterError("503"), WriterError("timeout")), 3, "check failed",
+                 id="then two failed attempts"),
+    pytest.param(lambda: (UnverifiedWrite("check failed", make_entry("attempt1", status="done", previous="12.60")),), 1, "check failed",
+                 id="an entry without the error"),
+    pytest.param(lambda: (UnverifiedWrite("the message of the failure", make_entry("attempt1", status="done", previous="12.60", error="check failed")),),
+                 1, "check failed", id="an entry with an error of its own"),
+    pytest.param(lambda: (unchecked("attempt1", "12.60", ""),), 1, "UnverifiedWrite", id="one attempt, no message"),
+])
+def test_one_accepted_write_that_no_attempt_verifies_keeps_the_change_from_the_fallback(tmp_path, script, calls, error):
+    """One attempt that the system accepted is enough: whatever the other attempts failed at, the system may hold the change, so
+    it is logged as made with the value that attempt read and its failed check as the error (never an empty one: the message of
+    the failure, or the name of its class, where the entry came without)."""
+    primary = FakeLive(*script())
+    e = RetryingWriter(primary, PreparedWriter(tmp_path), retries=calls).apply(make_op(), "c1", "R04", {}, NOW)
+    assert primary.calls == calls and (e.entry_id, e.status, e.previous, e.error) == ("attempt1", "done", "12.60", error)
+    assert not (tmp_path / "prepared_changes.csv").exists()
+
+
+def test_a_write_the_system_ignored_is_still_prepared(tmp_path):
+    """A writer whose check reads back the value that was there before the write raises a plain WriterError: the system ignored
+    the write. That is a failed attempt as any other, and after the last one the change is prepared, as before."""
+    ignored = "verify: read back the value from before the write"
+    primary = FakeLive(WriterError(ignored), WriterError(ignored))
+    e = RetryingWriter(primary, PreparedWriter(tmp_path)).apply(make_op(), "c1", "R04", {}, NOW)
+    assert primary.calls == 2 and (e.status, e.previous, e.new, e.error) == ("prepared", "12.50", "12.70", ignored)
+    assert [(r["entry_id"], r["old_value"], r["new_value"]) for r in csv_rows(tmp_path)] == [(e.entry_id, "12.50", "12.70")]
+
+
+def test_an_attempt_that_finds_its_own_earlier_write_counts_the_read_as_the_check(tmp_path):
+    """The first attempt is accepted and cannot be checked. The second finds the value the first one sent and returns its entry,
+    made and verified, with the first attempt's previous value (the read itself is the system writer's: test_exact_api.py shows
+    it on the Exact writer, with the requests). That entry is the entry of the call as it is: no error, nothing of the attempt
+    before it, and nothing prepared."""
+    first = unchecked("attempt1", "12.60", "check failed")
+    verified = make_entry("attempt2", status="done", previous="12.60", evidence={"read_before": "12.70"})
+    primary = FakeLive(first, verified)
+    e = RetryingWriter(primary, PreparedWriter(tmp_path)).apply(make_op(), "c1", "R04", {}, NOW)
+    assert primary.calls == 2 and e == verified and (e.status, e.previous, e.error) == ("done", "12.60", None)
+    assert not (tmp_path / "prepared_changes.csv").exists()
+
+
+def test_an_unverified_write_is_a_writer_error_that_carries_its_entry():
+    failure = unchecked("attempt1", "12.60", "check failed")
+    assert isinstance(failure, WriterError) and str(failure) == "check failed"
+    assert (failure.entry.entry_id, failure.entry.status, failure.entry.previous, failure.entry.error) == ("attempt1", "done", "12.60", "check failed")
+
+
+# --- a write whose outcome is not known ---
+
+def in_doubt(entry_id: str, previous: str, happened: str) -> UnknownWrite:
+    """What a writer into a system raises when a write was sent and no answer, or no clear one, came: the entry of the attempt, with
+    the value it read before the write as its previous and what happened as its error."""
+    return UnknownWrite(happened, make_entry(entry_id, status="done", previous=previous, error=happened))
+
+
+def test_a_write_whose_outcome_is_not_known_is_logged_as_not_sure_and_never_prepared(tmp_path):
+    """No answer came to the write of either attempt, and nothing settled what the system did with it. The entry of the call is the
+    first attempt's, made as far as the log goes (status "done", the value read before the first attempt), with what the writer
+    last said happened to the write as its error and the note that the outcome is not known; the fallback is never asked."""
+    first, second = in_doubt("attempt1", "12.60", "write: no answer"), in_doubt("attempt2", "12.60", "write: no answer again")
+    primary = FakeLive(first, second)
+    e = RetryingWriter(primary, PreparedWriter(tmp_path)).apply(make_op(), "c1", "R04", {"flag_id": "f1"}, NOW)
+    assert primary.calls == 2
+    assert (e.entry_id, e.status, e.previous, e.new, e.error) == ("attempt1", "done", "12.60", "12.70", "write: no answer again")
+    assert outcome_not_known(e) and e.evidence == {"outcome": "not known"}
+    assert not outcome_not_known(first.entry)                      # the note is the retrying writer's: the entry given is not changed
+    assert not (tmp_path / "prepared_changes.csv").exists()
+    WriteLog(tmp_path).append(e)
+    assert outcome_not_known(WriteLog(tmp_path).entries()[0])      # the note is in the write log
+
+
+@pytest.mark.parametrize("script, retries, status, entry_id, error, not_known", [
+    pytest.param(lambda: (in_doubt("a1", "12.60", "no answer"),), 1, "done", "a1", "no answer", True, id="one attempt"),
+    pytest.param(lambda: (WriterError("503"), in_doubt("a2", "12.60", "no answer")), 2, "done", "a2", "no answer", True, id="after a failed attempt"),
+    pytest.param(lambda: (in_doubt("a1", "12.60", "no answer"), WriterError("settled: not made")), 2, "prepared", None, "settled: not made", False,
+                 id="then a plain failure: the writer says no write is in doubt"),
+    pytest.param(lambda: (in_doubt("a1", "12.60", "no answer"), WriterError("not made"), in_doubt("a3", "12.60", "no answer again")), 3,
+                 "done", "a3", "no answer again", True, id="settled, then in doubt again"),
+    pytest.param(lambda: (in_doubt("a1", "12.60", "no answer"), unchecked("a2", "12.60", "check failed")), 2, "done", "a2", "check failed", False,
+                 id="then accepted and not checked: made, not verified"),
+    pytest.param(lambda: (unchecked("a1", "12.60", "check failed"), in_doubt("a2", "12.70", "no answer")), 2, "done", "a1", "check failed", False,
+                 id="accepted and not checked, then in doubt: made, not verified"),
+    pytest.param(lambda: (unchecked("a1", "12.60", "check failed"), in_doubt("a2", "12.70", "no answer"), WriterError("not made")), 3,
+                 "done", "a1", "check failed", False, id="an accepted write stays, whatever settles the doubt after it"),
+    pytest.param(lambda: (UnknownWrite("no answer", make_entry("a1", status="done", previous="12.60")),), 1, "done", "a1", "no answer", True,
+                 id="an entry without the error"),
+    pytest.param(lambda: (UnknownWrite("", make_entry("a1", status="done", previous="12.60")),), 1, "done", "a1", "UnknownWrite", True,
+                 id="no message"),
+])
+def test_what_the_last_attempt_knows_decides_a_write_in_doubt(tmp_path, script, retries, status, entry_id, error, not_known):
+    """A writer raises UnknownWrite after the attempt that left a write in doubt and after every later attempt that fails without
+    settling it, so a plain failure after it says that the system did not make the write: the change is then prepared, as after
+    any failed attempt. A write the system accepted (UnverifiedWrite) is made whatever comes after it."""
+    primary = FakeLive(*script())
+    e = RetryingWriter(primary, PreparedWriter(tmp_path), retries=retries).apply(make_op(), "c1", "R04", {}, NOW)
+    assert primary.calls == retries and (e.status, e.error, outcome_not_known(e)) == (status, error, not_known)
+    assert (e.entry_id == entry_id) if entry_id else (e.previous == "12.50")
+    assert (tmp_path / "prepared_changes.csv").exists() == (status == "prepared")
+
+
+def test_an_unknown_write_is_a_writer_error_that_carries_its_entry():
+    failure = in_doubt("attempt1", "12.60", "no answer")
+    assert isinstance(failure, WriterError) and not isinstance(failure, UnverifiedWrite) and str(failure) == "no answer"
+    assert (failure.entry.entry_id, failure.entry.status, failure.entry.previous, failure.entry.error) == ("attempt1", "done", "12.60", "no answer")
+
+
 # --- the inverse ---
 
 @pytest.mark.parametrize("kind, back_kind", INVERSE_KINDS.items())
@@ -519,3 +656,103 @@ def test_undo_through_a_retrying_writer_logs_the_fallback_entry(tmp_path):
     assert (undo.status, undo.error, undo.undo_of) == ("prepared", "503", entry.entry_id)
     assert WriteLog(tmp_path).entries() == [entry, undo]
     assert [r["entry_id"] for r in csv_rows(tmp_path)] == [undo.entry_id]
+
+
+# --- the undo of a change made in a system ---
+
+def test_the_undo_writes_back_the_value_read_before_the_write(tmp_path):
+    """The document said 10 and the system held 12 when the change to 11 was made (the entry's previous). The undo writes the 12
+    back, through a writer into the system and as the change the prepared writer prepares, and takes the 11 away."""
+    made = make_entry("e1", make_op(old="10", new="11"), status="done", previous="12", evidence={"read_before": "12"})
+    for folder, writer in ((tmp_path / "live", FakeLive()), (tmp_path / "prepared", PreparedWriter(tmp_path / "prepared"))):
+        folder.mkdir()
+        WriteLog(folder).append(made)
+        undo = undo_entry(folder, "e1", writer, NOW + timedelta(hours=1))
+        assert (undo.op.kind, undo.op.old_value, undo.op.new_value) == ("po_line_price", "11", "12")
+        assert undo.op == make_op(old="11", new="12") and (undo.previous, undo.new) == ("11", "12")
+        assert (undo.rule_id, undo.undo_of, undo.evidence) == ("undo", "e1", {"undo_of": "e1"})
+        assert WriteLog(folder).entries() == [made, undo]
+    assert [(r["old_value"], r["new_value"], r["rule_id"]) for r in csv_rows(tmp_path / "prepared")] == [("11", "12", "undo")]
+
+
+def test_the_undo_of_a_case_writes_back_what_each_change_made_in_a_system_read(tmp_path):
+    log = WriteLog(tmp_path)
+    log.append(make_entry("e1", make_op(old="10", new="11"), status="done", previous="12"))
+    log.append(make_entry("e2", make_op("po_line_quantity", old="100", new="120"), status="done", previous="100"))
+    undone = undo_case(tmp_path, FakeLive(), NOW)
+    assert [(u.undo_of, u.op.old_value, u.op.new_value) for u in undone] == [("e2", "120", "100"), ("e1", "11", "12")]
+
+
+NOT_READ = [
+    pytest.param(None, {"read_before": None}, "the field was empty before the write", id="null read"),
+    pytest.param("", {"read_before": ""}, "the field was empty before the write", id="empty text read"),
+    pytest.param("  ", {"read_before": "  "}, "the field was empty before the write", id="blank read"),
+    pytest.param(None, {}, "no value was read before the write", id="nothing read"),
+]
+
+
+@pytest.mark.parametrize("previous, evidence, why", NOT_READ)
+def test_the_undo_of_a_change_made_in_a_system_writes_no_value_the_system_did_not_hold(tmp_path, previous, evidence, why):
+    """The field was empty before the write, or nothing was read: there is no value to write back, and the document's old value
+    is one the system never held. A writer into a system gets no operation at all: the undo is refused with a WriterError that
+    names the kind, the place and which of the two it is, and nothing is written or logged. Through RetryingWriter too: the
+    fallback is not asked."""
+    made = make_entry("e1", make_op(old="10", new="11"), status="done", previous=previous, evidence=evidence)
+    WriteLog(tmp_path).append(made)
+    live = FakeLive()
+    for writer in (live, RetryingWriter(live, PreparedWriter(tmp_path / "prepared"))):
+        with pytest.raises(WriterError) as caught:
+            undo_entry(tmp_path, "e1", writer, NOW)
+        assert type(caught.value) is WriterError and str(caught.value) == f"cannot undo po_line_price on PO 250101, line 1: {why}, so there is no value to write back"
+    assert live.calls == 0 and WriteLog(tmp_path).entries() == [made] and not (tmp_path / "prepared").exists()
+    with pytest.raises(WriterError, match="cannot undo po_line_price"):
+        undo_case(tmp_path, live, NOW)                             # the undo of the case stops there, as at any refused undo
+
+
+@pytest.mark.parametrize("previous, evidence, why", NOT_READ)
+def test_the_prepared_writer_puts_such_an_undo_on_the_list_without_a_value(tmp_path, previous, evidence, why):
+    """The page's writer only prepares: the row asks the buyer, with the value written as its old value and no new value."""
+    made = make_entry("e1", make_op(old="10", new="11"), status="done", previous=previous, evidence=evidence)
+    WriteLog(tmp_path).append(made)
+    undo = undo_entry(tmp_path, "e1", PreparedWriter(tmp_path / "prepared"), NOW)
+    assert (undo.status, undo.op.old_value, undo.op.new_value, undo.undo_of) == ("prepared", "11", None, "e1")
+    assert [(r["old_value"], r["new_value"], r["rule_id"]) for r in csv_rows(tmp_path / "prepared")] == [("11", "", "undo")]
+
+
+def test_the_refused_undo_names_the_article_and_a_file_is_detached_as_before(tmp_path):
+    article = WriteOp(kind="article_price", po_number="250101", version=1, article_code="KM-1001", new_value="12.70")
+    attached = make_entry("e2", WriteOp(kind="attach_document", po_number="250101", version=1, document="conf.pdf"), status="done")
+    log = WriteLog(tmp_path)
+    log.append(make_entry("e1", article, status="done"))             # made by a writer that read nothing: no previous, no note
+    log.append(attached)
+    live = FakeLive()
+    with pytest.raises(WriterError) as caught:
+        undo_case(tmp_path, live, NOW)
+    assert str(caught.value) == "cannot undo article_price on PO 250101, article KM-1001: no value was read before the write, so there is no value to write back"
+    [detached] = [e for e in log.entries() if e.undo_of == "e2"]     # the file, undone first, is detached: no value is read for a file
+    assert detached.op == inverse(attached.op) and (detached.op.kind, detached.op.document, detached.op.new_value) == ("detach_document", "conf.pdf", None)
+    assert live.calls == 1
+
+
+def test_a_second_undo_of_a_change_made_in_a_system_writes_back_the_value_read_too(tmp_path):
+    """The review page's "Terugdraaien in Exact" undoes an entry once more (again); that undo is the same undo."""
+    WriteLog(tmp_path).append(make_entry("e1", make_op(old="10", new="11"), status="done", previous="12"))
+    live = FakeLive()
+    first = undo_entry(tmp_path, "e1", live, NOW)
+    assert undo_entry(tmp_path, "e1", live, NOW) is None
+    second = undo_entry(tmp_path, "e1", live, NOW, again=True)
+    assert [(u.op.old_value, u.op.new_value, u.undo_of) for u in (first, second)] == [("11", "12", "e1")] * 2
+
+
+def test_the_undo_of_a_prepared_change_is_unchanged(tmp_path):
+    """A change that was only prepared is undone by the plain inverse of its operation, its row's old value back: the list of the
+    changes to enter names that value. The status decides it, not the entry's previous."""
+    w = PreparedWriter(tmp_path)
+    [entry] = apply_and_log(tmp_path, w, make_op(old="10", new="11"))
+    undo = undo_entry(tmp_path, entry.entry_id, w, NOW + timedelta(hours=1))
+    assert undo.op == inverse(entry.op) and (undo.op.old_value, undo.op.new_value) == ("11", "10")
+    assert [(r["old_value"], r["new_value"], r["rule_id"]) for r in csv_rows(tmp_path)] == [("10", "11", "R04"), ("11", "10", "undo")]
+    other = tmp_path / "other"
+    other.mkdir()
+    WriteLog(other).append(make_entry("e1", make_op(old="10", new="11"), status="prepared", previous="12"))
+    assert undo_entry(other, "e1", FakeLive(), NOW).op == make_op(old="11", new="10")

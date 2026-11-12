@@ -12,15 +12,19 @@ from pathlib import Path
 
 import pytest
 
-from aid import demo, versioning
+from aid import demo, pipeline, versioning
 from aid.batch import main as batch_main
-from aid.case import sha256_file
+from aid.case import load_case, sha256_file
 from aid.decider import PROMPT as DECISION_PROMPT
 from aid.decider import LlmDecider
-from aid.execution.writer import PreparedWriter, RetryingWriter, WriteLog, WriteLogEntry, WriterError
+from aid.execution.by_hand import MARKS_FILE, changes, mark, open_changes, reconcile, reopen
+from aid.execution.ops import WriteOp
+from aid.execution.writer import (PREPARED_FILE, PreparedWriter, RetryingWriter, UnknownWrite, UnverifiedWrite, WriteLog, WriteLogEntry, WriterError,
+                                  outcome_not_known, undo_entry)
 from aid.madeup.generate import BOLD, GAP, TABLE_NL_COLUMNS, MadeUpSpec, Row, Text, export_csv, pdf_bytes, po_pages
-from aid.messaging import FileMailer, MailerError, SentRecord, file_reply, pending_asks, record_sent
-from aid.pipeline import DISPOSITION_COLUMNS, CaseResult, ReviewItem, escalate_pending, file_answer, read_with_parser, record_dispositions, run_case
+from aid.messaging import FileMailer, HandOverUnconfirmed, MailerError, SentRecord, file_reply, pending_asks, record_sent
+from aid.pipeline import (DISPOSITION_COLUMNS, GUESSED_PO, UNREAD_LIST, CaseResult, ReviewItem, end_empty_waits, escalate_pending, file_answer,
+                          read_with_parser, record_dispositions, run_case)
 from aid.po_store import PoStore, PoVersion
 from aid.readers.llm_client import LlmResponse, ReaderError, RecordedClient
 from aid.readers.supplier_llm import read_supplier_document, reading_request
@@ -29,7 +33,8 @@ from aid.schema import DocValue, SourceRef
 from aid.sources.upload import open_upload_case
 from aid.tests import made_up_batch
 from aid.tests.conftest import REPO_ROOT, SETTINGS, deps, read_csv
-from aid.tests.helpers import ANDERS_LAYOUT, ANDERS_PO, EXPORT_COLUMNS
+from aid.tests.helpers import ANDERS_LAYOUT, ANDERS_PO, EXPORT_COLUMNS, confirmation_again, filed_on, given_on, newer_po
+from aid.tryout import confirmation_pdf as tryout_pdf
 
 
 def test_no_difference_closes(tmp_path, madeup_out):
@@ -112,6 +117,26 @@ class Refusing:
             raise WriterError("503 service unavailable")
         return WriteLogEntry(entry_id=f"{rule_id}-{op.kind}", case_id=case_id, op=op, status="done", previous=op.old_value, new=op.new_value,
                              rule_id=rule_id, evidence=evidence, timestamp=now.isoformat())
+
+
+class Unchecked:
+    """A write route into a system that accepts every change and cannot check the changes of one kind, however often it is tried:
+    for those it raises UnverifiedWrite with the entry of the attempt, made, whose previous is the value it read before the write
+    (`read`); with answered False it gets no answer to the write of that kind at all, and raises UnknownWrite with the entry. It
+    makes every other change it is given."""
+    name = "route"
+
+    def __init__(self, kind: str, read: str, answered: bool = True):
+        self.kind, self.read, self.given, self.answered = kind, read, [], answered
+
+    def apply(self, op, case_id, rule_id, evidence, now):
+        self.given.append(op.kind)
+        entry = WriteLogEntry(entry_id=f"{rule_id}-{op.kind}-{len(self.given)}", case_id=case_id, op=op, status="done", previous=op.old_value,
+                              new=op.new_value, rule_id=rule_id, evidence=evidence, timestamp=now.isoformat())
+        if op.kind != self.kind:
+            return entry
+        failed = "the check after the write failed" if self.answered else "no answer to the write"
+        raise (UnverifiedWrite if self.answered else UnknownWrite)(failed, entry.model_copy(update={"previous": self.read, "error": failed}))
 
 
 class Executing:
@@ -232,6 +257,64 @@ def test_the_writes_before_a_failed_one_stay_normal_writes(tmp_path, madeup_out)
         ("not applied: an earlier write failed (rule R01, attach_document)", None), ("not applied: an earlier write failed (rule R01, set_status)", None)]
     assert [row["decision"] for row in read_csv(record_dispositions(c, r))] == ["Exact update executed (R04)", "prepared (R04)"]
     assert r.status == "review" and r.digest_line == "PO 250108 (S08): ter beoordeling, 1 schrijfactie, 1 voorbereide wijziging"
+
+
+def test_the_pipeline_stops_at_a_write_made_and_not_verified(tmp_path, madeup_out):
+    """MU08 through RetryingWriter(a route whose system accepts the article price and cannot check it, PreparedWriter). The change
+    is logged as made, with the price the route read as its previous value and the failed check as its error, and is a review item
+    of its own, "write made, not verified: check in Exact", naming its entry. Nothing is prepared, and it counts as a write made in
+    the digest line and the disposition log. The operations after it are not applied, as after a failed write, so the PO is not
+    confirmed over a correction nobody checked; their items say that an earlier change waits for a look in Exact, since no write
+    failed."""
+    route = Unchecked("article_price", read="12.40")
+    c, r = run(deps(tmp_path, madeup_out, writer=RetryingWriter(route, PreparedWriter(tmp_path))), madeup_out, "MU08", "250108")
+    assert route.given == ["po_line_price", "article_price", "article_price"]                           # two tries, then nothing
+    assert [(e.op.kind, e.status, e.previous, e.new, e.error) for e in r.write_entries] == [
+        ("po_line_price", "done", "12.50", "12.70", None), ("article_price", "done", "12.40", "12.70", "the check after the write failed")]
+    assert r.write_entries[1].entry_id == "R04-article_price-2"                                         # the first attempt the system accepted
+    assert WriteLog(c.root).entries() == r.write_entries and not (tmp_path / "prepared_changes.csv").exists()
+    assert [(i.item_id, i.finding_id, i.field, i.reason, i.entry_id) for i in r.review_items] == [
+        ("RI1", "F1", "price", "write made, not verified: check in Exact", "R04-article_price-2"),
+        ("RI2", None, None, "not applied: an earlier change waits for a look in Exact (rule R01, attach_document)", None),
+        ("RI3", None, None, "not applied: an earlier change waits for a look in Exact (rule R01, set_status)", None)]
+    assert r.status == "review" and r.digest_line == "PO 250108 (S08): ter beoordeling, 2 schrijfacties"
+    assert [row["decision"] for row in read_csv(record_dispositions(c, r))] == ["Exact update executed (R04)", "Exact update executed (R04)"]
+    assert [entry["error"] for entry in audit(c)["writes"]] == [None, "the check after the write failed"]
+
+
+def test_the_pipeline_stops_at_a_write_whose_outcome_is_not_known(tmp_path, madeup_out):
+    """MU08 through a route that gets no answer to the write of the line's price, on either attempt. Nobody knows whether the system
+    made the change, so nothing is prepared: the entry is logged as made, with the price the route read and the note that its
+    outcome is not known, and its review item has a reason of its own, which does not say "made". Everything else is as for a
+    write made and not verified: the operations after it wait for the buyer's look in Exact."""
+    route = Unchecked("po_line_price", read="12.60", answered=False)
+    c, r = run(deps(tmp_path, madeup_out, writer=RetryingWriter(route, PreparedWriter(tmp_path))), madeup_out, "MU08", "250108")
+    [entry] = r.write_entries
+    assert route.given == ["po_line_price", "po_line_price"] and not (tmp_path / "prepared_changes.csv").exists()
+    assert (entry.op.kind, entry.status, entry.previous, entry.new, entry.error) == ("po_line_price", "done", "12.60", "12.70", "no answer to the write")
+    assert outcome_not_known(entry) and WriteLog(c.root).entries() == [entry]
+    assert [(i.item_id, i.finding_id, i.reason, i.entry_id) for i in r.review_items] == [
+        ("RI1", "F1", "write outcome not known: check in Exact", entry.entry_id),
+        ("RI2", "F1", "not applied: an earlier change waits for a look in Exact (rule R04, article_price, article KM-0801)", None),
+        ("RI3", None, "not applied: an earlier change waits for a look in Exact (rule R01, attach_document)", None),
+        ("RI4", None, "not applied: an earlier change waits for a look in Exact (rule R01, set_status)", None)]
+    assert r.status == "review" and r.digest_line == "PO 250108 (S08): ter beoordeling, 1 schrijfactie"
+
+
+def test_reapproval_is_not_requested_for_a_write_made_and_not_verified(tmp_path, madeup_out):
+    """MU08 above the limit, its correction an R10 action: the request to the approver lists the changes made and checked before
+    the one that was not, as before a failed write; when the first change is the one not checked, no request is recorded."""
+    d = deps(tmp_path, madeup_out)
+    limit = d.store.versions("250108")[0].total / 2
+    limited = d.model_copy(update={"settings": d.settings.model_copy(update={"authorization_limit": limit}), "store": PoStore(d.store.root, limit)})
+    article = RetryingWriter(Unchecked("article_price", read="12.40"), PreparedWriter(tmp_path))
+    c, r = run(limited.model_copy(update={"writer": article}), madeup_out, "MU08", "250108")
+    assert [(a.rule_id, a.route) for a in r.actions] == [("R10", "AUTO"), ("R01", "AUTO")] and r.status == "review"
+    assert [(m["template"], [item["kind"] for item in m["items"]]) for m in r.messages] == [("reapproval", ["po_line_price"])]
+    line = RetryingWriter(Unchecked("po_line_price", read="12.60"), PreparedWriter(tmp_path))
+    c, r = run(limited.model_copy(update={"writer": line}), madeup_out, "MU08", "250108", now=LATER)
+    assert r.status == "review" and r.messages == []
+    assert [(e.op.kind, e.status, e.previous) for e in r.write_entries] == [("po_line_price", "done", "12.60")]
 
 
 def test_a_write_that_failed_waits_for_the_buyer(tmp_path, madeup_out):
@@ -720,8 +803,12 @@ def test_a_bounce_goes_to_review_at_once_and_a_reply_ends_the_wait(tmp_path, mad
     bounced, _ = run(d, madeup_out, "MU17", "250117")
     answered, _ = run(d, madeup_out, "MU11", "250111")
     silent, _ = run(d, madeup_out, "MU20", "250120")
-    file_reply(bounced, an_email(tmp_path / "bounce.eml", "Onbestelbaar: Vraag over orderbevestiging PO 250117", "postmaster@example.com"))
-    file_reply(answered, an_email(tmp_path / "reply.eml", "Re: Vraag over orderbevestiging PO 250111", "sales@s11.example.com"))
+    from aid.tests.test_messaging import at_time     # an e-mail that names no message answers the latest question sent before it was filed
+
+    file_reply(bounced, at_time(an_email(tmp_path / "bounce.eml", "Onbestelbaar: Vraag over orderbevestiging PO 250117", "postmaster@example.com"),
+                                NOW + timedelta(minutes=2)))
+    file_reply(answered, at_time(an_email(tmp_path / "reply.eml", "Re: Vraag over orderbevestiging PO 250111", "sales@s11.example.com"),
+                                 NOW + timedelta(minutes=2)))
     assert file_reply(silent, an_email(tmp_path / "ooo.eml", "Automatisch antwoord: Vraag over orderbevestiging PO 250120", "sales@s20.example.com")
                       ) == silent.root / "messages" / "auto" / "ooo.eml"
     assert escalate_pending(d.settings.cases_root, NOW + timedelta(minutes=5), d.settings) == [(bounced.case_id, "message bounced")]
@@ -802,6 +889,263 @@ def test_the_batch_escalates_the_questions_whose_wait_is_over(tmp_path, madeup_o
     assert printed[0].startswith("MU01 (250101_20261118T090000): ") and printed[3].startswith("1 cases, 1 closed")
     assert printed[1:3] == [f"{torn.case_id}: unreadable: ValidationError", f"{c.case_id}: escalated to review: no answer in 3 working days"]
     assert c.read_step("result")["status"] == "review"
+
+
+# --- a reply belongs to its question (Task 44) ---
+
+def test_a_question_asked_after_a_reply_to_another_comes_back_when_its_own_wait_ends(tmp_path, madeup_out):
+    """MU12: the run asks S12 about the unit (R06) on Thursday 12 November at 9:00 and leaves two items to the buyer. The supplier
+    answers that question, and the audit keeps which question the reply names. On Friday at 10:00 the buyer asks about the price on
+    the review page and keeps the rest: the case waits for the second question, which has no reply of its own, and the reply to the
+    first does not answer it. Three working days later, on Wednesday 18 November at 10:00, its wait ends: the case comes back with
+    "no answer", and the escalation names the second question."""
+    from aid.review.app import close_case, decide
+
+    out = tmp_path / "outbox"
+    d = mailing(deps(tmp_path, madeup_out), out)
+    c, r = run(d, madeup_out, "MU12", "250112")
+    [first] = [m["message_id"] for m in r.messages]
+    assert r.status == "review" and [i.item_id for i in r.review_items] == ["RI1", "RI2"]
+    reply = a_reply(tmp_path / "reply.eml", "Re: Vraag over orderbevestiging PO 250112", "sales@s12.example.com", in_reply_to=f"<{first}@example.com>")
+    assert file_answer(d.settings.cases_root, reply, NOW + timedelta(hours=2)) == c.case_id
+    assert audit(c)["answers"] == [{"file": "reply.eml", "filed_under": "replies", "at": (NOW + timedelta(hours=2)).isoformat(), "message_id": first}]
+    friday = datetime(2026, 11, 13, 10, 0)
+    decide(c, "RI1", "ask"); decide(c, "RI2", "keep"); decide(c, "RI3", "keep")
+    closed = close_case(c, d.model_copy(update={"clock": lambda: friday, "mailer": FileMailer(out, sender="aid@example.com", clock=lambda: friday)}))
+    second = closed.messages[-1]["message_id"]
+    assert closed.status == "waiting" and [(m["template"], m["status"]) for m in closed.messages] == [("quantity_unit", "sent"), ("missing_info", "sent")]
+    assert pending_asks(d.settings.cases_root, datetime(2026, 11, 18, 10, 0), 3) == []
+    assert escalate_pending(d.settings.cases_root, datetime(2026, 11, 18, 10, 0), d.settings) == []
+    assert escalate_pending(d.settings.cases_root, datetime(2026, 11, 18, 10, 1), d.settings) == [(c.case_id, "no answer in 3 working days")]
+    result = c.read_step("result")
+    assert result["status"] == "review" and [i["reason"] for i in result["review_items"]][-2:] == [
+        "supplier answered: read the reply", "no answer in 3 working days"]
+    [escalated] = (c.root / "messages" / "escalated.jsonl").read_text(encoding="utf-8").splitlines()
+    assert json.loads(escalated)["message_id"] == second and audit(c)["escalations"][0]["message_id"] == second
+    assert escalate_pending(d.settings.cases_root, datetime(2026, 12, 14, 10, 0), d.settings) == []
+
+
+def test_a_delivery_report_is_filed_as_the_bounce_of_the_question_it_returns(tmp_path, madeup_out):
+    """A delivery report in the standard form names no message in its own headers: it is filed into the case whose question it
+    returns, under bounces/, and that question comes back to the buyer as bounced at once. A report of a message the aid did not
+    send is not filed."""
+    from aid.tests.test_messaging import delivery_report
+
+    d = deps(tmp_path, madeup_out)
+    c, message_id = asked(d, madeup_out, tmp_path)
+    before = c.read_step("result")
+    assert file_answer(d.settings.cases_root, delivery_report(tmp_path / "other.eml", "<0123abcd@example.org>"), NOW) is None
+    assert not (c.root / "messages" / "bounces").exists()
+    assert file_answer(d.settings.cases_root, delivery_report(tmp_path / "dsn.eml", message_id), NOW + timedelta(minutes=5)) == c.case_id
+    assert (c.root / "messages" / "bounces" / "dsn.eml").exists() and c.read_step("result") == before
+    assert audit(c)["answers"][0]["filed_under"] == "bounces" and audit(c)["answers"][0]["message_id"] == message_id.strip("<>").partition("@")[0]
+    assert escalate_pending(d.settings.cases_root, NOW + timedelta(minutes=6), d.settings) == [(c.case_id, "message bounced")]
+
+
+# --- the review round of Task 44 (rulings S15, S17, S20, S21, S23, S24, S25) ---
+
+def test_an_e_mail_that_names_questions_of_two_cases_belongs_to_the_case_named_first(tmp_path, madeup_out):
+    """Ruling S15. Two cases of one order (a second confirmation while the first question is out), one question each. A reply whose
+    In-Reply-To names the later case and whose References name both belongs to the later case, not to the one whose folder sorts
+    first: that case gets the reply and its item, and the other keeps waiting. A delivery report with an In-Reply-To of one case
+    that returns a message of the other belongs to the case its In-Reply-To names."""
+    from aid.tests.test_messaging import delivery_report
+
+    d = mailing(deps(tmp_path, madeup_out), tmp_path / "outbox")
+    a, first = run(d, madeup_out, "MU17", "250117")
+    b, second = run(d, madeup_out, "MU17", "250117", now=LATER)
+    assert a.case_id < b.case_id and (first.status, second.status) == ("waiting", "waiting")
+    of_a, of_b = (r.messages[0]["message_id"] for r in (first, second))
+    reply = a_reply(tmp_path / "reply.eml", "Re: Vraag over orderbevestiging PO 250117", "sales@s17.example.com",
+                    in_reply_to=f"<{of_b}@example.com>", references=f"<{of_a}@example.com> <{of_b}@example.com>")
+    assert file_answer(d.settings.cases_root, reply, NOW + timedelta(hours=2)) == b.case_id
+    assert b.read_step("result")["status"] == "review" and [a["message_id"] for a in audit(b)["answers"]] == [of_b]
+    assert a.read_step("result") == first.model_dump(mode="json") and "answers" not in audit(a) and not (a.root / "messages" / "replies").exists()
+    report = delivery_report(tmp_path / "dsn.eml", f"<{of_b}@example.com>")
+    report.write_bytes(report.read_bytes().replace(b"Subject:", f"In-Reply-To: <{of_a}@example.com>\nSubject:".encode(), 1))
+    assert file_answer(d.settings.cases_root, report, NOW + timedelta(hours=3)) == a.case_id
+    assert (a.root / "messages" / "bounces" / "dsn.eml").exists() and [a["message_id"] for a in audit(a)["answers"]] == [of_a]
+    assert not (b.root / "messages" / "bounces").exists()
+
+
+def two_asked(tmp_path, madeup_out, own=()):
+    """MU12 with three questions out of two closes' worth: the run asked about the unit on Thursday (answered here, and the reply
+    kept), and on Friday at 10:00 the buyer asked about both of his items in one close. Returns the Deps, the case and the ids of
+    the two questions of that close, in the order sent."""
+    from aid.review.app import close_case, decide
+
+    out = tmp_path / "outbox"
+    d = mailing(deps(tmp_path, madeup_out), out)
+    c, r = run(d, madeup_out, "MU12", "250112")
+    reply = a_reply(tmp_path / "reply.eml", "Re: Vraag over orderbevestiging PO 250112", "sales@s12.example.com",
+                    in_reply_to=f"<{r.messages[0]['message_id']}@example.com>")
+    assert file_answer(d.settings.cases_root, reply, NOW + timedelta(hours=2)) == c.case_id
+    friday = datetime(2026, 11, 13, 10, 0)
+    decide(c, "RI1", "ask"); decide(c, "RI2", "ask"); decide(c, "RI3", "keep")
+    closed = close_case(c, d.model_copy(update={"clock": lambda: friday, "mailer": FileMailer(out, sender="aid@example.com", clock=lambda: friday)}))
+    assert closed.status == "waiting" and [m["status"] for m in closed.messages] == ["sent", "sent", "sent"]
+    return d, c, [m["message_id"] for m in closed.messages[1:]]
+
+
+def test_two_questions_of_one_close_that_bounce_are_each_shown_once(tmp_path, madeup_out):
+    """Ruling S20. Two questions sent in one close to a wrong address both bounce: the next pass shows each bounce once, as an item
+    of its own with its own line in the escalations, and no later pass shows either again."""
+    d, c, (second, third) = two_asked(tmp_path, madeup_out)
+    for number, question in enumerate((second, third)):
+        bounce = a_reply(tmp_path / f"bounce{number}.eml", "Undeliverable: Vraag over orderbevestiging PO 250112", "postmaster@example.com",
+                         in_reply_to=f"<{question}@example.com>")
+        assert file_answer(d.settings.cases_root, bounce, datetime(2026, 11, 13, 10, 5)) == c.case_id
+    at = datetime(2026, 11, 13, 10, 6)
+    assert escalate_pending(d.settings.cases_root, at, d.settings) == [(c.case_id, "message bounced"), (c.case_id, "message bounced")]
+    result = c.read_step("result")
+    assert result["status"] == "review" and [(i["item_id"], i["reason"]) for i in result["review_items"]][-2:] == [
+        ("RI4", "message bounced"), ("RI5", "message bounced")]
+    escalated = [json.loads(line) for line in (c.root / "messages" / "escalated.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert [line["message_id"] for line in escalated] == [second, third] and audit(c)["escalations"] == escalated
+    assert escalate_pending(d.settings.cases_root, datetime(2026, 12, 14, 9, 0), d.settings) == [] and c.read_step("result") == result
+
+
+def test_the_audit_names_the_question_an_e_mail_belongs_to_of_the_two_it_names(tmp_path, madeup_out):
+    """Ruling S24. A reply that names two questions of one case belongs to the one its In-Reply-To names, whichever was sent first,
+    and the audit's entry names that question."""
+    d, c, (second, third) = two_asked(tmp_path, madeup_out)
+    for name, named, other in (("a.eml", second, third), ("b.eml", third, second)):
+        reply = a_reply(tmp_path / name, "Re: Vraag over orderbevestiging PO 250112", "sales@s12.example.com",
+                        in_reply_to=f"<{named}@example.com>", references=f"<{other}@example.com> <{named}@example.com>")
+        assert file_answer(d.settings.cases_root, reply, datetime(2026, 11, 13, 11, 0)) == c.case_id
+    assert [(a["file"], a["message_id"]) for a in audit(c)["answers"]][1:] == [("a.eml", second), ("b.eml", third)]
+
+
+def test_a_message_of_the_aids_own_side_is_filed_as_such_and_ends_no_wait(tmp_path, madeup_out):
+    """Ruling S21. The buyer is in copy of every question, so his own reply to all names it: an e-mail whose sender is one of the
+    addresses of the aid's own side is filed with its case under own/, leaves the result as it is and ends no wait, so that the
+    supplier's silence is still reported; the same e-mail from any other address is the supplier's answer."""
+    d = deps(tmp_path, madeup_out)
+    c, message_id = asked(d, madeup_out, tmp_path)
+    before = c.read_step("result")
+    own = [d.settings.buyer_email, d.settings.aid_email, None]
+    mine = a_reply(tmp_path / "mine.eml", "RE: Vraag over orderbevestiging PO 250117", f"De inkoper <{d.settings.buyer_email.upper()}>",
+                   in_reply_to=message_id)
+    assert file_answer(d.settings.cases_root, mine, NOW + timedelta(hours=1), own=own) == c.case_id
+    assert (c.root / "messages" / "own" / "mine.eml").exists() and not (c.root / "messages" / "replies").exists()
+    assert c.read_step("result") == before and [(a["file"], a["filed_under"]) for a in audit(c)["answers"]] == [("mine.eml", "own")]
+    assert escalate_pending(d.settings.cases_root, datetime(2026, 11, 17, 9, 1), d.settings) == [(c.case_id, "no answer in 3 working days")]
+    other = deps(tmp_path / "other", madeup_out)
+    c2, message_id = asked(other, madeup_out, tmp_path / "other")
+    theirs = a_reply(tmp_path / "theirs.eml", "RE: Vraag over orderbevestiging PO 250117", "sales@s17.example.com", in_reply_to=message_id)
+    assert file_answer(other.settings.cases_root, theirs, NOW + timedelta(hours=1), own=own) == c2.case_id
+    assert c2.read_step("result")["status"] == "review" and (c2.root / "messages" / "replies" / "theirs.eml").exists()
+
+
+def test_a_waiting_case_without_a_question_comes_back_to_the_buyer(tmp_path, madeup_out):
+    """Ruling S23, the net under every path to a case that waits for nothing. A waiting case with no question outstanding comes back
+    at the next pass: with the reply's item when a reply was filed that has none (a file put into replies/ by hand), else with
+    the reason "no question is open" (a run without a mailer; a case whose reply was read and decided, left waiting by an earlier
+    version). A case whose question is out, a closed case and a case in review are left as they are, and nothing is given twice."""
+    from aid.tests.test_messaging import at_time
+
+    d = mailing(deps(tmp_path, madeup_out), tmp_path / "outbox")
+    root = d.settings.cases_root
+    out, _ = run(d, madeup_out, "MU17", "250117")                            # its question is out
+    by_hand, _ = run(d, madeup_out, "MU11", "250111")                        # a reply put into its folder by hand
+    folder = by_hand.root / "messages" / "replies"
+    folder.mkdir()
+    at_time(an_email(folder / "antwoord.eml", "Uw vraag over PO 250111", "sales@s11.example.com"), NOW + timedelta(hours=3))
+    unasked, r = run(d.model_copy(update={"mailer": None}), madeup_out, "MU20", "250120")     # no mailer: nothing was asked
+    assert r.status == "waiting" and not (unasked.root / "messages" / "sent.jsonl").exists()
+    old, r = run(d, madeup_out, "MU17", "250117", now=LATER)                 # the reply was read and kept, and the case left waiting
+    reply = a_reply(tmp_path / "reply.eml", "Re: Vraag", "sales@s17.example.com", in_reply_to=f"<{r.messages[0]['message_id']}@example.com>")
+    assert file_answer(root, reply, NOW + timedelta(hours=1)) == old.case_id
+    old.write_step(8, "result", CaseResult.model_validate(old.read_step("result")).model_copy(update={"status": "waiting"}))
+    closed, r = run(d.model_copy(update={"mailer": None}), madeup_out, "MU13", "250113")
+    closed.write_step(8, "result", r.model_copy(update={"status": "closed"}))
+    in_review, _ = run(d, madeup_out, "MU12", "250112")
+    left = {case.case_id: (case.read_step("result"), audit(case)) for case in (out, closed, in_review)}
+    later = NOW + timedelta(hours=4)
+    assert end_empty_waits(root, later, d.settings) == sorted([
+        (by_hand.case_id, "supplier answered: read the reply"), (unasked.case_id, "no question is open"), (old.case_id, "no question is open")])
+    for case, reasons in ((by_hand, ["supplier answered: read the reply"]), (unasked, ["no question is open"]),
+                          (old, ["supplier answered: read the reply", "no question is open"])):
+        result = CaseResult.model_validate(case.read_step("result"))
+        assert result.status == "review" and "ter beoordeling" in result.digest_line
+        assert [(i.item_id, i.reason, i.finding_id) for i in result.review_items] == [(f"RI{n}", reason, None) for n, reason in enumerate(reasons, 1)]
+        assert audit(case)["escalations"] == [{"case_id": case.case_id, "message_id": None, "reason": reasons[-1], "at": later.isoformat()}]
+        assert not (case.root / "messages" / "escalated.jsonl").exists()
+    assert {case.case_id: (case.read_step("result"), audit(case)) for case in (out, closed, in_review)} == left
+    assert end_empty_waits(root, later + timedelta(days=30), d.settings) == []
+    assert escalate_pending(root, later + timedelta(days=30), d.settings) == [(out.case_id, "no answer in 3 working days")]
+
+
+def test_a_pass_reads_the_replies_of_the_cases_that_wait_only(tmp_path, madeup_out, monkeypatch):
+    """Ruling S25. escalate_pending reads the filed replies of the cases that wait, and of no other: not those of a closed case
+    nor of a case in review, however many replies they hold."""
+    import aid.messaging
+
+    d = mailing(deps(tmp_path, madeup_out), tmp_path / "outbox")
+    cases = {}
+    for name, po in (("MU11", "250111"), ("MU17", "250117"), ("MU20", "250120")):
+        c, r = run(d, madeup_out, name, po)
+        other = a_reply(tmp_path / "other.eml", "Re: iets anders", f"sales@s{po[-2:]}.example.com", in_reply_to="<0123abcd@example.org>")
+        file_reply(c, other)                                                 # filed by hand: it names another message and answers nothing
+        cases[name] = (c, r)
+    closed, r = cases["MU11"]
+    closed.write_step(8, "result", r.model_copy(update={"status": "closed"}))
+    in_review, r = cases["MU17"]
+    in_review.write_step(8, "result", r.model_copy(update={"status": "review"}))
+    waiting, _ = cases["MU20"]
+    read, seen = aid.messaging.named_ids, []
+    monkeypatch.setattr(aid.messaging, "named_ids", lambda eml: (seen.append(Path(eml).parents[2].name), read(eml))[1])
+    assert escalate_pending(d.settings.cases_root, NOW + timedelta(days=30), d.settings) == [(waiting.case_id, "no answer in 3 working days")]
+    assert seen == [waiting.case_id]
+
+
+def test_a_reply_that_cannot_be_read_at_a_pass_leaves_its_case_for_the_next(tmp_path, madeup_out, monkeypatch):
+    """Ruling S17. The read of one filed reply fails at a pass: its case is named as unreadable and not escalated, the others go
+    on, and at the next pass, when the file reads again, the reply is the answer it is."""
+    import aid.messaging
+
+    d = mailing(deps(tmp_path, madeup_out), tmp_path / "outbox")
+    held, r = run(d, madeup_out, "MU11", "250111")
+    late = file_reply(held, a_reply(tmp_path / "late.eml", "Re: Vraag", "sales@s11.example.com", in_reply_to="<0123abcd@example.org>"))
+    other, _ = run(d, madeup_out, "MU17", "250117")
+    read = aid.messaging.named_ids
+
+    def locked(eml):
+        if Path(eml) == late:
+            raise PermissionError(13, "made-up: the file is in use by another program")
+        return read(eml)
+    monkeypatch.setattr(aid.messaging, "named_ids", locked)
+    later = NOW + timedelta(days=30)
+    assert escalate_pending(d.settings.cases_root, later, d.settings) == [
+        (held.case_id, "unreadable: PermissionError"), (other.case_id, "no answer in 3 working days")]
+    assert held.read_step("result") == r.model_dump(mode="json")
+    monkeypatch.setattr(aid.messaging, "named_ids", read)
+    assert escalate_pending(d.settings.cases_root, later, d.settings) == [(held.case_id, "no answer in 3 working days")]
+
+
+class Doubtful:
+    """A mailer whose hand-over is never confirmed: the message may have left, under the id of its record."""
+    name = "doubtful"
+
+    def send(self, msg):
+        record = SentRecord(message_id="ab" * 16, to=msg.to, subject=msg.subject, sent_at=NOW.isoformat(), template=msg.template, unconfirmed=True)
+        raise HandOverUnconfirmed("TimeoutError: no confirmation that the draft was sent", record)
+
+
+def test_a_question_of_the_run_whose_hand_over_was_not_confirmed_counts_as_asked(tmp_path, madeup_out):
+    """Ruling S5. The mailer could not confirm the hand-over of the run's question: the run records the message as sent, with the
+    note that it was not confirmed and under the id it would carry, and the case waits. So a reply that names it is filed with the
+    case, and when none comes the case returns after the wait; nothing is sent a second time."""
+    d = mailing(deps(tmp_path, madeup_out), tmp_path / "outbox").model_copy(update={"mailer": Doubtful()})
+    c, r = run(d, madeup_out, "MU17", "250117")
+    [message] = r.messages
+    assert r.status == "waiting" and r.review_items == [] and (message["status"], message["unconfirmed"], message["message_id"]) == ("sent", True, "ab" * 16)
+    assert audit(c)["messages"][0]["unconfirmed"] is True and "error" not in audit(c)["messages"][0]
+    [line] = (c.root / "messages" / "sent.jsonl").read_text(encoding="utf-8").splitlines()
+    assert json.loads(line)["unconfirmed"] is True and pending_asks(d.settings.cases_root, datetime(2026, 11, 17, 9, 1), 3) == [c.case_id]
+    reply = a_reply(tmp_path / "reply.eml", "Re: Vraag over orderbevestiging PO 250117", "sales@s17.example.com", in_reply_to=f"<{'ab' * 16}@example.com>")
+    assert file_answer(d.settings.cases_root, reply, NOW + timedelta(hours=2)) == c.case_id
+    assert c.read_step("result")["status"] == "review" and escalate_pending(d.settings.cases_root, NOW + timedelta(days=30), d.settings) == []
 
 
 # --- the audit record ---
@@ -1226,3 +1570,797 @@ def test_a_confirmation_without_a_basis_is_compared_with_a_po_whose_prices_are_p
     assert [(u.field, u.po_line_ids, u.reason) for u in r2.findings.uncompared] == [
         ("price", ["1"], "unknown price basis"), ("price", ["2"], "unknown price basis")]
     assert r2.status == "review" and r2.write_entries == []
+
+
+# --- Task 43: the values entered in Exact count in the next comparison ---
+
+FILED = datetime(2026, 11, 1, 9, 0)                  # when the store filed its POs in these tests: before every case and every tick
+TICKED = NOW + timedelta(hours=1)                    # when the buyer ticked a change as entered in Exact
+ENTERED_STEPS = sorted([*STEP_FILES, "03_entered.json"])
+AUDIT_STEPS = ["po_versions", "read_document", "version", "match", "compare", "route", "execute", "result"]
+
+
+def with_list(tmp_path, madeup_out, settings=None):
+    """deps() as the runner builds its Deps: the prepared writer into <cases_root>/prepared, where the pipeline reads the list "In
+    Exact invoeren" and its marks. Every version of the store is filed at FILED, before every case and every tick, so that no test
+    rests on the day it runs."""
+    d = deps(tmp_path, madeup_out, writer=PreparedWriter(tmp_path / "cases" / "prepared"), settings=settings)
+    for stored in d.store.root.glob("*/*/po.json"):
+        os.utime(stored, (FILED.timestamp(), FILED.timestamp()))
+    return d
+
+
+def ticked(d, case, kind: str = "po_line_price", at: datetime = TICKED, what: str = "entered") -> list[str]:
+    """The open changes of this kind that the case asked, marked as the buyer marks them on the tab, at `at`: their entry ids."""
+    prepared = d.settings.cases_root / "prepared"
+    ids = [entry_id for change in open_changes(prepared) if change.kind == kind and case.case_id in change.case_ids for entry_id in change.ids]
+    assert ids and mark(prepared, ids, what, at) == len(ids)
+    return ids
+
+
+def again(d, document: Path, po_number: str, now: datetime, kind: str = "confirmation"):
+    """A case opened from this document and run: the case and its result."""
+    c = open_upload_case(d.settings.cases_root, [document], po_number, kind, now)
+    return c, run_case(c, d)
+
+
+def price_flags(result) -> list[tuple]:
+    return [(f.po_line_ids, f.po_value.value, f.doc_value.value) for f in result.findings.flags if f.field == "price"]
+
+
+def step_names(c) -> list[str]:
+    return sorted(path.name for path in (c.root / "steps").iterdir())
+
+
+def test_a_second_confirmation_with_the_entered_price_has_no_price_flag(tmp_path, madeup_out):
+    """MU08 confirms 12.70 where the order prints 12.50, within the thresholds: the rules prepare the change. While it is only
+    asked, a second confirmation with that price is compared with the order as printed, as before this task. Once the buyer has
+    entered the price and ticked it, the next confirmation is compared with 12.70: no price flag, no change prepared again, and
+    step 03_entered of the case, which is a step of the audit record too, names the value that took the printed one's place. Step
+    01 keeps the version as the store holds it."""
+    d = with_list(tmp_path, madeup_out)
+    prepared = d.settings.cases_root / "prepared"
+    first, r1 = run(d, madeup_out, "MU08", "250108")
+    assert (r1.status, price_flags(r1)) == ("closed", [(["1"], "12.50", "12.70")]) and step_names(first) == sorted(STEP_FILES)
+    asked, r2 = again(d, confirmation_again(tmp_path / "MU08_asked.pdf", "MU08"), "250108", LATER)
+    assert price_flags(r2) == [(["1"], "12.50", "12.70")] and step_names(asked) == sorted(STEP_FILES)       # not ticked: as printed
+    assert [step["name"] for step in audit(asked)["steps"]] == AUDIT_STEPS and "entered" not in audit(asked)["timings"]
+    assert len(ticked(d, first)) == 2                                            # one change, asked by both cases
+    second, r3 = again(d, confirmation_again(tmp_path / "MU08_second.pdf", "MU08"), "250108", LATER + timedelta(minutes=1))
+    assert (r3.status, r3.findings.flags, r3.findings.uncompared, r3.review_items) == ("closed", [], [], [])
+    assert ("price", ["1"], "12.70") in [(m.field, m.po_line_ids, m.value) for m in r3.findings.matches]
+    assert [(a.rule_id, a.route) for a in r3.actions] == [("R01", "AUTO")]
+    assert [e.op.kind for e in r3.write_entries] == ["attach_document", "set_status"]
+    record = {"version": 1, "replaced": [{"line_id": "1", "field": "price", "was": "12.50", "entered": "12.70",
+                                          "marked_at": TICKED.isoformat(), "by": "buyer"}]}
+    assert second.read_step("entered") == record and step_names(second) == ENTERED_STEPS
+    recorded = audit(second)
+    assert [step["name"] for step in recorded["steps"]] == [*AUDIT_STEPS[:3], "entered", *AUDIT_STEPS[3:]]
+    assert recorded["steps"][3]["payload"] == record and "entered" in recorded["timings"]
+    [stored] = d.store.versions("250108")
+    assert [PoVersion.model_validate(v) for v in second.read_step("po_versions")["versions"]] == [stored]
+    assert stored.document.lines[0].unit_price.value == "12.50" and second.read_step("route")["context"]["version"] == 1
+    assert [(change.kind, change.state, len(change.ids)) for change in changes(prepared)[0]] == [
+        ("po_line_price", "entered", 2), ("article_price", "open", 2)]            # nothing asked a third time
+
+
+def test_one_that_returns_to_the_old_price_is_flagged_against_the_entered_price(tmp_path, madeup_out):
+    """After the buyer entered 12.70, a confirmation that names the old 12.50 again differs from what Exact holds: the price flag
+    has the entered price as the order's value, without a text or a source, and the rules, within the thresholds, prepare the
+    change from the entered price back to the old one."""
+    d = with_list(tmp_path, madeup_out)
+    first, _ = run(d, madeup_out, "MU08", "250108")
+    ticked(d, first)
+    back, r = again(d, confirmation_again(tmp_path / "MU08_back.pdf", "MU08", prices={"1": "12.50"}), "250108", LATER)
+    assert [(f.field, f.po_line_ids, f.detail) for f in r.findings.flags] == [("price", ["1"], "different")]
+    assert (r.findings.flags[0].po_value, r.findings.flags[0].doc_value.value) == (DocValue(value="12.70"), "12.50")
+    assert [(a.rule_id, a.route) for a in r.actions] == [("R04", "AUTO"), ("R01", "AUTO")] and r.status == "closed"
+    assert [(e.op.kind, e.op.old_value, e.op.new_value) for e in r.write_entries[:2]] == [
+        ("po_line_price", "12.70", "12.50"), ("article_price", None, "12.50")]
+    [asked] = [change for change in open_changes(d.settings.cases_root / "prepared") if change.kind == "po_line_price"]
+    assert (asked.old_value, asked.new_value, asked.case_ids) == ("12.70", "12.50", [back.case_id])
+    assert back.read_step("entered")["replaced"][0]["entered"] == "12.70"
+
+
+def test_a_newer_version_is_compared_as_it_is(tmp_path, madeup_out):
+    """Rule 3: Exact printed the order again after the buyer entered and ticked the price, as version 2 with that price. A
+    confirmation that quotes version 2 is compared with it as it is: nothing is laid over it, and the case has no step
+    03_entered. A late confirmation that quotes version 1 is compared with version 1 and the entered price. Had version 2, with
+    yet another price, come in before the tick, the tick would count for it too, and step 03_entered names that version."""
+    d = with_list(tmp_path, madeup_out)
+    first, _ = run(d, madeup_out, "MU08", "250108")
+    ticked(d, first)
+    d.store.add(newer_po(tmp_path / "MU08_po_v2.pdf", "MU08", 2, {"1": "12.70"}))
+    filed_on(d.store, "250108", "v2", TICKED + timedelta(hours=1))
+    newer, r = again(d, confirmation_again(tmp_path / "MU08_v2.pdf", "MU08", prices={"1": "12.70"}, quoted=2), "250108", LATER)
+    assert (r.version.version, r.version.reason, r.findings.flags, r.status) == (2, "quotes version 2", [], "closed")
+    assert step_names(newer) == sorted(STEP_FILES)
+    late, r = again(d, confirmation_again(tmp_path / "MU08_v1.pdf", "MU08", quoted=1), "250108", LATER + timedelta(minutes=2))
+    assert (r.version.version, r.findings.flags) == (1, []) and late.read_step("entered")["replaced"][0]["entered"] == "12.70"
+    assert late.read_step("entered")["version"] == 1
+    other = with_list(tmp_path / "before the tick", madeup_out)
+    first, _ = run(other, madeup_out, "MU08", "250108")
+    other.store.add(newer_po(tmp_path / "MU08_po_v2_other.pdf", "MU08", 2, {"1": "12.80"}))
+    filed_on(other.store, "250108", "v2", TICKED - timedelta(minutes=30))         # version 2 came in before the tick
+    ticked(other, first)
+    before, r = again(other, confirmation_again(tmp_path / "MU08_before.pdf", "MU08", quoted=2), "250108", LATER + timedelta(minutes=3))
+    assert r.findings.flags == [] and step_names(before) == ENTERED_STEPS
+    assert before.read_step("entered") == {"version": 2, "replaced": [{"line_id": "1", "field": "price", "was": "12.80", "entered": "12.70",
+                                                                         "marked_at": TICKED.isoformat(), "by": "buyer"}]}
+
+
+def test_a_newer_print_that_contradicts_a_tick_ends_it(tmp_path, madeup_out):
+    """The review round, W9 (findings 9 and 10): the buyer ticks 12.70 without entering it, and Exact prints the order again with
+    the old 12.50, filed after the tick. The supplier's second confirmation at 12,70, which quotes the new print, is flagged against
+    it and the rules prepare the change in the ordinary way; its row stands on the list as open, with the row of the first case,
+    so that no case closes as confirmed on a tick that the newest print contradicts. A late confirmation that quotes version 1 is
+    compared with version 1 as it was printed too: the value is laid over no version. Once the buyer has entered the price and
+    ticks again, that tick counts."""
+    d = with_list(tmp_path, madeup_out)
+    prepared = d.settings.cases_root / "prepared"
+    first, _ = run(d, madeup_out, "MU08", "250108")
+    ids = ticked(d, first)
+    d.store.add(newer_po(tmp_path / "MU08_po_v2.pdf", "MU08", 2, {"1": "12.50"}))
+    filed_on(d.store, "250108", "v2", TICKED + timedelta(hours=1))
+    second, r = again(d, confirmation_again(tmp_path / "MU08_v2.pdf", "MU08", quoted=2), "250108", LATER)
+    assert (r.version.version, price_flags(r), r.status) == (2, [(["1"], "12.50", "12.70")], "closed")
+    assert [(a.rule_id, a.route) for a in r.actions] == [("R04", "AUTO"), ("R01", "AUTO")] and step_names(second) == sorted(STEP_FILES)
+    [asked] = [change for change in changes(prepared)[0] if change.kind == "po_line_price"]
+    assert (asked.state, asked.case_ids, asked.ids[:1]) == ("open", [first.case_id, second.case_id], ids)       # on the list again
+    late, r = again(d, confirmation_again(tmp_path / "MU08_v1.pdf", "MU08", quoted=1), "250108", LATER + timedelta(minutes=1))
+    assert (r.version.version, price_flags(r)) == (1, [(["1"], "12.50", "12.70")]) and step_names(late) == sorted(STEP_FILES)
+    [asked] = [change for change in changes(prepared)[0] if change.kind == "po_line_price"]
+    assert mark(prepared, asked.ids, "entered", TICKED + timedelta(hours=2)) == 3   # entered now, and ticked again: three cases asked it
+    after, r = again(d, confirmation_again(tmp_path / "MU08_after.pdf", "MU08", quoted=2), "250108", LATER + timedelta(minutes=2))
+    assert r.findings.flags == [] and after.read_step("entered")["replaced"][0] | {"marked_at": ""} == {
+        "line_id": "1", "field": "price", "was": "12.50", "entered": "12.70", "marked_at": "", "by": "buyer"}
+
+
+def test_an_export_that_contradicts_a_tick_ends_it_for_a_confirmation_too(tmp_path, madeup_out):
+    """W9 (finding 9): a confirmation is compared with the PDF, never with an export. An export filed after the tick that shows
+    the old price still ends the tick: the second confirmation at 12,70 is flagged against version 1 as it was printed, and is not
+    closed as confirmed on the tick."""
+    d = with_list(tmp_path, madeup_out)
+    prepared = d.settings.cases_root / "prepared"
+    first, _ = run(d, madeup_out, "MU08", "250108")
+    ticked(d, first)
+    export = tmp_path / "export_after.csv"
+    export.write_text("po_number,line_id,item_code,description,quantity,unit,unit_price,price_basis,delivery_date\n"
+                      "250108,1,KM-0801,Manometer 0-10 bar,3,st,12.50,1,2026-11-16\n250108,2,KM-0802,Zeskantbout M10 x 40,50,st,0.42,1,2026-11-16\n",
+                      encoding="utf-8")
+    assert d.store.from_export(export, {name: name for name in export.read_text(encoding="utf-8").splitlines()[0].split(",")})
+    filed_on(d.store, "250108", "e1", TICKED + timedelta(hours=1))
+    second, r = again(d, confirmation_again(tmp_path / "MU08_again.pdf", "MU08"), "250108", LATER)
+    assert (r.version.version, price_flags(r)) == (1, [(["1"], "12.50", "12.70")]) and step_names(second) == sorted(STEP_FILES)
+    [asked] = [change for change in changes(prepared)[0] if change.kind == "po_line_price"]
+    assert asked.state == "open" and len(asked.ids) == 2
+    reopened = [json.loads(line) for line in (prepared / MARKS_FILE).read_text(encoding="utf-8").splitlines()][-1]
+    assert (reopened["mark"], reopened["by"]) == ("reopened", "export")
+
+
+def test_select_version_gets_the_same_versions(tmp_path, madeup_out, monkeypatch):
+    """Rule 1: with entered values on the list, select_version is given what the store gives, as before this task: every PDF
+    version for a confirmation and the PO as it stands alone for a cart, each as the store holds it, without an entered value."""
+    given = []
+
+    def spy(doc, versions, decider):
+        given.append(list(versions))
+        return versioning.select_version(doc, versions, decider)
+    monkeypatch.setattr("aid.pipeline.select_version", spy)
+    d = with_list(tmp_path, madeup_out)
+    first, _ = run(d, madeup_out, "MU08", "250108")
+    ticked(d, first)
+    d.store.add(newer_po(tmp_path / "MU08_po_v2.pdf", "MU08", 2, {"1": "12.80"}))
+    filed_on(d.store, "250108", "v2", FILED)
+    both = d.store.versions("250108")
+    second, r = again(d, confirmation_again(tmp_path / "MU08_v1.pdf", "MU08", quoted=1), "250108", LATER)
+    assert given[-1] == both and [version.document.lines[0].unit_price.value for version in given[-1]] == ["12.50", "12.80"]
+    assert r.findings.flags == [] and len(second.read_step("entered")["replaced"]) == 1                     # the entered value counted
+    [look] = d.store.from_export(madeup_out / "CART01_export.csv", EXPORT_COLUMNS)
+    filed_on(d.store, "250201", "e1", FILED)
+    page = tmp_path / "CART01.html"
+    page.write_text((madeup_out / "CART01.html").read_text(encoding="utf-8").replace("€ 4,10", "€ 4,15"), encoding="utf-8")
+    cart, r = again(d, page, "250201", LATER + timedelta(minutes=1), kind="cart")
+    assert price_flags(r) == [(["2"], "4.10", "4.15")]
+    ticked(d, cart)
+    shown = tmp_path / "shown again" / "CART01.html"
+    shown.parent.mkdir()
+    shown.write_text(page.read_text(encoding="utf-8") + "<!-- shown again -->", encoding="utf-8")
+    cart2, r = again(d, shown, "250201", LATER + timedelta(minutes=2), kind="cart")
+    assert given[-1] == given[-2] == d.store.candidates("250201", "cart") == [look]
+    assert given[-1][0].document.lines[1].unit_price.value == "4.10"
+    assert r.findings.flags == [] and cart2.read_step("entered")["replaced"][0]["entered"] == "4.15"
+
+
+def test_a_cart_is_compared_through_the_same_step(tmp_path, madeup_out):
+    """Rule 7: a cart is checked against its order as it stands, a look from an export, with the entered values laid over it. After
+    the buyer entered the price that the rules prepared for a cart, the same cart shown again has no price flag; a look from an
+    export filed after the tick is taken as it is."""
+    d = with_list(tmp_path, madeup_out)
+    d.store.from_export(madeup_out / "CART01_export.csv", EXPORT_COLUMNS)
+    filed_on(d.store, "250201", "e1", FILED)
+    page = tmp_path / "CART01.html"
+    page.write_text((madeup_out / "CART01.html").read_text(encoding="utf-8").replace("€ 4,10", "€ 4,15"), encoding="utf-8")
+    first, r = again(d, page, "250201", NOW, kind="cart")
+    assert (r.status, price_flags(r), [(a.rule_id, a.route) for a in r.actions]) == ("closed", [(["2"], "4.10", "4.15")], [("R04", "AUTO")])
+    ticked(d, first)
+    second, r = again(d, page, "250201", LATER, kind="cart")
+    assert (r.status, r.findings.flags, [(a.rule_id, a.reason) for a in r.actions], r.write_entries) == (
+        "closed", [], [("R01", "no difference")], [])
+    assert second.read_step("entered") == {"version": 1, "replaced": [{"line_id": "2", "field": "price", "was": "4.10", "entered": "4.15",
+                                                                      "marked_at": TICKED.isoformat(), "by": "buyer"}]}
+    export = tmp_path / "CART01_export.csv"                                       # a newer export, in which the line holds 4.20
+    export.write_text((madeup_out / "CART01_export.csv").read_text(encoding="utf-8").replace("4.10", "4.20"), encoding="utf-8")
+    d.store.from_export(export, EXPORT_COLUMNS)
+    filed_on(d.store, "250201", "e2", TICKED + timedelta(hours=1))
+    third, r = again(d, page, "250201", LATER + timedelta(minutes=1), kind="cart")
+    assert price_flags(r) == [(["2"], "4.20", "4.15")] and step_names(third) == sorted(STEP_FILES)
+
+
+def test_a_later_change_starts_from_the_entered_value(tmp_path, madeup_out):
+    """Amendment 6: what the pipeline does after the comparison sees an entered value as the order's. A third confirmation with yet
+    another price prepares the change from the entered price to the new one, and its undo puts the entered price back. The total and
+    the authorization are worked out with the entered price: the limit lies between the printed total (58.50) and the total with
+    the entered price (59.10), so the change of the third confirmation asks the approver, and the request names it from the
+    entered price. Against the order as printed the same confirmation would be above the price threshold."""
+    limited = SETTINGS.model_copy(update={"authorization_limit": Decimal("58.80")})
+    d = with_list(tmp_path, madeup_out, settings=limited)
+    [stored] = d.store.versions("250108")
+    assert (stored.total, stored.above_authorization) == (Decimal("58.50"), False)
+    first, r1 = run(d, madeup_out, "MU08", "250108")
+    assert [(a.rule_id, a.route) for a in r1.actions] == [("R04", "AUTO"), ("R01", "AUTO")] and r1.messages == []
+    ticked(d, first)
+    third, r = again(d, confirmation_again(tmp_path / "MU08_third.pdf", "MU08", prices={"1": "12.90"}), "250108", LATER)
+    assert price_flags(r) == [(["1"], "12.70", "12.90")]
+    assert [(a.rule_id, a.route, a.base_rule_id) for a in r.actions] == [("R10", "AUTO", "R04"), ("R01", "AUTO", None)]
+    price, item = r.write_entries[:2]
+    assert (price.op.kind, price.op.old_value, price.op.new_value, price.previous) == ("po_line_price", "12.70", "12.90", "12.70")
+    assert (item.op.kind, item.op.new_value) == ("article_price", "12.90")
+    context = third.read_step("route")["context"]
+    assert context["po_above_authorization"] is True and context["po_basis"] == {"1": "1", "2": "1"}
+    [request] = r.messages
+    assert (request["template"], request["rule_id"]) == ("reapproval", "R10")
+    assert request["items"][0] == {"kind": "po_line_price", "line_id": "1", "article_code": "", "old_value": "12.70", "new_value": "12.90"}
+    back = undo_entry(third.root, price.entry_id, d.writer, LATER)
+    assert (back.op.old_value, back.op.new_value) == ("12.90", "12.70")           # the undo puts the entered price back
+    printed = tmp_path / "as printed"                                              # the same documents with nothing entered
+    plain = with_list(printed, madeup_out, settings=limited)
+    run(plain, madeup_out, "MU08", "250108")
+    _, r = again(plain, tmp_path / "MU08_third.pdf", "250108", LATER)
+    assert price_flags(r) == [(["1"], "12.50", "12.90")] and [(a.rule_id, a.route) for a in r.actions] == [("R05", "REVIEW")]
+
+
+def held_file(name: str, error: type[OSError] = PermissionError):
+    """pathlib's read_bytes for a time in which the file of the list with this name cannot be read: a PermissionError, as Windows
+    gives for a file that another program holds, or another OSError."""
+    real = Path.read_bytes
+
+    def read_bytes(self):
+        if self.name == name:
+            raise error(13, "The process cannot access the file because it is being used by another process", str(self))
+        return real(self)
+    return read_bytes
+
+
+@pytest.mark.parametrize("name, error", [(PREPARED_FILE, PermissionError), (MARKS_FILE, PermissionError), (MARKS_FILE, OSError)])
+def test_a_case_run_while_the_list_cannot_be_read_goes_to_the_buyer(tmp_path, madeup_out, monkeypatch, name, error):
+    """Amendment 5 and the review round's W6: while prepared_changes.csv or marks.jsonl cannot be read (a PermissionError, or any
+    other OSError), the case is compared with the version as it is, and step 03_entered says so: {"version": n, "replaced": [],
+    "unread": true}, a step of the audit record too. The aid then does not know what Exact holds, so the rules prepare nothing,
+    request nothing and send nothing: one REVIEW action of the pipeline's own rule L01 covers the whole case, and every difference is
+    the buyer's to decide. Once the list can be read again, the next case counts the entered value."""
+    d = with_list(tmp_path, madeup_out, settings=SETTINGS.model_copy(update={"authorization_limit": Decimal("50")}))
+    prepared = d.settings.cases_root / "prepared"
+    first, _ = run(d, madeup_out, "MU08", "250108")
+    ticked(d, first)
+    rows = (prepared / PREPARED_FILE).read_bytes()
+    with monkeypatch.context() as held:
+        held.setattr(Path, "read_bytes", held_file(name, error))
+        blind, r = again(d, confirmation_again(tmp_path / "MU08_blind.pdf", "MU08"), "250108", LATER)
+        back, old = again(d, confirmation_again(tmp_path / "MU08_back.pdf", "MU08", prices={"1": "12.50"}), "250108", LATER + timedelta(seconds=30))
+    assert (r.status, price_flags(r)) == ("review", [(["1"], "12.50", "12.70")])
+    assert [(a.rule_id, a.route, a.finding_ids, a.reason) for a in r.actions] == [("L01", "REVIEW", ["F1"], UNREAD_LIST)]
+    assert (r.write_entries, r.messages) == ([], []) and (prepared / PREPARED_FILE).read_bytes() == rows
+    assert [(item.finding_id, item.reason, item.field) for item in r.review_items] == [("F1", UNREAD_LIST, "price")]
+    assert blind.read_step("entered") == {"version": 1, "replaced": [], "unread": True} and step_names(blind) == ENTERED_STEPS
+    assert audit(blind)["steps"][3] == {"name": "entered", "seconds": audit(blind)["steps"][3]["seconds"],
+                                         "payload": {"version": 1, "replaced": [], "unread": True}}
+    assert [decision["rule_id"] for decision in audit(blind)["decisions"]] == ["L01"]
+    # the confirmation that returns to the printed 12,50 has no difference against the order as filed: it still goes to the buyer
+    assert (old.status, old.findings.flags, old.write_entries) == ("review", [], [])
+    assert [(item.finding_id, item.reason) for item in old.review_items] == [(None, UNREAD_LIST)]
+    seen, r = again(d, confirmation_again(tmp_path / "MU08_seen.pdf", "MU08"), "250108", LATER + timedelta(minutes=1))
+    assert r.findings.flags == [] and seen.read_step("entered")["replaced"][0]["entered"] == "12.70"
+    assert "unread" not in seen.read_step("entered") and r.status == "closed"
+
+
+def test_a_list_that_cannot_be_understood_sends_the_case_to_the_buyer(tmp_path, madeup_out):
+    """W5 (finding 5) with W6: prepared_changes.csv was saved from a spreadsheet with semicolons between its fields. No tick of it
+    can be read, so the case is compared with the order as filed and goes to the buyer under L01, as while a program holds the
+    file; before, the list counted as empty, the change was prepared again and the approver was asked a second time."""
+    d = with_list(tmp_path, madeup_out, settings=SETTINGS.model_copy(update={"authorization_limit": Decimal("50")}))
+    prepared = d.settings.cases_root / "prepared"
+    first, r = run(d, madeup_out, "MU08", "250108")
+    assert [a.rule_id for a in r.actions] == ["R10", "R01"]
+    ticked(d, first)
+    rows = (prepared / PREPARED_FILE).read_text(encoding="utf-8")
+    (prepared / PREPARED_FILE).write_text(rows.replace(",", ";"), encoding="utf-8")
+    saved = (prepared / PREPARED_FILE).read_bytes()
+    second, r = again(d, confirmation_again(tmp_path / "MU08_again.pdf", "MU08"), "250108", LATER)
+    assert (r.status, [a.rule_id for a in r.actions], r.write_entries, r.messages) == ("review", ["L01"], [], [])
+    assert second.read_step("entered")["unread"] is True and (prepared / PREPARED_FILE).read_bytes() == saved
+
+
+def test_a_guessed_order_and_an_unread_list_are_both_told(tmp_path, madeup_out, monkeypatch):
+    """W6 beside the rule of a guessed order: a case whose PO the aid guessed, run while the list cannot be read, has the action
+    of G01 for its findings and one of L01 for the whole case, so that the buyer reads both reasons."""
+    d = with_list(tmp_path, madeup_out)
+    first, _ = run(d, madeup_out, "MU08", "250108")
+    ticked(d, first)
+    c = open_upload_case(d.settings.cases_root, [confirmation_again(tmp_path / "MU08_guess.pdf", "MU08")], "250108", "confirmation", LATER)
+    meta = json.loads((c.root / "case.json").read_text(encoding="utf-8")) | {"po_found_by": "held number"}
+    (c.root / "case.json").write_text(json.dumps(meta), encoding="utf-8")
+    with monkeypatch.context() as held:
+        held.setattr(Path, "read_bytes", held_file(MARKS_FILE))
+        r = run_case(load_case(d.settings.cases_root, c.case_id), d)
+    assert [(a.rule_id, a.finding_ids) for a in r.actions] == [("G01", ["F1"]), ("L01", [])]
+    assert [(item.finding_id, item.reason) for item in r.review_items] == [("F1", GUESSED_PO), (None, UNREAD_LIST)]
+
+
+def test_a_step_file_of_an_earlier_attempt_is_removed(tmp_path, madeup_out, monkeypatch):
+    """W8 (findings 8 and 11): the run of a second confirmation is cut off after step 03_entered; the buyer takes the tick back;
+    the case is run again, as the runner resumes one without a result. It is compared with the order as filed, and the step file
+    of the first attempt is gone, so that the review tab and the audit record say the same. An "unread" step goes the same way."""
+    d = with_list(tmp_path, madeup_out)
+    prepared = d.settings.cases_root / "prepared"
+    first, _ = run(d, madeup_out, "MU08", "250108")
+    ids = ticked(d, first)
+    c = open_upload_case(d.settings.cases_root, [confirmation_again(tmp_path / "MU08_cut.pdf", "MU08")], "250108", "confirmation", LATER)
+
+    def stopped(*args, **kwargs):
+        raise KeyboardInterrupt("the runner is stopped while the case runs")
+    with monkeypatch.context() as cut, pytest.raises(KeyboardInterrupt):
+        cut.setattr(pipeline, "match_lines", stopped)
+        run_case(c, d)
+    assert step_names(c) == ["01_po_versions.json", "02_read_document.json", "03_entered.json", "03_version.json"]
+    assert reopen(prepared, ids, LATER) == "open"
+    r = run_case(load_case(d.settings.cases_root, c.case_id), d)
+    assert price_flags(r) == [(["1"], "12.50", "12.70")] and step_names(c) == sorted(STEP_FILES)
+    assert "entered" not in [step["name"] for step in audit(c)["steps"]]
+    blind = open_upload_case(d.settings.cases_root, [confirmation_again(tmp_path / "MU08_held.pdf", "MU08")], "250108", "confirmation",
+                             LATER + timedelta(minutes=1))
+    with monkeypatch.context() as held, pytest.raises(KeyboardInterrupt):
+        held.setattr(Path, "read_bytes", held_file(MARKS_FILE))
+        held.setattr(pipeline, "match_lines", stopped)
+        run_case(blind, d)
+    assert blind.read_step("entered")["unread"] is True
+    r = run_case(load_case(d.settings.cases_root, blind.case_id), d)
+    assert "03_entered.json" not in step_names(blind) and [a.rule_id for a in r.actions] != ["L01"]
+
+
+def test_a_change_the_supplier_withdrew_leaves_the_list(tmp_path, madeup_out):
+    """W4 (finding 4): 12.60 is entered and ticked; a newer confirmation names 12.70, whose change stands open; the newest one
+    names 12.60 again. Its case has no difference, and it takes the open change off the list as replaced: nothing is left to enter
+    for the line. The change of a confirmation that the buyer still has to look at stays (a guessed order), and when the supplier
+    names 12.70 once more, the change is asked again."""
+    d = with_list(tmp_path, madeup_out)
+    prepared = d.settings.cases_root / "prepared"
+
+    def line_prices() -> list[tuple]:
+        return [(change.old_value, change.new_value, change.state, len(change.ids)) for change in changes(prepared)[0] if change.kind == "po_line_price"]
+    first, _ = again(d, confirmation_again(tmp_path / "MU08_1260.pdf", "MU08", prices={"1": "12.60"}), "250108", NOW)
+    ticked(d, first)
+    again(d, confirmation_again(tmp_path / "MU08_1270.pdf", "MU08"), "250108", LATER)
+    assert line_prices() == [("12.50", "12.60", "entered", 1), ("12.60", "12.70", "open", 1)]
+    guess = open_upload_case(d.settings.cases_root, [confirmation_again(tmp_path / "MU08_guess.pdf", "MU08", prices={"1": "12.60"})], "250108",
+                             "confirmation", LATER + timedelta(minutes=1))
+    meta = json.loads((guess.root / "case.json").read_text(encoding="utf-8")) | {"po_found_by": "held number"}
+    (guess.root / "case.json").write_text(json.dumps(meta), encoding="utf-8")
+    run_case(load_case(d.settings.cases_root, guess.case_id), d)
+    assert line_prices()[1][2] == "open"                                           # the aid's guess takes nothing off the list
+    back, r = again(d, confirmation_again(tmp_path / "MU08_back.pdf", "MU08", prices={"1": "12.60"}), "250108", LATER + timedelta(minutes=2))
+    assert (r.status, r.findings.flags, r.write_entries[0].op.kind) == ("closed", [], "attach_document")
+    assert line_prices() == [("12.50", "12.60", "entered", 1), ("12.60", "12.70", "replaced", 1)]
+    assert [change for change in open_changes(prepared) if change.kind == "po_line_price"] == []
+    last = [json.loads(line) for line in (prepared / MARKS_FILE).read_text(encoding="utf-8").splitlines()][-1]
+    assert (last["mark"], last["by"]) == ("replaced", f"case {back.case_id}")
+    again(d, confirmation_again(tmp_path / "MU08_1270_again.pdf", "MU08"), "250108", LATER + timedelta(minutes=3))
+    assert line_prices() == [("12.50", "12.60", "entered", 1), ("12.60", "12.70", "open", 2)]
+
+
+def never_counting(d, tmp_path) -> None:
+    """Rows and marks on the list of d that count in no supplier's case of PO 250108 (rule 4, amendment 4): an open change of its
+    line 1 and one that it replaced, a dropped one, one undone before it was entered, an entered article price, an entered change
+    of another PO, and the entered change of a case made from a try-out."""
+    prepared = d.settings.cases_root / "prepared"
+    writer, other = PreparedWriter(prepared), "250108_20261109T090000"
+
+    def asked(case_id: str, op: WriteOp) -> str:
+        return writer.apply(op, case_id, "R04", {}, NOW - timedelta(days=1)).entry_id
+    asked(other, WriteOp(kind="po_line_price", po_number="250108", version=1, line_id="1", old_value="12.50", new_value="12.60"))
+    asked(other, WriteOp(kind="po_line_price", po_number="250108", version=1, line_id="1", old_value="12.50", new_value="12.65"))
+    dropped = asked(other, WriteOp(kind="po_line_quantity", po_number="250108", version=1, line_id="2", old_value="50", new_value="60"))
+    article = asked(other, WriteOp(kind="article_price", po_number="250108", version=1, article_code="KM-0802", new_value="0.45"))
+    elsewhere = asked("250107_20261110T090000", WriteOp(kind="po_line_price", po_number="250107", version=1, line_id="1",
+                                                        old_value="12.50", new_value="12.70"))
+    cancelled = tmp_path / "cancelled case"
+    cancelled.mkdir()
+    entry = writer.apply(WriteOp(kind="po_line_date", po_number="250108", version=1, line_id="2", old_value="2026-11-16",
+                                 new_value="2026-11-20"), other, "R02", {}, NOW - timedelta(days=1))
+    WriteLog(cancelled).append(entry)
+    undo_entry(cancelled, entry.entry_id, writer, NOW - timedelta(days=1))
+    [stored] = d.store.versions("250108")
+    document = tmp_path / "PROEF orderbevestiging.pdf"
+    document.write_bytes(tryout_pdf(stored, "none", NOW))
+    tried = open_upload_case(d.settings.cases_root, [document], "250108", "confirmation", NOW - timedelta(days=2))
+    made_up = asked(tried.case_id, WriteOp(kind="po_line_price", po_number="250108", version=1, line_id="2", old_value="0.42",
+                                           new_value="0.43"))
+    assert mark(prepared, [dropped], "dropped", TICKED - timedelta(days=1)) == 1
+    assert mark(prepared, [article, elsewhere, made_up], "entered", TICKED - timedelta(days=1)) == 3
+    assert sorted((change.state, change.tryout) for change in changes(prepared)[0]) == [
+        ("dropped", False), ("entered", False), ("entered", False), ("entered", True), ("open", False), ("replaced", False),
+        ("undone", False), ("undone", False)]
+
+
+def test_without_marks_every_step_file_is_as_before(tmp_path, madeup_out):
+    """Rule 2, on a case of its own beside the golden comparison of the whole made-up batch above: with nothing on the list that
+    counts for its order, a case writes the step files, the result and the audit record that it writes with an empty list: no
+    step 03_entered and no new key. Here the list of the second world holds rows and marks that never count for a supplier's
+    case of PO 250108 (rule 4): open, replaced, dropped and undone changes, an article price, the change of another PO and the
+    entered change of a try-out."""
+    worlds = {}
+    for name in ("empty list", "marks that never count"):
+        d = with_list(tmp_path / name, madeup_out)
+        if name != "empty list":
+            never_counting(d, tmp_path / name)
+        c, r = run(d, madeup_out, "MU08", "250108")
+        assert r.status == "closed" and step_names(c) == sorted(STEP_FILES)
+        places = [(tmp_path / name, "<RUN>"), (REPO_ROOT, "<REPO>")]
+        steps = {path.name: made_up_batch._json(json.loads(path.read_text(encoding="utf-8")), places) for path in (c.root / "steps").iterdir()}
+        recorded = audit(c)
+        assert [step["name"] for step in recorded["steps"]] == AUDIT_STEPS and list(recorded["timings"]) == [*AUDIT_STEPS, "total", "wall_seconds"]
+        recorded["timings"] = dict.fromkeys(recorded["timings"])
+        worlds[name] = steps | {"audit.json": made_up_batch._json(recorded, places)}
+    assert worlds["empty list"] == worlds["marks that never count"]
+
+
+def test_a_try_outs_entered_value_reaches_no_suppliers_case(tmp_path, madeup_out):
+    """Amendment 4 in the pipeline: a value entered for a change that a try-out asked is laid over the order in a case made from a
+    try-out, and never in a supplier's own case, which is compared with the order as printed."""
+    d = with_list(tmp_path, madeup_out, settings=SETTINGS.model_copy(update={"authorization_limit": None, "test_mode": True}))
+    [stored] = d.store.versions("250108")
+    document = tmp_path / "PROEF orderbevestiging 1.pdf"
+    document.write_bytes(tryout_pdf(stored, "price_small", NOW))
+    tried, r = again(d, document, "250108", NOW)
+    assert price_flags(r) == [(["1"], "12.50", "12.63")]
+    assert [change.tryout for change in open_changes(d.settings.cases_root / "prepared")] == [True, True]
+    ticked(d, tried)
+    own, r = run(d, madeup_out, "MU08", "250108", now=LATER)                      # the supplier's own confirmation, at 12.70
+    assert price_flags(r) == [(["1"], "12.50", "12.70")] and step_names(own) == sorted(STEP_FILES)
+    laid = stored.document.lines[0].model_copy(update={"unit_price": DocValue(value="12.63")})
+    entered = stored.model_copy(update={"document": stored.document.model_copy(update={"lines": [laid, *stored.document.lines[1:]]})})
+    second = tmp_path / "PROEF orderbevestiging 2.pdf"
+    second.write_bytes(tryout_pdf(entered, "none", LATER))                        # a second try-out, of the order with the entered price
+    next_tried, r = again(d, second, "250108", LATER + timedelta(minutes=1))
+    assert r.findings.flags == [] and next_tried.read_step("entered")["replaced"] == [
+        {"line_id": "1", "field": "price", "was": "12.50", "entered": "12.63", "marked_at": TICKED.isoformat(), "by": "buyer"}]
+
+
+# --- the review round of Task 43, W1: an entered value belongs to a line of the order, not to a line id ---
+
+ORDER = "250155"                                     # a made-up order of its own, drawn by the made-up generator
+ORDER_LINES = {"a": ("KM-5501", "Manometer 0-10 bar", "3", "12.50", "1"), "b": ("KM-5502", "Zeskantbout M10 x 40", "500", "4.20", "100"),
+               "c": ("KM-5503", "Kogelkraan DN20", "4", "38.75", "1"),
+               "d": ("KM-5504", "Pakking eerste levering", "2", "7.00", "1"),       # two deliveries of one article: d and e
+               "e": ("KM-5504", "Pakking tweede levering", "6", "7.00", "1")}
+ORDER_DATES = {"e": "2026-11-23"}                    # the delivery date of a line; every other line has 16 November
+
+
+def order_values(key: str, prices: dict[str, str], dates: dict[str, str] | None = None, codes: dict[str, str] | None = None) -> dict:
+    """The values of the line `key` of the made-up order, at its own price, delivery date and item code or the ones given."""
+    code, description, quantity, price, basis = ORDER_LINES[key]
+    return {"item_code": (codes or {}).get(key, code), "description": description, "quantity": quantity, "unit": "pc",
+            "unit_price": prices.get(key, price), "price_basis": basis, "delivery_date": (dates or {}).get(key, ORDER_DATES.get(key, "2026-11-16"))}
+
+
+def order_spec(keys: str, prices: dict[str, str], version: int = 1, quoted: int | None = None, document: bool = False,
+               dates: dict[str, str] | None = None, codes: dict[str, str] | None = None):
+    """The made-up order with the lines named by `keys` ("abc"), numbered by their place, each at its own price, delivery date and
+    item code or the ones given; with document, a confirmation of those lines that quotes version `quoted`."""
+    from datetime import date as day
+
+    from aid.madeup.generate import Confirmation, DocumentLine, MadeUpSpec, Po, PoLine
+    from aid.madeup.generate import PoVersion as SpecVersion
+
+    def values(key: str) -> dict:
+        return order_values(key, prices, dates, codes)
+    po = Po(po_number=ORDER, supplier="S08", currency="EUR", incoterm="DAP Rotterdam", buyer_authorization_exceeded=False,
+            versions=[SpecVersion(version=version, version_date=day(2026, 10, 19),
+                                  lines=[PoLine(line_id=str(number), **values(key)) for number, key in enumerate(keys, 1)])])
+    confirmation = Confirmation(layout="table_nl", language="nl", document_date=day(2026, 10, 21), version_quoted=quoted, incoterm="DAP Rotterdam",
+                                lines=[DocumentLine(line_id=str(number), **values(key)) for number, key in enumerate(keys, 1)]) if document else None
+    return MadeUpSpec.model_construct(case_id="MU55", po=po, confirmation=confirmation, cart=None)
+
+
+def order_pdf(path: Path, keys: str, version: int, prices: dict[str, str] | None = None, dates: dict[str, str] | None = None,
+              codes: dict[str, str] | None = None) -> Path:
+    from aid.madeup import generate
+    spec = order_spec(keys, prices or {}, version, dates=dates, codes=codes)
+    path.write_bytes(generate.pdf_bytes(generate.po_pages(spec, spec.po.versions[0]), path.name))
+    return path
+
+
+def order_confirmation(path: Path, keys: str, prices: dict[str, str], quoted: int, dates: dict[str, str] | None = None) -> Path:
+    from aid.madeup import generate
+    path.write_bytes(generate.pdf_bytes(generate.confirmation_pages(order_spec(keys, prices, quoted, quoted, document=True, dates=dates)), path.name))
+    return path
+
+
+def order_export(path: Path, keys: str, prices: dict[str, str] | None = None, dates: dict[str, str] | None = None) -> Path:
+    """An export of the made-up order with the lines named by `keys` in that order and no line column, so that the lines are
+    numbered by their place, as the export of an overview numbers them."""
+    names = ["po_number", "item_code", "description", "quantity", "unit", "unit_price", "price_basis", "delivery_date"]
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=names)
+        writer.writeheader()
+        writer.writerows({"po_number": ORDER} | order_values(key, prices or {}, dates) | {"unit": "st"} for key in keys)
+    return path
+
+
+def order_columns(path: Path) -> dict[str, str]:
+    """The column map of an export of order_export: each of its titles is the field's own name."""
+    return {name: name for name in path.read_text(encoding="utf-8").splitlines()[0].split(",")}
+
+
+def test_two_prints_numbered_by_place_keep_each_lines_entered_price(tmp_path, madeup_out):
+    """W1 (finding 1, the reviewers' sequence "renumbered", the order above the authorization limit): Exact numbers the lines of a
+    print by their place. Version 1 holds KM-5501, KM-5502, KM-5503 as 1, 2, 3; after KM-5501 left the order, version 2 holds
+    KM-5502 as 1 and KM-5503 as 2. The price of KM-5502 is entered for a confirmation of version 1 (its line 2) and that of
+    KM-5503 for one of version 2 (its line 2 too). A confirmation of version 2 with both entered prices has no difference: both
+    values are laid over, nothing is prepared again, and the approver is asked nothing more. Before, the tick made last pushed the
+    other value out, the change of KM-5502 was prepared again and requested a second time with an old value Exact no longer held."""
+    d = with_list(tmp_path, madeup_out, settings=SETTINGS.model_copy(update={"authorization_limit": Decimal("100"),
+                                                                             "supplier_lead_times": {"S08": 10}}))
+    prepared = d.settings.cases_root / "prepared"
+    d.store.add(order_pdf(tmp_path / "order_v1.pdf", "abc", 1))
+    filed_on(d.store, ORDER, "v1", FILED)
+    first, r = again(d, order_confirmation(tmp_path / "x.pdf", "abc", {"b": "4.25"}, 1), ORDER, NOW)
+    assert [(a.rule_id, a.route) for a in r.actions] == [("R10", "AUTO"), ("R01", "AUTO")] and len(r.messages) == 1
+    d.store.add(order_pdf(tmp_path / "order_v2.pdf", "bc", 2))                      # KM-5501 left the order: Exact prints it again
+    filed_on(d.store, ORDER, "v2", NOW + timedelta(minutes=30))
+    ticked(d, first)
+    second, r = again(d, order_confirmation(tmp_path / "y.pdf", "bc", {"b": "4.25", "c": "39.14"}, 2), ORDER, TICKED + timedelta(minutes=5))
+    assert price_flags(r) == [(["2"], "38.75", "39.14")] and len(r.messages) == 1  # KM-5502's 4.25 is known: no flag for it
+    assert second.read_step("entered")["replaced"] == [{"line_id": "1", "field": "price", "was": "4.20", "entered": "4.25",
+                                                         "marked_at": TICKED.isoformat(), "by": "buyer"}]
+    ticked(d, second, at=TICKED + timedelta(minutes=10))
+    third, r = again(d, order_confirmation(tmp_path / "z.pdf", "bc", {"b": "4.25", "c": "39.14"}, 2), ORDER, TICKED + timedelta(minutes=15))
+    assert (r.status, r.findings.flags, r.messages) == ("closed", [], [])
+    assert [e.op.kind for e in r.write_entries if e.op.kind in ("po_line_price", "article_price")] == []       # nothing prepared again
+    assert [(one["line_id"], one["entered"]) for one in third.read_step("entered")["replaced"]] == [("1", "4.25"), ("2", "39.14")]
+    assert [change.state for change in changes(prepared)[0] if change.kind == "po_line_price"] == ["entered", "entered"]
+    assert [change for change in open_changes(prepared) if change.kind == "po_line_price"] == []
+
+
+# --- the second review round of Task 43: a print that shows nothing new is a look at the order (W16), two deliveries of one
+# article are told by their values (W17), a print that cannot be matched ends the tick (W18) ---
+
+MU08_EXPORT = ("po_number,line_id,item_code,description,quantity,unit,unit_price,price_basis,delivery_date\n"
+               "250108,1,KM-0801,Manometer 0-10 bar,3,st,12.50,1,2026-11-16\n250108,2,KM-0802,Zeskantbout M10 x 40,50,st,0.42,1,2026-11-16\n")
+AFTER_TICK = TICKED + timedelta(hours=1)             # when a print is given after the buyer's tick
+
+
+def last_mark(prepared: Path) -> dict:
+    return [json.loads(line) for line in (prepared / MARKS_FILE).read_text(encoding="utf-8").splitlines()][-1]
+
+
+def line_changes(prepared: Path, kind: str = "po_line_price") -> list[tuple]:
+    """The changes of that kind on the list: (line id, old value, new value, state, number of rows)."""
+    return [(change.line_id, change.old_value, change.new_value, change.state, len(change.ids)) for change in changes(prepared)[0] if change.kind == kind]
+
+
+def order_deps(tmp_path, madeup_out, limit: str | None = None):
+    """with_list() for the made-up order: S08 with a lead time, and the authorization limit given."""
+    return with_list(tmp_path, madeup_out, settings=SETTINGS.model_copy(update={
+        "authorization_limit": Decimal(limit) if limit is not None else None, "supplier_lead_times": {"S08": 10}}))
+
+
+@pytest.mark.parametrize("how", ["the same file", "another file", "the pdf"])
+def test_a_print_that_shows_nothing_new_ends_a_tick_given_without_the_entry(tmp_path, madeup_out, how):
+    """W16 (the check's findings 1 and 6, its probe same_rows): the order has a PDF and a look from an export, both at 12.50. The
+    rules prepare 12.70 and the buyer ticks it without entering it. Exact is unchanged, so the next export has the rows of the look
+    before: the store files nothing, and still it is a look at the order at the time it was given. The supplier's second
+    confirmation at 12,70 is flagged against the printed 12.50 and prepared again; it is not closed as confirmed on the tick.
+    The same when that export is the very file of the look, and when the PDF that the store holds is given again."""
+    d = with_list(tmp_path, madeup_out)
+    prepared = d.settings.cases_root / "prepared"
+    export = tmp_path / "export.csv"
+    export.write_text(MU08_EXPORT, encoding="utf-8")
+    columns = {name: name for name in MU08_EXPORT.splitlines()[0].split(",")}
+    if how != "the pdf":
+        assert d.store.from_export(export, columns)                                   # the daily export, before the tick
+        filed_on(d.store, "250108", "e1", FILED + timedelta(hours=1))
+    first, _ = run(d, madeup_out, "MU08", "250108")
+    ticked(d, first)
+    if how == "the pdf":
+        assert d.store.add(madeup_out / "MU08_po_v1.pdf").version == 1 and len(d.store.versions("250108")) == 1
+    else:
+        again_path = export if how == "the same file" else tmp_path / "next morning.csv"
+        again_path.write_text(MU08_EXPORT.replace("12.50", "12.5") if how == "another file" else MU08_EXPORT, encoding="utf-8")
+        filed: list[str] = []
+        assert d.store.from_export(again_path, columns, filed=filed) and filed == [] and len(d.store.snapshots("250108")) == 1
+    name, by = ("v1", "version 1") if how == "the pdf" else ("e1", "export")
+    given_on(d.store, "250108", name, AFTER_TICK)
+    second, r = again(d, confirmation_again(tmp_path / "MU08_again.pdf", "MU08"), "250108", AFTER_TICK + timedelta(minutes=5))
+    assert (r.version.version, price_flags(r), r.status) == (1, [(["1"], "12.50", "12.70")], "closed")
+    assert [(a.rule_id, a.route) for a in r.actions] == [("R04", "AUTO"), ("R01", "AUTO")] and step_names(second) == sorted(STEP_FILES)
+    assert line_changes(prepared) == [("1", "12.50", "12.70", "open", 2)]            # on the list again, asked by both cases
+    assert last_mark(prepared) | {"at": ""} == {"entry_id": last_mark(prepared)["entry_id"], "mark": "reopened", "at": "", "by": by, "shown": "12.50"}
+
+
+def test_an_unchanged_export_ends_the_tick_of_a_delivery_date(tmp_path, madeup_out):
+    """W16, the check's minimised seed 30009: a later delivery date is prepared and ticked without the entry; the next export has
+    the rows of the look before. The next confirmation, which names the order as Exact holds it, has no difference: it is compared
+    with the printed date, and no change back to it is prepared. Before, the ticked date was laid over the order, the supplier's
+    own date was flagged as a difference and a change back was prepared, which Exact held already."""
+    d = order_deps(tmp_path, madeup_out)
+    prepared = d.settings.cases_root / "prepared"
+    d.store.add(order_pdf(tmp_path / "order_v1.pdf", "abc", 1))
+    filed_on(d.store, ORDER, "v1", FILED)
+    export = order_export(tmp_path / "export.csv", "abc")
+    assert d.store.from_export(export, order_columns(export))
+    filed_on(d.store, ORDER, "e1", FILED + timedelta(hours=1))
+    first, r = again(d, order_confirmation(tmp_path / "x.pdf", "abc", {}, 1, dates={"b": "2026-11-19"}), ORDER, NOW)
+    assert [(f.field, f.po_line_ids) for f in r.findings.flags] == [("delivery_date", ["2"])] and r.status == "closed"
+    ticked(d, first, kind="po_line_date")
+    assert d.store.from_export(export, order_columns(export)) and len(d.store.snapshots(ORDER)) == 1      # the same export again
+    given_on(d.store, ORDER, "e1", AFTER_TICK)
+    second, r = again(d, order_confirmation(tmp_path / "y.pdf", "abc", {}, 1), ORDER, AFTER_TICK + timedelta(minutes=5))
+    assert (r.status, r.findings.flags, step_names(second)) == ("closed", [], sorted(STEP_FILES))
+    assert [e.op.kind for e in r.write_entries if e.op.kind == "po_line_date"] == []
+    assert line_changes(prepared, "po_line_date") == [("2", "2026-11-16", "2026-11-19", "open", 1)] and last_mark(prepared)["by"] == "export"
+
+
+def test_an_unchanged_export_ends_a_second_tick_after_exact_was_changed_by_hand(tmp_path, madeup_out):
+    """W16, the check's minimised seed 30014, the order above the authorization limit: 4.25 is prepared, requested, entered and
+    ticked. The buyer then changes the price in Exact to 4.30 by hand: a PDF and an export show it, and the tick is ended. He ticks
+    4.25 once more without entering it, and the next export has the rows of the look before. The confirmation that follows, which
+    quotes the new print and names 4.30, has no difference and asks the approver nothing. Before, the second tick stood: 4.25 was
+    laid over the print, a change to 4.30 was prepared, and the approver was sent a request with an old value Exact did not hold."""
+    d = order_deps(tmp_path, madeup_out, limit="100")
+    prepared = d.settings.cases_root / "prepared"
+    d.store.add(order_pdf(tmp_path / "order_v1.pdf", "abc", 1))
+    filed_on(d.store, ORDER, "v1", FILED)
+    first, r = again(d, order_confirmation(tmp_path / "x.pdf", "abc", {"b": "4.25"}, 1), ORDER, NOW)
+    assert [(a.rule_id, a.route) for a in r.actions] == [("R10", "AUTO"), ("R01", "AUTO")] and len(r.messages) == 1
+    ticked(d, first)
+    d.store.add(order_pdf(tmp_path / "order_v2.pdf", "abc", 2, prices={"b": "4.30"}))        # changed in Exact by hand: both prints
+    export = order_export(tmp_path / "export.csv", "abc", prices={"b": "4.30"})
+    assert d.store.from_export(export, order_columns(export))
+    for name in ("v2", "e1"):
+        filed_on(d.store, ORDER, name, AFTER_TICK)
+    assert reconcile(prepared, d.store, d.settings.cases_root, AFTER_TICK + timedelta(minutes=1)) == 0
+    assert line_changes(prepared) == [("2", "4.20", "4.25", "open", 1)] and last_mark(prepared)["by"] == "version 2"
+    again_at = AFTER_TICK + timedelta(hours=1)
+    ticked(d, first, at=again_at)                                                   # once more, without the entry
+    assert d.store.from_export(export, order_columns(export)) and len(d.store.snapshots(ORDER)) == 1
+    given_on(d.store, ORDER, "e1", again_at + timedelta(hours=1))
+    second, r = again(d, order_confirmation(tmp_path / "y.pdf", "abc", {"b": "4.30"}, 2), ORDER, again_at + timedelta(hours=2))
+    assert (r.version.version, r.status, r.findings.flags, r.messages, step_names(second)) == (2, "closed", [], [], sorted(STEP_FILES))
+    assert line_changes(prepared) == [("2", "4.20", "4.25", "open", 1)] and last_mark(prepared) | {"at": "", "entry_id": ""} == {
+        "entry_id": "", "mark": "reopened", "at": "", "by": "export", "shown": "4.30"}
+
+
+@pytest.mark.parametrize("second,flags,states", [
+    ("7.00", [], [("4", "7.00", "7.10", "entered", 1)]),
+    ("7.10", [(["4"], "7.00", "7.10")], [("4", "7.00", "7.10", "entered", 1), ("4", "7.00", "7.10", "open", 1)])])
+def test_a_tick_is_never_laid_over_the_other_delivery_of_its_article(tmp_path, madeup_out, second, flags, states):
+    """W17 (the check's finding 2, its probe renumbered_dup, both halves): two deliveries of one article are lines 4 and 5 of
+    version 1. The supplier raises the first delivery to 7,10, quoting version 1. A line above them leaves the order and Exact
+    prints version 2, numbered by place: the first delivery is line 3, the second line 4. The buyer enters 7.10 on the first
+    delivery and ticks. The next confirmation quotes version 2. With the second delivery at 7,00 it has no difference; with the
+    second delivery raised to 7,10 too, that line is flagged and prepared as a row of its own, never confirmed silently. Before,
+    the tick was laid over line 4 of version 2, the other delivery, which carries the number the change was asked under."""
+    d = order_deps(tmp_path, madeup_out)
+    prepared = d.settings.cases_root / "prepared"
+    d.store.add(order_pdf(tmp_path / "order_v1.pdf", "abcde", 1))
+    filed_on(d.store, ORDER, "v1", FILED)
+    first, r = again(d, order_confirmation(tmp_path / "x.pdf", "abcde", {"d": "7.10"}, 1), ORDER, NOW)
+    assert price_flags(r) == [(["4"], "7.00", "7.10")] and r.status == "closed"
+    d.store.add(order_pdf(tmp_path / "order_v2.pdf", "abde", 2))                     # KM-5503 left the order: 3 and 4 are the deliveries
+    filed_on(d.store, ORDER, "v2", NOW + timedelta(minutes=30))
+    ticked(d, first)
+    case, r = again(d, order_confirmation(tmp_path / "y.pdf", "abde", {"d": "7.10", "e": second}, 2), ORDER, AFTER_TICK)
+    assert (r.version.version, price_flags(r), r.status) == (2, flags, "closed")
+    assert case.read_step("entered")["replaced"] == [{"line_id": "3", "field": "price", "was": "7.00", "entered": "7.10",
+                                                      "marked_at": TICKED.isoformat(), "by": "buyer"}]
+    assert line_changes(prepared) == states and len({change.place for change in changes(prepared)[0] if change.kind == "po_line_price"}) == len(states)
+
+
+def test_a_tick_of_a_delivery_that_left_the_order_is_laid_over_no_line(tmp_path, madeup_out):
+    """W17, the check's minimised seed 30103: the later date of the first delivery is prepared against version 1 (its line 4). That
+    delivery leaves the order, and in version 2 line 4 is the second delivery. The buyer ticks the change all the same. The next
+    confirmation, which quotes version 2, has no difference: the ticked date belongs to no line of version 2. Before, it was laid
+    over line 4, and the second delivery's own date was flagged and a change back was prepared."""
+    d = order_deps(tmp_path, madeup_out)
+    prepared = d.settings.cases_root / "prepared"
+    d.store.add(order_pdf(tmp_path / "order_v1.pdf", "abcde", 1))
+    filed_on(d.store, ORDER, "v1", FILED)
+    first, r = again(d, order_confirmation(tmp_path / "x.pdf", "abcde", {}, 1, dates={"d": "2026-11-19"}), ORDER, NOW)
+    assert [(f.field, f.po_line_ids) for f in r.findings.flags] == [("delivery_date", ["4"])]
+    d.store.add(order_pdf(tmp_path / "order_v2.pdf", "abce", 2))                     # the first delivery left the order
+    filed_on(d.store, ORDER, "v2", NOW + timedelta(minutes=30))
+    ticked(d, first, kind="po_line_date")
+    second, r = again(d, order_confirmation(tmp_path / "y.pdf", "abce", {}, 2), ORDER, AFTER_TICK)
+    assert (r.version.version, r.status, r.findings.flags, step_names(second)) == (2, "closed", [], sorted(STEP_FILES))
+    assert [e.op.kind for e in r.write_entries if e.op.kind == "po_line_date"] == []
+
+
+def test_a_print_numbered_by_place_that_shows_the_entered_date_ends_no_tick(tmp_path, madeup_out):
+    """W17, the check's minimised seed 30859: the later date of the first delivery (line 4 of version 1) is entered and ticked. A
+    line above leaves the order; version 2, numbered by place, shows the entered date on line 3, the first delivery. The tick
+    stands: the print shows its value on its own line. The next confirmation, which quotes version 2, has no difference. Before,
+    the tick was held against line 4, the second delivery, and ended; ticked again, it was laid over that line."""
+    d = order_deps(tmp_path, madeup_out)
+    prepared = d.settings.cases_root / "prepared"
+    d.store.add(order_pdf(tmp_path / "order_v1.pdf", "abcde", 1))
+    filed_on(d.store, ORDER, "v1", FILED)
+    first, _ = again(d, order_confirmation(tmp_path / "x.pdf", "abcde", {}, 1, dates={"d": "2026-11-19"}), ORDER, NOW)
+    ticked(d, first, kind="po_line_date")
+    d.store.add(order_pdf(tmp_path / "order_v2.pdf", "acde", 2, dates={"d": "2026-11-19"}))
+    filed_on(d.store, ORDER, "v2", AFTER_TICK)
+    second, r = again(d, order_confirmation(tmp_path / "y.pdf", "acde", {}, 2, dates={"d": "2026-11-19"}), ORDER, AFTER_TICK + timedelta(minutes=5))
+    assert (r.version.version, r.status, r.findings.flags, step_names(second)) == (2, "closed", [], sorted(STEP_FILES))
+    assert line_changes(prepared, "po_line_date") == [("4", "2026-11-16", "2026-11-19", "entered", 1)]
+    assert last_mark(prepared)["mark"] == "entered"                                 # no print ended it
+
+
+def test_the_changes_of_two_deliveries_are_two_rows(tmp_path, madeup_out):
+    """W17, the check's minimised seed 30425: 7,08 is prepared for the first delivery against version 1, where it is line 4. A line
+    above leaves the order; in version 2, numbered by place, line 4 is the second delivery, and the supplier asks 7,08 for that
+    one too. The list holds two rows, each a place of its own, so that one tick never covers both deliveries. Before, the two
+    were one change with the rows of two lines of the order."""
+    d = order_deps(tmp_path, madeup_out)
+    prepared = d.settings.cases_root / "prepared"
+    d.store.add(order_pdf(tmp_path / "order_v1.pdf", "abcde", 1))
+    filed_on(d.store, ORDER, "v1", FILED)
+    first, _ = again(d, order_confirmation(tmp_path / "x.pdf", "abcde", {"d": "7.08"}, 1), ORDER, NOW)
+    d.store.add(order_pdf(tmp_path / "order_v2.pdf", "bcde", 2))                     # KM-5501 left the order
+    filed_on(d.store, ORDER, "v2", NOW + timedelta(minutes=30))
+    second, r = again(d, order_confirmation(tmp_path / "y.pdf", "bcde", {"e": "7.08"}, 2), ORDER, LATER + timedelta(hours=1))
+    assert price_flags(r) == [(["4"], "7.00", "7.08")]
+    assert line_changes(prepared) == [("4", "7.00", "7.08", "open", 1), ("4", "7.00", "7.08", "open", 1)]
+    one, other = [change for change in changes(prepared)[0] if change.kind == "po_line_price"]
+    assert one.place != other.place and (one.case_ids, other.case_ids) == ([first.case_id], [second.case_id])
+    assert mark(prepared, one.ids, "entered", TICKED + timedelta(hours=2)) == 1
+    assert [state for *_, state, _ in line_changes(prepared)] == ["entered", "open"]
+
+
+@pytest.mark.parametrize("print_", ["an export of both deliveries", "another article on the line"])
+def test_a_tick_whose_line_a_newer_print_does_not_show_so_is_ended(tmp_path, madeup_out, print_):
+    """W18 (the check's finding 3, its probes dup_export and code_changed): the buyer ticks a price without entering it. A newer
+    print is filed after the tick. An export that lists the two deliveries of the article the other way round than the PDF, both
+    at the old 7.00: the tick of the first delivery is held against that delivery, wherever it stands, and ended. A PDF in which
+    the buyer has put another article on the line: the tick's line cannot be found, and the tick is ended. Either way the
+    supplier's next confirmation of the raised price is flagged against the printed price again, never closed as confirmed."""
+    d = order_deps(tmp_path, madeup_out)
+    prepared = d.settings.cases_root / "prepared"
+    d.store.add(order_pdf(tmp_path / "order_v1.pdf", "abcde", 1))
+    filed_on(d.store, ORDER, "v1", FILED)
+    key, line_id, price = ("d", "4", "7.10") if print_.startswith("an export") else ("a", "1", "12.70")
+    first, r = again(d, order_confirmation(tmp_path / "x.pdf", "abcde", {key: price}, 1), ORDER, NOW)
+    assert [ids for ids, _, _ in price_flags(r)] == [[line_id]]
+    ticked(d, first)
+    if print_.startswith("an export"):
+        export = order_export(tmp_path / "export.csv", "abced")                      # the second delivery first: 4 and 5 change places
+        assert d.store.from_export(export, order_columns(export))
+        filed_on(d.store, ORDER, "e1", AFTER_TICK)
+        by, shown = "export", "7.00"
+    else:
+        d.store.add(order_pdf(tmp_path / "order_v2.pdf", "abcde", 2, codes={"a": "KM-5599"}))
+        filed_on(d.store, ORDER, "v2", AFTER_TICK)
+        by, shown = "version 2", None
+    second, r = again(d, order_confirmation(tmp_path / "y.pdf", "abcde", {key: price}, 1), ORDER, AFTER_TICK + timedelta(minutes=5))
+    assert (r.version.version, [ids for ids, _, _ in price_flags(r)], step_names(second)) == (1, [[line_id]], sorted(STEP_FILES))
+    assert last_mark(prepared) | {"at": "", "entry_id": ""} == {"entry_id": "", "mark": "reopened", "at": "", "by": by, "shown": shown}
+    assert [state for *_, state, _ in line_changes(prepared)] == ["open"]

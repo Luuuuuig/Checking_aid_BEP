@@ -469,3 +469,38 @@ def test_the_attachment_and_the_status_prepared_are_for_the_buyer_to_do_in_exact
     cart = case_result("250201_20261118T090000", "closed", writes=writes[:2], supplier="S21").model_copy(
         update={"digest_line": "voorcontrole PO 250201 (S21): afgesloten, 2 voorbereide wijzigingen"})
     assert f"- {cart.digest_line}" in build_digest([cart], [], SETTINGS, DAY).text.splitlines()   # nothing to do by hand: the line as it is
+
+
+# --- the three reasons that had no label (Task 44) ---
+
+@pytest.mark.parametrize("settings, answered, skipped, unread", [
+    (SETTINGS, "De leverancier heeft geantwoord: lees het antwoord", "Scan zonder leesbare tekst: bekijk dit document zelf",
+     "Scan zonder leesbare tekst: de assistent kon dit document niet lezen; bekijk het zelf"),
+    (ENGLISH, "The supplier answered: read the reply", "A scan without readable text: look at this document yourself",
+     "A scan without readable text: the assistant could not read this document; look at it yourself")], ids=["nl", "en"])
+def test_a_reply_a_skipped_scan_and_a_scan_that_failed_at_reading_have_their_label(settings, answered, skipped, unread):
+    """Three reasons the digest showed as the records hold them, in English also in the Dutch digest, have a label in the page's
+    language: the item of a supplier's reply; a scan the watched folder skipped, by the words of the tab "Bestanden"; and a case
+    that failed at reading a scan, whole or one page of it, by the words that tab uses for it. Every other skip and every other
+    error stays as it was."""
+    from aid.pipeline import ANSWERED
+    from aid.readers.copilot_client import NO_TEXT_LAYER, NO_TEXT_ON_PAGE
+    from aid.review.i18n import STRINGS
+
+    language = settings.language
+    review = case_result("250112_20261118T091000", "review", supplier="S12", language=language).model_copy(update={"review_items": [item("RI1", ANSWERED)]})
+    whole = case_result("250116_20261118T100000", "failed", supplier="S16", language=language).model_copy(update={"error": f"ReaderError: {NO_TEXT_LAYER}"})
+    page = case_result("unknown_20261118T100500", "failed", language=language).model_copy(
+        update={"error": f"ReaderError: {NO_TEXT_ON_PAGE.format(page=2)}\nmore detail"})
+    other = case_result("250105_20261118T101000", "failed", language=language).model_copy(update={"error": "ReaderError: no template for scan.pdf"})
+    d = build_digest([review, whole, page, other], [("mail.eml/scan.pdf", "no text layer; class unknown"), ("again.pdf", "duplicate")], settings, DAY)
+    words = {"nl": ("Wacht op u", "Mislukt", "Overgeslagen", "onbekend"), "en": ("Waiting for you", "Failed", "Skipped", "unknown")}[language]
+    assert block(d.text, words[0])[2:] == [f"    - {answered}"]
+    assert block(d.text, words[1])[1:] == [f"- PO 250116 (S16): {unread}", f"- PO {words[3]}: {unread}", "- PO 250105: ReaderError: no template for scan.pdf"]
+    assert block(d.text, words[2])[1:] == ["- again.pdf: duplicate", f"- mail.eml/scan.pdf: {skipped}"]
+    assert (STRINGS[language]["reason:supplier answered: read the reply"], STRINGS[language]["files_skipped:scan"],
+            STRINGS[language]["files_outcome:unread"]) == (answered, skipped, unread)
+    for label in (answered, skipped, unread):
+        assert f"{escape(label)}</li>" in d.html
+    assert "text layer" not in d.text + d.html and "more detail" not in d.text + d.html and "class unknown" not in d.text + d.html
+    assert "    - supplier answered: read the reply" not in d.text.splitlines()          # the reason as the records hold it

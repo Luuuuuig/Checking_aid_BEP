@@ -20,6 +20,7 @@ def test_the_demo_prepares_the_folder_and_runs_the_made_up_set(tmp_path, capsys)
     settings = load_settings(out / "settings.json")
     assert settings.reader == "parser" and settings.cases_root == out / "cases" and settings.watched_folder == out / "inbox"
     assert settings.supplier_lead_times["S01"] == 10 and settings.supplier_lead_times["S22"] == 10
+    assert settings.send_via == "auto"               # the batch's own settings stay as they were: its files are compared with earlier runs
     cases = read_csv(out / "cases.csv")
     assert [row["case_id"] for row in cases] == list(PARSER_STATUS) and {row["kind"] for row in cases} == {"confirmation", "cart"}
     assert cases[0]["po_number"] == "250101" and cases[-1]["document"].endswith("CART02.html")
@@ -79,6 +80,12 @@ def test_a_prepared_folder_lets_the_loop_open_a_case_by_itself(tmp_path, capsys)
     assert "no case run" in capsys.readouterr().out
     settings = load_settings(out / "settings.json")
     assert settings.po_store_root.exists() and len(list(settings.po_store_root.iterdir())) >= 21
+    # The made-up set sends nothing by its settings, not by the absence of a mailbox (ruling S4 of the review round of Task 44):
+    # the prepared folder says send_via "file", so that a sign-in made on its settings tab sends nothing either, and the mailer of
+    # the runner and of the page writes files by choice.
+    mailer = build_deps(settings, {}).mailer
+    assert settings.send_via == "file" and type(mailer).__name__ == "FileMailer" and mailer.unrouted is None
+    assert mailer.out_dir == settings.cases_root / "outbox"
     shutil.copy(MADEUP_OUT / "MU03_conf.pdf", out / "inbox")
     deps = build_deps(settings, dict(os.environ))
     assert run_loop(deps, out / "STOP", poll_seconds=0, max_passes=1) == 1

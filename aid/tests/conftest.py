@@ -122,6 +122,20 @@ def _file_po_pdfs(madeup_out: Path, root: Path) -> None:
     try:
         for pdf in sorted(Path(madeup_out).glob("*_po_v*.pdf")):
             store.add(pdf)
+        _pin_filed(root)
     except BaseException:
         shutil.rmtree(root, ignore_errors=True)
         raise
+
+
+FILED = datetime(2026, 11, 1, 9, 0)              # when the made-up POs count as filed: before every time the tests' clock gives
+
+
+def _pin_filed(root: Path) -> None:
+    """Set the time at which every version of the store at root counts as filed (the time of its po.json, as PoStore.filed_at reads
+    it) to FILED, before the 12 November 2026, 9:00 of the tests' clock. Filed with the real clock, the made-up POs would count as
+    filed after a change of a test once the suite runs after that moment, and the list would note such a print ("Exact toont
+    nu"). The copies that deps() makes keep the time. A test that needs another time sets it with helpers.filed_on."""
+    stamp = FILED.timestamp()
+    for po_json in Path(root).glob("*/*/po.json"):
+        os.utime(po_json, (stamp, stamp))

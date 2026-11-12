@@ -5,7 +5,8 @@ side. read_export() reads the file into one Document of kind "po" per PO number;
 The file. A .csv file is read as UTF-16 when it begins with a UTF-16 byte order mark, and otherwise as UTF-8, with or without a byte
 order mark, or else as Windows-1252. It is cut at semicolons, at commas or at tabs (DELIMITERS): the first of these marks, in that
 order, under which a row of the file holds every column title of the map (see the header row below), so a title line above the column
-titles may hold another mark or none. An .xlsx file is the first sheet of the workbook, a formula as the value it last had. Any other
+titles may hold another mark or none. An .xlsx file is the one visible sheet of the workbook that holds data, never a hidden sheet
+(a workbook with more than one such sheet is refused with their names), a formula as the value it last had. Any other
 file is refused; an old .xls workbook is saved as .xlsx first. The rows are numbered as a spreadsheet numbers them: the first row of
 the file is row 1, and a blank row counts.
 
@@ -100,7 +101,7 @@ from typing import Any, NamedTuple
 
 from pydantic import BaseModel
 
-from aid.pricelist import _cell_text, _xlsx_table
+from aid.pricelist import SURPLUS, OnlyHidden, SeveralSheets, _cell_text, _xlsx_table, odd_row
 from aid.schema import DocLine, DocValue, Document, normalize_basis, normalize_date, normalize_number, normalize_unit
 
 EXPORT_SUFFIXES = (".xlsx", ".csv")
@@ -113,9 +114,11 @@ FOLDER_NAME_MAX = 100                                # the most characters a PO 
 # delimiter or an encoding the aid does not read; a column of the map that no row holds; a title that stands twice in the header row;
 # an item code without a PO number; a PO number that is a date, a time or an error cell; a PO number without a digit; a PO number
 # that is no folder name; an item code without a line id; a line id that is a date, a time or an error cell; a line id that an
-# earlier line of the same PO has.
+# earlier line of the same PO has; a row of a CSV file with a filled cell beyond the last column title; a workbook with more than
+# one visible sheet with data.
 REFUSALS = ("map", "file_type", "unreadable", "delimiter_or_encoding", "no_column", "double_column", "no_po_number", "po_number_date",
-            "po_number_no_digit", "po_number_no_folder", "no_line_id", "line_id_date", "double_line_id")
+            "po_number_no_digit", "po_number_no_folder", "no_line_id", "line_id_date", "double_line_id", "surplus_cells",
+            "cell_count", "several_sheets", "hidden_sheet")
 _NUMBERS = ("quantity", "unit_price", "discount_pct", "net_price")                                   # the fields read as a number
 _LINE_VALUES = tuple(field for field in EXPORT_FIELDS if field not in ("po_number", "line_id", "supplier"))      # the values of a DocLine
 _NO_IDENTIFIER = ("date", "time", "error")           # the kinds of cell that hold no PO number, line id, item code or supplier
@@ -149,11 +152,15 @@ class ExportReading(BaseModel):
 class ExportRefused(ValueError):
     """An export that read_export refuses. The text names the file with the column or the row, or the field of the map, and never
     what a cell holds. `reason` is one of REFUSALS, `column` the column title the refusal is about and `row` the row of the file,
-    counted from 1; each of the two is None when the refusal names none."""
+    counted from 1; each of the two is None when the refusal names none. `names` are the names of the sheets of a workbook that is
+    refused for its sheets (several_sheets), which the text does not hold, and `tables` their rows, or the rows of the hidden sheets
+    of a workbook whose only data stands on a hidden sheet (hidden_sheet), by which is_export tells whether such a workbook is an
+    export at all."""
 
-    def __init__(self, text: str, reason: str, column: str | None = None, row: int | None = None):
+    def __init__(self, text: str, reason: str, column: str | None = None, row: int | None = None, names: list[str] | None = None,
+                 tables: list | None = None):
         super().__init__(text)
-        self.reason, self.column, self.row = reason, column, row
+        self.reason, self.column, self.row, self.names, self.tables = reason, column, row, names or [], tables or []
 
 
 class _Cell(NamedTuple):
@@ -261,13 +268,20 @@ def is_export(path: Path, columns: dict[str, str]) -> bool:
     title of the map, compared as read_export compares them (a CSV file cut at the mark that finds such a row). It tells an export
     from another spreadsheet, a price list for example, and says nothing of the fields the map names. False for an empty map, which
     names no title, for a file of another type and for a file that cannot be read as a table; a file that cannot be opened raises
-    its OSError."""
+    its OSError. A CSV file whose row of titles was found and that is refused for a row below it (a filled cell beyond the last
+    title, or in a comma file another number of cells) is an export all the same, and so is a workbook refused for its sheets
+    (more than one visible sheet with data, or data on a hidden sheet only) when one of those sheets holds the titles, so that
+    the reader's refusal is what the scan shows, and not a skip."""
     titles = {field: title.strip() for field, title in columns.items() if title.strip()}
     if not titles:
         return False
     try:
         export_table(Path(path), titles)
-    except ValueError:                               # a file of another type, one that cannot be read, one without the titles
+    except ExportRefused as refused:                 # a file of another type, one that cannot be read, one without the titles
+        wanted = {_folded(title) for title in titles.values()}
+        return refused.reason in ("surplus_cells", "cell_count") or (refused.reason in ("several_sheets", "hidden_sheet") and any(
+            wanted <= {_folded(cell.text) for cell in row} for table in refused.tables for row in table))
+    except ValueError:
         return False
     return True
 
@@ -307,18 +321,24 @@ def export_table(path: Path, titles: dict[str, str]) -> tuple[list[list[_Cell]],
     title of `titles` (field -> column title). A CSV file is cut at the first of DELIMITERS under which such a row is found. Refuses a
     file of another type, a file that cannot be read, and a file in no row of which the titles stand: a CSV file for its delimiter or
     its encoding when no mark cuts a row of it into two cells or its text holds NUL characters, any file else for the first title of
-    the map it lacks. Each cell has its text and its kind ("text" for every cell of a CSV file; see _workbook_cell)."""
+    the map it lacks. A CSV file with a row below the header row that the aid does not read is refused with that row (odd_row of
+    aid/pricelist.py): a row with a filled cell beyond the last column title (surplus_cells) and, in a file cut at commas, a filled
+    row with another number of cells than the header row (cell_count). Such a row is cut otherwise than its titles, and no cell
+    of it can be trusted.
+    Each cell has its text and its kind ("text" for every cell of a CSV file; see _workbook_cell)."""
     name, suffix = path.name, path.suffix.lower()
     if suffix not in EXPORT_SUFFIXES:
         raise ExportRefused(f"{name} is neither a .csv nor an .xlsx file", "file_type")
     wanted = {_folded(title) for title in titles.values()}
     text = csv_text(path) if suffix == ".csv" else None
     tables = []
-    for table in (csv_rows(text, mark) for mark in DELIMITERS) if text is not None else [workbook_rows(path)]:
+    for mark, table in ((mark, csv_rows(text, mark)) for mark in DELIMITERS) if text is not None else [(None, workbook_rows(path))]:
         if table is None:
             continue                                 # the csv module cannot cut the text at this mark
         header = next((index for index, row in enumerate(table) if wanted <= {_folded(cell.text) for cell in row}), None)
         if header is not None:
+            if mark is not None and (odd := odd_row(table, header, mark == ",", lambda cell: cell.text)) is not None:
+                raise ExportRefused(f"{name}, row {odd[0]}: {odd[1]}", "surplus_cells" if odd[1] == SURPLUS else "cell_count", row=odd[0])
             return table, header
         tables.append(table)
     if text is not None:
@@ -362,8 +382,11 @@ def csv_rows(text: str, mark: str) -> list[list[_Cell]] | None:
 
 
 def workbook_rows(path: Path) -> list[list[_Cell]]:
-    """The rows of the first sheet of a workbook, read as the price list reads one (_xlsx_table) but cell by cell, so that each cell
-    keeps its kind. A workbook that openpyxl cannot read, or that holds a cell it cannot convert, is refused: the error names the file,
+    """The rows of the one sheet of a workbook that the aid reads, read as the price list reads one (_xlsx_table: the one visible
+    sheet that holds data, never a hidden one) but cell by cell, so that each cell keeps its kind. A workbook with more than one
+    visible sheet with data is refused (several_sheets), the names of those sheets and their rows kept on the error and out of its
+    text, and so is one whose only data stands on a hidden sheet (hidden_sheet). A workbook that openpyxl cannot read, or that holds
+    a cell it cannot convert, is refused: the error names the file,
     and the row when it is known, and neither a cell nor the text of the error underneath, which holds the cell's content. openpyxl
     gives a date cell whose serial lies beyond the dates as the error #VALUE!, with a warning that holds the cell and its serial: the
     warning is kept here, so that nothing of the cell reaches the console or a log, and the cell is read as an error cell."""
@@ -374,6 +397,11 @@ def workbook_rows(path: Path) -> list[list[_Cell]]:
             return _xlsx_table(path, cell=lambda cell: _workbook_cell(cell, name), values_only=False)
         except ExportRefused:
             raise
+        except SeveralSheets as several:
+            raise ExportRefused(f"{name} has more than one visible sheet with data", "several_sheets", names=several.names,
+                                tables=several.tables) from None
+        except OnlyHidden as hidden:
+            raise ExportRefused(f"{name} holds data on a hidden sheet only", "hidden_sheet", tables=hidden.tables) from None
         except (ValueError, TypeError, OverflowError, IndexError, KeyError):
             # The price list's ValueError for a workbook openpyxl cannot open, and what openpyxl raises, before it gives the row, for a
             # cell it cannot convert: a number or an ISO date that is a text (ValueError), a shared text that is not there (IndexError).

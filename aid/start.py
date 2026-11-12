@@ -30,7 +30,8 @@ stays. When the tie cannot be made, start.log says so once and the launcher goes
 of their own, so that a Ctrl-C or a hangup of the terminal reaches the launcher only, and the launcher stops them.
 
 Before anything is started: the settings file is read with load_settings (when it does not exist the launcher says so, when it
-cannot be read it says why, by the fields and never a value, and ends with exit code 2); a STOP file is obeyed; a launcher that
+cannot be read it says why, by the fields and never a value, and ends with exit code 2; so it does, with the one sentence of
+aid/settings.py, for a file in which exact_base_url is set, since no command builds a write route into Exact); a STOP file is obeyed; a launcher that
 already runs on the settings folder is left alone; a runner that the last launcher may have left running is given time to end (see
 the state file below); and the two addresses of the review page and the capture server are asked. They are fixed, so only one
 launcher runs on a PC: when one answers, nothing is started, the line says so (a launcher on other settings is stopped with --stop
@@ -116,7 +117,7 @@ import urllib.request
 from datetime import datetime
 from pathlib import Path
 
-from aid.settings import load_settings
+from aid.settings import WriteRouteSet, load_settings
 
 PACKAGE_PARENT = Path(__file__).resolve().parent.parent   # the folder that holds the package aid: the parts' working folder
 STOP_FILE = "STOP"                               # the runner's stop switch (aid/runner.py), next to the settings file
@@ -1299,13 +1300,17 @@ def remove_autostart(startup: Path | None = None) -> int:
 # --- the command ---
 
 def _settings_problem(settings_file: Path) -> str | None:
-    """Why the settings file cannot be read, by the fields and never a value; None when it can."""
+    """The line that says why the settings file is not used, by the fields and never a value; None when it is. A file in which
+    exact_base_url is set can be read and is refused, with the one sentence of aid/settings.py: no command builds a write route
+    into Exact."""
     try:
         load_settings(settings_file)
     except OSError as exc:
-        return f"{settings_file}: {type(exc).__name__}"
+        return f"the settings cannot be read: {settings_file}: {type(exc).__name__}"
+    except WriteRouteSet as exc:
+        return f"the settings are refused: {exc}"
     except ValueError as exc:                    # load_settings names the fields, never the values; a JSON error its position
-        return str(exc)
+        return f"the settings cannot be read: {exc}"
     return None
 
 
@@ -1325,7 +1330,7 @@ def _command(args, settings: Path, log: _Log) -> int:
         return 2
     problem = _settings_problem(settings)
     if problem is not None:
-        log(f"the settings cannot be read: {problem}")       # to stdout, and to start.log when its folder can be made
+        log(problem)                             # to stdout, and to start.log when its folder can be made
         return 2
     if args.install_autostart:
         return install_autostart(settings, args.testshop, args.poll_seconds, sys.executable)

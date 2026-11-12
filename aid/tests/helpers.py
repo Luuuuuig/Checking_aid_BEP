@@ -2,8 +2,10 @@
 import codecs
 import csv
 import os
+import re
 import socket
 import threading
+import zipfile
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -90,6 +92,18 @@ def write_sheet(path: Path, rows: list[list]) -> Path:
     for row in rows:
         workbook.active.append(list(row))
     workbook.save(path)
+    return path
+
+
+def wrong_dimensions(path: Path) -> Path:
+    """The workbook at `path` written again with a wrong dimension record in every sheet, <dimension ref="A1">, as a real export
+    may hold one: read by that record, each sheet would give its first cell only."""
+    with zipfile.ZipFile(path) as source:
+        members = [(member, source.read(member.filename)) for member in source.infolist()]
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as target:
+        for member, data in members:
+            sheet = member.filename.startswith("xl/worksheets/")
+            target.writestr(member, re.sub(rb'<dimension ref="[^"]*"', b'<dimension ref="A1"', data) if sheet else data)
     return path
 
 
@@ -251,12 +265,14 @@ def _page_rows(spec: MadeUpSpec, table: list[list[str]]) -> list[Row]:
     return [Row([Text(0, joined[row.ref])], ref=row.ref) if row.ref in joined else row for row in cart_rows(spec)]
 
 
-def newer_po(path: Path, case_id: str, number: int, prices: dict[str, str]) -> Path:
+def newer_po(path: Path, case_id: str, number: int, prices: dict[str, str], codes: dict[str, str] | None = None) -> Path:
     """A newer print of the made-up PO of `case_id`, drawn by the generator into `path` as Exact prints an order again after a change:
-    its first version as version `number`, with the unit price of each line that `prices` names (line id -> price, two decimals)."""
+    its first version as version `number`, with the unit price of each line that `prices` names (line id -> price, two decimals)
+    and the item code of each line that `codes` names (line id -> item code)."""
     spec = MadeUpSpec.model_validate_json((SPEC_DIR / f"{case_id}.json").read_text(encoding="utf-8"))
     first = spec.po.versions[0]
-    lines = [line.model_copy(update={"unit_price": prices.get(line.line_id, line.unit_price)}) for line in first.lines]
+    lines = [line.model_copy(update={"unit_price": prices.get(line.line_id, line.unit_price),
+                                     "item_code": (codes or {}).get(line.line_id, line.item_code)}) for line in first.lines]
     version = first.model_copy(update={"version": number, "lines": lines})
     path.write_bytes(generate.pdf_bytes(generate.po_pages(spec, version), path.name))
     return path
@@ -266,6 +282,26 @@ def filed_on(store, po_number: str, look: str, when) -> None:
     """Set when the version ("v2") or the look ("e1") of the PO was filed, as PoStore.filed_at reads it: the time of its po.json."""
     stamp = when.timestamp()
     os.utime(store.root / po_number / look / "po.json", (stamp, stamp))
+
+
+def given_on(store, po_number: str, look: str, when) -> None:
+    """Set when the store was last given a print that shows the PO as the version ("v2") or the look ("e1") holds it, as
+    PoStore.given_at reads it: the time of the given.txt that the store left in that folder when such a print came again. The
+    store must have left one: a test that sets the time shows by it that the print was noted."""
+    path, stamp = store.root / po_number / look / "given.txt", when.timestamp()
+    assert path.exists(), f"the store noted no print of {look} given again"
+    os.utime(path, (stamp, stamp))
+
+
+def confirmation_again(path: Path, case_id: str, prices: dict[str, str] | None = None, quoted: int | None = None) -> Path:
+    """Another confirmation of the made-up PO of `case_id`, drawn by the generator into `path` as its supplier would send one again:
+    the case's own confirmation with the unit price of each line that `prices` names (line id -> price, two decimals), quoting the
+    version `quoted` of the PO when one is given. Its title is the name of its file, so that no two of them hold the same bytes."""
+    spec = MadeUpSpec.model_validate_json((SPEC_DIR / f"{case_id}.json").read_text(encoding="utf-8"))
+    lines = [line.model_copy(update={"unit_price": (prices or {}).get(line.line_id, line.unit_price)}) for line in spec.confirmation.lines]
+    again = spec.confirmation.model_copy(update={"lines": lines} | ({"version_quoted": quoted} if quoted is not None else {}))
+    path.write_bytes(generate.pdf_bytes(generate.confirmation_pages(spec.model_copy(update={"confirmation": again})), path.name))
+    return path
 
 
 # --- a local page and a proxy that cannot be reached (Task 30: no proxy stands between the aid and its own pages) ---

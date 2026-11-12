@@ -64,6 +64,8 @@ def article(code: str, new: str, old: str | None = None, po: str = "250108") -> 
 
 def test_the_blocks_are_by_order_and_line_then_the_article_prices(tmp_path, madeup_out):
     d = deps(tmp_path, madeup_out)
+    for po_number in ("250104", "250108", "250114"):                             # filed before the rows are asked, whatever day the suite
+        filed_on(d.store, po_number, "v1", datetime(2026, 11, 1, 9, 0))          # runs: a later print would be noted ("Exact toont nu")
     asking = Asking(tmp_path, d.store)
     # asked in an order unlike the list's: PO 250114 first, the lines of PO 250104 mixed, an article price among them
     date14 = asking.ask(asking.case("250114"), on_line("po_line_date", "250114", "1", "2026-11-16", "2026-W48"))
@@ -588,7 +590,7 @@ def test_a_put_back_stands_when_the_change_was_asked_again(tmp_path, madeup_out)
                                       ("MU08_conf_again.pdf", 1, {}, datetime(2026, 11, 12, 11, 0))):
         again = open_upload_case(d.settings.cases_root, [newer_confirmation(tmp_path / name, "MU08", version, prices)], "250108",
                                  "confirmation", at)
-        record_dispositions(again, run_case(again, d))
+        record_dispositions(again, run_case(again, printed(d)))                  # each compared with its version as printed (below)
         if version == 2:
             mark(prepared, one(prepared, "po_line_price").ids, "dropped", datetime(2026, 11, 12, 10, 30))
     prices = [change for change in changes(prepared)[0] if change.kind == "po_line_price"]
@@ -713,10 +715,29 @@ def test_a_change_that_can_never_be_put_back_says_so_before_a_newer_change(tmp_p
 # --- the third review round: a put-back stands alone (K20), the newer change that asks the old value (K21), a replaced put-back made
 # again (K22), a newer change that can never be put back (K23), and the seen cases of K13 (K25) ---
 
+class _Unfiled(PoStore):
+    """A store that cannot say when a version was filed (see printed)."""
+
+    def filed_at(self, po_number: str, look: str) -> datetime:
+        raise ValueError("this store keeps no filing times")
+
+
+def printed(d):
+    """The Deps for the run of a case that is compared with its version as it was printed: those of d, with its store as one that
+    cannot say when a version was filed, so that the pipeline lays no entered value over the version and takes no tick back
+    (aid/pipeline.py: without a filing time nothing is laid over a version). Before entered values counted in the comparison (Task
+    43) every case was compared so. The checkers' sequences of the review rounds below are sequences of rows asked so: with the
+    ticked value laid over the version, the later confirmation of such a sequence asks another change, or none, and the list holds
+    other rows than the ruling is about. The list itself is read with the store of d, whose versions keep the times the tests give
+    them."""
+    return d.model_copy(update={"store": _Unfiled(d.store.root, d.store.authorization_limit)})
+
+
 def confirmed(d, folder: Path, name: str, version: int, prices: dict[str, str], at: datetime):
-    """A newer made-up confirmation of S08 that quotes version `version` of 250108, with the unit prices given, run as a case at `at`."""
+    """A newer made-up confirmation of S08 that quotes version `version` of 250108, with the unit prices given, run as a case at `at`
+    and compared with that version as it was printed (printed)."""
     case = open_upload_case(d.settings.cases_root, [newer_confirmation(folder / name, "MU08", version, prices)], "250108", "confirmation", at)
-    record_dispositions(case, run_case(case, d))
+    record_dispositions(case, run_case(case, printed(d)))
     return case
 
 
@@ -738,8 +759,14 @@ def press(d, change, hour: int, minute: int, language: str = "nl") -> str:
     return take_back(d.model_copy(update={"clock": lambda: moment}), change, moment, language)
 
 
-def listed_note(row: str) -> str:
-    return f"Nog niet teruggedraaid in Exact. Op de lijst staat nu: {row}. Voer de oude waarde in Exact in en vink de regel af."
+def listed_note(row: str, other: tuple[str, str] | None = None) -> str:
+    """The note of a put-back made now, with the row it names; with other, (the old value it names, the value the list's marks say
+    Exact held before the change), the sentence that says so behind it (the review round of Task 43, W10)."""
+    note = f"Nog niet teruggedraaid in Exact. Op de lijst staat nu: {row}. Voer de oude waarde in Exact in en vink de regel af."
+    if other is None:
+        return note
+    return (f"{note} Let op: {other[0]} is de waarde van de inkooporder zoals de assistent die las; volgens de lijst (een eerdere wijziging "
+            f"die is ingevoerd) stond er {other[1]}. Kijk in Exact welke waarde terug moet.")
 
 
 PUT_BACK_ROW = "Inkooporder 250108 (S08), Terugzetten: regel 1 (KM-0801): prijs {old} → {new}"
@@ -796,7 +823,7 @@ def test_a_put_back_that_exact_holds_already_by_the_marks_is_not_made(tmp_path, 
     refused = ("Terugdraaien kan nu niet: er is een nieuwere wijziging ingevoerd, Inkooporder 250108 (S08), regel 1 (KM-0801): prijs "
                "12,50 → 12,60. Draai die eerst terug en vink het terugzetten af; daarna kunt u deze wijziging terugdraaien.")
     assert press(d, first, 11, 0) == refused
-    assert press(d, second, 11, 10) == listed_note(PUT_BACK_ROW.format(old="12,60", new="12,50"))
+    assert press(d, second, 11, 10) == listed_note(PUT_BACK_ROW.format(old="12,60", new="12,50"), ("12,50", "12,70"))
     mark(prepared, line_change(prepared, "12.60", "12.50", UNDO_RULE_ID).ids, "entered", datetime(2026, 11, 12, 11, 20))
     kept = files_of(d)
     for language in ("nl", "en"):
@@ -824,7 +851,7 @@ def test_a_put_back_that_newer_rows_replaced_is_made_again_once_they_are_handled
                "12,50 → 12,60. Draai die eerst terug en vink het terugzetten af; daarna kunt u deze wijziging terugdraaien.")
     assert press(d, first, 11, 10) == refused
     row = PUT_BACK_ROW.format(old="12,60", new="12,50")
-    assert press(d, second, 11, 20) == listed_note(row)
+    assert press(d, second, 11, 20) == listed_note(row, ("12,50", "12,70"))
     assert line_prices(prepared)[-1] == ("12.60", "12.50", UNDO_RULE_ID, "open") and listed_rows(d)[0] == row
     log = [entry for entry in WriteLog(load_case(d.settings.cases_root, second.case_ids[0]).root).entries() if entry.undo_of]
     assert [(entry.undo_of, entry.status) for entry in log] == [(second.ids[0], "prepared")] * 2       # the second undo of the entry
@@ -934,7 +961,8 @@ def test_a_newer_change_that_no_longer_stands_in_exact_does_not_refuse(tmp_path,
     for minute, value in ((0, "12.60"), (20, "12.55")):
         confirmed(d, tmp_path, f"MU08_conf_{value}.pdf", 1, {"1": value}, datetime(2026, 11, 12, 10, minute))
         mark(prepared, line_change(prepared, "12.50", value).ids, "entered", datetime(2026, 11, 12, 10, minute + 10))
-    assert press(d, line_change(prepared, "12.50", "12.55"), 10, 40) == listed_note(PUT_BACK_ROW.format(old="12,55", new="12,50"))
+    assert press(d, line_change(prepared, "12.50", "12.55"), 10, 40) == listed_note(PUT_BACK_ROW.format(old="12,55", new="12,50"),
+                                                                                    ("12,50", "12,60"))
     mark(prepared, line_change(prepared, "12.55", "12.50", UNDO_RULE_ID).ids, "entered", datetime(2026, 11, 12, 10, 50))
     kept = files_of(d)
     for value in ("12.70", "12.60"):
@@ -957,7 +985,8 @@ def test_a_newer_change_whose_put_back_exact_holds_already_does_not_refuse(tmp_p
     mark(prepared, line_change(prepared, "12.70", "12.90").ids, "entered", datetime(2026, 11, 12, 10, 10))
     confirmed(d, tmp_path, "MU08_conf_12.80.pdf", 2, {"1": "12.80"}, datetime(2026, 11, 12, 10, 20))
     mark(prepared, line_change(prepared, "12.70", "12.80").ids, "entered", datetime(2026, 11, 12, 10, 30))
-    assert press(d, line_change(prepared, "12.70", "12.80"), 10, 40) == listed_note(PUT_BACK_ROW.format(old="12,80", new="12,70"))
+    assert press(d, line_change(prepared, "12.70", "12.80"), 10, 40) == listed_note(PUT_BACK_ROW.format(old="12,80", new="12,70"),
+                                                                                    ("12,70", "12,90"))
     mark(prepared, line_change(prepared, "12.80", "12.70", UNDO_RULE_ID).ids, "entered", datetime(2026, 11, 12, 10, 50))
     undo_case(newer.root, PreparedWriter(prepared), datetime(2026, 11, 12, 11, 0))
     assert press(d, line_change(prepared, "12.70", "12.90"), 11, 10) == STRINGS["nl"]["hand_put_back_done"]
@@ -981,7 +1010,8 @@ def test_a_newer_change_whose_value_exact_no_longer_holds_does_not_refuse(tmp_pa
     for minute, value in ((0, "12.50"), (20, "12.90")):
         confirmed(d, tmp_path, f"MU08_conf_{value}.pdf", 2, {"1": value}, datetime(2026, 11, 12, 10, minute))
         mark(prepared, line_change(prepared, "12.70", value).ids, "entered", datetime(2026, 11, 12, 10, minute + 10))
-    assert press(d, line_change(prepared, "12.70", "12.90"), 10, 40) == listed_note(PUT_BACK_ROW.format(old="12,90", new="12,70"))
+    assert press(d, line_change(prepared, "12.70", "12.90"), 10, 40) == listed_note(PUT_BACK_ROW.format(old="12,90", new="12,70"),
+                                                                                    ("12,70", "12,50"))
     mark(prepared, line_change(prepared, "12.90", "12.70", UNDO_RULE_ID).ids, "entered", datetime(2026, 11, 12, 10, 50))
     row = PUT_BACK_ROW.format(old="12,70", new="12,50")
     assert press(d, line_change(prepared, "12.50", "12.70"), 11, 0) == listed_note(row)
@@ -1039,7 +1069,7 @@ def test_a_replaced_put_back_is_made_again_once_the_rows_after_it_no_longer_stan
     confirmed(d, tmp_path, "MU08_conf_12.60.pdf", 1, {"1": "12.60"}, datetime(2026, 11, 12, 10, 0))
     mark(prepared, line_change(prepared, "12.50", "12.60").ids, "entered", datetime(2026, 11, 12, 10, 10))
     newer = line_change(prepared, "12.50", "12.60")
-    assert press(d, newer, 10, 20) == listed_note(PUT_BACK_ROW.format(old="12,60", new="12,50"))
+    assert press(d, newer, 10, 20) == listed_note(PUT_BACK_ROW.format(old="12,60", new="12,50"), ("12,50", "12,70"))
     d.store.add(newer_po(tmp_path / "MU08_po_v2.pdf", "MU08", 2, {"1": "12.60"}))
     filed_on(d.store, "250108", "v2", datetime(2026, 11, 12, 10, 25))
     confirmed(d, tmp_path, "MU08_conf_12.50.pdf", 2, {"1": "12.50"}, datetime(2026, 11, 12, 10, 30))
@@ -1051,7 +1081,7 @@ def test_a_replaced_put_back_is_made_again_once_the_rows_after_it_no_longer_stan
                "12,50 → 12,60. Draai die eerst terug en vink het terugzetten af; daarna kunt u deze wijziging terugdraaien.")
     assert press(d, first, 11, 10) == refused
     row = PUT_BACK_ROW.format(old="12,60", new="12,50")
-    assert press(d, next(change for change in changes(prepared)[0] if change.ids == newer.ids), 11, 20) == listed_note(row)
+    assert press(d, next(change for change in changes(prepared)[0] if change.ids == newer.ids), 11, 20) == listed_note(row, ("12,50", "12,70"))
     assert line_prices(prepared)[-1] == ("12.60", "12.50", UNDO_RULE_ID, "open") and listed_rows(d)[0] == row
     mark(prepared, line_prices_ids(prepared)[-1], "entered", datetime(2026, 11, 12, 11, 30))
     assert press(d, first, 11, 40) == STRINGS["nl"]["hand_put_back_done"]
@@ -1083,7 +1113,8 @@ def test_a_newer_change_whose_put_back_was_seen_does_not_refuse_when_exact_holds
     assert line_change(prepared, "12.90", "12.70", UNDO_RULE_ID).state == "seen"
     confirmed(d, tmp_path, "MU08_conf_12.80.pdf", 3, {"1": "12.80"}, datetime(2026, 11, 12, 10, 40))
     mark(prepared, line_change(prepared, "12.90", "12.80").ids, "entered", datetime(2026, 11, 12, 10, 45))
-    assert press(d, line_change(prepared, "12.90", "12.80"), 10, 50) == listed_note(PUT_BACK_ROW.format(old="12,80", new="12,90"))
+    assert press(d, line_change(prepared, "12.90", "12.80"), 10, 50) == listed_note(PUT_BACK_ROW.format(old="12,80", new="12,90"),
+                                                                                    ("12,90", "12,70"))
     mark(prepared, line_change(prepared, "12.80", "12.90", UNDO_RULE_ID).ids, "entered", datetime(2026, 11, 12, 10, 55))
     row = PUT_BACK_ROW.format(old="12,70", new="12,50")
     assert press(d, line_change(prepared, "12.50", "12.70"), 11, 0) == listed_note(row)
@@ -1113,3 +1144,109 @@ def test_a_replaced_put_back_says_put_back_already_when_a_newer_change_entered_t
         assert press(d, next(change for change in changes(prepared)[0] if change.ids == newer.ids), 10, 50, language) == (
             STRINGS[language]["hand_put_back_done"])
     assert files_of(d) == kept
+
+
+# --- the review round of Task 43, W10: the put-back says when the aid knows another old value ---
+
+def test_a_put_back_says_when_the_aids_own_records_give_another_old_value(tmp_path, madeup_out):
+    """A put-back names the old value of its row, the purchase order's as the aid read it. When the order as the aid last saw it
+    shows a third value (Exact was changed by hand: a print filed before the tick shows 12,60), the note of the put-back says so in
+    one more sentence, in the page's language; the row it puts on the list is as before. Without another value in the aid's
+    records (the order still shows the old value, or shows the value entered), the note is as before."""
+    from aid.tests.helpers import filed_on, newer_po
+
+    d, prepared, _ = ran(tmp_path, madeup_out, "MU08")
+    filed_on(d.store, "250108", "v1", datetime(2026, 11, 1, 9, 0))
+    row = PUT_BACK_ROW.format(old="12,70", new="12,50")
+    plain = tmp_path / "plain"
+    other, other_prepared, _ = ran(plain, madeup_out, "MU08")
+    filed_on(other.store, "250108", "v1", datetime(2026, 11, 1, 9, 0))
+    mark(other_prepared, one(other_prepared, "po_line_price").ids, "entered", datetime(2026, 11, 12, 10, 0))
+    assert press(other, one(other_prepared, "po_line_price"), 11, 0) == listed_note(row)          # the order shows the old value: as before
+    d.store.add(newer_po(tmp_path / "MU08_po_v2.pdf", "MU08", 2, {"1": "12.60"}))
+    filed_on(d.store, "250108", "v2", datetime(2026, 11, 12, 9, 30))               # Exact held 12,60: a print from before the tick
+    mark(prepared, one(prepared, "po_line_price").ids, "entered", datetime(2026, 11, 12, 10, 0))
+    note = press(d, one(prepared, "po_line_price"), 11, 0)
+    assert note == (listed_note(row) + " Let op: 12,50 is de waarde van de inkooporder zoals de assistent die las; volgens de inkooporder "
+                    "zoals de assistent haar het laatst zag stond er 12,60. Kijk in Exact welke waarde terug moet.")
+    assert listed_rows(d)[0] == row                                                # the row itself is as before
+    english = tmp_path / "english"
+    e, e_prepared, _ = ran(english, madeup_out, "MU08")
+    filed_on(e.store, "250108", "v1", datetime(2026, 11, 1, 9, 0))
+    e.store.add(newer_po(tmp_path / "MU08_po_v2_en.pdf", "MU08", 2, {"1": "12.60"}))
+    filed_on(e.store, "250108", "v2", datetime(2026, 11, 12, 9, 30))
+    mark(e_prepared, one(e_prepared, "po_line_price").ids, "entered", datetime(2026, 11, 12, 10, 0))
+    assert press(e, one(e_prepared, "po_line_price"), 11, 0, "en").endswith(
+        "Enter the old value in Exact and tick the row. Note: 12.50 is the value of the purchase order as the assistant read it; the "
+        "purchase order as the assistant last saw it showed 12.60. Look in Exact which value goes back.")
+    shown = tmp_path / "shown"
+    s, s_prepared, _ = ran(shown, madeup_out, "MU08")
+    filed_on(s.store, "250108", "v1", datetime(2026, 11, 1, 9, 0))
+    mark(s_prepared, one(s_prepared, "po_line_price").ids, "entered", datetime(2026, 11, 12, 10, 0))
+    s.store.add(newer_po(tmp_path / "MU08_po_v2_shown.pdf", "MU08", 2, {"1": "12.70"}))
+    filed_on(s.store, "250108", "v2", datetime(2026, 11, 12, 10, 30))              # Exact printed the entered value: nothing else known
+    assert press(s, one(s_prepared, "po_line_price"), 11, 0) == listed_note(row)
+    assert STRINGS["en"]["hand_put_back_source:marks"] == "the list (an earlier change that was entered)"
+    assert STRINGS["nl"]["hand_put_back_source:marks"] == "de lijst (een eerdere wijziging die is ingevoerd)"
+
+
+# --- the second review round of Task 43: a row that a print put back on the list says so (W20), and W10's sentence keeps to the
+# line of the put-back (W24) ---
+
+ENDED_NL = ("U vinkte dit af, maar de inkooporder die daarna binnenkwam toont {value}. Voer de wijziging in Exact in, of vink opnieuw "
+            "af als zij er al in staat.")
+ENDED_EN = ("You ticked this, but the purchase order that came in afterwards shows {value}. Enter the change in Exact, or tick again if "
+            "it is already there.")
+UNFOUND_NL = ("U vinkte dit af, maar in de inkooporder die daarna binnenkwam is deze regel niet terug te vinden. Kijk in Exact of de "
+              "wijziging er staat en vink dan opnieuw af, of haal de regel van de lijst.")
+UNFOUND_EN = ("You ticked this, but this line cannot be found in the purchase order that came in afterwards. Look in Exact whether the "
+              "change is there and tick again, or take the row off the list.")
+
+
+def test_a_row_that_a_print_put_back_on_the_list_says_so(tmp_path, madeup_out):
+    """W20 (the check's finding 5): the buyer ticks 12,70; a print made before the entry is filed after the tick and shows 12,50, so
+    the tick is ended and the row stands on the list again. The row says so, with the value the print showed: its own old value
+    here, where the row said nothing before. A print that shows a third value is named the same way, in place of "Exact toont nu";
+    and when the line cannot be found in the print (another article stands on it), the row says that. Once the buyer ticks
+    again, the row is handled as any other."""
+    d, prepared, _ = ran(tmp_path, madeup_out, "MU08")                              # asked on 12 November, 9:00
+    cases_root = d.settings.cases_root
+    filed_on(d.store, "250108", "v1", datetime(2026, 11, 1, 9, 0))
+    row, row_en = ("Inkooporder 250108 (S08), regel 1 (KM-0801): prijs 12,50 → 12,70",
+                   "Purchase order 250108 (S08), line 1 (KM-0801): price 12.50 → 12.70")
+    assert listed_rows(d)[0] == row
+    mark(prepared, one(prepared, "po_line_price").ids, "entered", datetime(2026, 11, 12, 10, 0))
+    d.store.add(newer_po(tmp_path / "MU08_po_v2.pdf", "MU08", 2, {"1": "12.50"}))    # the old price, in a print filed after the tick
+    filed_on(d.store, "250108", "v2", datetime(2026, 11, 12, 11, 0))
+    assert reconcile(prepared, d.store, cases_root, datetime(2026, 11, 12, 11, 5)) == 0
+    assert listed_rows(d)[0] == f"{row}. {ENDED_NL.format(value='12,50')}"
+    assert listed_rows(d, "en")[0] == f"{row_en}. {ENDED_EN.format(value='12.50')}"
+    mark(prepared, one(prepared, "po_line_price").ids, "entered", datetime(2026, 11, 12, 12, 0))      # ticked again
+    assert not [text for text in listed_rows(d) if text.startswith(row)]            # off the list, as any ticked row
+    d.store.add(newer_po(tmp_path / "MU08_po_v3.pdf", "MU08", 3, {"1": "12.60"}))    # a third value, after that tick
+    filed_on(d.store, "250108", "v3", datetime(2026, 11, 12, 13, 0))
+    assert reconcile(prepared, d.store, cases_root, datetime(2026, 11, 12, 13, 5)) == 0
+    assert listed_rows(d)[0] == f"{row}. {ENDED_NL.format(value='12,60')}" and "Exact toont nu" not in listed_rows(d)[0]
+    mark(prepared, one(prepared, "po_line_price").ids, "entered", datetime(2026, 11, 12, 14, 0))
+    d.store.add(newer_po(tmp_path / "MU08_po_v4.pdf", "MU08", 4, {}, codes={"1": "KM-0899"}))      # another article on the line
+    filed_on(d.store, "250108", "v4", datetime(2026, 11, 12, 15, 0))
+    assert reconcile(prepared, d.store, cases_root, datetime(2026, 11, 12, 15, 5)) == 0
+    assert listed_rows(d)[0] == f"{row}. {UNFOUND_NL}" and listed_rows(d, "en")[0] == f"{row_en}. {UNFOUND_EN}"
+    for language, strings in (("nl", (ENDED_NL, UNFOUND_NL)), ("en", (ENDED_EN, UNFOUND_EN))):
+        assert (STRINGS[language]["hand_tick_ended"], STRINGS[language]["hand_tick_ended_unfound"]) == strings
+
+
+def test_the_sentence_of_another_old_value_keeps_to_the_line_of_the_put_back(tmp_path, madeup_out):
+    """W24 (the check's mutant C29): W10's sentence names the value that an earlier entered change of the same line of the same
+    order gave. An entered price of another line of the order, and one of another order, both asked before the change that is put
+    back, give no such sentence."""
+    prepared = tmp_path / "cases" / "prepared"
+    writer = PreparedWriter(prepared)
+    early = datetime(2026, 11, 12, 8, 0)
+    others = [writer.apply(on_line("po_line_price", "250108", "2", "0.42", "0.45"), "250108_20261112T080000", "R04", {}, early).entry_id,
+              writer.apply(on_line("po_line_price", "250114", "1", "12.50", "12.90"), "250114_20261112T080000", "R04", {}, early).entry_id]
+    mark(prepared, others, "entered", datetime(2026, 11, 12, 8, 30))
+    d, prepared, _ = ran(tmp_path, madeup_out, "MU08")
+    filed_on(d.store, "250108", "v1", datetime(2026, 11, 1, 9, 0))
+    mark(prepared, one(prepared, "po_line_price").ids, "entered", datetime(2026, 11, 12, 10, 0))
+    assert press(d, one(prepared, "po_line_price"), 11, 0) == listed_note(PUT_BACK_ROW.format(old="12,70", new="12,50"))

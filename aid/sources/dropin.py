@@ -6,8 +6,8 @@ The scan of the watched folder (scan_folder of aid/sources/mailbox.py) leaves al
 written first under such a name of its own in the watched folder and renamed once it is whole: the scan never reads half a file. A
 copy that fails removes its file again, and an empty file is refused before anything is written. From the watched folder on the file
 is the runner's, as any file the mailbox rule saves there: the page writes nothing into the PO store or into a case. The part
-"Proefdraaien" of the settings tab gives its try-out confirmation (aid/tryout.py) this way, and any other file given on the page is to
-take the same way.
+"Proefdraaien" of the settings tab gives its try-out confirmation (aid/tryout.py) this way, and the tab "Bestanden" any file the buyer
+gives on it (accept of aid/review/intake.py, after its own refusals).
 
 A drop cut off in the middle of its copy (the page ended, the PC switched off) leaves its copy under that name in the watched folder,
 where the scan never reads it. remove_leftovers removes such a copy, a file whose name is drop's own (PREFIX, random letters, SUFFIX),

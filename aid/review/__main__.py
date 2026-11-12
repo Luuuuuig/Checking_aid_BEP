@@ -2,13 +2,20 @@
 
 The dependencies come from the settings: the PO store at po_store_root, read with the settings' authorization limit; the parser as the
 reader; no decider; the prepared writer into <cases_root>/prepared; the file mailer into <cases_root>/outbox, from the aid's address;
-and the clock of the machine. The page is served on 127.0.0.1 only and answers its own host only (see below). --share opens a
+and the clock of the machine. The page gets the environment of the command too (build_app's environ), with which it makes the mailer
+of each close from the settings as they are then, the way the runner makes its own (mailer_of of aid/messaging/microsoft_mailer.py):
+a question asked on the page goes out through the work mailbox or the SMTP server when the settings name one, is written into
+<cases_root>/outbox when send_via is "file", and is not asked at all, the case staying with the buyer, when the settings name a way
+to send that is not there. A page on a public link never makes a mailer and keeps the file mailer. The page is
+served on 127.0.0.1 only and answers its own host only (see below). --share opens a
 public gradio link and is for the made-up set only: it is refused, with exit status 2 and the reason of refuse_share, when the
 settings hold company values, because the company's data are for internal use only. A settings file that is missing or not valid
-ends the command with exit status 2 and a message that names the file and the fields, never a value. The Colab notebook asks
+ends the command with exit status 2 and a message that names the file and the fields, never a value; one in which exact_base_url is
+set ends it with exit status 2 and the one sentence of aid/settings.py, since no command builds a write route into Exact. The Colab notebook asks
 refuse_share as well before it opens its link; refuse_share imports without gradio, which build_app imports when it builds the
-page. The page's settings tab writes into the settings file of the command, and its tab "In Exact invoeren" lists the changes
-prepared in <cases_root>/prepared; on a page opened with --share both offer nothing.
+page. The page's settings tab writes into the settings file of the command, its tab "In Exact invoeren" lists the changes
+prepared in <cases_root>/prepared, and its tab "Prijslijst" keeps the article prices of the exports given on it in
+<cases_root>/exact and prepares a price list's changes; on a page opened with --share these tabs offer nothing.
 
 The page library keeps a file uploaded to the page and the page images of a document it shows in its temporary folder. The command
 gives it <cases_root>/tmp (page_temporary_folder): named in GRADIO_TEMP_DIR before build_app imports gradio, which reads it then,
@@ -18,6 +25,12 @@ reader keep a document for a moment, is spared (the runner empties it at its own
 temporary file is removed between one and two hours after it was made (aid/review/page.py). So no document of a case lies outside
 the aid's own folders on the disk, and the page tells the browser to keep none of its files either (OwnHost). When the environment
 names a folder in GRADIO_TEMP_DIR already, that folder is used as it is and not emptied.
+
+The page library also makes a folder vibe_edit_history in that temporary folder whenever it makes its application, when the page
+is built and again when it is launched. It writes there only in its "vibe" mode, which is for writing a page, not for running
+this one: the command takes GRADIO_VIBE_MODE out of the environment before the page is built, and removes the folder when it is
+empty, after the build and once the page is launched (remove_empty_vibe_folder: rmdir, nothing else). For that the page is
+launched without holding the thread, and the command then waits for the page as the launch itself would.
 
 No proxy of the PC stands between the page library and the page (own_hosts_without_proxy): the command adds 127.0.0.1 and
 localhost to NO_PROXY and no_proxy before the library is imported, because the library asks its own start-up address on 127.0.0.1,
@@ -49,11 +62,12 @@ from aid.messaging import FileMailer
 from aid.pipeline import Deps, read_with_parser
 from aid.po_store import PoStore
 from aid.review.app import build_app
-from aid.settings import Settings, load_settings
+from aid.settings import Settings, WriteRouteSet, load_settings
 
 MADE_UP_DOMAINS = ("example.com", "example.org")   # the domains of the made-up addresses
 OWN_HOSTS = ("127.0.0.1", "localhost")             # the names of this PC by which the page is opened
 FILE_ROUTES = ("/gradio_api/file=", "/gradio_api/file/")      # where the page library serves the files of the page
+VIBE_FOLDER = "vibe_edit_history"                  # the folder the page library makes in its temporary folder (remove_empty_vibe_folder)
 NO_PROXY_NAMES = ("NO_PROXY", "no_proxy")                     # the hosts no proxy stands before, as httpx, requests and urllib read them
 
 
@@ -121,11 +135,13 @@ def company_values(settings: Settings) -> list[str]:
     mail_folder set, since the cases may then come from the work mailbox; po_layout set, since the layout of the PO PDF is set on
     the company side from the company's own PO; exact_endpoints, exact_fields or po_senders not empty; export_columns not empty,
     since the column titles of the export are chosen on the company side from the company's own export (the made-up exports need no
-    map); an address of supplier_emails, or buyer_email, aid_email or approver_email, outside example.com and example.org (a domain
-    under them counts as theirs). The folders are no mark: the made-up set may be kept anywhere (in Colab, in Drive)."""
+    map), and for the same reason article_columns, the column titles of the company's export of articles; an address of
+    supplier_emails, or buyer_email, aid_email or approver_email, outside example.com and example.org (a domain under them counts
+    as theirs). The folders are no mark: the made-up set may be kept anywhere (in Colab, in Drive)."""
     found = [f"{name} is set" for name in ("exact_base_url", "authorization_limit", "smtp_host", "smtp_user", "ms_tenant_id", "mail_folder",
                                            "po_layout") if getattr(settings, name) is not None]
-    found += [f"{name} is not empty" for name in ("exact_endpoints", "exact_fields", "po_senders", "export_columns") if getattr(settings, name)]
+    found += [f"{name} is not empty" for name in ("exact_endpoints", "exact_fields", "po_senders", "export_columns", "article_columns")
+              if getattr(settings, name)]
     if not all(_made_up(address) for address in settings.supplier_emails.values()):
         found.append("supplier_emails holds an address outside example.com and example.org")
     found += [f"{name} is outside example.com and example.org" for name in ("buyer_email", "aid_email", "approver_email")
@@ -180,6 +196,17 @@ def page_temporary_folder(cases_root: Path, environ: MutableMapping[str, str] = 
     return folder
 
 
+def remove_empty_vibe_folder(environ: Mapping[str, str] = os.environ) -> None:
+    """Remove the folder VIBE_FOLDER of the page's temporary folder (GRADIO_TEMP_DIR of environ) when it is empty: the page
+    library makes it whenever it makes its application and puts nothing there outside its "vibe" mode (see the module docstring).
+    A folder that holds anything, or is not there, is left as it is."""
+    if environ.get("GRADIO_TEMP_DIR"):
+        try:
+            (Path(environ["GRADIO_TEMP_DIR"]) / VIBE_FOLDER).rmdir()
+        except OSError:
+            pass
+
+
 def own_hosts_without_proxy(environ: MutableMapping[str, str] = os.environ,
                             system_proxies: Callable[[], Mapping[str, str]] = urllib.request.getproxies) -> None:
     """Add 127.0.0.1 and localhost (OWN_HOSTS) to NO_PROXY and no_proxy of environ, each keeping what it holds, so that no proxy of
@@ -212,6 +239,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         settings = load_settings(args.settings)
+    except WriteRouteSet as error:                           # read, and refused: no command builds a write route into Exact
+        print(f"the settings are refused: {error}", file=sys.stderr)
+        return 2
     except (OSError, ValueError) as error:
         print(f"the settings cannot be read: {_unreadable(args.settings, error)}", file=sys.stderr)
         return 2
@@ -219,14 +249,18 @@ def main(argv: list[str] | None = None) -> int:
         print(reason, file=sys.stderr)
         return 2
     os.environ["GRADIO_ANALYTICS_ENABLED"] = "False"         # before build_app imports gradio
+    os.environ.pop("GRADIO_VIBE_MODE", None)                 # the library's mode for writing a page: never for this one
     cases = settings.cases_root
     page_temporary_folder(cases)                             # before build_app imports gradio, too
     own_hosts_without_proxy()                                # and so is this: no proxy of the PC before the page's own address
     deps = Deps(settings=settings, store=PoStore(settings.po_store_root, settings.authorization_limit), reader=read_with_parser,
                 decider=NoDecider(), writer=PreparedWriter(cases / "prepared"), mailer=FileMailer(cases / "outbox", sender=settings.aid_email),
                 clock=datetime.now)
-    page = build_app(deps, settings_file=args.settings, share=args.share)
-    page.launch(**launch_options(page, args.share))
+    page = build_app(deps, settings_file=args.settings, share=args.share, environ=os.environ)
+    remove_empty_vibe_folder()
+    page.launch(**launch_options(page, args.share), prevent_thread_lock=True)
+    remove_empty_vibe_folder()                               # the launch makes the folder again
+    page.block_thread()                                      # until the page is stopped, as the launch itself would wait
     return 0
 
 

@@ -19,6 +19,7 @@ from aid.connections.microsoft import SHARED_SCOPES, MicrosoftAccount, Microsoft
 from aid.messaging import FileMailer
 from aid.messaging.microsoft_mailer import AutoMailer, MicrosoftMailer
 from aid.connections.secrets import SecretStore
+from aid.review.intake import recent
 from aid.runner import build_deps, main, run_loop
 from aid.settings import Settings, load_settings
 from aid.sources.microsoft_mail import MailSync, forget_connection, sync_mailbox
@@ -467,6 +468,9 @@ def test_the_pass_reads_the_mailbox_before_the_scan_so_that_a_confirmation_opens
     assert (case / "steps" / "08_result.json").exists() and (case / "input" / "MU01_conf.pdf").exists()
     assert (tmp_path / "inbox" / "processed" / eml_name("M1", received)).exists()
     assert not (root / "runner.log").exists()
+    # the e-mail the mailbox saved is a file of the watched folder: the tab 'Bestanden' names what came of its attachment (Task 37)
+    assert [(line["file"], line["outcome"], line["detail"]) for line in recent(root)] == [
+        (f"{eml_name('M1', received)}/MU01_conf.pdf", "case", case.name)]
 
 
 def mailbox_lines(root: Path) -> list[str]:

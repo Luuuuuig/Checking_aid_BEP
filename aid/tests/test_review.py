@@ -17,7 +17,7 @@ import pytest
 
 from aid.case import load_case
 from aid.comparison import Detail, Findings, Flag, Reason
-from aid.execution.writer import PreparedWriter, RetryingWriter, WriteLog, WriteLogEntry, WriterError
+from aid.execution.writer import PreparedWriter, RetryingWriter, UnknownWrite, UnverifiedWrite, WriteLog, WriteLogEntry, WriterError
 from aid.messaging import FileMailer
 from aid.pipeline import CaseResult, ReviewItem, escalate_pending, run_case
 from aid.po_store import PoStore
@@ -27,7 +27,7 @@ from aid.review.__main__ import main as review_main
 from aid.review.app import (CaseSummary, FlagRow, build_app, close_case, decide, import_gradio, list_open_cases, load_case_view, page_rows,
                             undo)
 from aid.review.i18n import STRINGS
-from aid.review.page import _article_items, close_text, undo_text
+from aid.review.page import _article_items, _decision_choices, close_text, undo_text
 from aid.schema import DocValue
 from aid.settings import load_settings
 from aid.sources.upload import open_upload_case
@@ -403,7 +403,10 @@ def test_the_page_shows_labels_and_no_code(tmp_path, madeup_out):
                "delivery date beyond the lead time plus the tolerance", "no price on the document", "quantity unknown for the price rule",
                "price above threshold", "PO total unknown", "cart: for the buyer", "messages off for this supplier", "could not be placed", "not covered by a rule",
                "prepared change: apply by hand", "write failed: the line is locked", "not applied: an earlier write failed (rule R01, set_status)",
-               "no address for the supplier", "message not sent", "message bounced", "no answer in 3 working days"]
+               "write made, not verified: check in Exact", "write outcome not known: check in Exact",
+               "not applied: an earlier change waits for a look in Exact (rule R01, set_status)",
+               "no address for the supplier", "message not sent", "message bounced", "no answer in 3 working days",
+               "supplier answered: read the reply", "no question is open"]
     for language in ("nl", "en"):
         labels = [row[5] for row in page_rows([FlagRow(item_id="RI1", field="price", line="1", po_value="", doc_value="", po_source="",
                                                        doc_source="", thumbnail=None, reason=reason) for reason in reasons], language)]
@@ -430,17 +433,17 @@ def test_the_page_lists_the_open_cases_and_makes_no_network_call(tmp_path, madeu
 
 
 def test_share_is_refused_with_company_settings(tmp_path, capsys):
-    """--share is for the made-up set only: with a settings file that holds an Exact address the command refuses it (exit 2) before
+    """--share is for the made-up set only: with a settings file that holds an SMTP server the command refuses it (exit 2) before
     it builds anything. The example settings hold no company value; an authorization limit is a company value too, and a watched
     folder outside the repository is not (the made-up set may be kept in Drive)."""
     example = json.loads((REPO_ROOT / "aid" / "settings.example.json").read_text(encoding="utf-8"))
     path = tmp_path / "settings.json"
-    path.write_text(json.dumps(example | {"exact_base_url": "https://erp.example.com", "watched_folder": str(REPO_ROOT / "aid" / "inbox")}),
+    path.write_text(json.dumps(example | {"smtp_host": "smtp.example.com", "watched_folder": str(REPO_ROOT / "aid" / "inbox")}),
                     encoding="utf-8")
     assert review_main(["--settings", str(path), "--share"]) == 2
     assert "internal use only" in capsys.readouterr().err and not (tmp_path / "cases").exists()
     assert company_values(load_settings(REPO_ROOT / "aid" / "settings.example.json")) == []
-    assert company_values(load_settings(path)) == ["exact_base_url is set"]
+    assert company_values(load_settings(path)) == ["smtp_host is set"]
     assert company_values(SETTINGS) == ["authorization_limit is set"]                  # the made-up test limit of conftest
     assert company_values(SETTINGS.model_copy(update={"authorization_limit": None, "watched_folder": tmp_path})) == []
 
@@ -658,6 +661,23 @@ def test_saved_export_columns_refuse_the_share_link(tmp_path, capsys):
     assert "export_columns is not empty" in err and "Bestelnummer" not in err and not (tmp_path / "cases").exists()
 
 
+def test_saved_article_columns_refuse_the_share_link_and_the_kept_columns_are_no_setting():
+    """The column titles of the export of articles are chosen on the company side from the company's own file (Task 42): once they
+    are saved a public share link is refused, by the name of the setting and never by a title. The number convention alone is no
+    company value. The columns kept for a supplier's price list are no setting (ruling Z9 of the review round): the settings refuse
+    the key, so that no press of the tab Prijslijst can change the settings file."""
+    made_up = MADE_UP.model_dump()
+    articles = MADE_UP.model_validate(made_up | {"article_columns": {"item_code": "Artikelnummer", "price": "Inkoopprijs"}})
+    assert company_values(articles) == ["article_columns is not empty"]
+    reason = refuse_share(articles)
+    assert reason is not None and "internal use only" in reason
+    assert not any(word in reason for word in ("Artikelnummer", "Inkoopprijs"))
+    assert company_values(MADE_UP.model_validate(made_up | {"article_decimal_comma": True})) == []
+    assert "pricelist_columns" not in made_up and "pricelist_columns" not in (REPO_ROOT / "aid" / "settings.example.json").read_text(encoding="utf-8")
+    with pytest.raises(ValueError):
+        MADE_UP.model_validate(made_up | {"pricelist_columns": {"Voorbeeld BV": {"item_code": "Bestelcode", "price": "Netto"}}})
+
+
 def test_share_is_refused_with_the_reason(tmp_path, capsys):
     example = json.loads((REPO_ROOT / "aid" / "settings.example.json").read_text(encoding="utf-8"))
     path = tmp_path / "settings.json"
@@ -724,6 +744,23 @@ def test_a_settings_file_that_cannot_be_read_exits_2_without_its_values(tmp_path
     assert review_main(["--settings", str(tmp_path / "missing.json")]) == 2 and capsys.readouterr().err
 
 
+def test_the_review_page_refuses_a_settings_file_in_which_exact_base_url_is_set(tmp_path, capsys, monkeypatch):
+    """Ruling V10: no command builds the write route into Exact. The review page's command ends with 2 and the one sentence, with
+    --share and without, and makes nothing: no cases folder, no temporary folder of the page."""
+    monkeypatch.setattr("aid.review.__main__.build_app", lambda *a, **k: pytest.fail("the page was built"))
+    example = json.loads((REPO_ROOT / "aid" / "settings.example.json").read_text(encoding="utf-8"))
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps(example | {"exact_base_url": "https://erp.example.com", "cases_root": "cases", "po_store_root": "po_store",
+                                          "watched_folder": "inbox"}), encoding="utf-8")
+    sentence = ('exact_base_url is set, but this version of the aid writes nothing in Exact: every change is prepared for the tab '
+                '"In Exact invoeren". Remove exact_base_url from the settings file.')
+    for arguments in ([], ["--share"]):
+        assert review_main(["--settings", str(path), *arguments]) == 2
+        out = capsys.readouterr()
+        assert out.err.splitlines() == [f"the settings are refused: {sentence}"] and out.out == "" and "erp.example.com" not in out.err
+    assert sorted(entry.name for entry in tmp_path.iterdir()) == ["settings.json"]
+
+
 def test_the_page_reads_the_query_on_load(tmp_path, madeup_out):
     """The page's load reads the query of the request: the case is selected among the offered cases and the write remembered for the
     undo choices of that case."""
@@ -780,6 +817,8 @@ def test_a_reply_ends_the_open_question(tmp_path, madeup_out):
     c, r = run(d, madeup_out, "MU12", "250112")
     (c.root / "messages" / "replies").mkdir(parents=True)
     (c.root / "messages" / "replies" / "answer.eml").write_bytes(b"Subject: Re: Vraag\r\n\r\nDe eenheid is per stuk.\r\n")
+    # a file that names no message answers the latest question sent before it was put there: an hour after the run's question
+    os.utime(c.root / "messages" / "replies" / "answer.eml", ((NOW + timedelta(hours=1)).timestamp(),) * 2)
     decide(c, "RI1", "keep"); decide(c, "RI2", "keep")
     assert close_case(c, d).status == "closed"
 
@@ -833,20 +872,20 @@ from aid.review.close import finish_replaced, waiting_for_po  # noqa: E402
 
 # The hint of a case that waits for its PO (ruling N2), word for word: for a PO, here 250101, and for a quoted version, here version 1
 # of PO 250103.
+# Since Task 37 the hint names the tab 'Bestanden', where the buyer gives the PDF or the e-mail, and no longer the folder the aid reads.
 HINT = {"nl": ("Inkooporder 250101 kent de assistent nog niet. Komt die inkooporder uit Exact binnen, dan controleert de assistent deze "
-               "bevestiging vanzelf opnieuw; u hoeft hier niets te besluiten. Blijft zij weg, sleep dan de pdf van de inkooporder of de "
-               "e-mail van Exact naar de map die de assistent leest. Is 250101 niet een van uw inkoopordernummers, besluit dan zelf over "
-               "deze zaak."),
+               "bevestiging vanzelf opnieuw; u hoeft hier niets te besluiten. Blijft zij weg, geef dan de pdf van de inkooporder of de "
+               "e-mail van Exact op het tabblad Bestanden. Is 250101 niet een van uw inkoopordernummers, besluit dan zelf over deze zaak."),
         "en": ("The assistant does not know purchase order 250101 yet. When that purchase order comes in from Exact, the assistant checks "
-               "this confirmation again by itself; you need not decide anything here. If it stays away, drag the PDF of the purchase "
-               "order or the e-mail from Exact into the folder the assistant reads. If 250101 is not one of your purchase order numbers, "
-               "decide on this case yourself.")}
+               "this confirmation again by itself; you need not decide anything here. If it stays away, give the PDF of the purchase order "
+               "or the e-mail from Exact on the tab Files. If 250101 is not one of your purchase order numbers, decide on this case "
+               "yourself.")}
 VERSION_HINT = {"nl": ("Versie 1 van inkooporder 250103 kent de assistent nog niet. Komt die versie uit Exact binnen, dan controleert de "
-                       "assistent deze bevestiging vanzelf opnieuw; u hoeft hier niets te besluiten. Blijft zij weg, sleep dan de pdf van "
-                       "die versie of de e-mail van Exact naar de map die de assistent leest."),
+                       "assistent deze bevestiging vanzelf opnieuw; u hoeft hier niets te besluiten. Blijft zij weg, geef dan de pdf van "
+                       "die versie of de e-mail van Exact op het tabblad Bestanden."),
                 "en": ("The assistant does not know version 1 of purchase order 250103 yet. When that version comes in from Exact, the "
-                       "assistant checks this confirmation again by itself; you need not decide anything here. If it stays away, drag the "
-                       "PDF of that version or the e-mail from Exact into the folder the assistant reads.")}
+                       "assistant checks this confirmation again by itself; you need not decide anything here. If it stays away, give the "
+                       "PDF of that version or the e-mail from Exact on the tab Files.")}
 
 
 def without_po(d, tmp_path):
@@ -940,7 +979,7 @@ def test_the_reason_of_a_guessed_link(tmp_path, madeup_out):
     for language in ("nl", "en"):
         assert STRINGS[language][f"reason:{GUESSED_PO}"] == GUESSED[language]
         assert GUESSED[language] in str(page_rows(load_case_view(guessed).flags, language)), language
-    assert [decision["rule_id"] for decision in audit(guessed)["decisions"]] == ["P01"]
+    assert [decision["rule_id"] for decision in audit(guessed)["decisions"]] == ["G01"]
     plain, r = run(d, madeup_out, "MU01", "250101", now=LATER)
     assert r.status == "closed" and "po_found_by" not in json.loads((plain.root / "case.json").read_text(encoding="utf-8"))
 
@@ -1021,14 +1060,26 @@ import aid.review.__main__ as review
 
 seen = {}
 
+def vibe():
+    return os.path.join(os.environ["GRADIO_TEMP_DIR"], "vibe_edit_history")
+
 class Page:
     def launch(self, **options):
         seen["launched"] = True
+        seen["thread_free"] = options.get("prevent_thread_lock")
+        os.makedirs(vibe(), exist_ok=True)                # as the page library does whenever it makes its application
+        if os.environ.get("MADE_UP_VIBE_FILE"):
+            open(os.path.join(vibe(), "kept.txt"), "w").close()
+
+    def block_thread(self):
+        seen["vibe_folder_while_the_page_runs"] = os.path.isdir(vibe())
 
 def build_app(deps, **options):
     seen["folder"] = os.environ.get("GRADIO_TEMP_DIR")
     seen["no_proxy"] = [os.environ.get("NO_PROXY"), os.environ.get("no_proxy")]
     seen["gradio"] = "gradio" in sys.modules              # the page library is imported in build_app, after the folder is named
+    seen["vibe_mode"] = os.environ.get("GRADIO_VIBE_MODE")
+    os.makedirs(vibe(), exist_ok=True)
     return Page()
 
 review.build_app, review.launch_options = build_app, lambda page, share: {}
@@ -1059,10 +1110,16 @@ def test_the_page_keeps_its_temporary_files_under_the_cases_root(tmp_path, madeu
         assert done.returncode == 0, done.stderr
         return json.loads(done.stdout.splitlines()[-1])
 
-    seen = review_command()
-    assert seen == {"folder": str(tmp_path / "cases" / "tmp"), "gradio": False, "launched": True, "code": 0,
+    seen = review_command(GRADIO_VIBE_MODE="1")
+    # The page library makes a folder vibe_edit_history in its temporary folder whenever it makes its application, at the build and
+    # again at the launch, and writes there only in its "vibe" mode: the command does not pass that mode on to the page, and
+    # removes the folder, empty as it then is, once the page is launched (ruling S28 of the review round of Task 44).
+    assert seen == {"folder": str(tmp_path / "cases" / "tmp"), "gradio": False, "launched": True, "code": 0, "vibe_mode": None,
+                    "thread_free": True, "vibe_folder_while_the_page_runs": False,
                     "no_proxy": ["intranet.example.com,127.0.0.1,localhost", "127.0.0.1,localhost"]}     # no proxy for the page itself
     assert sorted(path.name for path in (tmp_path / "cases" / "tmp").iterdir()) == ["work"] and working.is_file()     # the work stays
+    assert review_command(MADE_UP_VIBE_FILE="1")["vibe_folder_while_the_page_runs"] is True      # not empty: left as it is (rmdir only)
+    assert (tmp_path / "cases" / "tmp" / "vibe_edit_history" / "kept.txt").is_file()
     # a folder the environment names is the one used, and it is not emptied
     own = tmp_path / "own temporary folder"
     own.mkdir()
@@ -1169,3 +1226,1692 @@ def test_the_page_librarys_request_to_its_own_address_goes_past_the_proxy(monkey
         own_hosts_without_proxy()
         assert httpx.get(url, timeout=5).status_code == 200
         assert httpx.get(url.replace("127.0.0.1", "localhost"), timeout=5).status_code == 200
+
+
+# --- Task 43: the values entered in Exact that a case was compared with ---
+
+import pathlib  # noqa: E402
+
+from aid.execution.by_hand import mark, open_changes  # noqa: E402
+from aid.review.app import EnteredValue  # noqa: E402
+from aid.review.page import entered_text  # noqa: E402
+from aid.tests.helpers import confirmation_again, filed_on  # noqa: E402
+
+ENTERED = {"nl": "Sinds deze inkooporder is opgenomen, is in Exact ingevoerd: regel 1: prijs 12,70. De assistent vergelijkt met deze waarden.",
+           "en": "Since this purchase order was filed, this was entered in Exact: line 1: price 12.70. The assistant compares with these values."}
+LIST_UNREAD = {"nl": "De lijst In Exact invoeren kon niet worden gelezen: de assistent vergelijkt met de inkooporder zoals zij is opgenomen.",
+               "en": "The list Enter in Exact could not be read: the assistant compares with the purchase order as it was filed."}
+
+
+def test_the_page_names_the_applied_changes(tmp_path, madeup_out, monkeypatch):
+    """Rule 7 and amendment 5: above the lists of the review tab, a case that was compared with values entered in Exact names each of
+    them, in the page's language and with the values as the tab "In Exact invoeren" shows them, and the list of differences shows
+    the entered value as the order's, without a source. A case run while the list could not be read says that instead. A case that
+    was compared with the order as it was filed shows no line."""
+    d = deps(tmp_path, madeup_out, writer=PreparedWriter(tmp_path / "cases" / "prepared"))
+    prepared = d.settings.cases_root / "prepared"
+    filed_on(d.store, "250108", "v1", datetime(2026, 11, 1, 9, 0))               # filed before the tick, whatever day the suite runs
+    first, _ = run(d, madeup_out, "MU08", "250108")
+    ids = [entry_id for change in open_changes(prepared) if change.kind == "po_line_price" for entry_id in change.ids]
+    assert mark(prepared, ids, "entered", NOW + timedelta(hours=1)) == 1
+    high = open_upload_case(d.settings.cases_root, [confirmation_again(tmp_path / "MU08_high.pdf", "MU08", prices={"1": "14.00"})],
+                            "250108", "confirmation", LATER)
+    assert run_case(high, d).status == "review"                                   # 14.00 against the entered 12.70: above the threshold
+    view = load_case_view(high)
+    assert view.entered == [EnteredValue(line="1", field="price", value="12.70")] and view.entered_unread is False
+    assert (view.flags[0].po_value, view.flags[0].doc_value, view.flags[0].po_source) == ("12.70", "14.00", "")
+    assert load_case_view(first).entered == [] and load_case_view(first).entered_unread is False
+    real = pathlib.Path.read_bytes
+
+    def read_bytes(self):
+        if self.name == "marks.jsonl":
+            raise PermissionError(13, "The process cannot access the file because it is being used by another process", str(self))
+        return real(self)
+    with monkeypatch.context() as held:                                           # the list held by another program during a run
+        held.setattr(pathlib.Path, "read_bytes", read_bytes)
+        blind = open_upload_case(d.settings.cases_root, [confirmation_again(tmp_path / "MU08_blind.pdf", "MU08", prices={"1": "14.00"})],
+                                 "250108", "confirmation", LATER + timedelta(minutes=1))
+        assert run_case(blind, d).status == "review"
+    unread = load_case_view(blind)
+    assert (unread.entered, unread.entered_unread, unread.flags[0].po_value) == ([], True, "12.50")
+    assert page_rows(unread.flags, "nl")[0][5] == LIST_UNREAD["nl"] and page_rows(unread.flags, "en")[0][5] == LIST_UNREAD["en"]     # L01's reason
+    closed = open_upload_case(d.settings.cases_root, [confirmation_again(tmp_path / "MU08_closed.pdf", "MU08", prices={"1": "12.90"})],
+                              "250108", "confirmation", LATER + timedelta(minutes=2))
+    assert run_case(closed, d).status == "closed"                                 # within the threshold from 12.70: prepared, closed
+    assert load_case_view(closed).entered == [EnteredValue(line="1", field="price", value="12.70")]          # a closed case shown has it too
+    gr = import_gradio()
+    app = build_app(d)
+    [show] = [f for f in app.fns.values() if getattr(f.fn, "__name__", "") == "show"]
+    [relabel] = [f for f in app.fns.values() if getattr(f.fn, "__name__", "") == "relabel"]
+    at = [getattr(block, "elem_id", None) for block in show.outputs].index("review-entered")
+    switched = [getattr(block, "elem_id", None) for block in relabel.outputs].index("review-entered")     # the language switch relabels it
+    for case, text in ((high, ENTERED), (blind, LIST_UNREAD), (closed, ENTERED)):
+        shown = show.fn(case.case_id, "nl")
+        assert shown[at] == {"__type__": "update", "value": text["nl"], "visible": True} and shown[-1] == ""
+        state = shown[[type(block).__name__ for block in show.outputs].index("State")]
+        assert relabel.fn("en", case.case_id, state)[switched] == {"__type__": "update", "value": text["en"], "visible": True}
+    for case_id in (first.case_id, None):
+        assert show.fn(case_id, "nl")[at] == {"__type__": "update", "value": "", "visible": False}, case_id
+        assert relabel.fn("en", case_id, None)[switched] == {"__type__": "update", "value": "", "visible": False}, case_id
+    blocks = list(app.blocks.values())
+    [line] = [block for block in blocks if getattr(block, "elem_id", None) == "review-entered"]
+    galleries = [blocks.index(block) for block in blocks if isinstance(block, gr.Gallery)]
+    tables = [blocks.index(block) for block in blocks if isinstance(block, gr.Dataframe)]
+    assert isinstance(line, gr.Markdown) and line.visible is False and max(galleries) < blocks.index(line) < min(tables)     # above the lists
+    [title] = [blocks.index(block) for block in blocks if isinstance(block, gr.Markdown) and block.value == f"### {STRINGS['nl']['flags']}"]
+    assert blocks.index(line) < title                                             # and above the title of the first list, not under it
+
+
+def test_the_line_escapes_a_line_id_for_markdown():
+    """A line id from an export is any text: its characters that Markdown reads are escaped in the line above the lists, as on the
+    tab "In Exact invoeren", so that the line shows the id as it is."""
+    values = [EnteredValue(line="A_1*[x]", field="price", value="12.70")]
+    assert entered_text(values, False, "nl") == ("Sinds deze inkooporder is opgenomen, is in Exact ingevoerd: regel A\\_1\\*\\[x\\]: prijs 12,70. De "
+                                                "assistent vergelijkt met deze waarden.")
+
+
+def test_the_reason_of_a_case_run_without_the_list_is_in_the_manuals_table():
+    """The review round's W6: the reason of the pipeline's rule L01 has amendment 5's sentence as its label in both languages, and
+    the table of reasons in MANUAL 2.4 holds it."""
+    from aid.pipeline import UNREAD_LIST, UNREAD_RULE
+
+    manual = (REPO_ROOT / "aid" / "MANUAL.md").read_text(encoding="utf-8")
+    assert UNREAD_RULE == "L01" and (STRINGS["nl"][f"reason:{UNREAD_LIST}"], STRINGS["en"][f"reason:{UNREAD_LIST}"]) == (LIST_UNREAD["nl"], LIST_UNREAD["en"])
+    assert f"| {UNREAD_LIST} | {LIST_UNREAD['nl']} | {LIST_UNREAD['en']} |" in manual
+
+
+def test_the_line_of_the_entered_values_in_both_languages():
+    """The texts of rule 7 and of amendment 5, word for word: the line names each value by its line and its kind, a price or a
+    quantity with the decimal mark of the language, a day as dd-mm-yyyy and a week by its number, joined by semicolons; with
+    nothing entered and the list read, there is no line."""
+    values = [EnteredValue(line="1", field="price", value="12.70"), EnteredValue(line="2", field="delivery_date", value="2026-W48"),
+              EnteredValue(line="2", field="quantity", value="60.5"), EnteredValue(line="10", field="delivery_date", value="2026-11-20")]
+    assert entered_text(values, False, "nl") == ("Sinds deze inkooporder is opgenomen, is in Exact ingevoerd: regel 1: prijs 12,70; regel 2: "
+                                                "leverdatum week 48 (2026); regel 2: aantal 60,5; regel 10: leverdatum 20-11-2026. De "
+                                                "assistent vergelijkt met deze waarden.")
+    assert entered_text(values, False, "en") == ("Since this purchase order was filed, this was entered in Exact: line 1: price 12.70; line "
+                                                "2: delivery date week 48 (2026); line 2: quantity 60.5; line 10: delivery date 20-11-2026. "
+                                                "The assistant compares with these values.")
+    assert entered_text(values[:1], False, "nl") == ENTERED["nl"] and entered_text(values[:1], False, "en") == ENTERED["en"]
+    assert entered_text([], True, "nl") == LIST_UNREAD["nl"] and entered_text(values, True, "en") == LIST_UNREAD["en"]
+    assert entered_text([], False, "nl") == "" == entered_text([], False, "en")
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    assert nl["entered_values"] == ("Sinds deze inkooporder is opgenomen, is in Exact ingevoerd: {changes}. De assistent vergelijkt met deze "
+                                    "waarden.")
+    assert en["entered_values"] == ("Since this purchase order was filed, this was entered in Exact: {changes}. The assistant compares with "
+                                    "these values.")
+    assert [nl[f"entered:{field}"] for field in ("price", "delivery_date", "quantity")] == [
+        "regel {line}: prijs {value}", "regel {line}: leverdatum {value}", "regel {line}: aantal {value}"]
+    assert [en[f"entered:{field}"] for field in ("price", "delivery_date", "quantity")] == [
+        "line {line}: price {value}", "line {line}: delivery date {value}", "line {line}: quantity {value}"]
+    assert (nl["entered_unread"], en["entered_unread"]) == (LIST_UNREAD["nl"], LIST_UNREAD["en"])
+
+
+def test_the_documents_say_what_the_aid_compares_with():
+    """Task 43 in the documents: the manual's sections 1, 2.2 and 2.6 say that a document is compared with the order as Exact holds
+    it by the ticks, 2.2 quotes the line above the lists and the sentence of a list that could not be read word for word, 2.6 and
+    the Dutch guide have the two sentences of the answer to check A7, 3.1 and 3.6 name the new step file, 3.10 and 3.17 say how a
+    value is laid over a version and what a try-out is made from, 4.9 says what remains (a tick without an entry is believed), and
+    the README says what the aid compares with. The limitation that a cart asks the same change again until a new export comes
+    is gone."""
+    from aid.tests.test_hand_tab import manual_sections
+
+    manual, whole = manual_sections(), Path("aid/MANUAL.md").read_text(encoding="utf-8")
+    guide = ("Laat u Exact de inkooporder na de wijziging opnieuw versturen, dan vinkt de assistent de wijziging zelf af. Doet u dat niet, "
+             "vink de wijziging dan af op het tabblad In Exact invoeren: de assistent vergelijkt latere documenten dan met de waarde die u "
+             "hebt ingevoerd.")
+    assert guide in manual["2.6"] and guide in manual["7"]
+    assert "**What a document is compared with.**" in manual["1"] and "a tick is the buyer's word" in manual["1"]
+    for words in (f"\"{ENTERED['nl']}\"", f"\"{LIST_UNREAD['nl']}\"", "regel 1: prijs 12,70; regel 2: leverdatum 20-11-2026"):
+        assert words in manual["2.2"], words
+    for words in ("**What the next check is compared with.**", "(Verrichten)", "counts for the next try-out alone",
+                  "A version or an export that the aid was given after the tick is taken as it is"):
+        assert words in manual["2.6"], words
+    assert f"\"{ENTERED['nl']}\"" in manual["7"] and f"\"{LIST_UNREAD['nl']}\"" in manual["7"]
+    assert "03_entered.json only when" in manual["3.1"] and "`steps/03_entered.json`" in manual["3.6"]
+    for words in ("`as_entered` of `aid/execution/by_hand.py`", "`PoStore.given_at`", "`PoStore.filed_at`", '`"unread": true`', "check A7"):
+        assert words in manual["3.10"], words
+    assert "prints 12,63 and its case closes without a price item" in manual["3.17"] and "prints 12,76" in manual["3.17"]
+    assert "**A tick without an entry is believed.**" in manual["4.9"]
+    for words in ("asks for the same change again until a new export comes", "does not learn the aid's own changes", "is the owner's check A7;"):
+        assert words not in whole, words
+    readme = Path("aid/README.md").read_text(encoding="utf-8")
+    assert "with the purchase order as Exact holds it (the version of the order that the document answers" in readme
+    assert "—" not in whole and "—" not in readme
+
+
+def test_the_documents_say_what_the_review_round_of_task_43_ruled():
+    """The review round of Task 43 in the documents: a newer print ends a tick that it contradicts (sections 1, 2.6, 4.9 and the
+    Dutch guide, W9); a value belongs to a line of the order (1, 2.6 and 3.10, W1, W2 and W7); a change the supplier takes back
+    leaves the list (2.6, W4); a list that cannot be read or understood sends the case to the buyer (2.2, 2.6 and 3.10, W5 and W6);
+    the pre-check judges a stored match by the list (2.5, W3); and the put-back says when the aid knows another old value (2.6 and
+    the guide, W10), in the words of the page."""
+    from aid.tests.test_hand_tab import manual_sections
+
+    manual, whole = manual_sections(), Path("aid/MANUAL.md").read_text(encoding="utf-8")
+    assert "that the aid is given after the tick shows another value for that line, whether that print shows anything new or not. Such a print ends the tick" in manual["1"]
+    assert "not to a line number" in manual["1"]
+    for words in ("**A newer print ends a tick.**", "No case closes as confirmed on a tick that the newest print contradicts.",
+                  "an export given after the tick that shows another value ends the tick for the PDF versions too",
+                  "tick the row again once the value is in Exact: the later tick counts",
+                  "A change that the supplier takes back leaves the list",
+                  "are one row of the list", "the aid prepares, requests and asks nothing for it",
+                  STRINGS["nl"]["hand_put_back_other"].format(old="12,50", source=STRINGS["nl"]["hand_put_back_source:marks"], value="12,70"),
+                  f"\"volgens {STRINGS['nl']['hand_put_back_source:look']}\""):
+        assert words in manual["2.6"], words
+    assert "What a later PDF shows never takes back a tick" not in whole
+    assert "it prepared no change, requested no approval and asked the supplier nothing" in manual["2.2"]
+    assert "(de lijst In Exact invoeren zegt nu iets anders)" in manual["2.5"] and "is judged by the list again each time it is shown" in manual["2.5"]
+    assert "removed\n                   when the run writes none" in manual["3.1"]
+    for words in ("`contradict`", "rule L01", "`withdraw`", "`ListUnread`", "the one marked last decides"):
+        assert words in manual["3.10"], words
+    assert "that print ends the tick, the change stands on the list again" in manual["4.9"]
+    for words in ("tot een nieuwere inkooporder-pdf of export uit Exact voor die regel een andere waarde laat zien. Dan staat de wijziging "
+                  "weer op de lijst", "vink de wijziging dan opnieuw af zodra de waarde in Exact staat",
+                  "Zo'n zaak komt altijd bij u, en de assistent heeft er zelf niets voor voorbereid of gevraagd.",
+                  STRINGS["nl"]["hand_put_back_other"].format(old="12,50", source=STRINGS["nl"]["hand_put_back_source:marks"], value="12,70")):
+        assert words in manual["7"], words
+    assert "—" not in whole
+
+
+def test_the_documents_say_what_the_second_review_round_of_task_43_ruled():
+    """The manual after the second review round of Task 43: a print that shows nothing new is a look at the order at the time it
+    was given, and the sentences that stated the old limit are gone (1, 2.6, 3.1, 3.10, 4.9, 6 and the Dutch guide, W16); a line of
+    an article that stands on several lines is told by its values (2.6 and 3.10, W17); a print that cannot be matched ends the
+    tick (2.6, W18); the pre-check judges a stored match whole and counts a prepared change only while it stands on the list
+    (2.5, W19 and W21); a row that a print put back says so (2.6 and the guide, W20); the tab's sentence for a list that cannot
+    be understood (2.6 and the guide, W22); and the unread sentence beside a guessed order (2.2, W25): in the words of the page."""
+    from aid.tests.test_hand_tab import manual_sections
+
+    manual, whole = manual_sections(), Path("aid/MANUAL.md").read_text(encoding="utf-8")
+    nl = STRINGS["nl"]
+    for words in ("an export in which the lines of the order differ from the export before, is filed", "so it changes nothing here",
+                  "(a PDF for a PDF, an export for an export)", "Dit is niet gelukt (ListUnread)", "as the reason of each of its items"):
+        assert words not in whole, words
+    for words in ("A print that shows nothing new counts as well", "A file that stays in the watched folder was given once",
+                  "agrees with the line it was asked for in its quantity, its delivery date and its unit price, the changed value apart",
+                  "The changes of two deliveries of one article are rows of their own, and one tick never covers both.",
+                  "It holds for a print that shows nothing new as well", "A print in which the line of the tick cannot be found ends the tick too",
+                  "When one of several lines of the article shows the ticked value, the print does not contradict the tick and it stands.",
+                  f"prijs 12,50 → 12,70. {nl['hand_tick_ended'].format(value='12,50')}\"", f"\"{nl['hand_tick_ended_unfound']}\"",
+                  f"\"{nl['hand_list_changed']}\"", "an export counts whether its lines differ from the export before or not", "Never save that file from a spreadsheet."):
+        assert words in manual["2.6"], words
+    assert "as the reason of its items, or of one item of its own when the order was also found by a guess" in manual["2.2"]
+    for words in ("counts as ended at once, also before the runner's next pass", "A cart that agreed with its order as it was printed is judged the same way",
+                  "counts as prepared only while it stands on the list", "no cart is green while the list cannot be read"):
+        assert words in manual["2.5"], words
+    assert "given.txt (empty) once a print that shows the PO so was given again" in manual["3.1"]
+    for words in ("`PoStore.given_at`", "`given.txt`", "the changes of two deliveries are never one row", "`held_now`",
+                  "or its line cannot be found there and no line of its article shows its value"):
+        assert words in manual["3.10"], words
+    assert "and still counts as such a print: it is a look at the order at the time it was given" in manual["4.9"]
+    assert "the time of an empty `given.txt`" in manual["6"] and "A file that stays in `inbox/` is given once" in manual["6"]
+    for words in ("Dat geldt ook voor een export waarin niets is veranderd", f"\"{nl['hand_tick_ended'].format(value='12,50')}\"",
+                  f"\"{nl['hand_tick_ended_unfound']}\"", f"\"{nl['hand_list_changed']}\"", "Sla dat bestand nooit op vanuit een rekenblad.",
+                  "sluit het programma dat het bestand open heeft en druk op \"Lijst vernieuwen\"",
+                  "\"de lijst In Exact invoeren zegt nu iets anders\""):
+        assert words in manual["7"], words
+    assert "—" not in whole
+# --- a question asked on the page is sent, and a reply belongs to its question (Task 44) ---
+
+import base64  # noqa: E402
+import smtplib  # noqa: E402
+
+import requests  # noqa: E402
+
+from aid.connections.microsoft import MicrosoftAccount  # noqa: E402
+from aid.connections.secrets import SecretStore  # noqa: E402
+from aid.pipeline import file_answer, read_with_parser  # noqa: E402
+from aid.review.page import decision_text  # noqa: E402
+from aid.settings import update_settings_file  # noqa: E402
+from aid.tests.fakes import ACCESS_TOKEN, CLIENT_ID, TENANT_ID, USERNAME, FakeApp, FakeSession  # noqa: E402
+from aid.tests.test_microsoft_mailer import graph  # noqa: E402
+
+MAILBOX = {"ms_tenant_id": TENANT_ID, "ms_client_id": CLIENT_ID}       # the app registration of the fake sign-in
+WAITING = {"nl": "De zaak is nu: wacht op de leverancier.", "en": "The case is now: waiting for the supplier."}
+NOT_SENT = "De zaak is nu: ter beoordeling. Een bericht is niet verzonden; de zaak blijft ter beoordeling."
+# What the page says after a message that was not sent, by the kind of its cause, and after one written as a file by the settings'
+# choice (the review round of Task 44; the tests of that round, further on, spell every sentence out).
+LAPSED = f"{NOT_SENT} De aanmelding bij Microsoft is verlopen: meld u opnieuw aan onder Instellingen, Koppelingen, en sluit de zaak opnieuw af."
+NO_MAILBOX = f"{NOT_SENT} Er is geen postvak verbonden: verbind een postvak onder Instellingen, Koppelingen, en sluit de zaak opnieuw af."
+
+
+def filed(language: str, folder: str = "cases/outbox") -> str:
+    return STRINGS[language]["message_filed"].format(folder=folder)
+
+
+@pytest.fixture
+def smtp_server(monkeypatch):
+    """smtplib.SMTP replaced by a stand-in that connects to nothing, accepts every recipient and keeps the e-mails it is given
+    after DATA, parsed, which the fixture returns; the password of the aid's mailbox is a made-up one in the environment."""
+    taken = []
+
+    class Server:
+        does_esmtp = True
+
+        def __init__(self, host, port, timeout=None):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            pass
+
+        def starttls(self, context=None):
+            pass
+
+        def login(self, user, password):
+            pass
+
+        def ehlo_or_helo_if_needed(self):
+            pass
+
+        def has_extn(self, name):
+            return False
+
+        def mail(self, sender, options=()):
+            return 250, b"2.1.0 ok"
+
+        def rcpt(self, recipient, options=()):
+            return 250, b"2.1.5 ok"
+
+        def docmd(self, command, args=""):
+            return (354, b"go ahead") if command == "data" else (250, b"2.0.0 ok")
+
+        def send(self, data):
+            taken.append(message_from_bytes(data[:-3], policy=policy.default))
+
+        def getreply(self):
+            return 250, b"2.0.0 queued"
+
+    monkeypatch.setattr(smtplib, "SMTP", Server)
+    monkeypatch.setenv("AID_MAIL_PASSWORD", uuid.uuid4().hex)
+    return taken
+
+
+def sending_page(tmp_path, madeup_out, app: FakeApp | None = None, session: FakeSession | None = None, environ=None, share: bool = False, **values):
+    """The review page as its command builds it, on a made-up settings file with S07's made-up address and `values`: the page makes the
+    mailer of each close from the settings as they are then (`environ` is where the password of the aid's mailbox is looked up; none
+    by default), with a fake sign-in and a fake Graph. The mailer its Deps were given writes into tmp_path/given, which a page that
+    builds its own never uses. Returns (the settings file, the Deps, the page, the account of the sign-in)."""
+    data = json.loads(SETTINGS.model_dump_json()) | {"cases_root": "cases", "po_store_root": "po_store", "watched_folder": "inbox",
+                                                       "reader": "parser", "supplier_emails": {"S07": SUPPLIER}} | values
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    d = deps(tmp_path, madeup_out).model_copy(update={"settings": load_settings(path),
+                                                      "mailer": FileMailer(tmp_path / "given", sender="aid@example.com", clock=lambda: NOW)})
+    store = SecretStore(tmp_path / "secrets")
+    account = MicrosoftAccount(TENANT_ID, CLIENT_ID, store, app=(app or FakeApp()).bind(store.token_cache()))
+    page = build_app(d, settings_file=path, share=share, account_factory=lambda tenant, client: account, session=session or FakeSession(),
+                     environ={} if environ is None else environ)
+    return path, d, page, account
+
+
+def pressed_close(page, case, language: str = "nl") -> tuple[str, str | None]:
+    """"Zaak afsluiten" pressed on the page for the case: what the page says, and the case its dropdown then shows (None once the
+    case has left the review)."""
+    [close] = [f.fn for f in page.fns.values() if getattr(f.fn, "__name__", "") == "close"]
+    text, choice = close(case.case_id, language)
+    return text, choice["value"]
+
+
+def asked_on_the_page(d, madeup_out, now: datetime = NOW):
+    """MU07 in review with "Leverancier vragen" on its price: the case."""
+    c, _ = run(d, madeup_out, "MU07", "250107", now=now)
+    decide(c, "RI1", "ask")
+    return c
+
+
+def sent_lines(c) -> list[dict]:
+    path = c.root / "messages" / "sent.jsonl"
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()] if path.exists() else []
+
+
+def changed_on_disk(path, **values) -> None:
+    """The settings file with these values, as a save on the settings tab writes them, and a modification time that differs."""
+    before = path.stat().st_mtime_ns
+    update_settings_file(path, values)
+    os.utime(path, ns=(before + 2_000_000_000, before + 2_000_000_000))
+
+
+def test_a_close_sends_its_question_through_the_mailer_of_the_settings(tmp_path, madeup_out, smtp_server):
+    """The page as its command builds it sends a close's question the way the runner sends its own: through the mailer that send_via
+    names, made from the settings as they are at the close. With the SMTP server set, the question goes to it (a stand-in here), to
+    S07's made-up address with the buyer in copy; nothing is written as a file, the mailer the Deps were given is not used, and the
+    page says the new status and no more. A change of the settings file counts for the next close without a restart: with send_via
+    "microsoft" the next question goes out through the work mailbox of the account signed in (a fake Graph)."""
+    mailbox = graph()
+    path, d, page, _ = sending_page(tmp_path, madeup_out, app=FakeApp(accounts=[USERNAME]), session=mailbox, environ=os.environ,
+                                    send_via="smtp", smtp_host="smtp.example.com", smtp_user="aid@example.com")
+    c = asked_on_the_page(d, madeup_out)
+    assert pressed_close(page, c) == (WAITING["nl"], None)
+    [mail] = smtp_server
+    assert (mail["To"], mail["Cc"], mail["X-Aid-Template"], mail["X-Aid-Case"]) == (SUPPLIER, SETTINGS.buyer_email, "missing_info", c.case_id)
+    [message] = c.read_step("result")["messages"]
+    assert (message["rule_id"], message["status"], message["sent_at"]) == ("B01", "sent", "2026-11-12T09:00:00")      # the page's clock
+    assert mail["Message-ID"] == f"<{message['message_id']}@example.com>" and [line["message_id"] for line in sent_lines(c)] == [message["message_id"]]
+    assert c.read_step("result")["status"] == "waiting" and mailbox.calls == []
+    assert not (tmp_path / "cases" / "outbox").exists() and not (tmp_path / "given").exists()
+    changed_on_disk(path, send_via="microsoft", **MAILBOX)
+    second = asked_on_the_page(d, madeup_out, now=LATER)
+    assert pressed_close(page, second, "en") == (WAITING["en"], None)
+    create, send = mailbox.calls
+    mime = message_from_bytes(base64.b64decode(create["data"]), policy=policy.default)
+    assert (mime["From"], mime["To"], mime["Cc"], mime["X-Aid-Case"]) == (USERNAME, SUPPLIER, SETTINGS.buyer_email, second.case_id)
+    assert create["headers"]["Authorization"] == f"Bearer {ACCESS_TOKEN}" and send["url"].endswith("/send")
+    [line] = sent_lines(second)
+    assert line["internet_message_id"] == mime["Message-ID"] and len(smtp_server) == 1 and not (tmp_path / "cases" / "outbox").exists()
+
+
+def test_a_sign_in_counts_for_the_next_close_without_a_restart(tmp_path, madeup_out):
+    """send_via "auto" with a folder of the work mailbox chosen and nobody signed in: there is no way to send, so nothing is asked
+    and nothing written as a file; the case stays with the buyer and the page says that no mailbox is connected (ruling S4 of the
+    review round). After the sign-in (on the account the page's settings tab signs in with) the next close of that case sends its
+    question through the mailbox, without a restart of the page."""
+    mailbox = graph()
+    path, d, page, account = sending_page(tmp_path, madeup_out, session=mailbox, mail_folder="AAMkADMadeUpFolder0001=", **MAILBOX)
+    first = asked_on_the_page(d, madeup_out)
+    assert pressed_close(page, first) == (NO_MAILBOX, first.case_id)
+    assert not (tmp_path / "cases" / "outbox").exists() and mailbox.calls == [] and sent_lines(first) == []
+    account.sign_in_browser(["Mail.Send"])
+    assert pressed_close(page, first) == (WAITING["nl"], None)
+    assert len(mailbox.calls) == 2 and not (tmp_path / "cases" / "outbox").exists()
+    assert sent_lines(first)[0]["internet_message_id"]
+
+
+def test_a_question_that_could_not_be_sent_keeps_the_case_in_review(tmp_path, madeup_out):
+    """The sign-in of the work mailbox has lapsed when the buyer closes the case: the page does what the run does for its own
+    messages. The question is recorded as not sent with the class of the error, the case stays in review, and the page says so by
+    its fixed sentences, never by the error's text. Nothing is recorded as asked: no line in sent.jsonl, no row "ask the supplier",
+    the item not carried out, and no file written in its place. After a new sign-in the same close sends the question, and the case
+    waits."""
+    mailbox, application = graph(), FakeApp(accounts=[USERNAME], silent=None)
+    path, d, page, _ = sending_page(tmp_path, madeup_out, app=application, session=mailbox, send_via="microsoft", **MAILBOX)
+    c = asked_on_the_page(d, madeup_out)
+    assert pressed_close(page, c) == (LAPSED, c.case_id)
+    result = c.read_step("result")
+    assert result["status"] == "review" and [(m["template"], m["status"]) for m in result["messages"]] == [("missing_info", "not sent (SignInLapsed)")]
+    record = c.read_step("close")["records"][-1]
+    assert record["carried_out"] == {} and record["messages"][0]["error"].startswith("SignInLapsed: SignInNeeded: ")
+    assert sent_lines(c) == [] and rows(c) == [] and mailbox.calls == []
+    assert not (tmp_path / "cases" / "outbox").exists() and not (tmp_path / "given").exists()
+    assert [s.case_id for s in list_open_cases(d.settings.cases_root)] == [c.case_id]
+    application.silent = {"access_token": ACCESS_TOKEN, "token_type": "Bearer"}             # signed in again
+    assert pressed_close(page, c) == (WAITING["nl"], None)
+    assert len(mailbox.calls) == 2 and len(sent_lines(c)) == 1 and rows(c) == [("1", "price", "ask the supplier (B01)", "page 1, line 8")]
+
+
+class NoConnection(FakeSession):
+    """A Graph that cannot be reached: every request fails as requests fails without a network."""
+
+    def post(self, url, headers=None, data=None, timeout=None, **kwargs):
+        self.calls.append({"method": "POST", "url": url})
+        raise requests.ConnectionError("made-up detail: graph.microsoft.com unreachable")
+
+
+@pytest.mark.parametrize("mailbox, error", [(NoConnection, "MailerError: ConnectionError: could not create the draft"),
+                                            (lambda: graph(created=403), "MailerError: HTTP 403: could not create the draft")],
+                         ids=["no connection", "a refusal"])
+def test_a_question_the_mailbox_cannot_take_keeps_the_case_in_review(tmp_path, madeup_out, mailbox, error):
+    """No connection to the work mailbox, or its refusal: as a lapsed sign-in, the case stays in review with the page's sentence for a
+    message that was not sent and the kind of its cause, and nothing is recorded as asked. The error's own text stays in the record
+    of the close."""
+    path, d, page, _ = sending_page(tmp_path, madeup_out, app=FakeApp(accounts=[USERNAME]), session=mailbox(), send_via="microsoft", **MAILBOX)
+    c = asked_on_the_page(d, madeup_out)
+    text, shown = pressed_close(page, c)
+    cause = STRINGS["nl"]["not_sent:refused" if "403" in error else "not_sent:unreachable"]
+    assert (text, shown) == (f"{NOT_SENT} {cause}", c.case_id) and "403" not in text and "ConnectionError" not in text
+    record = c.read_step("close")["records"][-1]
+    assert [(m["status"], m["error"]) for m in record["messages"]] == [("not sent (MailerError)", error)] and record["carried_out"] == {}
+    assert c.read_step("result")["status"] == "review" and sent_lines(c) == [] and rows(c) == []
+
+
+def test_a_store_of_the_sign_in_that_the_pc_refuses_leaves_the_question_unsent(tmp_path, madeup_out):
+    """The page cannot make the account of the sign-in, because its store lies inside a git work tree, and the store the runner
+    would take is one this process may not use either: the question is not sent, as while a sign-in has lapsed, the case stays in
+    review with the page's sentence, and the record names neither the folder of the store nor its kind."""
+    path, d, _, _ = sending_page(tmp_path, madeup_out, send_via="microsoft", **MAILBOX)
+    work_tree = tmp_path / "work-tree"
+    (work_tree / ".git").mkdir(parents=True)
+    default = tmp_path / "default-secrets"                   # where the conftest keeps the store of the PC for this test
+    default.mkdir()
+    (default / "backend").write_text("made-up-kind\n", encoding="utf-8")
+    mailbox = graph()
+    page = build_app(d, settings_file=path, environ={}, session=mailbox,
+                     account_factory=lambda tenant, client: MicrosoftAccount(tenant, client, SecretStore(work_tree / "secrets")))
+    c = asked_on_the_page(d, madeup_out)
+    assert pressed_close(page, c) == (LAPSED, c.case_id)
+    [message] = c.read_step("close")["records"][-1]["messages"]
+    assert message["status"] == "not sent (SignInLapsed)" and message["error"].startswith("SignInLapsed: StoreRefused: ")
+    assert str(tmp_path) not in message["error"] and "made-up-kind" not in message["error"]
+    assert mailbox.calls == [] and sent_lines(c) == [] and not (tmp_path / "cases" / "outbox").exists() and not (work_tree / "secrets").exists()
+
+
+@pytest.mark.parametrize("language", ["nl", "en"])
+def test_a_question_written_as_a_file_is_said_on_the_page(tmp_path, madeup_out, language):
+    """send_via "file", the owner's choice for a run in which nothing may leave: the question is written to cases/outbox, recorded
+    as sent, and the case waits; after the close the page says that the message was not sent but written as a file, because the
+    settings say so (ruling S4 of the review round; without that choice and without a way to send, nothing is written). A request
+    to the approver written as a file is said in the same way."""
+    path, d, page, _ = sending_page(tmp_path, madeup_out, send_via="file")
+    c = asked_on_the_page(d, madeup_out)
+    assert pressed_close(page, c, language) == (f"{WAITING[language]} {filed(language)}", None)
+    [eml] = (tmp_path / "cases" / "outbox").glob("*.eml")
+    mail = read_eml(eml)
+    assert (mail["To"], mail["Cc"], mail["X-Aid-Case"]) == (SUPPLIER, SETTINGS.buyer_email, c.case_id)
+    assert [line["message_id"] for line in sent_lines(c)] == [eml.stem] and c.read_step("result")["status"] == "waiting"
+    assert not (tmp_path / "given").exists()
+    confirmed, _ = run(d, madeup_out, "MU07", "250107", now=LATER)
+    decide(confirmed, "RI1", "confirm")
+    text, _ = pressed_close(page, confirmed, language)
+    assert text == f"{STRINGS[language]['new_status'].format(status=STRINGS[language]['status:closed'])} {filed(language)}"
+    assert len(list((tmp_path / "cases" / "outbox").glob("*.eml"))) == 2
+    kept, _ = run(d, madeup_out, "MU07", "250107", now=LATER + timedelta(minutes=1))       # a close without a message says nothing of files
+    decide(kept, "RI1", "keep")
+    assert pressed_close(page, kept, language)[0] == STRINGS[language]["new_status"].format(status=STRINGS[language]["status:closed"])
+
+
+def test_a_page_given_its_own_deps_keeps_the_mailer_it_was_given(tmp_path, madeup_out, smtp_server):
+    """A page built with Deps of its own, as a test or the notebook builds it, sends through the mailer of those Deps, whatever the
+    settings name; and so does a page on a public link, which never makes a mailer."""
+    values = {"send_via": "smtp", "smtp_host": "smtp.example.com", "smtp_user": "aid@example.com"}
+    path, d, _, _ = sending_page(tmp_path, madeup_out, **values)
+    c = asked_on_the_page(d, madeup_out)
+    assert pressed_close(build_app(d, settings_file=path), c) == (f"{WAITING['nl']} {filed('nl', 'given')}", None)
+    shared = sending_page(tmp_path, madeup_out, environ=os.environ, share=True, **values)[2]
+    second = asked_on_the_page(d, madeup_out, now=LATER)
+    assert pressed_close(shared, second) == (f"{WAITING['nl']} {filed('nl', 'given')}", None)
+    assert len(list((tmp_path / "given").glob("*.eml"))) == 2 and smtp_server == [] and not (tmp_path / "cases" / "outbox").exists()
+
+
+def test_a_question_of_the_run_that_was_not_sent_is_asked_from_the_page(tmp_path, madeup_out):
+    """MU17's question could not be sent when the runner checked the confirmation (the sign-in had lapsed, say): the case came to the
+    buyer with "Bericht niet verzonden" on the missing line. Once the mailbox works, "Leverancier vragen" on that item and a close
+    send the question of its field, and the case waits for the supplier."""
+    out = tmp_path / "outbox"
+    d = mailing(deps(tmp_path, madeup_out), out)
+    d = d.model_copy(update={"settings": d.settings.model_copy(update={"supplier_emails": {"S17": "sales@s17.example.com"}})})
+    c, r = run(d.model_copy(update={"mailer": Unreachable()}), madeup_out, "MU17", "250117")
+    assert r.status == "review" and [(i.item_id, i.reason) for i in r.review_items] == [("RI1", "message not sent")]
+    assert page_rows(load_case_view(c).flags, "nl")[0][5] == "Bericht niet verzonden" and not out.exists()
+    decide(c, "RI1", "ask")
+    text, still_open = close_text(c, d, "nl")
+    assert text.startswith(WAITING["nl"]) and not still_open
+    [eml] = out.glob("*.eml")
+    mail = read_eml(eml)
+    assert (mail["To"], mail["X-Aid-Template"], mail["X-Aid-Case"]) == ("sales@s17.example.com", "line_missing_extra", c.case_id)
+    assert [line["message_id"] for line in sent_lines(c)] == [eml.stem]
+
+
+def two_differences(path, kind):
+    """The parser's reading of MU17 (PO line 3 is missing) with the quantity of line 1 raised by 5, so that the rules ask two
+    questions in one run: about the quantity (R06) and about the missing line (R07)."""
+    doc = read_with_parser(path, kind)
+    first = doc.lines[0]
+    quantity = first.quantity.model_copy(update={"value": str(int(float(first.quantity.value)) + 5)})
+    return doc.model_copy(update={"lines": [first.model_copy(update={"quantity": quantity}), *doc.lines[1:]]})
+
+
+def answer(d, tmp_path, message_id: str, name: str = "antwoord.eml", at: datetime = NOW + timedelta(hours=2)) -> str | None:
+    """A made-up reply to the message with this id, filed as the scan of the watched folder files it: the case id, or None."""
+    reply = tmp_path / name
+    reply.write_bytes(f"From: sales@supplier.example.com\nTo: aid@example.com\nSubject: Re: Vraag over orderbevestiging\n"
+                      f"In-Reply-To: <{message_id}@example.com>\n\nHet klopt zo.\n".encode())
+    return file_answer(d.settings.cases_root, reply, at)
+
+
+@pytest.mark.parametrize("answered", [0, 1], ids=["the first question answered", "the second question answered"])
+def test_a_reply_to_one_of_two_questions_leaves_the_case_waiting_and_confirms_nothing(tmp_path, madeup_out, answered):
+    """One run asks S17 two questions. The supplier answers one of them, and the buyer reads the reply and closes the case: the other
+    question has no reply of its own, so the close confirms nothing. It makes none of the operations that the answer was to allow (no
+    confirmation attached, no status set), leaves the case waiting and the page says that a question is open. When the wait of that
+    question ends, the case comes back, and then the close confirms the order."""
+    out = tmp_path / "outbox"
+    d = mailing(deps(tmp_path, madeup_out), out)
+    d = d.model_copy(update={"settings": d.settings.model_copy(update={"supplier_emails": {"S17": "sales@s17.example.com"}}), "reader": two_differences})
+    c, r = run(d, madeup_out, "MU17", "250117")
+    asked = [m["message_id"] for m in r.messages]
+    assert r.status == "waiting" and sorted(m["template"] for m in r.messages) == ["line_missing_extra", "quantity_unit"]
+    assert answer(d, tmp_path, asked[answered]) == c.case_id
+    decide(c, "RI1", "keep")
+    text, still_open = close_text(c, d, "nl")
+    assert text == f"{WAITING['nl']} {STRINGS['nl']['question_open']}." and not still_open
+    r2 = CaseResult.model_validate(c.read_step("result"))
+    record = c.read_step("close")["records"][-1]
+    assert r2.status == "waiting" and record["question_open"] is True and record["messages"] == []
+    assert r2.write_entries == [] and WriteLog(c.root).entries() == [] and list_open_cases(d.settings.cases_root) == []
+    assert escalate_pending(d.settings.cases_root, datetime(2026, 11, 17, 9, 0), d.settings) == []
+    assert escalate_pending(d.settings.cases_root, datetime(2026, 11, 17, 9, 1), d.settings) == [(c.case_id, "no answer in 3 working days")]
+    [escalated] = (c.root / "messages" / "escalated.jsonl").read_text(encoding="utf-8").splitlines()
+    assert json.loads(escalated)["message_id"] == asked[1 - answered]
+    decide(c, "RI2", "keep")
+    r3 = close_case(c, d)
+    assert r3.status == "closed" and [e.op.kind for e in r3.write_entries] == ["attach_document", "set_status"]
+
+
+def test_an_item_left_on_ask_after_its_answer_keeps_the_case_in_review(tmp_path, madeup_out):
+    """MU07 asked from the page and answered: the case comes back with the reply's item. The buyer acknowledges that item and leaves
+    the price on "Leverancier vragen": no question is outstanding, so the close does not set the case to waiting, where nothing would
+    ever bring it back. It stays in review, with nothing sent again, until the buyer decides the price otherwise."""
+    out = tmp_path / "outbox"
+    d = mailing(deps(tmp_path, madeup_out), out)
+    c = asked_on_the_page(d, madeup_out)
+    assert close_case(c, d).status == "waiting"
+    [question] = sent_lines(c)
+    assert answer(d, tmp_path, question["message_id"]) == c.case_id
+    decide(c, "RI2", "keep")
+    text, still_open = close_text(c, d, "nl")
+    assert (text, still_open) == (STRINGS["nl"]["new_status"].format(status=STRINGS["nl"]["status:review"]), True)
+    record = c.read_step("close")["records"][-1]
+    assert record["status"] == "review" and record["messages"] == [] and record["carried_out"].keys() == {"RI2"}
+    assert len(sent_lines(c)) == 1 and len(list(out.glob("*.eml"))) == 1
+    assert [s.case_id for s in list_open_cases(d.settings.cases_root)] == [c.case_id]
+    assert escalate_pending(d.settings.cases_root, NOW + timedelta(days=30), d.settings) == []
+    decide(c, "RI1", "keep")
+    assert close_case(c, d).status == "closed"
+
+
+def test_an_item_left_on_ask_keeps_the_case_waiting_while_its_question_is_open(tmp_path, madeup_out):
+    """MU12: the run's question and the buyer's own are both without a reply when the reply to the run's question is filed. The
+    buyer reads it and closes: the price stays on "Leverancier vragen" and its question is still open, so the case waits, the page
+    says that a question is open, and that question comes back when its own wait ends."""
+    out = tmp_path / "outbox"
+    d = mailing(deps(tmp_path, madeup_out), out)
+    d = d.model_copy(update={"settings": d.settings.model_copy(update={"supplier_emails": {"S12": "sales@s12.example.com"}})})
+    c, r = run(d, madeup_out, "MU12", "250112")
+    decide(c, "RI1", "ask"); decide(c, "RI2", "keep")
+    assert close_text(c, d, "nl") == (f"{WAITING['nl']} {filed('nl', 'outbox')} {STRINGS['nl']['question_open']}.", False)
+    first, second = [line["message_id"] for line in sent_lines(c)]
+    assert answer(d, tmp_path, first) == c.case_id
+    decide(c, "RI3", "keep")
+    assert close_text(c, d, "nl") == (f"{WAITING['nl']} {STRINGS['nl']['question_open']}.", False)
+    assert c.read_step("close")["records"][-1]["question_open"] is True and len(sent_lines(c)) == 2
+    assert escalate_pending(d.settings.cases_root, datetime(2026, 11, 17, 9, 1), d.settings) == [(c.case_id, "no answer in 3 working days")]
+    assert json.loads((c.root / "messages" / "escalated.jsonl").read_text(encoding="utf-8").splitlines()[0])["message_id"] == second
+
+
+def test_a_bounce_that_was_not_escalated_yet_keeps_the_case_waiting(tmp_path, madeup_out):
+    """MU12 again: the run's question bounces while the case is in review for its other items, so nothing has told the buyer yet. The
+    close does not confirm the order: the case waits, and the next escalation brings it back as bounced."""
+    out = tmp_path / "outbox"
+    d = mailing(deps(tmp_path, madeup_out), out)
+    d = d.model_copy(update={"settings": d.settings.model_copy(update={"supplier_emails": {"S12": "sales@s12.example.com"}})})
+    c, r = run(d, madeup_out, "MU12", "250112")
+    bounce = tmp_path / "bounce.eml"
+    bounce.write_bytes(f"From: postmaster@example.com\nTo: aid@example.com\nSubject: Undeliverable: Vraag over orderbevestiging PO 250112\n"
+                       f"In-Reply-To: <{r.messages[0]['message_id']}@example.com>\n\nNo such user.\n".encode())
+    assert file_answer(d.settings.cases_root, bounce, NOW + timedelta(hours=1)) == c.case_id
+    assert escalate_pending(d.settings.cases_root, NOW + timedelta(hours=1), d.settings) == []          # in review: not escalated
+    decide(c, "RI1", "keep"); decide(c, "RI2", "keep")
+    r2 = close_case(c, d)
+    assert r2.status == "waiting" and r2.write_entries == [] and c.read_step("close")["records"][-1]["question_open"] is True
+    assert escalate_pending(d.settings.cases_root, NOW + timedelta(hours=2), d.settings) == [(c.case_id, "message bounced")]
+
+
+def test_a_try_out_sends_nothing(tmp_path, madeup_out, smtp_server):
+    """A case made from a try-out document on the page that sends: with the SMTP server set, "Leverancier vragen" is refused, and a
+    decision "ask" that stands in its decisions all the same sends nothing. The close asks no mailer: the stand-in server gets no
+    e-mail, no file is written, nothing is recorded as sent, and the case stays in review. The guard is the try-out's alone: the
+    supplier's own confirmation of the same order, asked on the same page, is sent."""
+    from aid.decider import NoDecider
+    from aid.pipeline import Deps
+    from aid.tests.test_tryout import NOW as MADE, OPEN, give, outbox, results, runner_pass, tryout_settings
+    from aid.tryout_mark import TRYOUT_NOT_SENT, tryout_case
+
+    store = deps(tmp_path, madeup_out, settings=OPEN).store
+    settings = tryout_settings(tmp_path, first_cases_review=5, send_via="smtp", smtp_host="smtp.example.com", smtp_user="aid@example.com")
+    give(settings, store, "250108", "price_large")
+    runner_pass(settings, store)                              # the runner of the tests' try-outs: a file mailer, which gets nothing
+    [r] = results(settings)
+    case = load_case(settings.cases_root, r.case_id)
+    item = next(item.item_id for item in r.review_items if item.finding_id)
+    assert r.status == "review" and tryout_case(case)
+    path = tmp_path / "settings.json"
+    path.write_text(settings.model_dump_json(), encoding="utf-8")
+    d = Deps(settings=load_settings(path), store=store, reader=read_with_parser, decider=NoDecider(), writer=PreparedWriter(settings.cases_root / "prepared"),
+             mailer=FileMailer(tmp_path / "given", sender=settings.aid_email, clock=lambda: MADE), clock=lambda: MADE)
+    page = build_app(d, settings_file=path, environ=os.environ, session=FakeSession())
+    assert decision_text(case, item, "ask", False, "nl") == (STRINGS["nl"]["tryout_nothing_sent"], False)
+    assert not (case.root / "decisions.jsonl").exists()
+    (case.root / "decisions.jsonl").write_text(json.dumps({"item_id": item, "decision": "ask", "article_update": False,
+                                                           "at": "2026-11-12T09:30:00"}) + "\n", encoding="utf-8")
+    assert pressed_close(page, case) == (STRINGS["nl"]["new_status"].format(status=STRINGS["nl"]["status:review"]), case.case_id)
+    closed = case.read_step("result")
+    assert closed["status"] == "review" and [(m["template"], m["status"]) for m in closed["messages"]] == [("missing_info", TRYOUT_NOT_SENT)]
+    assert smtp_server == [] and outbox(settings) == [] and not (tmp_path / "given").exists()
+    assert [found for found in (case.root / "messages").rglob("*")] == [] and case.read_step("close")["records"][-1]["carried_out"] == {}
+    # the supplier's own confirmation of the same order, on the same page: its question is sent
+    shutil.copy(madeup_out / "MU08_conf.pdf", settings.watched_folder)
+    runner_pass(settings, store)
+    [own] = [load_case(settings.cases_root, result.case_id) for result in results(settings) if result.case_id != r.case_id]
+    items = own.read_step("result")["review_items"]
+    asked = next(i["item_id"] for i in items if i["finding_id"])
+    for i in items:
+        decide(own, i["item_id"], "ask" if i["item_id"] == asked else "keep")
+    assert pressed_close(page, own) == (WAITING["nl"], None)
+    [mail] = smtp_server
+    assert (mail["To"], mail["X-Aid-Case"]) == (settings.supplier_emails["S08"], own.case_id) and outbox(settings) == []
+    assert not (tmp_path / "given").exists()
+
+
+# --- the review round of Task 44: the page sends (rulings S1 to S10) and an item's own question (S11, S12, S14, S17, S20) ---
+
+import gradio  # noqa: E402
+
+import aid.messaging  # noqa: E402
+from aid.messaging import HandOverUnconfirmed, MailerError, outstanding_questions  # noqa: E402
+from aid.review.close import standing_decisions  # noqa: E402
+
+REVIEW = {"nl": "De zaak is nu: ter beoordeling.", "en": "The case is now: for review."}
+CLOSED = {"nl": "De zaak is nu: afgesloten.", "en": "The case is now: closed."}
+UNSENT = {"nl": f"{REVIEW['nl']} Een bericht is niet verzonden; de zaak blijft ter beoordeling.",
+          "en": f"{REVIEW['en']} A message was not sent; the case stays for review."}
+CAUSES = {      # the kind of cause the page names after a message that was not sent, as the rulings give them
+    "sign_in": ("De aanmelding bij Microsoft is verlopen: meld u opnieuw aan onder Instellingen, Koppelingen, en sluit de zaak opnieuw af.",
+                "The Microsoft sign-in has lapsed: sign in again under Settings, Connections, and close the case again."),
+    "unreachable": ("Het postvak of de mailserver was niet bereikbaar: sluit de zaak later opnieuw af.",
+                    "The mailbox or the mail server could not be reached: close the case again later."),
+    "refused": ("Het postvak of de mailserver weigerde het bericht: geef dit door aan de onderzoeker.",
+                "The mailbox or the mail server refused the message: pass this on to the researcher."),
+    "no_mailbox": ("Er is geen postvak verbonden: verbind een postvak onder Instellingen, Koppelingen, en sluit de zaak opnieuw af.",
+                   "No mailbox is connected: connect a mailbox under Settings, Connections, and close the case again."),
+    "no_password": ("Het wachtwoord van de mailserver is niet ingesteld: geef dit door aan de onderzoeker.",
+                    "The mail server's password is not set: pass this on to the researcher."),
+    "settings": ("De instellingen kunnen nu niet worden gelezen: er is niets verstuurd. Geef dit door aan de onderzoeker.",
+                 "The settings cannot be read now: nothing was sent. Pass this on to the researcher."),
+    "document": ("Het document van de zaak kan nu niet worden gelezen: er is niets verstuurd.",
+                 "The case's document cannot be read now: nothing was sent."),
+}
+UNCONFIRMED = {"nl": ("Niet zeker of het bericht is verstuurd: het postvak gaf geen bevestiging. Kijk bij Verzonden items. Staat het er niet, "
+                      "dan komt de zaak na de wachttijd bij u terug en stelt u de vraag opnieuw."),
+               "en": ("Not sure whether the message was sent: the mailbox gave no confirmation. Look in Sent items. If it is not there, the "
+                      "case comes back to you after the wait and you ask the question again.")}
+UNREAD = {"nl": "Een antwoord bij deze zaak kan nu niet worden gelezen: sluit de zaak zo opnieuw af.",
+          "en": "A reply filed with this case cannot be read now: close the case again in a moment."}
+OPEN = {"nl": "Vraag aan de leverancier staat open.", "en": "A question to the supplier is open."}
+
+
+def written(language: str, folder: str = "cases/outbox") -> str:
+    """The page's sentence after a close whose message was written as a file into this folder, by the owner's choice."""
+    return {"nl": f"Het bericht is niet verstuurd maar als bestand klaargezet ({folder}): de instellingen laten berichten als bestand schrijven.",
+            "en": f"The message was not sent but written as a file ({folder}): the settings have messages written as files."}[language]
+
+
+def not_sent(language: str, cause: str | None = None) -> str:
+    """What the page says after a close whose message was not sent, with the sentence of its kind of cause."""
+    return UNSENT[language] + (f" {CAUSES[cause][language == 'en']}" if cause else "")
+
+
+class Clock:
+    """A clock that a test moves; the Deps and their file mailer read the same one."""
+
+    def __init__(self, now: datetime = NOW):
+        self.now = now
+
+    def __call__(self) -> datetime:
+        return self.now
+
+
+def world(tmp_path, madeup_out):
+    """The Deps of a test that moves the time: a file mailer into tmp_path/outbox, a made-up address for every made-up supplier,
+    and one clock for the run, the close and the mailer. Returns the Deps and the clock."""
+    clock, d = Clock(), deps(tmp_path, madeup_out)
+    settings = d.settings.model_copy(update={"supplier_emails": {f"S{n:02d}": f"sales@s{n:02d}.example.com" for n in range(1, 24)}})
+    return d.model_copy(update={"settings": settings, "clock": clock,
+                                "mailer": FileMailer(tmp_path / "outbox", sender="aid@example.com", clock=clock)}), clock
+
+
+def questions(c) -> list[str]:
+    """The message ids of the questions the case sent, in the order sent."""
+    return [line["message_id"] for line in sent_lines(c) if line["template"] != "reapproval"]
+
+
+def out(c, d) -> list[str]:
+    """The message ids of the questions of the case that are still out."""
+    return [question.message_id for question in outstanding_questions(c.root / "messages", d.settings.ask_wait_working_days)]
+
+
+def bounce(d, tmp_path, message_id: str, at: datetime, name: str = "ndr.eml") -> str | None:
+    """A made-up non-delivery notice of the message with this id, filed as the scan of the watched folder files it."""
+    notice = tmp_path / name
+    notice.write_bytes(f"From: postmaster@example.com\nTo: aid@example.com\nSubject: Undeliverable: Vraag over orderbevestiging\n"
+                       f"In-Reply-To: <{message_id}@example.com>\n\nNo such user.\n".encode())
+    return file_answer(d.settings.cases_root, notice, at)
+
+
+def items(c) -> list[tuple[str, str]]:
+    return [(item["item_id"], item["reason"]) for item in c.read_step("result")["review_items"]]
+
+
+def shown_choices(page_or_deps, c, language: str = "nl") -> dict[str, str]:
+    """The choice the page shows on each review item of the case: what its radios are set to when the case is opened."""
+    page = page_or_deps if hasattr(page_or_deps, "fns") else build_app(page_or_deps)
+    [show] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == "show"]
+    state = show.fn(c.case_id, language)[[type(block).__name__ for block in show.outputs].index("State")]
+    return {item_id: decision["decision"] for item_id, decision in state["decisions"].items()}
+
+
+def after_the_press(page, case, language: str = "nl") -> tuple[str, str | None]:
+    """What the status line and the case list show once the browser has run everything that a press on "Zaak afsluiten" sets off,
+    as the page wires it: the close, whose outputs are the status line and the case list, then every function wired to the change
+    of a component whose value the close changed (the case list, when the case leaves the review), and the step chained after the
+    close. An output that is an update without a value leaves its component as it is, as the browser leaves it."""
+    functions = list(page.fns.values())
+    [closing] = [f for f in functions if getattr(f.fn, "__name__", "") == "close"]
+    line, cases = closing.outputs
+    values = {line._id: "", cases._id: case.case_id}
+
+    def value_of(block):
+        return values.get(block._id, language if isinstance(block, gradio.Radio) else None)
+
+    def take(outputs, results) -> list:
+        changed = []
+        for block, result in zip(outputs, results):
+            if isinstance(result, dict) and result.get("__type__") == "update":
+                if "value" not in result:
+                    continue
+                result = result["value"]
+            if values.get(block._id) != result:
+                changed.append(block)
+            values[block._id] = result
+        return changed
+
+    changed = take(closing.outputs, closing.fn(*(value_of(block) for block in closing.inputs)))
+    for block in changed:
+        for wired in functions:
+            if (block._id, "change") in [(target[0], target[1]) for target in wired.targets]:
+                take(wired.outputs, wired.fn(*(value_of(given) for given in wired.inputs)))
+    for chained in functions:
+        if chained.trigger_after == closing._id:
+            take(chained.outputs, chained.fn(*(value_of(given) for given in chained.inputs)))
+    return values[line._id], values[cases._id]
+
+
+def test_the_change_of_the_case_list_leaves_the_status_line_alone_when_no_case_is_chosen(tmp_path, madeup_out):
+    """Ruling S1. A close that takes the case out of the review empties the case list, and that change runs the function that
+    shows the chosen case. With no case chosen it gives no new text for the status line, so that what the close said stays on the
+    screen; with a case chosen it empties the line, as before."""
+    d = mailing(deps(tmp_path, madeup_out), tmp_path / "outbox")
+    c, _ = run(d, madeup_out, "MU07", "250107")
+    [show] = [f for f in build_app(d).fns.values() if getattr(f.fn, "__name__", "") == "show"]
+    line = [type(block).__name__ for block in show.outputs].index("Markdown", len(show.outputs) - 1)
+    for none in (None, ""):
+        assert show.fn(none, "nl")[line] == {"__type__": "update"}
+    assert show.fn(c.case_id, "nl")[line] == ""
+
+
+@pytest.mark.parametrize("language", ["nl", "en"])
+def test_what_the_page_says_after_a_close_stays_on_the_screen(tmp_path, madeup_out, language):
+    """Ruling S1, the chain of events of a press on "Zaak afsluiten" as the page wires it, not the handler alone: the text of every
+    close is still on the status line after the change of the case list that the close causes. The four cases of the finding: a
+    question written as a file (send_via "file"), a case closed, a case that waits on an earlier question, and an undecided item."""
+    path, d, page, _ = sending_page(tmp_path, madeup_out, send_via="file", supplier_emails={"S07": SUPPLIER, "S12": "sales@s12.example.com"})
+    asked = asked_on_the_page(d, madeup_out)
+    assert after_the_press(page, asked, language) == (f"{WAITING[language]} {written(language)}", None)
+    kept, _ = run(d, madeup_out, "MU07", "250107", now=LATER)
+    decide(kept, "RI1", "keep")
+    assert after_the_press(page, kept, language) == (CLOSED[language], None)
+    runner = d.model_copy(update={"mailer": FileMailer(tmp_path / "cases" / "outbox", sender="aid@example.com", clock=lambda: NOW)})
+    open_question, _ = run(runner, madeup_out, "MU12", "250112")                 # the run's own question is out
+    decide(open_question, "RI1", "keep"); decide(open_question, "RI2", "keep")
+    assert after_the_press(page, open_question, language) == (f"{WAITING[language]} {OPEN[language]}", None)
+    undecided, _ = run(d, madeup_out, "MU07", "250107", now=LATER + timedelta(minutes=1))
+    assert after_the_press(page, undecided, language) == (REVIEW[language], undecided.case_id)
+
+
+@pytest.mark.parametrize("language", ["nl", "en"])
+@pytest.mark.parametrize("cause, application, mailbox", [
+    ("sign_in", lambda: FakeApp(accounts=[USERNAME], silent=None), graph),
+    ("unreachable", lambda: FakeApp(accounts=[USERNAME]), lambda: NoConnection()),
+    ("unreachable", lambda: FakeApp(accounts=[USERNAME]), lambda: graph(created=503)),
+    ("refused", lambda: FakeApp(accounts=[USERNAME]), lambda: graph(created=403)),
+    ("refused", lambda: FakeApp(accounts=[USERNAME]), lambda: graph(sent=403)),
+], ids=["sign-in lapsed", "no connection", "HTTP 503", "HTTP 403 at the draft", "HTTP 403 at the send"])
+def test_a_question_that_could_not_be_sent_leaves_an_item_and_the_page_says_why(tmp_path, madeup_out, language, cause, application, mailbox):
+    """Ruling S2. The close could not send its question: the page says so, with the kind of the cause and what to do (never a text
+    of the server, an address or a status code), and the case gets the review item of the run for a message that was not sent,
+    "Bericht niet verzonden", which is there after a reload. The item needs no decision of its own: once a later close sends the
+    question it is settled, and the case waits."""
+    session, signed = mailbox(), application()
+    path, d, page, _ = sending_page(tmp_path, madeup_out, app=signed, session=session, send_via="microsoft", **MAILBOX)
+    c = asked_on_the_page(d, madeup_out)
+    text, chosen = after_the_press(page, c, language)
+    assert (text, chosen) == (not_sent(language, cause), c.case_id)
+    assert not re.search(r"\d{3}|Error|example|graph", text) and items(c) == [("RI1", "price above threshold"), ("RI2", "message not sent")]
+    assert c.read_step("result")["review_items"][1]["finding_id"] is None and sent_lines(c) == []
+    record = c.read_step("close")["records"][-1]
+    assert record["carried_out"] == {} and record["unsent_questions"] == {"missing_info": "RI2"} and [m["cause"] for m in record["messages"]] == [cause]
+    assert page_rows(load_case_view(c).flags, language)[-1][5] == STRINGS[language]["reason:message not sent"]      # after a reload
+    assert shown_choices(page, c) == {"RI1": "ask"}
+    text, chosen = after_the_press(page, c, language)                           # pressed again while it still fails: the same item
+    assert (text, chosen) == (not_sent(language, cause), c.case_id) and [item_id for item_id, _ in items(c)] == ["RI1", "RI2"]
+    decide(c, "RI2", "keep")                                                    # a choice on the item does not let the case go while the
+    assert after_the_press(page, c, language) == (not_sent(language, cause), c.case_id)      # question is still not sent
+    assert c.read_step("result")["status"] == "review" and sent_lines(c) == []
+    signed.silent = {"access_token": ACCESS_TOKEN, "token_type": "Bearer"}
+    page = sending_page(tmp_path, madeup_out, app=signed, session=graph(), send_via="microsoft", **MAILBOX)[2]      # the mailbox works again
+    assert after_the_press(page, c, language) == (WAITING[language], None)
+    record = c.read_step("close")["records"][-1]
+    assert record["settled"] == ["RI2"] and record["unsent_questions"] == {} and record["carried_out"].keys() == {"RI1"}
+    assert c.read_step("result")["status"] == "waiting" and len(sent_lines(c)) == 1 and len(items(c)) == 2
+
+
+def test_a_question_without_an_address_leaves_the_item_of_the_run(tmp_path, madeup_out):
+    """The settings hold no address for the supplier: the close records the question as not sent, as the run does, and the case
+    gets the run's item for it, "Geen e-mailadres van de leverancier". With the address set, the next close sends it."""
+    path, d, page, _ = sending_page(tmp_path, madeup_out, send_via="file", supplier_emails={})
+    c = asked_on_the_page(d, madeup_out)
+    assert after_the_press(page, c) == (not_sent("nl"), c.case_id)
+    assert items(c)[-1] == ("RI2", "no address for the supplier") and not (tmp_path / "cases" / "outbox").exists()
+    changed_on_disk(path, supplier_emails={"S07": SUPPLIER})
+    assert after_the_press(page, c) == (f"{WAITING['nl']} {written('nl')}", None)
+    assert c.read_step("close")["records"][-1]["settled"] == ["RI2"]
+
+
+def spoiled(path, how: str) -> None:
+    """The settings file as an edit by hand leaves it when it goes wrong: a value that does not validate, a file cut in the
+    middle, or the file moved away."""
+    before = path.stat().st_mtime_ns
+    text = path.read_text(encoding="utf-8")
+    if how == "moved away":
+        path.rename(path.with_name("settings.bak"))
+        return
+    path.write_text(text.replace('"send_via": "smtp"', '"send_via": "postduif"') if how == "a wrong value" else text[:len(text) // 2], encoding="utf-8")
+    os.utime(path, ns=(before + 2_000_000_000, before + 2_000_000_000))
+
+
+@pytest.mark.parametrize("how", ["a wrong value", "cut in the middle", "moved away"])
+def test_a_close_while_the_settings_file_cannot_be_read_sends_nothing(tmp_path, madeup_out, smtp_server, how):
+    """Ruling S3. The page was started with settings that send through the mail server. The owner edits the file by hand and
+    leaves it unreadable: a close that has a question to send then sends nothing and writes no file, keeps the case in review with
+    the item of a message not sent, and says that the settings cannot be read. A close without a message goes on as before. Once
+    the file reads again, the next close sends by the settings as they are then."""
+    path, d, page, _ = sending_page(tmp_path, madeup_out, environ=os.environ, send_via="smtp", smtp_host="smtp.example.com", smtp_user="aid@example.com")
+    good = path.read_text(encoding="utf-8")
+    c = asked_on_the_page(d, madeup_out)
+    kept, _ = run(d, madeup_out, "MU07", "250107", now=LATER)
+    decide(kept, "RI1", "keep")
+    spoiled(path, how)
+    assert after_the_press(page, c) == (not_sent("nl", "settings"), c.case_id)
+    assert smtp_server == [] and sent_lines(c) == [] and not (tmp_path / "cases" / "outbox").exists() and not (tmp_path / "given").exists()
+    assert items(c)[-1] == ("RI2", "message not sent") and c.read_step("close")["records"][-1]["messages"][0]["cause"] == "settings"
+    assert after_the_press(page, kept) == (CLOSED["nl"], None)                  # nothing to send: as before
+    path.write_text(good.replace('"send_via": "smtp"', '"send_via": "file"'), encoding="utf-8")
+    os.utime(path, ns=(path.stat().st_mtime_ns + 4_000_000_000,) * 2)
+    assert after_the_press(page, c) == (f"{WAITING['nl']} {written('nl')}", None)
+    assert smtp_server == [] and len(list((tmp_path / "cases" / "outbox").glob("*.eml"))) == 1
+
+
+@pytest.mark.parametrize("language", ["nl", "en"])
+@pytest.mark.parametrize("values, cause", [({}, "no_mailbox"), (MAILBOX, "no_mailbox"), (MAILBOX | {"mail_folder": "AAMkADMadeUpFolder0001="}, "no_mailbox"),
+                                           ({"smtp_host": "smtp.example.com", "smtp_user": "aid@example.com"}, "no_password"),
+                                           ({"send_via": "smtp"}, "no_mailbox")],
+                         ids=["nothing connected", "a sign-in without a folder", "a folder and nobody signed in", "no password", "smtp without a server"])
+def test_for_want_of_a_route_nothing_is_asked(tmp_path, madeup_out, language, values, cause):
+    """Ruling S4 (b). The settings name a way to send that is not there: the page's close writes no file and counts nothing as
+    asked. It is a message not sent: the case stays in review with its item, and the page says what is missing."""
+    path, d, page, _ = sending_page(tmp_path, madeup_out, **values)
+    c = asked_on_the_page(d, madeup_out)
+    assert after_the_press(page, c, language) == (not_sent(language, cause), c.case_id)
+    assert not (tmp_path / "cases" / "outbox").exists() and not (tmp_path / "given").exists() and sent_lines(c) == [] and rows(c) == []
+    assert items(c)[-1] == ("RI2", "message not sent") and c.read_step("result")["status"] == "review"
+    words = {"no_mailbox": "no mailbox connected", "no_password": "mail server password not set"}[cause]
+    assert [(m["status"], m["cause"]) for m in c.read_step("close")["records"][-1]["messages"]] == [(f"not sent ({words})", cause)]
+
+
+@pytest.mark.parametrize("language", ["nl", "en"])
+def test_a_message_written_as_a_file_by_choice_counts_and_names_its_folder(tmp_path, madeup_out, language):
+    """Rulings S4 (c) and S26. With send_via "file" the question is written to cases/outbox, counts as asked and the case waits; the
+    page says that it was written as a file because the settings say so, and names the folder the mailer writes into: its path
+    from the cases folder when it lies inside it, else its name. A close without a message says nothing of files."""
+    path, d, page, _ = sending_page(tmp_path, madeup_out, send_via="file", **MAILBOX)
+    c = asked_on_the_page(d, madeup_out)
+    assert pressed_close(page, c, language) == (f"{WAITING[language]} {written(language)}", None)
+    [eml] = (tmp_path / "cases" / "outbox").glob("*.eml")
+    assert (read_eml(eml)["To"], read_eml(eml)["X-Aid-Case"]) == (SUPPLIER, c.case_id)
+    assert [line["message_id"] for line in sent_lines(c)] == [eml.stem] and c.read_step("result")["status"] == "waiting"
+    assert STRINGS[language]["message_filed"].format(folder="cases/outbox") == written(language) and not (tmp_path / "given").exists()
+    for folder, words in ((tmp_path / "given", "given"), (tmp_path / "cases" / "uit" / "post", "cases/uit/post")):       # a page given its own mailer
+        own = d.model_copy(update={"mailer": FileMailer(folder, sender="aid@example.com", clock=lambda: NOW)})
+        second = asked_on_the_page(own, madeup_out, now=LATER + timedelta(minutes=len(words)))
+        assert close_text(second, own, language) == (f"{WAITING[language]} {written(language, words)}", False)
+        assert len(list(folder.glob("*.eml"))) == 1
+    kept, _ = run(d, madeup_out, "MU07", "250107", now=LATER)
+    decide(kept, "RI1", "keep")
+    assert pressed_close(page, kept, language) == (CLOSED[language], None)
+
+
+@pytest.mark.parametrize("language", ["nl", "en"])
+def test_a_hand_over_that_was_not_confirmed_counts_as_asked_and_says_so(tmp_path, madeup_out, language):
+    """Ruling S5. The draft is made and its send gets no answer in time: the message may have left. The close records it as sent
+    with the note that the hand-over was not confirmed, under the id the supplier would have received, the case waits, and the
+    page says to look in Sent items. Nothing is sent a second time, and a reply that names the message is filed with the case and
+    is the answer to its question."""
+    mailbox = graph()
+
+    def no_answer(request):
+        raise requests.ReadTimeout("made-up detail: no answer in time")
+    [send_url] = [key for key in mailbox.answers if key[1].endswith("/send")]
+    mailbox.answers[send_url] = [no_answer]
+    path, d, page, _ = sending_page(tmp_path, madeup_out, app=FakeApp(accounts=[USERNAME]), session=mailbox, send_via="microsoft", **MAILBOX)
+    c = asked_on_the_page(d, madeup_out)
+    assert after_the_press(page, c, language) == (f"{WAITING[language]} {UNCONFIRMED[language]}", None)
+    [message] = c.read_step("result")["messages"]
+    [line] = sent_lines(c)
+    assert (message["status"], message["unconfirmed"], line["unconfirmed"]) == ("sent", True, True) and message["message_id"] == line["message_id"]
+    mime = message_from_bytes(base64.b64decode(mailbox.calls[0]["data"]), policy=policy.default)
+    assert mime["Message-ID"] == line["internet_message_id"] and c.read_step("result")["status"] == "waiting"
+    assert c.read_step("close")["records"][-1]["carried_out"].keys() == {"RI1"} and items(c) == [("RI1", "price above threshold")]
+    assert pressed_close(page, c, language) == (STRINGS[language]["not_closed"], None) and len(mailbox.calls) == 2      # nothing sent again
+    assert out(c, d) == [line["message_id"]]
+    assert answer(d, tmp_path, line["message_id"]) == c.case_id and out(c, d) == [] and items(c)[-1] == ("RI2", "supplier answered: read the reply")
+
+
+def test_a_reply_filed_while_the_close_is_sending_keeps_its_item(tmp_path, madeup_out):
+    """Ruling S6 (the review's test_x8_race.py). MU12 after its run: the run's question is out and two items wait for the buyer,
+    who asks about the first and keeps the second. While the close is sending that question, the runner files the supplier's reply
+    to the run's question and adds its item to the saved result, and a message record besides. The close keeps both: the case stays
+    in review with the reply's item, which the buyer reads; after that the case waits on the question the close sent."""
+    d, clock = world(tmp_path, madeup_out)
+    c, r = run(d, madeup_out, "MU12", "250112")
+    [first] = questions(c)
+    decide(c, "RI1", "ask"); decide(c, "RI2", "keep")
+
+    class Slow(FileMailer):
+        """The file mailer, during whose send the runner's pass files the reply to the run's own question."""
+
+        def send(self, msg):
+            assert answer(d, tmp_path, first) == c.case_id
+            saved = CaseResult.model_validate(c.read_step("result"))
+            c.write_step(8, "result", saved.model_copy(update={"messages": [*saved.messages, {"rule_id": "X", "template": "made_up", "status": "sent"}]}))
+            return super().send(msg)
+
+    text, still_open = close_text(c, d.model_copy(update={"mailer": Slow(tmp_path / "outbox", sender="aid@example.com", clock=clock)}), "nl")
+    assert (text, still_open) == (f"{REVIEW['nl']} {written('nl', 'outbox')}", True)
+    result = c.read_step("result")
+    assert result["status"] == "review" and items(c) == [*((item.item_id, item.reason) for item in r.review_items),
+                                                         ("RI3", "supplier answered: read the reply")]
+    assert [m["template"] for m in result["messages"]] == ["quantity_unit", "made_up", "missing_info"]
+    assert [s.case_id for s in list_open_cases(d.settings.cases_root)] == [c.case_id] and len(questions(c)) == 2
+    assert shown_choices(d, c) == {"RI1": "ask", "RI2": "keep"}                 # its question is out: the choice stands
+    decide(c, "RI3", "keep")
+    assert close_text(c, d, "nl") == (f"{WAITING['nl']} {OPEN['nl']}", False)
+    assert WriteLog(c.root).entries() == [] and out(c, d) == [questions(c)[1]]
+
+
+def test_a_document_that_cannot_be_read_at_the_close_sends_nothing(tmp_path, madeup_out, smtp_server, monkeypatch):
+    """Ruling S7. Whether the case is made from a try-out is known by its document alone. When that document cannot be read at the
+    close (held by another program, or gone), the page cannot tell, and sends nothing: a message not sent, with the sentence that
+    the document cannot be read. This holds for a try-out and for a supplier's own document alike; once the document reads again,
+    the question of the supplier's document goes out."""
+    import aid.tryout_mark as mark
+
+    path, d, page, _ = sending_page(tmp_path, madeup_out, environ=os.environ, send_via="smtp", smtp_host="smtp.example.com", smtp_user="aid@example.com")
+    c = asked_on_the_page(d, madeup_out)
+    read = mark.extract_lines
+
+    def held(document):
+        raise PermissionError(13, "made-up: held by another program")
+    monkeypatch.setattr(mark, "extract_lines", held)
+    monkeypatch.setattr(mark, "READ_PAUSE", 0)
+    mark._first_row_is_tryout.cache_clear()
+    assert after_the_press(page, c) == (not_sent("nl", "document"), c.case_id)
+    assert smtp_server == [] and sent_lines(c) == [] and items(c)[-1] == ("RI2", "message not sent")
+    assert c.read_step("close")["records"][-1]["messages"][0]["status"] == "not sent (document cannot be read)"
+    monkeypatch.setattr(mark, "extract_lines", read)
+    gone = c.input_files[0].with_name("elders.pdf")
+    c.input_files[0].rename(gone)                                               # the file is gone: nothing to judge by
+    assert after_the_press(page, c) == (not_sent("nl", "document"), c.case_id) and smtp_server == []
+    gone.rename(c.input_files[0])
+    assert after_the_press(page, c) == (WAITING["nl"], None) and len(smtp_server) == 1 and c.read_step("close")["records"][-1]["settled"] == ["RI2"]
+
+
+def test_a_try_out_whose_document_cannot_be_read_is_asked_about_nowhere(tmp_path, madeup_out, smtp_server, monkeypatch):
+    """Ruling S7, the finding behind it: a try-out whose document cannot be read at the close, with an "ask" in its decisions, is
+    not taken for a supplier's: nothing goes to the address the settings hold for the order's real supplier."""
+    import aid.tryout_mark as mark
+    from aid.decider import NoDecider
+    from aid.pipeline import Deps
+    from aid.tests.test_tryout import NOW as MADE, OPEN as TRYOUTS, give, outbox, results, runner_pass, tryout_settings
+
+    store = deps(tmp_path, madeup_out, settings=TRYOUTS).store
+    settings = tryout_settings(tmp_path, first_cases_review=5, send_via="smtp", smtp_host="smtp.example.com", smtp_user="aid@example.com")
+    give(settings, store, "250108", "price_large")
+    runner_pass(settings, store)
+    [r] = results(settings)
+    case = load_case(settings.cases_root, r.case_id)
+    path = tmp_path / "settings.json"
+    path.write_text(settings.model_dump_json(), encoding="utf-8")
+    d = Deps(settings=load_settings(path), store=store, reader=read_with_parser, decider=NoDecider(), writer=PreparedWriter(settings.cases_root / "prepared"),
+             mailer=FileMailer(tmp_path / "given", sender=settings.aid_email, clock=lambda: MADE), clock=lambda: MADE)
+    page = build_app(d, settings_file=path, environ=os.environ, session=FakeSession())
+    item = next(item.item_id for item in r.review_items if item.finding_id)
+    (case.root / "decisions.jsonl").write_text(json.dumps({"item_id": item, "decision": "ask", "article_update": False,
+                                                           "at": "2026-11-12T09:30:00"}) + "\n", encoding="utf-8")
+
+    def held(document):
+        raise PermissionError(13, "made-up: held by another program")
+    monkeypatch.setattr(mark, "extract_lines", held)
+    monkeypatch.setattr(mark, "READ_PAUSE", 0)
+    mark._first_row_is_tryout.cache_clear()
+    text, chosen = pressed_close(page, case)
+    assert text == not_sent("nl", "document") and chosen == case.case_id
+    assert smtp_server == [] and outbox(settings) == [] and not (tmp_path / "given").exists() and not (case.root / "messages" / "sent.jsonl").exists()
+
+
+def test_a_cart_is_not_asked_about_at_the_close(tmp_path, madeup_out):
+    """Ruling S9. decide refuses "Leverancier vragen" on a cart; an "ask" that stands in the decisions of a cart all the same (a
+    line written by hand) is not sent by the close either: nothing is written or recorded as asked, and the case stays in review."""
+    d, clock = world(tmp_path, madeup_out)
+    c = cart_case(d, madeup_out, "CART01.html", "250107")
+    c.write_step(8, "result", CaseResult.model_validate(c.read_step("result")).model_copy(update={"supplier": "S07"}))
+    with pytest.raises(ValueError, match="a cart is not asked about"):
+        decide(c, "RI1", "ask")
+    (c.root / "decisions.jsonl").write_text(json.dumps({"item_id": "RI1", "decision": "ask", "article_update": False,
+                                                        "at": "2026-11-12T09:30:00"}) + "\n", encoding="utf-8")
+    assert close_text(c, d, "nl") == (REVIEW["nl"], True)
+    record = c.read_step("close")["records"][-1]
+    assert record["messages"] == [] and record["carried_out"] == {} and sent_lines(c) == [] and not (tmp_path / "outbox").exists()
+
+
+def test_a_question_with_its_reply_and_a_bounce_is_answered(tmp_path, madeup_out):
+    """Ruling S11 (the review's scen.py both). The supplier answers the run's question, and a non-delivery notice of the same
+    question is filed besides (one of several recipients). The question has its reply: it is not outstanding and never comes back
+    as bounced. The buyer reads the reply and closes: the order is confirmed, and the next pass has nothing to show."""
+    d, clock = world(tmp_path, madeup_out)
+    c, r = run(d, madeup_out, "MU17", "250117")
+    [first] = questions(c)
+    assert answer(d, tmp_path, first) == c.case_id and bounce(d, tmp_path, first, NOW + timedelta(hours=3)) == c.case_id
+    assert out(c, d) == [] and (c.root / "messages" / "bounces" / "ndr.eml").exists()
+    decide(c, "RI1", "keep")
+    assert close_text(c, d, "nl") == (CLOSED["nl"], False)
+    assert [e.op.kind for e in WriteLog(c.root).entries()] == ["attach_document", "set_status"]
+    assert escalate_pending(d.settings.cases_root, NOW + timedelta(hours=4), d.settings) == [] and items(c) == [("RI1", "supplier answered: read the reply")]
+
+
+def test_a_bounce_of_an_answered_question_does_not_come_back_after_a_later_question(tmp_path, madeup_out):
+    """Ruling S11 (the review's scen2.py stalebounce). MU12: the reply and a bounce of the run's question are filed while the case is
+    in review. The buyer keeps the reply's item and asks a question of his own: the pass after it shows no bounce, since the
+    second question did not bounce and the first was answered; the case waits on the second question alone."""
+    d, clock = world(tmp_path, madeup_out)
+    c, r = run(d, madeup_out, "MU12", "250112")
+    [first] = questions(c)
+    assert answer(d, tmp_path, first) == c.case_id and bounce(d, tmp_path, first, NOW + timedelta(hours=3)) == c.case_id
+    decide(c, "RI1", "ask"); decide(c, "RI2", "keep"); decide(c, "RI3", "keep")
+    clock.now = NOW + timedelta(hours=4)
+    assert close_text(c, d, "nl") == (f"{WAITING['nl']} {written('nl', 'outbox')}", False)
+    clock.now += timedelta(minutes=1)
+    assert escalate_pending(d.settings.cases_root, clock.now, d.settings) == [] and out(c, d) == [questions(c)[1]]
+    assert c.read_step("result")["status"] == "waiting" and len(items(c)) == 3
+
+
+@pytest.mark.parametrize("earlier", ["escalated", "answered"])
+def test_an_item_left_on_ask_is_judged_by_its_own_question(tmp_path, madeup_out, earlier):
+    """Ruling S12 (the review's scen.py leftask, both halves). MU12 with the run's question in its past, escalated in one half and
+    answered in the other. The buyer asks about both of his items in one close, and the supplier answers the question about the
+    first. The buyer reads the reply, keeps the first item and leaves the second on "Leverancier vragen": its own question is
+    still out, so the case waits and the page says that a question is open, whatever became of the earlier questions. When that
+    question's own wait ends, the case comes back, and the item shows no choice any more."""
+    d, clock = world(tmp_path, madeup_out)
+    c, r = run(d, madeup_out, "MU12", "250112")
+    [first] = questions(c)
+    if earlier == "escalated":
+        decide(c, "RI1", "keep"); decide(c, "RI2", "keep")
+        assert close_text(c, d, "nl") == (f"{WAITING['nl']} {OPEN['nl']}", False)
+        clock.now = datetime(2026, 11, 17, 9, 1)
+        assert escalate_pending(d.settings.cases_root, clock.now, d.settings) == [(c.case_id, "no answer in 3 working days")]
+    else:
+        assert answer(d, tmp_path, first) == c.case_id
+    decide(c, "RI3", "keep"); decide(c, "RI1", "ask"); decide(c, "RI2", "ask")
+    clock.now += timedelta(hours=1)
+    assert close_text(c, d, "nl") == (f"{WAITING['nl']} {written('nl', 'outbox')}", False)
+    asked = {line["template"]: line["message_id"] for line in sent_lines(c)[1:]}
+    assert sorted(asked) == ["missing_info", "quantity_unit"] and out(c, d) == questions(c)[1:]
+    clock.now += timedelta(hours=2)
+    assert answer(d, tmp_path, asked["missing_info"], name="r1.eml", at=clock.now) == c.case_id
+    on_price = next(item["item_id"] for item in c.read_step("result")["review_items"][:2] if item["field"] == "price")
+    on_unit = "RI2" if on_price == "RI1" else "RI1"
+    assert shown_choices(d, c).get(on_unit) == "ask" and on_price not in shown_choices(d, c)
+    decide(c, "RI4", "keep")
+    assert close_text(c, d, "nl") == (REVIEW["nl"], True)      # the price's own question has ended and nothing is chosen on it: undecided,
+    decide(c, on_price, "keep")                                # whatever other question is still out
+    assert close_text(c, d, "nl") == (f"{WAITING['nl']} {OPEN['nl']}", False)
+    record = c.read_step("close")["records"][-1]
+    assert (record["status"], record["question_open"], record["messages"]) == ("waiting", True, []) and out(c, d) == [asked["quantity_unit"]]
+    clock.now = datetime(2026, 12, 14, 10, 0)
+    assert escalate_pending(d.settings.cases_root, clock.now, d.settings) == [(c.case_id, "no answer in 3 working days")]
+    assert json.loads((c.root / "messages" / "escalated.jsonl").read_text(encoding="utf-8").splitlines()[-1])["message_id"] == asked["quantity_unit"]
+    assert on_unit not in shown_choices(d, c)
+
+
+@pytest.mark.parametrize("ended", ["answered", "bounced", "no answer"])
+def test_a_question_can_be_asked_again(tmp_path, madeup_out, ended):
+    """Ruling S14. MU07: the buyer asks about the price on Thursday, and the question ends: the supplier answers, the message
+    bounces, or the wait passes without an answer. The case is back with the buyer, and the page shows no choice on the price: its
+    earlier "Leverancier vragen" was carried out and is over. An item on which nothing is chosen keeps the case in review, and
+    sends nothing. Choosing "Leverancier vragen" again is a new decision: the close sends the question again, as a new question
+    with a wait of its own, and the case waits on it; its reply ends that wait."""
+    d, clock = world(tmp_path, madeup_out)
+    c, _ = run(d, madeup_out, "MU07", "250107")
+    decide(c, "RI1", "ask")
+    assert close_case(c, d).status == "waiting"
+    [first] = questions(c)
+    assert shown_choices(d, c) == {"RI1": "ask"}                                # while its question is out, the choice stands
+    if ended == "answered":
+        assert answer(d, tmp_path, first) == c.case_id
+        back = "supplier answered: read the reply"
+    elif ended == "bounced":
+        assert bounce(d, tmp_path, first, NOW + timedelta(minutes=5)) == c.case_id
+        assert shown_choices(d, c) == {"RI1": "ask"}                            # not shown to the buyer yet: the next pass does that
+        assert escalate_pending(d.settings.cases_root, NOW + timedelta(minutes=6), d.settings) == [(c.case_id, "message bounced")]
+        back = "message bounced"
+    else:
+        assert escalate_pending(d.settings.cases_root, datetime(2026, 11, 17, 9, 1), d.settings) == [(c.case_id, "no answer in 3 working days")]
+        back = "no answer in 3 working days"
+    assert items(c)[-1] == ("RI2", back) and shown_choices(d, c) == {} and standing_decisions(c, 3) == {}
+    decide(c, "RI2", "keep")
+    friday = clock.now = datetime(2026, 11, 20, 10, 0)
+    assert close_text(c, d, "nl") == (REVIEW["nl"], True)                       # nothing chosen on the price: undecided
+    assert len(questions(c)) == 1 and c.read_step("close")["records"][-1]["carried_out"].keys() == {"RI2"}
+    decide(c, "RI1", "ask")
+    assert shown_choices(d, c) == {"RI1": "ask", "RI2": "keep"}
+    assert close_text(c, d, "nl") == (f"{WAITING['nl']} {written('nl', 'outbox')}", False)
+    second = questions(c)[1]
+    assert second != first and sent_lines(c)[1]["sent_at"] == friday.isoformat() and out(c, d) == [second]
+    assert c.read_step("result")["status"] == "waiting" and len(list((tmp_path / "outbox").glob("*.eml"))) == 2
+    assert [row[2] for row in rows(c)].count("ask the supplier (B01)") == 2
+    assert escalate_pending(d.settings.cases_root, datetime(2026, 11, 25, 10, 0), d.settings) == []      # its own three working days
+    # A late e-mail about the first question brings the case back while the second is out: the item is judged by the latest
+    # question about it, so its "Leverancier vragen" stands, and the close leaves the case waiting on that question.
+    assert answer(d, tmp_path, first, name="laat.eml", at=datetime(2026, 11, 23, 9, 0)) == c.case_id
+    assert items(c)[-1] == ("RI3", "supplier answered: read the reply") and shown_choices(d, c) == {"RI1": "ask", "RI2": "keep"}
+    decide(c, "RI3", "keep")
+    assert close_text(c, d, "nl") == (f"{WAITING['nl']} {OPEN['nl']}", False) and len(questions(c)) == 2
+    assert answer(d, tmp_path, second, name="tweede.eml", at=datetime(2026, 11, 24, 9, 0)) == c.case_id
+    assert out(c, d) == [] and items(c)[-1] == ("RI4", "supplier answered: read the reply")
+    assert shown_choices(d, c) == {"RI2": "keep", "RI3": "keep"}
+    assert escalate_pending(d.settings.cases_root, datetime(2026, 12, 14, 9, 0), d.settings) == []
+    decide(c, "RI4", "keep"); decide(c, "RI1", "keep")
+    assert close_text(c, d, "nl") == (CLOSED["nl"], False)
+
+
+def test_asking_again_while_the_question_is_out_sends_nothing_new(tmp_path, madeup_out):
+    """Ruling S14: while the question about an item is out, "Leverancier vragen" chosen once more on it asks nothing new. MU12:
+    the buyer asks about his first item; the reply to the run's question brings the case back while that question is out. He
+    chooses "Leverancier vragen" on the item again and keeps the rest: nothing is sent, the case waits on the question that is
+    out, and when that one ends the item shows no choice."""
+    d, clock = world(tmp_path, madeup_out)
+    c, r = run(d, madeup_out, "MU12", "250112")
+    decide(c, "RI1", "ask"); decide(c, "RI2", "keep")
+    assert close_case(c, d).status == "waiting"
+    first, second = questions(c)
+    assert answer(d, tmp_path, first) == c.case_id
+    decide(c, "RI1", "ask"); decide(c, "RI3", "keep")
+    assert close_text(c, d, "nl") == (f"{WAITING['nl']} {OPEN['nl']}", False)
+    assert questions(c) == [first, second] and c.read_step("close")["records"][-1]["messages"] == []
+    assert answer(d, tmp_path, second, name="tweede.eml") == c.case_id
+    assert shown_choices(d, c) == {"RI2": "keep", "RI3": "keep"}
+
+
+def test_a_reply_that_cannot_be_read_at_the_close_holds_the_case(tmp_path, madeup_out, monkeypatch):
+    """Ruling S17 (the review's scen2.py unreadable). MU07: the first question was escalated, the buyer asked again and that
+    question is out, and a late reply to the first lies with the case. At the close that reply cannot be read: nobody can say then
+    which question it answers, so the close does nothing, the case stays in review and the page says to close again in a moment.
+    Once the file reads again, the same close leaves the case waiting on the open question."""
+    d, clock = world(tmp_path, madeup_out)
+    c, _ = run(d, madeup_out, "MU07", "250107")
+    decide(c, "RI1", "ask")
+    assert close_case(c, d).status == "waiting"
+    clock.now = datetime(2026, 11, 17, 9, 1)
+    assert escalate_pending(d.settings.cases_root, clock.now, d.settings) == [(c.case_id, "no answer in 3 working days")]
+    decide(c, "RI1", "ask"); decide(c, "RI2", "keep")
+    assert close_case(c, d).status == "waiting"
+    first, second = questions(c)
+    assert answer(d, tmp_path, first, name="laat.eml", at=clock.now) == c.case_id
+    late = c.root / "messages" / "replies" / "laat.eml"
+    decide(c, "RI3", "keep"); decide(c, "RI1", "keep")
+    before = (c.read_step("result"), WriteLog(c.root).entries(), len(c.read_step("close")["records"]))
+    read = aid.messaging.named_ids
+
+    def locked(eml):
+        if Path(eml) == late:
+            raise PermissionError(13, "made-up: the file is in use by another program")
+        return read(eml)
+    monkeypatch.setattr(aid.messaging, "named_ids", locked)
+    for language in ("nl", "en"):
+        assert close_text(c, d, language) == (f"{REVIEW[language]} {UNREAD[language]}", True)
+    record = c.read_step("close")["records"][-1]
+    assert (record["unread_reply"], record["carried_out"], record["messages"], record["write_entries"]) == (True, {}, [], [])
+    assert (c.read_step("result"), WriteLog(c.root).entries()) == before[:2]
+    assert shown_choices(d, c)["RI1"] == "keep"                                 # the page shows the choices as they were made
+    monkeypatch.setattr(aid.messaging, "named_ids", read)
+    assert close_text(c, d, "nl") == (f"{WAITING['nl']} {OPEN['nl']}", False) and WriteLog(c.root).entries() == []
+
+
+def test_a_later_questions_bounce_ends_no_wait_that_still_runs(tmp_path, madeup_out):
+    """Ruling S20 (the review's scen.py laterbounce). MU12: the run's question went out on Thursday at 9:00 and has no reply. At
+    10:00 the buyer asks a second question, which bounces at 10:05 and comes back to him. He keeps everything and closes at
+    10:35: the first question's own wait has not ended, so the order is not confirmed over it. The case waits, the page says that
+    a question is open, and the first question comes back by itself when its three working days are over."""
+    d, clock = world(tmp_path, madeup_out)
+    c, r = run(d, madeup_out, "MU12", "250112")
+    clock.now = NOW + timedelta(hours=1)
+    decide(c, "RI1", "ask"); decide(c, "RI2", "keep")
+    assert close_case(c, d).status == "waiting"
+    first, second = questions(c)
+    clock.now += timedelta(minutes=5)
+    assert bounce(d, tmp_path, second, clock.now) == c.case_id
+    assert escalate_pending(d.settings.cases_root, clock.now, d.settings) == [(c.case_id, "message bounced")] and out(c, d) == [first]
+    clock.now += timedelta(minutes=30)
+    decide(c, "RI3", "keep"); decide(c, "RI1", "keep")
+    assert close_text(c, d, "nl") == (f"{WAITING['nl']} {OPEN['nl']}", False)
+    assert WriteLog(c.root).entries() == [] and c.read_step("close")["records"][-1]["question_open"] is True
+    assert escalate_pending(d.settings.cases_root, datetime(2026, 11, 17, 9, 0), d.settings) == []
+    assert escalate_pending(d.settings.cases_root, datetime(2026, 11, 17, 9, 1), d.settings) == [(c.case_id, "no answer in 3 working days")]
+    escalated = [json.loads(line)["message_id"] for line in (c.root / "messages" / "escalated.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert escalated == [second, first] and out(c, d) == []
+    decide(c, "RI4", "keep")
+    assert close_text(c, d, "nl") == (CLOSED["nl"], False)
+
+
+def test_a_sign_in_on_the_settings_tab_counts_for_the_close(tmp_path, madeup_out):
+    """Ruling S24 (the shared accounts). The page makes one Microsoft account for the tenant and client of the settings: the
+    settings tab signs in with it and the close sends through it. Here each account the page makes has a store and an application
+    of its own, so that a sign-in made through the tab's own handler reaches the close only when the two share the account."""
+    from aid.tests.fakes import GRAPH, FakeResponse
+
+    mailbox, made = graph(), []
+    mailbox.answers[("GET", f"{GRAPH}/me/mailFolders?$top=100")] = [FakeResponse(json_data={"value": []})]      # the tab lists the folders
+    path, d, _, _ = sending_page(tmp_path, madeup_out, send_via="microsoft", **MAILBOX)
+
+    def factory(tenant, client):
+        store = SecretStore(tmp_path / f"secrets-{len(made)}")
+        made.append(MicrosoftAccount(tenant, client, store, app=FakeApp().bind(store.token_cache())))
+        return made[-1]
+    page = build_app(d, settings_file=path, environ={}, session=mailbox, account_factory=factory)
+    c = asked_on_the_page(d, madeup_out)
+    assert after_the_press(page, c) == (not_sent("nl", "sign_in"), c.case_id)
+    [sign_in] = [f.fn for f in page.fns.values() if getattr(f.fn, "__name__", "") == "sign_in_browser"]
+    list(sign_in(TENANT_ID, CLIENT_ID, "", "nl"))
+    assert after_the_press(page, c) == (WAITING["nl"], None)
+    assert len(made) == 1 and len([call for call in mailbox.calls if call["url"].endswith("/send")]) == 1
+# --- a write made and not verified ---
+
+class Unchecked:
+    """A write route into a system that accepts every change and cannot check the changes of one kind: for those it raises
+    UnverifiedWrite with the entry of the attempt, made, whose previous is the value it read before the write (`read`). It makes
+    every other change (status "done")."""
+    name = "unchecked"
+
+    def __init__(self, kind: str, read: str, answered: bool = True):
+        self.kind, self.read, self.answered = kind, read, answered
+
+    def apply(self, op, case_id, rule_id, evidence, now):
+        entry = WriteLogEntry(entry_id=uuid.uuid4().hex, case_id=case_id, op=op, status="done", previous=op.old_value, new=op.new_value,
+                              rule_id=rule_id, evidence=evidence, timestamp=now.isoformat())
+        if op.kind != self.kind:
+            return entry
+        failed = "verify: no answer" if self.answered else "write: no answer"       # with answered False the write itself got no answer
+        raise (UnverifiedWrite if self.answered else UnknownWrite)(failed, entry.model_copy(update={"previous": self.read, "error": failed}))
+
+
+NOT_VERIFIED_NL = "Wijziging in Exact gemaakt, maar de controle erna lukte niet: kijk in Exact of de waarde klopt"
+NOT_VERIFIED_EN = "Change made in Exact, but the check after it failed: look in Exact whether the value is right"
+NOT_SURE_NL = "Niet zeker of de wijziging in Exact is gemaakt: kijk in Exact welke waarde er staat"
+NOT_SURE_EN = "Not sure whether the change was made in Exact: look in Exact which value is there"
+
+
+def test_the_page_offers_the_undo_of_a_write_made_and_not_verified_and_its_put_back_names_the_value_read(tmp_path, madeup_out):
+    """MU08 when the system accepts the new price of the order line and the route cannot check it; the document says 12.50 and the
+    route read 12.60. The page shows the item by the label of its reason, in both languages, and the digest uses the same label;
+    the write is among the writes to undo. The page's own writer only prepares, so its undo is a put-back on the list "In Exact
+    invoeren", and that names the value read, 12,60, not the document's 12,50."""
+    from datetime import date
+
+    from aid.notify import build_digest
+
+    d = deps(tmp_path, madeup_out, writer=RetryingWriter(Unchecked("po_line_price", read="12.60"), PreparedWriter(tmp_path)))
+    c, r = run(d, madeup_out, "MU08", "250108")
+    [entry] = r.write_entries
+    assert (entry.status, entry.previous, entry.op.old_value, entry.error) == ("done", "12.60", "12.50", "verify: no answer")
+    assert [(i.item_id, i.reason, i.entry_id) for i in r.review_items][0] == ("RI1", "write made, not verified: check in Exact", entry.entry_id)
+    view = load_case_view(c)
+    assert [row[5] for row in page_rows(view.flags, "nl")] == [NOT_VERIFIED_NL] + ["Niet uitgevoerd: kijk eerst in Exact naar de eerdere wijziging"] * 3
+    assert [row[5] for row in page_rows(view.flags, "en")] == [NOT_VERIFIED_EN] + ["Not applied: look in Exact at the earlier change first"] * 3
+    assert f"    - {NOT_VERIFIED_NL} (prijs, regel 1)" in build_digest([r], [], d.settings, date(2026, 11, 12)).text
+    root = d.settings.cases_root
+    assert [e.entry_id for e in _undoable(c)] == [entry.entry_id] == [value for _, value in _undo_choices(c, STRINGS["nl"])]
+    assert selection_from_query(root, {"case": c.case_id, "undo": entry.entry_id}) == (c.case_id, entry.entry_id)
+    page = d.model_copy(update={"writer": PreparedWriter(root / "prepared")})         # the writer of the page, which only prepares
+    assert undo_text(c, entry.entry_id, page, "nl") == STRINGS["nl"]["hand_put_back_listed"].format(
+        row="Inkooporder 250108 (S08), Terugzetten: regel 1 (KM-0801): prijs 12,70 → 12,60")
+    assert [(row["kind"], row["old_value"], row["new_value"], row["rule_id"]) for row in read_csv(root / "prepared" / "prepared_changes.csv")] == [
+        ("po_line_price", "12.70", "12.60", "undo")]
+    assert _undoable(c) == []                                                         # undone once: no longer offered
+
+
+def test_the_tab_the_digest_and_the_put_back_name_such_a_write_by_the_value_read(tmp_path, madeup_out):
+    """One name for one write: the document says 12.50 and the system held 12.60 when the 12.70 was written. The tab's line under
+    "Schrijfactie", the digest's line with its undo link, and the put-back all say 12,60 and 12,70; none says the 12,50 that the
+    system never held."""
+    from datetime import date
+
+    from aid.notify import build_digest, undo_link
+
+    d = deps(tmp_path, madeup_out, writer=RetryingWriter(Unchecked("po_line_price", read="12.60"), PreparedWriter(tmp_path)))
+    c, r = run(d, madeup_out, "MU08", "250108")
+    [entry] = r.write_entries
+    assert _undo_choices(c, STRINGS["nl"]) == [("Prijs van de orderregel, regel 1: 12.60 -> 12.70", entry.entry_id)]
+    assert _undo_choices(c, STRINGS["en"]) == [("Price of the PO line, line 1: 12.60 -> 12.70", entry.entry_id)]
+    digest = build_digest([r], [], d.settings, date(2026, 11, 12))
+    assert f"    - prijs regel 1: 12,60 → 12,70 [ongedaan maken]({undo_link(d.settings, c.case_id, entry.entry_id)})" in digest.text.splitlines()
+    assert f'<a href="{undo_link(d.settings, c.case_id, entry.entry_id)}">ongedaan maken</a>'.replace("&", "&amp;") in digest.html
+    page = d.model_copy(update={"writer": PreparedWriter(d.settings.cases_root / "prepared")})
+    assert "Terugzetten: regel 1 (KM-0801): prijs 12,70 → 12,60" in undo_text(c, entry.entry_id, page, "nl")
+    assert "12,50" not in digest.text
+
+
+def test_the_tab_and_the_digest_name_a_write_into_an_empty_field_leeg_and_one_without_a_read_onbekend(tmp_path):
+    """Where the field was empty before the write (a null, an empty or a blank text was read) the tab's line and the digest's say
+    "leeg", and where nothing was read "onbekend", as the put-back does: never the document's old value, which Exact did not hold.
+    An attached file has no values, and a prepared change keeps what its row shows."""
+    from datetime import date
+
+    from aid.case import Case
+    from aid.notify import build_digest
+    from aid.tests.fakes import case_result
+
+    root = tmp_path / "c1"
+    root.mkdir()
+    op = dict(kind="po_line_price", po_number="250101", version=1, line_id="1", old_value="12.50", new_value="12.70")
+    made = [("e1", None, {}), ("e2", None, {"read_before": None}), ("e3", "", {"read_before": ""}), ("e4", "  ", {"read_before": "  "}),
+            ("e5", "12.60", {"read_before": "12.60"})]
+    entries = [WriteLogEntry(entry_id=entry_id, case_id="c1", op=op, status="done", previous=previous, new="12.70", rule_id="R04", evidence=evidence,
+                             timestamp=NOW.isoformat()) for entry_id, previous, evidence in made]
+    entries.append(WriteLogEntry(entry_id="e6", case_id="c1", op=dict(kind="attach_document", po_number="250101", version=1, document="conf.pdf"),
+                                 status="done", previous=None, new=None, rule_id="R01", evidence={}, timestamp=NOW.isoformat()))
+    for entry in entries:
+        WriteLog(root).append(entry)
+    case = Case(case_id="c1", root=root, kind="confirmation", po_number="250101", input_files=[])
+    line = "Prijs van de orderregel, regel 1: {} -> 12.70"
+    assert [label for label, _ in _undo_choices(case, STRINGS["nl"])] == [
+        line.format("onbekend"), line.format("leeg"), line.format("leeg"), line.format("leeg"), line.format("12.60"), "Bevestiging bijgevoegd"]
+    assert [label for label, _ in _undo_choices(case, STRINGS["en"])][:2] == ["Price of the PO line, line 1: unknown -> 12.70",
+                                                                               "Price of the PO line, line 1: empty -> 12.70"]
+    prepared = WriteLogEntry(entry_id="e7", case_id="c1", op=dict(kind="article_price", po_number="250101", version=1, article_code="KM-1001", new_value="12.70"),
+                             status="prepared", previous=None, new="12.70", rule_id="R04", evidence={}, timestamp=NOW.isoformat())
+    result = case_result("250101_20261112T090000", "closed", supplier="S01").model_copy(update={"write_entries": [*entries, prepared]})
+    text = build_digest([result], [], SETTINGS, date(2026, 11, 12)).text
+    writes = [line_.strip().partition(" [")[0] for line_ in text.splitlines() if line_.startswith("    - ")]
+    assert writes == ["- prijs regel 1: onbekend → 12,70", "- prijs regel 1: leeg → 12,70", "- prijs regel 1: leeg → 12,70", "- prijs regel 1: leeg → 12,70",
+                      "- prijs regel 1: 12,60 → 12,70", "- bijlage conf.pdf", "- artikelprijs KM-1001: onbekend → 12,70 (voorbereid)"]
+    english = build_digest([result], [], SETTINGS.model_copy(update={"language": "en"}), date(2026, 11, 12)).text
+    assert "    - price line 1: empty → 12.70 [undo]" in english and "    - price line 1: unknown → 12.70 [undo]" in english
+
+
+def test_the_put_back_of_an_article_price_into_an_empty_field_reads_leeg(tmp_path, madeup_out):
+    """An article's price was written by a program into a field that was empty; its put-back, prepared by the page, reads
+    "Terugzetten: artikel KM-0801: inkoopprijs 12,70 → leeg", not "terugzetten naar de prijs van daarvoor", which is for a price
+    the aid never read."""
+    d = deps(tmp_path, madeup_out, writer=done_writer())
+    c, r = run(d, madeup_out, "MU08", "250108")
+    page = d.model_copy(update={"writer": PreparedWriter(d.settings.cases_root / "prepared")})
+    article = next(e for e in r.write_entries if e.op.kind == "article_price")
+    empty = article.model_copy(update={"entry_id": "empty-article", "previous": None, "evidence": article.evidence | {"read_before": None}})
+    WriteLog(c.root).append(empty)
+    assert undo_text(c, "empty-article", page, "nl") == STRINGS["nl"]["hand_put_back_listed_empty"].format(row="Terugzetten: artikel KM-0801: inkoopprijs 12,70 → leeg")
+    # the same price where nothing was read: the row the list always had for it
+    assert undo_text(c, article.entry_id, page, "nl") == STRINGS["nl"]["hand_put_back_listed"].format(
+        row="Terugzetten: artikel KM-0801: inkoopprijs 12,70 terugzetten naar de prijs van daarvoor")
+
+
+@pytest.mark.parametrize("answered", [True, False], ids=["made, not verified", "not sure"])
+def test_leverancier_vragen_is_not_offered_on_an_item_that_asks_for_a_look_in_exact(tmp_path, madeup_out, answered):
+    """Such an item is no question for the supplier: the page does not offer "Leverancier vragen" on it, decide refuses it, and
+    the three other decisions are recorded as on any item. The items behind it are offered as before."""
+    d = deps(tmp_path, madeup_out, writer=RetryingWriter(Unchecked("po_line_price", read="12.60", answered=answered), PreparedWriter(tmp_path)))
+    c, r = run(d, madeup_out, "MU08", "250108")
+    view = load_case_view(c)
+    look, behind = view.flags[0], view.flags[1]
+    assert look.reason == ("write made, not verified: check in Exact" if answered else "write outcome not known: check in Exact")
+    assert [decision for _, decision in _decision_choices(look, c.kind, STRINGS["nl"])] == ["confirm", "keep", "unresolved"]
+    assert [decision for _, decision in _decision_choices(behind, c.kind, STRINGS["nl"])] == ["confirm", "keep", "ask", "unresolved"]
+    with pytest.raises(ValueError, match="RI1 asks for a look in Exact"):
+        decide(c, "RI1", "ask")
+    assert not (c.root / "decisions.jsonl").exists()
+    for decision in ("confirm", "keep", "unresolved"):
+        decide(c, "RI1", decision)
+    assert page_rows([look], "nl")[0][5] == (NOT_VERIFIED_NL if answered else NOT_SURE_NL)
+    assert page_rows([look], "en")[0][5] == (NOT_VERIFIED_EN if answered else NOT_SURE_EN)
+    from datetime import date
+
+    from aid.notify import build_digest
+
+    waiting = build_digest([r], [], d.settings, date(2026, 11, 12)).text.splitlines()       # the digest uses the page's labels
+    assert f"    - {NOT_VERIFIED_NL if answered else NOT_SURE_NL} (prijs, regel 1)" in waiting
+    assert "    - Niet uitgevoerd: kijk eerst in Exact naar de eerdere wijziging (prijs, regel 1)" in waiting
+    assert waiting.count("    - Niet uitgevoerd: kijk eerst in Exact naar de eerdere wijziging") == 2
+
+
+@pytest.mark.parametrize("answered", [True, False], ids=["made, not verified", "not sure"])
+def test_the_request_to_the_approver_follows_the_buyers_look(tmp_path, madeup_out, answered):
+    """MU08 above the authorization, the line's price made and not verified, or not sure. The run asks the approver nothing.
+    "Bevestigen" on the item counts the change as made, so the close then sends the request for it, once: a second close sends
+    nothing again. "Houden" sends none."""
+    for decision in ("confirm", "keep"):
+        base = tmp_path / decision
+        base.mkdir()
+        d = deps(base, madeup_out)
+        limit = d.store.versions("250108")[0].total / 2
+        route = RetryingWriter(Unchecked("po_line_price", read="12.60", answered=answered), PreparedWriter(base))
+        d = d.model_copy(update={"settings": d.settings.model_copy(update={"authorization_limit": limit}), "store": PoStore(d.store.root, limit)})
+        c, r = run(d.model_copy(update={"writer": route}), madeup_out, "MU08", "250108")
+        assert [(a.rule_id, a.route) for a in r.actions] == [("R10", "AUTO"), ("R01", "AUTO")] and r.messages == []
+        page = d.model_copy(update={"writer": PreparedWriter(d.settings.cases_root / "prepared")})
+        for item in r.review_items[:-1]:
+            decide(c, item.item_id, decision)
+        decide(c, r.review_items[-1].item_id, "unresolved")           # the case stays in review, for a second close
+        first = close_case(c, page)
+        requests_ = [(m["template"], m["status"], [(i["kind"], i["new_value"]) for i in m["items"]]) for m in first.messages]
+        assert first.status == "review"
+        assert requests_ == ([("reapproval", "not sent (no mailer)", [("po_line_price", "12.70")])] if decision == "confirm" else [])
+        # the close wrote nothing for the operation itself: one entry after "Bevestigen", the entry and its undo after "Houden"
+        assert [(e.rule_id, e.op.kind) for e in WriteLog(c.root).entries()] == [("R10", "po_line_price")] + [("undo", "po_line_price")] * (decision == "keep")
+        decide(c, r.review_items[-1].item_id, decision)
+        second = close_case(c, page)
+        assert second.status == "closed" and second.messages == first.messages          # nothing sent again
+
+
+def test_the_undo_of_a_change_made_without_a_value_read_asks_the_buyer_for_the_old_value(tmp_path, madeup_out):
+    """MU08 through a route that makes the line's price and reads nothing before it (no previous value, no note of a read). The
+    undo has no value to write back. A page whose writer is that route says that the undo failed, and nothing is written; a
+    page whose writer prepares puts the put-back on the list with the old value unknown, for the buyer to enter."""
+    class Blind(Unchecked):
+        def apply(self, op, case_id, rule_id, evidence, now):
+            self.given = getattr(self, "given", 0) + 1
+            return super().apply(op, case_id, rule_id, evidence, now).model_copy(update={"previous": None})
+
+    route = Blind("no such kind", read="")
+    d = deps(tmp_path, madeup_out, writer=route)
+    c, r = run(d, madeup_out, "MU08", "250108")
+    entry = r.write_entries[0]
+    assert (entry.op.kind, entry.status, entry.previous, entry.evidence.get("read_before", "no note")) == ("po_line_price", "done", None, "no note")
+    given = route.given
+    assert undo_text(c, entry.entry_id, d, "nl") == STRINGS["nl"]["undo_failed"] and route.given == given
+    assert [e.entry_id for e in WriteLog(c.root).entries()] == [e.entry_id for e in r.write_entries]       # nothing logged
+    page = d.model_copy(update={"writer": PreparedWriter(d.settings.cases_root / "prepared")})
+    row = "Inkooporder 250108 (S08), Terugzetten: regel 1 (KM-0801): prijs 12,70 → onbekend"
+    assert undo_text(c, entry.entry_id, page, "nl") == f"Nog niet teruggedraaid in Exact. Op de lijst staat nu: {row}. Voer de oude waarde in Exact in en vink de regel af."
+    assert [(row["old_value"], row["new_value"], row["rule_id"]) for row in read_csv(d.settings.cases_root / "prepared" / "prepared_changes.csv")] == [
+        ("12.70", "", "undo")]
+
+
+def test_bevestigen_after_the_tabs_own_undo_prepares_the_change_as_on_any_item(tmp_path, madeup_out):
+    """The buyer first undid the write from the tab, so it no longer stands; "Bevestigen" on its item then takes the supplier's
+    value as on any item: the change is prepared once, and the approver is asked for that one change, once."""
+    d = deps(tmp_path, madeup_out)
+    limit = d.store.versions("250108")[0].total / 2
+    d = d.model_copy(update={"settings": d.settings.model_copy(update={"authorization_limit": limit}), "store": PoStore(d.store.root, limit)})
+    c, r = run(d.model_copy(update={"writer": RetryingWriter(Unchecked("po_line_price", read="12.60"), PreparedWriter(tmp_path))}), madeup_out, "MU08", "250108")
+    page = d.model_copy(update={"writer": PreparedWriter(d.settings.cases_root / "prepared")})
+    assert "Terugzetten: regel 1 (KM-0801): prijs 12,70 → 12,60" in undo_text(c, r.write_entries[0].entry_id, page, "nl")
+    for item in r.review_items:
+        decide(c, item.item_id, "confirm")
+    closed = close_case(c, page)
+    assert closed.status == "closed" and [(e.rule_id, e.op.kind, e.status) for e in WriteLog(c.root).entries()] == [
+        ("R10", "po_line_price", "done"), ("undo", "po_line_price", "prepared"), ("B01", "po_line_price", "prepared"),
+        ("B01", "attach_document", "prepared"), ("B01", "set_status", "prepared")]
+    assert [(m["template"], [(i["kind"], i["old_value"], i["new_value"]) for i in m["items"]]) for m in closed.messages] == [
+        ("reapproval", [("po_line_price", "12.50", "12.70")])]
+
+
+def test_a_close_stops_at_a_write_made_and_not_verified(tmp_path, madeup_out):
+    """MU07 confirmed by the buyer through a route whose system accepts the price and cannot check it. The write is logged as made,
+    with the value the route read, and the close stops there as at a failed write: nothing after it is done and the case stays in
+    review. The page names the stop by the label of the reason, and the write is among the writes to undo."""
+    d = deps(tmp_path, madeup_out); c, r = run(d, madeup_out, "MU07", "250107")
+    decide(c, "RI1", "confirm", article_update=True)
+    route = d.model_copy(update={"writer": RetryingWriter(Unchecked("po_line_price", read="12.60"), PreparedWriter(tmp_path))})
+    text, still_open = close_text(c, route, "nl")
+    [entry] = WriteLog(c.root).entries()
+    assert (entry.op.kind, entry.status, entry.previous, entry.new, entry.error) == ("po_line_price", "done", "12.60", "14.00", "verify: no answer")
+    assert still_open and NOT_VERIFIED_NL in text and "verify" not in text and not (tmp_path / "prepared_changes.csv").exists()
+    result = c.read_step("result")
+    assert result["status"] == "review" and result["error"] == "write made, not verified: check in Exact (write: rule B01, po_line_price, line 1)"
+    assert [e.entry_id for e in _undoable(c)] == [entry.entry_id]
+
+
+def test_the_manual_says_what_a_write_made_and_not_verified_is_and_what_an_undo_restores():
+    """MANUAL 2.4 has the rows of the three reasons with the labels as the page shows them, each beginning by saying that no
+    installation has a write route, and says what "Bevestigen" and "Houden" do on an item that asks for a look in Exact; 2.2 names
+    the stop of a close at such a write; 3.10 says that no command builds the route, with the sentence a settings file with
+    exact_base_url gets, what the module is, what a route does with a write it cannot check or whose outcome it does not know,
+    what a builder of a route must still settle, and which value an undo writes back; 3.2, 3.4, 3.13 and section 5 say that the
+    key stays empty and that the token is not used, and so does the README; section 1 says that no installation writes in Exact;
+    the Dutch guide does not speak of the route; and the docstrings of the module, of the list and of the capture server say what
+    the rulings V11 and V13 ask of them."""
+    from aid import capture_server
+    from aid.execution import by_hand, exact_api
+    whole = Path("aid/MANUAL.md").read_text(encoding="utf-8")
+
+    def section(number: str, following: str, level: str = "###") -> str:
+        return whole.split(f"\n{level} {number} ")[1].split(f"\n{level} {following} ")[0]
+
+    reasons, route, page = section("2.4", "2.5"), section("3.10", "3.11"), section("2.2", "2.3")
+    one, troubles, guide = section("1.", "2.", "##"), section("5.", "6.", "##"), whole.split("\n## 7. ")[1]
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    assert nl["reason:write made, not verified: check in Exact"] == NOT_VERIFIED_NL and en["reason:write made, not verified: check in Exact"] == NOT_VERIFIED_EN
+    assert nl["reason:write outcome not known: check in Exact"] == NOT_SURE_NL and en["reason:write outcome not known: check in Exact"] == NOT_SURE_EN
+    behind = "reason:not applied: an earlier change waits for a look in Exact *"
+    assert (nl[behind], en[behind]) == ("Niet uitgevoerd: kijk eerst in Exact naar de eerdere wijziging", "Not applied: look in Exact at the earlier change first")
+    assert (nl["reason:not applied: an earlier write failed *"], en["reason:not applied: an earlier write failed *"]) == (
+        "Niet uitgevoerd: een eerdere schrijfactie is mislukt", "Not applied: an earlier write failed")
+    assert f"| write made, not verified: check in Exact | {NOT_VERIFIED_NL} | {NOT_VERIFIED_EN} |" in reasons
+    assert f"| write outcome not known: check in Exact | {NOT_SURE_NL} | {NOT_SURE_EN} |" in reasons
+    assert f"| not applied: an earlier change waits for a look in Exact ... | {nl[behind]} | {en[behind]} |" in reasons
+    assert "| not applied: an earlier write failed ... | Niet uitgevoerd: een eerdere schrijfactie is mislukt | Not applied: an earlier write failed |" in reasons
+    for words in ("\"Bevestigen\": the change is in Exact and stays.", "prepares nothing more for it", "\"Houden\": the old value must stay.",
+                  "what waited behind the change is not carried out", "\"Leverancier vragen\" is not offered"):
+        assert words in reasons, words
+    assert f"\"{NOT_VERIFIED_NL}\" or \"{NOT_SURE_NL}\"" in page and "nor on an item that asks you to look in Exact" in page
+    for words in ("`UnverifiedWrite`", "`UnknownWrite`", "it is logged as made", "\"write made, not verified: check in Exact\"",
+                  "\"write outcome not known: check in Exact\"", "`\"outcome\": \"not known\"`", "that write can still land",
+                  "is not sent again and ends as not sure", "takes that read as the check", "the value read before the write",
+                  "An undo never writes a value the system did not hold", f"\"{nl['hand_put_back_listed_empty'].split('. ')[-1]}\"",
+                  "never makes the put-back \"already put back\"", "includes it in the request to the approver"):
+        assert words in route, words
+    for words in ("*No token*", "*A status that is not 2xx*", "*A value that reads back different*", "*No connection or no answer*",
+                  "\"write outcome not known: check in Exact\"", "\"not applied: an earlier change waits for a look in Exact\""):
+        assert words in troubles, words
+    for words in ("puts the change on the list \"In Exact invoeren\" for the buyer to enter",
+                  "It writes nothing in Exact itself, and no installation does (section 3.10).",
+                  "puts both on the list \"In Exact invoeren\" for the buyer to enter"):
+        assert words in one, words
+    assert "web API route" not in one and "the aid makes the change itself" not in whole and "the aid writes the new" not in whole
+    # the last round (V10 to V13): no command builds the route, and the buyer's guide does not speak of it
+    sentence = ('exact_base_url is set, but this version of the aid writes nothing in Exact: every change is prepared for the tab '
+                '"In Exact invoeren". Remove exact_base_url from the settings file.')
+    no_route = "Only with a program's write route, which no installation has (section 3.10)."
+    for row in (f"| write made, not verified: check in Exact | {NOT_VERIFIED_NL} | {NOT_VERIFIED_EN} | {no_route} ",
+                f"| write outcome not known: check in Exact | {NOT_SURE_NL} | {NOT_SURE_EN} | {no_route} ",
+                f"| not applied: an earlier change waits for a look in Exact ... | {nl[behind]} | {en[behind]} | {no_route} "):
+        assert row in reasons, row
+    assert ("(the rows \"write made, not verified: check in Exact\" and \"write outcome not known: check in Exact\" above)" in reasons
+            and "above \"write failed\"" not in reasons)
+    assert f"\"{nl['hand_put_back_cannot']}\" and the case stays in review until the next close" in reasons
+    assert "(\"leeg\" where the field was empty, \"onbekend\" where nothing was read)" in page
+    for words in ("No command builds a write route into Exact", f"\n    {sentence}\n", nl["settings_file_write_route"].split(" Hieronder")[0],
+                  "none of them reads `AID_EXACT_TOKEN`", "**What the module `aid/execution/exact_api.py` is.**",
+                  "was never run against Exact", "**What a builder of a route must still settle.**", "A doubt that outlives its operation",
+                  "The article price that waits behind a look", "A close's own write that asks for a look", "A read that lags behind the write",
+                  "a connection that was never made: refused, a connect time-out, a TLS or a proxy failure", "`put_back_by_hand`",
+                  f"\"{nl['hand_put_back_cannot']}\"",
+                  "by \"leeg\" where the field was empty before the write and \"onbekend\" where nothing was read, as its put-back does"):
+        assert words in route, words
+    settings_file, starting, capture = section("3.2", "3.3"), section("3.4", "3.5"), section("3.13", "3.14")
+    assert "| `exact_base_url` | `null` | Must stay `null` or empty. No command builds a write route into Exact" in settings_file
+    assert "no command reads `AID_EXACT_TOKEN` (section 3.10)" in settings_file and "the Exact route (" not in settings_file
+    assert "`AID_EXACT_TOKEN` is not used: no command reads it (section 3.10)" in starting and "$env:AID_MAIL_PASSWORD" in starting
+    assert "its writer is the prepared writer" in capture and "`AID_EXACT_TOKEN` is not used" in capture
+    assert "**A settings file with `exact_base_url` set.**" in troubles and sentence in troubles
+    assert "a connection that was never made (refused, a connect time-out, a TLS or a proxy failure) sent nothing" in troubles
+    for stale in ("(when `exact_base_url` is set)", "$env:AID_EXACT_TOKEN", "Without the token every write to Exact", "If it were set, the runner would write"):
+        assert stale not in whole, stale
+    for words in ("kijk in Exact of de waarde klopt", "kijk in Exact welke waarde er staat", "Vraagt een punt u om in Exact te kijken"):
+        assert words not in guide, words
+    readme = Path("aid/README.md").read_text(encoding="utf-8")
+    for words in ("`exact_base_url` must stay `null` or empty", "no command reads `AID_EXACT_TOKEN`", "exact_api.py: the Exact writer, which no command builds",
+                  "are the keys of a write route into Exact that no command builds"):
+        assert words in readme, words
+    assert "`AID_EXACT_TOKEN` and `AID_MAIL_PASSWORD`" not in readme
+    module = " ".join((exact_api.__doc__ or "").split())
+    assert module.startswith("A writer into a system behind a web API, built by no command: kept as the place where a write route into Exact would plug in.")
+    for words in ("has never been run against Exact, whose web service has another shape than that stand-in",
+                  "such a writer implements the Writer protocol", "RetryingWriter takes it as its primary writer in front of the PreparedWriter",
+                  "What a builder of a route must still settle.", "- A doubt that outlives its operation.", "- The article price that waits behind a look.",
+                  "- A close's own write that asks for a look.", "- A read that lags behind the write.",
+                  "a connection that was never made: refused, a connect time-out, a TLS or a proxy failure"):
+        assert words in module, words
+    listed = " ".join((by_hand.__doc__ or "").split())
+    assert "A put-back whose own row can no longer be read (its line of the file is damaged and passed over) is judged the same way" in listed
+    served = " ".join((capture_server.__doc__ or "").split())
+    assert "asked the buyer for a look in Exact only once he confirmed its item and a close carried that out" in served
+    assert "counts once he confirmed its item and a close carried that out" in " ".join((capture_server._Writes.__doc__ or "").split())
+
+
+# --- where Task 44 and Task 45 meet in one close ---
+
+def test_a_look_kept_and_a_question_that_cannot_be_sent_in_one_close(tmp_path, madeup_out):
+    """MU08's price was written and not verified, so its item asks the buyer to look in Exact, and the items behind it wait. The
+    buyer keeps the old value on that item ("Houden") and asks the supplier about an item behind it, at a moment at which nothing
+    can send. One close does what each rule says. The change is put back, once, what waited behind it is not carried out, and
+    nothing is attached and no status set. The question is not sent and not written as a file: the case stays in review with the
+    item "Bericht niet verzonden", and the page says why. Once the settings have messages written as files, the next close sends
+    the question and settles that item, and puts nothing back a second time."""
+    d = deps(tmp_path, madeup_out, writer=RetryingWriter(Unchecked("po_line_price", read="12.60"), PreparedWriter(tmp_path)))
+    d = d.model_copy(update={"settings": d.settings.model_copy(update={"supplier_emails": {"S08": "sales@s08.example.com"}})})
+    c, r = run(d, madeup_out, "MU08", "250108")
+    look, behind, *others = r.review_items
+    assert look.reason == "write made, not verified: check in Exact" and behind.reason.startswith("not applied: an earlier change waits for a look")
+    outbox = tmp_path / "cases" / "outbox"
+    page = d.model_copy(update={"writer": PreparedWriter(d.settings.cases_root / "prepared"),
+                                "mailer": FileMailer(outbox, sender="aid@example.com", clock=lambda: NOW, unrouted="no_mailbox")})
+    decide(c, look.item_id, "keep"); decide(c, behind.item_id, "ask")
+    for other in others:
+        decide(c, other.item_id, "keep")
+    assert close_text(c, page, "nl") == (not_sent("nl", "no_mailbox"), True)
+    record = c.read_step("close")["records"][-1]
+    unsent = f"RI{len(r.review_items) + 1}"
+    assert [(e.rule_id, e.op.kind) for e in WriteLog(c.root).entries()] == [("R04", "po_line_price"), ("undo", "po_line_price")]
+    assert [(m["status"], m["cause"], m["item_ids"]) for m in record["messages"]] == [("not sent (no mailbox connected)", "no_mailbox", [behind.item_id])]
+    assert list(record["unsent_questions"].values()) == [unsent] and items(c)[-1] == (unsent, "message not sent")
+    assert record["carried_out"].keys() == {look.item_id, *(other.item_id for other in others)} and "put_back_by_hand" not in record
+    assert sent_lines(c) == [] and not outbox.exists() and c.read_step("result")["status"] == "review"
+    assert shown_choices(page, c)[behind.item_id] == "ask"
+    by_choice = page.model_copy(update={"mailer": FileMailer(outbox, sender="aid@example.com", clock=lambda: NOW)})
+    assert close_text(c, by_choice, "nl") == (f"{WAITING['nl']} {written('nl')}", False)
+    record = c.read_step("close")["records"][-1]
+    assert record["settled"] == [unsent] and record["unsent_questions"] == {} and record["carried_out"].keys() == {behind.item_id}
+    assert [e.op.kind for e in WriteLog(c.root).entries()] == ["po_line_price", "po_line_price"]      # put back once, nothing attached
+    assert len(sent_lines(c)) == 1 and len(list(outbox.glob("*.eml"))) == 1 and c.read_step("result")["status"] == "waiting"

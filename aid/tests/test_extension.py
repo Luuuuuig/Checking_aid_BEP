@@ -84,6 +84,26 @@ def test_the_content_script_reads_a_cell_as_the_reader_does():
     assert 'TOTAL_TEXTS.includes(fold(text(item))) && text(quantity) === ""' in data_row
 
 
+def test_the_banner_shows_the_aids_own_title_when_its_answer_has_one():
+    """Task 41, ruling Q21: the answer of a cart of whose purchase order the aid is not sure carries a title, and the banner shows
+    it in place of the title of the verdict; an answer without one, or with one that is no text, keeps the title of its verdict,
+    and so does every reply that is no answer. The title is set as text, never as markup, as every other part of the banner. The
+    title of the verdict "differences" is what it was, for a script that a browser loaded before this round."""
+    script = (EXTENSION / "content.js").read_text(encoding="utf-8")
+    render = " ".join(_function(script, "render").split())
+    assert ('if (answer && COLOURS[answer.verdict]) { kind = answer.verdict; // The aid\'s own title, when its answer has one (a cart '
+            'of whose purchase order it is not sure), else that of the verdict. '
+            'title = typeof answer.title === "string" && answer.title ? answer.title : TITLES[kind]; } else {') in render
+    assert render.count("answer.title") == 3 and 'banner.appendChild(element("div", title, "font-weight:bold;color:" + colour + ";"));' in render
+    element = " ".join(_function(script, "element").split())
+    assert "node.textContent = text;" in element and "innerHTML" not in script
+    assert ('differences: "Let op: de winkelwagen wijkt af van de inkooporder (the cart differs from the purchase order)",'
+            in script)
+    from aid.capture_server import GUESS_TITLE
+
+    assert GUESS_TITLE == "Let op: kijk na of dit de goede inkooporder is (check that this is the right purchase order)"
+
+
 def test_the_reader_chooses_the_header_row_by_th_cells_in_its_code():
     """The reader's side of the parity, in its code and on a page: the first row of th cells only is the header row, rows above it
     are no cart lines."""

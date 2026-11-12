@@ -29,6 +29,19 @@ one address or one domain (the part after the at sign) to each entry; an entry t
 (po_senders.1), never by what it holds. Fill it whenever po_layout is set: without it a supplier's document that repeats the PO's
 page is filed as a PO. With both empty or null the aid works as before, with the made-up layout.
 
+article_columns and article_decimal_comma belong to the price list on the review page (aid/pricelist.py,
+aid/review/pricelist_page.py): the columns and the number convention of the export of a supplier's articles from Exact, set in part 3
+of the block "Koppeling met Exact" of the settings tab. With article_columns empty the tab "Prijslijst" offers nothing. The columns of
+each supplier's price list, which that tab keeps when a list is carried out, are data and no setting: they are kept beside the stored
+article prices, under <cases_root>/exact, so that a press of the tab never changes the settings file.
+
+exact_base_url stays empty. No command builds a write route into Exact (aid/execution/exact_api.py says what that module is), so a
+settings file in which the key is set is refused wherever a file is read or written here, with the one sentence WRITE_ROUTE_SET
+(WriteRouteSet, a SettingsInvalid that names the field): the runner, the review page, the capture server and the launcher end with
+it at their start, and a part that is running keeps the settings in use. The model keeps the three keys of a route
+(exact_base_url, exact_endpoints, exact_fields), so that an older file with the key null or empty still loads and the tests of the
+writer can build settings with them in code.
+
 test_mode says that the aid works with the test account of Exact, for the owner's test before the hand-over (false by default). While
 it is true, whatever the authorization limit, the tab "In Exact invoeren" of the review page says that its changes go into the test
 Exact only, and only the switch on the settings tab ends it: setting a limit does not. While it is true and no authorization limit is
@@ -58,6 +71,8 @@ _ADDRESS = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s.]+")
 _SENDER = re.compile(r"[^@\s,;<>()\[\]\"']+@" + _DOMAIN.pattern)       # the address of a sender: no list, no name, nothing around it
 _WRITING = threading.Lock()                      # one save of a settings file at a time in this process (update_settings_file)
 _BLANK = " \t\n\r"                               # the white space of JSON
+WRITE_ROUTE_SET = ('exact_base_url is set, but this version of the aid writes nothing in Exact: every change is prepared for the tab '
+                   '"In Exact invoeren". Remove exact_base_url from the settings file.')
 
 
 def _sender(entry: str) -> str:
@@ -123,6 +138,11 @@ class Settings(BaseModel):
     export_columns: dict[str, str] = {}
     export_decimal_comma: bool = False           # numbers the export writes as text use the decimal comma: 1.234,50
     export_fill_down: bool = False               # the export prints the PO number once for each PO, on its first line or above it
+    # The export of a supplier's articles with their purchase prices, which the price list on the review page is compared with
+    # (aid/pricelist.py): the aid's field name -> the column title of the file. It names item_code and price, and supplier only for an
+    # export that names the supplier of each row. Empty: the tab "Prijslijst" offers nothing yet.
+    article_columns: dict[str, str] = {}
+    article_decimal_comma: bool = False          # numbers that export writes as text use the decimal comma: 1.234,50
     # The PO PDF that the ERP e-mails (aid/readers/po_pdf.py, aid/sources/mailbox.py). None: only the made-up layout is read.
     po_layout: PoLayout | None = None            # the layout of that PDF; with it a PDF that fits is a PO PDF, read with the layout alone
     # Who sends those e-mails: addresses, or domains as the part after the at sign. Not empty: a PDF that fits the layout and came
@@ -181,6 +201,14 @@ class SettingsInvalid(ValueError):
         self.fields = fields
 
 
+class WriteRouteSet(SettingsInvalid):
+    """A settings file in which exact_base_url is set: refused with the one sentence WRITE_ROUTE_SET, since no command builds a
+    write route into Exact (see the module docstring)."""
+
+    def __init__(self):
+        super().__init__(WRITE_ROUTE_SET, ["exact_base_url"])
+
+
 def is_tenant_id(text: str) -> bool:
     """Whether the text is a tenant as ms_tenant_id takes one: a GUID, or a domain name such as contoso.onmicrosoft.com."""
     return bool(_GUID.fullmatch(text) or _DOMAIN.fullmatch(text))
@@ -198,9 +226,12 @@ def is_client_id(text: str) -> bool:
 
 def load_settings(path: Path) -> Settings:
     """Read a settings file. Relative paths in it resolve against the folder that holds the file. A file that does not validate
-    raises ValueError naming each field and its problem, without the values (pydantic's error, which quotes them, is left out)."""
+    raises ValueError naming each field and its problem, without the values (pydantic's error, which quotes them, is left out);
+    a file in which exact_base_url is set raises WriteRouteSet, a ValueError too, whose text is the one sentence."""
     try:
         return read_settings(path)
+    except WriteRouteSet:
+        raise
     except SettingsInvalid as error:
         raise ValueError(str(error)) from None
 
@@ -270,12 +301,15 @@ def _validated(data, path: Path) -> Settings:
             if field.annotation is Path and isinstance(data.get(name), str):
                 data[name] = str((path.parent / data[name]).resolve())
     try:
-        return Settings.model_validate(data)
+        settings = Settings.model_validate(data)
     except ValidationError as exc:
         errors = exc.errors(include_input=False, include_url=False)
         fields = list(dict.fromkeys(".".join(str(part) for part in error["loc"]) or "the file" for error in errors))
         problems = "; ".join(f"{'.'.join(str(part) for part in error['loc']) or 'the file'}: {error['msg']}" for error in errors)
         raise SettingsInvalid(f"settings file {path.name} is not valid: {problems}", fields) from None
+    if settings.exact_base_url:                                # no command builds a write route into Exact (see the module docstring)
+        raise WriteRouteSet()
+    return settings
 
 
 def _indent(raw: str) -> int | str | None:

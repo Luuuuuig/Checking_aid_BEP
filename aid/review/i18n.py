@@ -5,12 +5,19 @@ A key with a prefix labels a value of the aid: "field:<field>" a field of the co
 review item, the detail of a flag or the reason of an uncompared item). A reason key that ends in " *" labels every reason that
 begins with the text before the asterisk, for the reasons that name a write or a number of days. The page shows these labels and
 never the texts themselves, so that no rule code and no setting value reaches it. reason_label gives the label of a reason, for
-the page and for the digest (aid/notify.py), which imports these strings and not gradio. The keys that begin with "settings" are the
+the page and for the digest (aid/notify.py), which imports these strings and not gradio. "message_not_sent" is what the page says
+after a close whose message could not be sent, followed by "not_sent:<cause>", the kind of its cause and what to do about it
+(the causes of aid/review/close.py: the sign-in, a mailbox or server not reached or refusing, no mailbox connected, the mail
+server's password, the settings file, the case's document); "message_filed" after one whose message was written as a file because
+the settings say so, into {folder}; "message_unconfirmed" after one whose hand-over was not confirmed; and "reply_unread" after a
+close that did nothing because a reply filed with the case could not be read at that moment. The keys that begin with "settings"
+are the
 strings of the settings tab, "settings_via:<value>" labelling a value of the setting send_via and "settings_reader:<value>" a value of
 the setting reader. Of the buyer's part of that tab, "settings_field:<setting>" is the label of a field and "settings_help:<setting>"
 its help, which says what the rule does and no more, in the words the review tab and the banner use ("de drempel", "de marge",
 "naar u"); "settings_problem:<kind>" is what a refused field takes; "settings_file_unreadable" is the one line of a settings file
-that cannot be read, with "settings_file_fields" for the fields it names. The help of the suppliers says what the tick for no
+that cannot be read, with "settings_file_fields" for the fields it names, and "settings_file_write_route" the line of a settings
+file in which exact_base_url is set, which no command uses. The help of the suppliers says what the tick for no
 questions does and does not do: the aid's own questions come to the buyer, and a question the buyer chooses on the review tab is
 still sent; a review item that comes from that tick has the tick's own words as its reason ("De assistent stuurt deze leverancier
 uit zichzelf geen vragen"). A save on the settings tab that the runner takes over at its next pass says so in one note,
@@ -19,16 +26,30 @@ uit zichzelf geen vragen"). A save on the settings tab that the runner takes ove
 block says "settings_buyer_saved", "settings_buyer_unchanged" and "settings_buyer_refused" as the buyer's part does, and its own
 "exact_number_changed" when the pattern was changed elsewhere. "settings_extension_code", with its help, labels the code the browser
 extension sends, which the connections show. "waiting_hint:po" and "waiting_hint:version" are the hint of the review tab on a case
-that waits for its purchase order, {number}, or for the version {version} of it that the confirmation quotes. The keys that begin
-with "hand" are the strings of the
+that waits for its purchase order, {number}, or for the version {version} of it that the confirmation quotes; it sends the buyer to the
+tab "Bestanden" when that order stays away. "entered_values" is the line above the lists of the review tab on a case that was
+compared with values entered in Exact, {changes} being those values, each as "entered:<field>" names it by its line and its value;
+"entered_unread" stands in its place on a case that ran while the list of them could not be read. The keys that begin with "files"
+are the strings of the tab "Bestanden"
+(aid/review/intake.py): "files_refused:<reason>" the note of a file it refuses ("type_export" the one of a type while the export's
+columns are set), "files_column:<column>" a column of its table, "files_outcome:<outcome>" the label of an outcome of the intake file
+("export_one" for an export of one purchase order, "case_unknown" for a case without one, "set_aside" with the {n} days a file stayed,
+"unread" for a case opened from a scan that failed at reading, by which the digest names that case too),
+"files_skipped:<key>" the label of a reason of a skip (intake.SKIPPED; "other" for a reason it does not know), "files_error" the label of
+an error the scan does not tell apart and "files_error:<key>" that of an export refused (intake.EXPORT_REFUSED) and of a version the
+store holds from another file ("version"), each by intake.ERRORS. The keys that begin with "hand" are the strings of the
 tab "In Exact invoeren" (aid/review/hand_list.py), "hand_row:<kind>" the row of a change of that kind and "hand_row:article_price_back"
 the row of the undo of an article price whose price before it the aid never read; "hand_tab_unread" is the tab's label while the list
 cannot be read, and "hand_nothing_noted" the note of a press that noted nothing. Under the list: "hand_put_back_row" is a row that puts
-a change back in Exact and "hand_exact_shows" the note of an open row whose order Exact printed with a third value; "hand_done*" are
+a change back in Exact and "hand_exact_shows" the note of an open row whose order Exact printed with a third value;
+"hand_tick_ended" and "hand_tick_ended_unfound" are the note of a row whose tick a newer print of its order ended, and
+"hand_list_changed" what the tab says of a list whose file was changed outside the aid; "hand_done*" are
 the section of the changes handled in the last 14 days and how the aid knows each, "hand_reopen*" and "hand_put_back*" its two buttons
 and what they say ("hand_reopen_not", "hand_reopen_put_back", "hand_put_back_newer_open", "hand_put_back_newer_entered",
 "hand_put_back_newer_never", "hand_put_back_not_needed", "hand_put_back_lost", "hand_put_back_not_entered" and
-"hand_put_back_cannot" say why a press did nothing, "hand_done_choose_first" that nothing was chosen), and
+"hand_put_back_cannot" say why a press did nothing, "hand_done_choose_first" that nothing was chosen; "hand_put_back_other" is the
+sentence behind the note of a put-back when the aid knows another value from before the change, {source} one of
+"hand_put_back_source:marks" and "hand_put_back_source:look"), and
 "hand_confirmation*" and "hand_attach_only" the section of the confirmations to attach in Exact. The keys that begin with "exact" are
 the strings of the block "Koppeling met Exact" of the settings tab (aid/review/exact_settings.py), one block in each language:
 "exact_field:<field>" the label of a field of its form and "exact_help:<field>" its help, "exact_meaning:<meaning>" what a column of
@@ -44,10 +65,22 @@ the sentence for a count of one, in the singular, beside the key without it for 
 over and the order or orders shown below it. The keys that begin with "tryout" are the strings of the part "Proefdraaien" at the end of
 that block and of the switch of the test mode (aid/tryout.py), "tryout_change:<change>" the label of a change of a try-out and
 "tryout_reason:<reason>" why a purchase order gives none, and "tryout_nothing_sent" the answer of the review tab to "Leverancier vragen"
-on a case made from a try-out (aid/tryout_mark.py). They stand in one block of their own after the block's strings, with the state line
+on a case made from a try-out (aid/tryout_mark.py); "tryout_cart_change:<change>" is the label of a change of a try-out cart, under a
+question of its own ("tryout_cart_change", so that the page says which choice is the cart's), "tryout_cart_make" its button and
+"tryout_cart_made" its note, with the link to the page on the capture server. They stand in one block of their own after the block's strings, with the state line
 of the changes still to enter ("exact_state_to_enter"), the line of the test mode on the tab In Exact invoeren ("hand_test_mode") and
 the mark of a change from try-out documents on that tab ("hand_tryout"), which also marks a try-out in the case dropdown of the tab
-"Beoordelen" and among the confirmations under the list.
+"Beoordelen" and among the confirmations under the list. The keys that begin with "pricelist" are the strings of the tab "Prijslijst"
+(aid/review/pricelist_page.py): "pricelist_refused:<reason>" a refusal of the export of articles or of a price list given there (a
+workbook with more than one sheet with data has the export reader's sentence, "exact_export_refused:several_sheets", wherever a
+workbook is given), "pricelist_column:<column>" the field of a column of the
+price list, "pricelist_header:<column>" a column of its table and "pricelist_outcome:<outcome>" what became of a row of the list, by
+its label and never by the import's own reason; a count line is put together from parts, each with a form for a count of one
+("pricelist_articles_one", "pricelist_articles_many"). The keys that begin with "exact_articles" are part 3 of the block
+"Koppeling met Exact", the columns of the export of articles ("exact_part_articles" its title): "exact_articles_field:<field>" a field,
+"exact_articles_left:<reason>" why the trial read left a row out, and "exact_articles_read" its count line, put together from the same
+parts. "hand_pricelist" and "hand_pricelist_entered" are the one press of the tab "In Exact invoeren" for the article prices of one
+price list.
 """
 
 STRINGS: dict[str, dict[str, str]] = {
@@ -91,15 +124,36 @@ STRINGS: dict[str, dict[str, str]] = {
         "undo_failed": "Ongedaan maken is mislukt.",
         "write_refused": "De schrijfactie is geweigerd",
         "message_not_sent": "Een bericht is niet verzonden; de zaak blijft ter beoordeling.",
+        "message_filed": ("Het bericht is niet verstuurd maar als bestand klaargezet ({folder}): de instellingen laten berichten als "
+                          "bestand schrijven."),
+        "not_sent:sign_in": ("De aanmelding bij Microsoft is verlopen: meld u opnieuw aan onder Instellingen, Koppelingen, en sluit de zaak "
+                             "opnieuw af."),
+        "not_sent:unreachable": "Het postvak of de mailserver was niet bereikbaar: sluit de zaak later opnieuw af.",
+        "not_sent:refused": "Het postvak of de mailserver weigerde het bericht: geef dit door aan de onderzoeker.",
+        "not_sent:no_mailbox": ("Er is geen postvak verbonden: verbind een postvak onder Instellingen, Koppelingen, en sluit de zaak opnieuw "
+                                "af."),
+        "not_sent:no_password": "Het wachtwoord van de mailserver is niet ingesteld: geef dit door aan de onderzoeker.",
+        "not_sent:settings": "De instellingen kunnen nu niet worden gelezen: er is niets verstuurd. Geef dit door aan de onderzoeker.",
+        "not_sent:document": "Het document van de zaak kan nu niet worden gelezen: er is niets verstuurd.",
+        "message_unconfirmed": ("Niet zeker of het bericht is verstuurd: het postvak gaf geen bevestiging. Kijk bij Verzonden items. Staat het "
+                                "er niet, dan komt de zaak na de wachttijd bij u terug en stelt u de vraag opnieuw."),
+        "reply_unread": "Een antwoord bij deze zaak kan nu niet worden gelezen: sluit de zaak zo opnieuw af.",
         "question_open": "Vraag aan de leverancier staat open",
         "decisions_damaged": "De besluiten van deze zaak kunnen niet worden gelezen ({file}).",
         "waiting_hint:po": ("Inkooporder {number} kent de assistent nog niet. Komt die inkooporder uit Exact binnen, dan controleert de "
-                            "assistent deze bevestiging vanzelf opnieuw; u hoeft hier niets te besluiten. Blijft zij weg, sleep dan de pdf "
-                            "van de inkooporder of de e-mail van Exact naar de map die de assistent leest. Is {number} niet een van uw "
+                            "assistent deze bevestiging vanzelf opnieuw; u hoeft hier niets te besluiten. Blijft zij weg, geef dan de pdf "
+                            "van de inkooporder of de e-mail van Exact op het tabblad Bestanden. Is {number} niet een van uw "
                             "inkoopordernummers, besluit dan zelf over deze zaak."),
         "waiting_hint:version": ("Versie {version} van inkooporder {number} kent de assistent nog niet. Komt die versie uit Exact binnen, dan "
                                  "controleert de assistent deze bevestiging vanzelf opnieuw; u hoeft hier niets te besluiten. Blijft zij "
-                                 "weg, sleep dan de pdf van die versie of de e-mail van Exact naar de map die de assistent leest."),
+                                 "weg, geef dan de pdf van die versie of de e-mail van Exact op het tabblad Bestanden."),
+        "entered_values": ("Sinds deze inkooporder is opgenomen, is in Exact ingevoerd: {changes}. De assistent vergelijkt met deze "
+                           "waarden."),
+        "entered:price": "regel {line}: prijs {value}",
+        "entered:delivery_date": "regel {line}: leverdatum {value}",
+        "entered:quantity": "regel {line}: aantal {value}",
+        "entered_unread": ("De lijst In Exact invoeren kon niet worden gelezen: de assistent vergelijkt met de inkooporder zoals zij is "
+                           "opgenomen."),
         "choose_write": "Kies eerst een schrijfactie.",
         "review_tab": "Beoordelen",
         "hand_tab": "In Exact invoeren",
@@ -117,12 +171,15 @@ STRINGS: dict[str, dict[str, str]] = {
         "hand_row:article_price": "artikel {item}: inkoopprijs {old} → {new}",
         "hand_row:article_price_back": "artikel {item}: inkoopprijs {old} terugzetten naar de prijs van daarvoor",
         "hand_unknown": "onbekend",
+        "hand_empty": "leeg",
         "hand_week": "week {week} ({year})",
         "hand_hint": "Let op: na deze wijziging moet de inkooporder opnieuw gefiatteerd worden.",
         "hand_entered": "Aangevinkte regels zijn ingevoerd",
         "hand_dropped": "Aangevinkte regels niet invoeren",
         "hand_block": "Blok",
         "hand_block_entered": "Alles van dit blok is ingevoerd",
+        "hand_pricelist": "Prijslijst",
+        "hand_pricelist_entered": "Alle artikelprijzen van deze prijslijst zijn ingevoerd",
         "hand_tick_first": "Vink eerst aan wat u bedoelt.",
         "hand_entered_one": "1 wijziging genoteerd als ingevoerd in Exact.",
         "hand_entered_many": "{n} wijzigingen genoteerd als ingevoerd in Exact.",
@@ -134,6 +191,12 @@ STRINGS: dict[str, dict[str, str]] = {
         "hand_unreadable_many": "{n} regels van de lijst konden niet worden gelezen; vernieuw de lijst over een minuut.",
         "hand_put_back_row": "Terugzetten: {row}",
         "hand_exact_shows": "Exact toont nu {value}.",
+        "hand_tick_ended": ("U vinkte dit af, maar de inkooporder die daarna binnenkwam toont {value}. Voer de wijziging in Exact in, of "
+                            "vink opnieuw af als zij er al in staat."),
+        "hand_tick_ended_unfound": ("U vinkte dit af, maar in de inkooporder die daarna binnenkwam is deze regel niet terug te vinden. "
+                                    "Kijk in Exact of de wijziging er staat en vink dan opnieuw af, of haal de regel van de lijst."),
+        "hand_list_changed": ("De lijst In Exact invoeren kan niet worden gelezen: het bestand is buiten de assistent gewijzigd. Geef dit "
+                              "door aan de onderzoeker."),
         "hand_done": "Afgehandeld in de laatste 14 dagen",
         "hand_done_ticked": "(door u afgevinkt op {date})",
         "hand_done_seen": "(gezien in versie {n} van de inkooporder)",
@@ -148,6 +211,12 @@ STRINGS: dict[str, dict[str, str]] = {
                             "artikel."),
         "hand_put_back_listed": ("Nog niet teruggedraaid in Exact. Op de lijst staat nu: {row}. Voer de oude waarde in Exact in en vink de "
                                  "regel af."),
+        "hand_put_back_other": ("Let op: {old} is de waarde van de inkooporder zoals de assistent die las; volgens {source} stond er "
+                                "{value}. Kijk in Exact welke waarde terug moet."),
+        "hand_put_back_source:marks": "de lijst (een eerdere wijziging die is ingevoerd)",
+        "hand_put_back_source:look": "de inkooporder zoals de assistent haar het laatst zag",
+        "hand_put_back_listed_empty": ("Nog niet teruggedraaid in Exact. Op de lijst staat nu: {row}. Maak het veld in Exact leeg en vink de "
+                                       "regel af."),
         "hand_put_back_on_list": "Het terugzetten staat al op de lijst.",
         "hand_put_back_done": "Deze wijziging is al teruggedraaid.",
         "hand_put_back_unknown": "Van dit artikel kent de assistent de oude prijs niet; zet die zelf terug in Exact.",
@@ -171,6 +240,148 @@ STRINGS: dict[str, dict[str, str]] = {
         "hand_reopen_put_back": "Deze wijziging is teruggedraaid; zij komt niet terug op de lijst.",
         "hand_done_choose_first": "Kies eerst een wijziging bij Afgehandelde wijziging.",
         "hand_done_seen_export": "(gezien in een export uit Exact)",
+        "files_tab": "Bestanden",
+        "files_title": "Een bestand aan de assistent geven",
+        "files_intro": ("Komt een document niet vanzelf uit uw postvak, geef het dan hier: een inkooporder uit Exact (pdf) of een "
+                        "orderbevestiging (pdf of e-mail). De assistent verwerkt het bij de volgende ronde, binnen een minuut."),
+        "files_intro_export": ("Komt een document niet vanzelf uit uw postvak, geef het dan hier: een inkooporder uit Exact (pdf), een "
+                               "orderbevestiging (pdf of e-mail) of een export uit Exact (Excel of csv). De assistent verwerkt het bij de "
+                               "volgende ronde, binnen een minuut."),
+        "files_choose": "Kies een bestand",
+        "files_give": "Aan de assistent geven",
+        "files_accepted": "{name} is aangenomen. Hieronder staat binnen een minuut wat ermee is gedaan.",
+        "files_refused:type": "{name} is niet aangenomen: de assistent leest pdf, png en e-mail (.eml).",
+        "files_refused:type_export": ("{name} is niet aangenomen: de assistent leest pdf, png, e-mail (.eml) en een export uit Exact (Excel "
+                                      "of csv)."),
+        "files_refused:empty": "{name} is niet aangenomen: het bestand is leeg.",
+        "files_refused:export": ("{name} is niet aangenomen: de assistent leest een export uit Exact pas als de kolommen zijn ingesteld "
+                                 "onder Instellingen, Koppeling met Exact."),
+        "files_choose_first": "Kies eerst een bestand.",
+        "files_done": "Laatst verwerkt",
+        "files_column:time": "Tijd",
+        "files_column:file": "Bestand",
+        "files_column:what": "Wat de assistent deed",
+        "files_outcome:po": "Inkooporder {number} opgenomen (versie {version})",
+        "files_outcome:export": "Export uit Exact opgenomen: {n} inkooporders, waarvan {m} nieuw of gewijzigd",
+        "files_outcome:export_one": "Export uit Exact opgenomen: 1 inkooporder, waarvan {m} nieuw of gewijzigd",
+        "files_outcome:case": "Zaak geopend voor inkooporder {number}",
+        "files_outcome:case_unknown": "Zaak geopend, inkooporder onbekend",
+        "files_outcome:guess": "Zaak geopend voor inkooporder {number}, afgeleid: kijk de zaak na",
+        "files_outcome:answer": "Antwoord van een leverancier bij de zaak gelegd",
+        "files_outcome:bounce": "Een bericht van de assistent kwam terug als onbestelbaar: bij de zaak gelegd",
+        "files_outcome:auto": "Automatisch antwoord (bijvoorbeeld een afwezigheidsmelding) bij de zaak gelegd",
+        "files_outcome:own": "Uw eigen bericht bij de zaak gelegd; dit telt niet als antwoord van de leverancier",
+        "files_outcome:set_aside": "Na {n} dagen nog niet gelezen: de assistent probeert dit bestand niet meer",
+        "files_outcome:recheck": "Inkooporder {number} is binnen: de wachtende zaak is opnieuw gecontroleerd",
+        "files_outcome:unread": "Scan zonder leesbare tekst: de assistent kon dit document niet lezen; bekijk het zelf",
+        "files_skipped:duplicate": "Al eerder ontvangen: niets gedaan",
+        "files_skipped:class": "Geen inkooporder of orderbevestiging: niets gedaan",
+        "files_skipped:type": "Dit soort bestand leest de assistent niet",
+        "files_skipped:numbers": "Meer dan een inkoopordernummer gevonden: bekijk dit document zelf",
+        "files_skipped:scan": "Scan zonder leesbare tekst: bekijk dit document zelf",
+        "files_skipped:no_attachment": "E-mail zonder bijlage: niets gedaan",
+        "files_skipped:not_an_export": "Een rekenblad zonder de kolomtitels van de export: niets gedaan",
+        "files_skipped:tryout": "Proefdocument buiten de proefstand: niets gedaan",
+        "files_skipped:no_order_lines": "Export uit Exact zonder orderregels: niets gedaan",
+        "files_skipped:other": "Overgeslagen: niets gedaan",
+        "files_error": ("Kon niet worden gelezen. Is het een inkooporder uit Exact, controleer dan de opmaak onder Instellingen, Koppeling "
+                        "met Exact."),
+        "files_error:no_po_number": "Export uit Exact niet opgenomen: een rij heeft een artikelcode maar geen inkoopordernummer",
+        "files_error:columns": "Export uit Exact niet opgenomen: de kolommen van dit bestand zijn anders dan ingesteld",
+        "files_error:cells": ("Export uit Exact niet opgenomen: een rij heeft een ander aantal cellen dan de rij met kolomtitels. Sla het "
+                              "bestand op als Excel-bestand (.xlsx) en geef het opnieuw."),
+        "files_error:sheets": ("Export uit Exact niet opgenomen: het Excel-bestand heeft meer dan één werkblad met gegevens. Sla het werkblad "
+                               "met de orderregels op als een eigen bestand en geef dat."),
+        "files_error:hidden_sheet": ("Export uit Exact niet opgenomen: het Excel-bestand heeft alleen gegevens op een verborgen werkblad. Maak "
+                                     "het werkblad zichtbaar en geef het bestand opnieuw."),
+        "files_error:export": "Export uit Exact niet opgenomen: controleer de kolommen onder Instellingen, Koppeling met Exact.",
+        "files_error:version": "Inkooporder niet opgenomen: de assistent heeft deze versie al uit een ander bestand",
+        "pricelist_tab": "Prijslijst",
+        "pricelist_unset": ("De kolommen van de export van de artikelen zijn nog niet ingesteld. Dat gebeurt bij de installatie: Instellingen, "
+                            "Koppeling met Exact, deel 3."),
+        "pricelist_intro": ("Een prijslijst van een leverancier vergelijkt u hier met de inkoopprijzen in Exact. De assistent heeft daarvoor de "
+                            "export van de artikelen van die leverancier uit Exact nodig. Wat verandert, zet u met een druk op de knop op de "
+                            "lijst In Exact invoeren; in Exact verandert de assistent niets."),
+        "pricelist_supplier": "Leverancier",
+        "pricelist_supplier_help": "Kies de leverancier, of typ de naam bij een nieuwe leverancier.",
+        "pricelist_state": "Inkoopprijzen van {supplier} opgenomen op {time} uit {file}: {articles}.",
+        "pricelist_state_none": ("Van {supplier} zijn nog geen inkoopprijzen opgenomen. Geef eerst de export van de artikelen van deze "
+                                 "leverancier uit Exact."),
+        "pricelist_choose_supplier": "Kies eerst een leverancier.",
+        "pricelist_stored_unreadable": "De opgenomen inkoopprijzen kunnen niet worden gelezen. Geef de export van de artikelen opnieuw.",
+        "pricelist_export": "Export van de artikelen uit Exact (Excel of csv)",
+        "pricelist_file_prices": "Inkoopprijzen opnemen",
+        "pricelist_remove": "Inkoopprijzen van deze leverancier weghalen",
+        "pricelist_removed": ("De opgenomen inkoopprijzen van {supplier} zijn weggehaald. Wat al op de lijst In Exact invoeren staat, blijft "
+                              "staan."),
+        "pricelist_filed": "Inkoopprijzen van {supplier} opgenomen: {articles}; {passed}.",
+        "pricelist_filed_suppliers": "Inkoopprijzen opgenomen van {m} leveranciers: {articles}; {passed}.",
+        "pricelist_articles_one": "1 artikel",
+        "pricelist_articles_many": "{n} artikelen",
+        "pricelist_passed_one": "1 rij overgeslagen",
+        "pricelist_passed_many": "{k} rijen overgeslagen",
+        "pricelist_refused:type": "{name} is niet aangenomen: de assistent leest hier Excel (.xlsx) en csv.",
+        "pricelist_refused:columns": ("De kolommen van dit bestand zijn anders dan ingesteld: controleer Instellingen, Koppeling met Exact, "
+                                      "deel 3."),
+        "pricelist_refused:supplier": "Kies eerst de leverancier van wie deze artikelen zijn.",
+        "pricelist_refused:name": "De naam van de leverancier is te lang of bevat tekens die niet in een naam horen.",
+        "pricelist_refused:name_row": ("In rij {row} van de export staat bij de leverancier een naam die te lang is of tekens bevat die niet "
+                                       "in een naam horen. Er is niets opgenomen."),
+        "pricelist_refused:no_article": ("Deze export gaf geen artikel: geen rij heeft een artikelcode en een prijs die te lezen is. Er is "
+                                         "niets opgenomen."),
+        "pricelist_refused:heading": ("De kolomtitels moeten in de eerste rij van het bestand staan: haal de regels erboven weg en geef het "
+                                      "bestand opnieuw."),
+        "pricelist_list": "Prijslijst (Excel of csv)",
+        "pricelist_column:item_code": "Kolom met de artikelcode",
+        "pricelist_column:price": "Kolom met de prijs",
+        "pricelist_column:basis": "Kolom met de prijs per (mag leeg)",
+        "pricelist_column:valid_from": "Geldig vanaf (mag leeg)",
+        "pricelist_column:valid_to": "Geldig tot (mag leeg)",
+        "pricelist_columns_hint": ("Heeft de lijst een kolom voor waar de prijs per geldt (per 100, per doos), wijs die dan aan: anders "
+                                   "leest de assistent elke prijs als een prijs per stuk."),
+        "pricelist_problem:price": "Kies de kolom met de prijs.",
+        "pricelist_view": "Bekijken",
+        "pricelist_carry_out": "Op de lijst In Exact invoeren zetten",
+        "pricelist_header:article": "Artikel",
+        "pricelist_header:current": "Inkoopprijs in Exact",
+        "pricelist_header:list": "Prijs op de lijst",
+        "pricelist_header:outcome": "Uitkomst",
+        "pricelist_outcome:changes": "prijs verandert",
+        "pricelist_outcome:unchanged": "ongewijzigd",
+        "pricelist_outcome:unknown_article": "artikel niet bekend in Exact",
+        "pricelist_outcome:unreadable_price": "prijs niet te lezen",
+        "pricelist_outcome:other_basis": "prijs per ander aantal: niet vergeleken",
+        "pricelist_outcome:not_yet_valid": "nog niet geldig",
+        "pricelist_outcome:expired": "verlopen",
+        "pricelist_outcome:duplicate": "dubbele rij",
+        "pricelist_outcome:no_item_code": "geen artikelcode",
+        "pricelist_outcome:unreadable_valid_from": "geldig vanaf niet te lezen",
+        "pricelist_outcome:unreadable_valid_to": "geldig tot niet te lezen",
+        "pricelist_outcome:failed": "niet gelukt",
+        "pricelist_outcome:shared": "ook bij leverancier {name}: voer deze prijs zelf in Exact in",
+        "pricelist_shared_more": "{names} en nog {n}",
+        "pricelist_outcome:differs": "wijkt sterk af: controleer de kolom \"prijs per\"",
+        "pricelist_outcome:ticked": "al afgevinkt op de lijst In Exact invoeren",
+        "pricelist_outcome:dropped": "van de lijst gehaald: zet de regel daar terug als de prijs toch moet worden ingevoerd",
+        "pricelist_row": "rij {n}",
+        "pricelist_counts": "{changes}, {same}, {passed}.",
+        "pricelist_changes_one": "1 prijs verandert",
+        "pricelist_changes_many": "{a} prijzen veranderen",
+        "pricelist_same_one": "1 blijft gelijk",
+        "pricelist_same_many": "{b} blijven gelijk",
+        "pricelist_carried_one": "1 prijswijziging staat op de lijst In Exact invoeren.",
+        "pricelist_carried_many": "{n} prijswijzigingen staan op de lijst In Exact invoeren.",
+        "pricelist_expired": "Sommige rijen zijn verlopen: vraag de leverancier om een actuele lijst.",
+        "pricelist_changed": "De gegevens zijn veranderd sinds u de lijst bekeek. Bekijk de lijst opnieuw.",
+        "pricelist_differs": ("Een prijs die meer dan drie keer zo hoog of zo laag is, zet de assistent niet op de lijst: controleer de "
+                              "lijst, en voer een echte wijziging zelf in Exact in."),
+        "pricelist_older": ("Let op: voor {articles} staat op de lijst In Exact invoeren nog de prijs van een eerdere prijslijst van deze "
+                            "leverancier. Deze lijst vraagt een andere prijs, die de assistent niet op de lijst zet: haal die regel daar van "
+                            "de lijst en voer de goede prijs zelf in Exact in."),
+        "pricelist_not_prepared": "Niet op de lijst gezet: {articles}. Bekijk de lijst opnieuw om het nog eens te proberen.",
+        "pricelist_columns_lost": "De kolommen van deze lijst konden niet worden bewaard: wijs ze de volgende keer opnieuw aan.",
+        "pricelist_log_lost": ("De assistent kon deze wijzigingen niet in zijn eigen logboek van de prijslijst schrijven en kan ze daardoor "
+                               "later niet zelf terugzetten: geef dit door aan de onderzoeker."),
         "settings_tab": "Instellingen",
         "settings_share": "Niet beschikbaar op een openbare link",
         "settings_no_file": "Niet beschikbaar: de pagina is gestart zonder instellingenbestand",
@@ -240,6 +451,10 @@ STRINGS: dict[str, dict[str, str]] = {
         "settings_file_unreadable": ("Het instellingenbestand kan niet worden gelezen{fields}. Hieronder staan de instellingen die de "
                                      "assistent nu gebruikt. Opslaan kan pas weer als het bestand is hersteld."),
         "settings_file_fields": ": controleer {fields}",
+        "settings_file_write_route": ('exact_base_url staat ingesteld, maar deze versie van de assistent schrijft niets in Exact: elke '
+                                      'wijziging wordt klaargezet op het tabblad "In Exact invoeren". Haal exact_base_url uit het '
+                                      'instellingenbestand. Hieronder staan de instellingen die de assistent nu gebruikt. Opslaan kan pas '
+                                      'weer als het bestand is hersteld.'),
         "settings_group:handled": "Wat de assistent zelf mag afhandelen",
         "settings_group:questions": "Vragen aan leveranciers",
         "settings_group:digest": "Dagoverzicht en taal",
@@ -547,15 +762,46 @@ STRINGS: dict[str, dict[str, str]] = {
         "exact_export_refused:double_line_id": ("Rij {row}: dit regelnummer staat al op een eerdere regel van dezelfde inkooporder. Kies de "
                                                 "kolom met het regelnummer, of kies \"(staat niet in het bestand)\": dan telt de assistent de "
                                                 "regels zelf."),
+        "exact_export_refused:surplus_cells": ("Rij {row} van dit bestand heeft meer cellen dan de rij met kolomtitels. Meestal staat er dan "
+                                               "een komma in een getal of in een omschrijving zonder aanhalingstekens. Sla het bestand op als "
+                                               "Excel-bestand (.xlsx) of met puntkomma's als scheidingsteken, en geef het opnieuw."),
+        "exact_export_refused:cell_count": ("Rij {row} van dit bestand heeft een ander aantal cellen dan de rij met kolomtitels. In een bestand "
+                                            "met komma's als scheidingsteken staat er dan meestal een komma in een getal of in een "
+                                            "omschrijving zonder aanhalingstekens. Sla het bestand op als Excel-bestand (.xlsx) of met "
+                                            "puntkomma's als scheidingsteken, en geef het opnieuw."),
+        "exact_export_refused:hidden_sheet": ("Dit Excel-bestand heeft alleen gegevens op een verborgen werkblad. De assistent leest geen "
+                                              "verborgen werkbladen: maak het werkblad zichtbaar, of sla het op als een eigen bestand, en geef "
+                                              "het opnieuw."),
+        "exact_export_refused:several_sheets": ("Dit Excel-bestand heeft meer dan één werkblad met gegevens ({names}). De assistent leest één "
+                                                "werkblad: sla het werkblad dat u bedoelt op als een eigen bestand en geef dat."),
         "exact_export_saved": "Opgeslagen.",
         "exact_export_changed": ("Niet opgeslagen: de koppeling is intussen op een andere plek gewijzigd. Open het tabblad Instellingen "
                                  "opnieuw en kijk de kolommen na."),
+        "exact_part_articles": "3. Inkoopprijzen van artikelen als export uit Exact (voor de prijslijst)",
+        "exact_articles_intro": ("Kies een voorbeeld van de export van artikelen uit Exact en wijs de kolommen aan. Heeft de export geen "
+                                 "kolom met de leverancier, dan kiest u de leverancier wanneer u de export op het tabblad Prijslijst geeft."),
+        "exact_articles_sample": "Voorbeeld: een export van artikelen uit Exact",
+        "exact_articles_columns": "Kolommen van de export van de artikelen",
+        "exact_articles_field:item_code": "Artikelcode (verplicht)",
+        "exact_articles_field:price": "Inkoopprijs (verplicht)",
+        "exact_articles_field:supplier": "Leverancier",
+        "exact_articles_price": "Inkoopprijs",
+        "exact_articles_problem:price": "Kies de kolom met de inkoopprijs.",
+        "exact_articles_problem:none": ("Het voorbeeld gaf geen artikel: geen rij onder de kolomnamen heeft een artikelcode en een prijs die "
+                                        "te lezen is."),
+        "exact_articles_read": "{articles} gelezen; {passed}.",
+        "exact_articles_read_reasons": "{articles} gelezen; {passed} ({reasons}).",
+        "exact_articles_left:no_item_code": "zonder artikelcode",
+        "exact_articles_left:no_supplier": "zonder leverancier",
+        "exact_articles_left:no_price": "prijs niet te lezen",
+        "exact_articles_left:twice": "artikel dubbel",
         "exact_state_to_enter": "Nog in te voeren in Exact: {n}.",
         "hand_test_mode": "Proefstand: voer deze wijzigingen alleen in het test-Exact in.",
         "hand_tryout": "(proefdocument)",
         "tryout_title": "Proefdraaien met een inkooporder uit Exact",
         "tryout_intro": ("Zonder leverancier kunt u de assistent toch proberen: bij een inkooporder die de assistent kent, maakt de "
-                         "assistent een verzonnen orderbevestiging. U kiest wat er afwijkt. Het proefdocument blijft op deze pc."),
+                         "assistent een verzonnen orderbevestiging. Voor de voorcontrole in de browser maakt de assistent van dezelfde "
+                         "inkooporder een verzonnen winkelwagen. U kiest wat er afwijkt. Het proefdocument blijft op deze pc."),
         "tryout_switch": "Proefstand: de assistent werkt met het test-Exact",
         "tryout_saved": "Opgeslagen.",
         "tryout_saved_open": ("Opgeslagen. Op de lijst In Exact invoeren staan nog {n} wijzigingen uit proefdocumenten. Voer die niet in het "
@@ -577,6 +823,12 @@ STRINGS: dict[str, dict[str, str]] = {
         "tryout_made": ("De proefbevestiging is gemaakt. Stuur haar als bijlage naar uw eigen postvak, naar de map die de assistent leest, "
                         "of geef haar direct aan de assistent."),
         "tryout_given": "De proefbevestiging ligt in de bewaakte map. De assistent opent de zaak bij de volgende ronde, binnen een minuut.",
+        "tryout_cart_change": "Wat wijkt af in de proefwinkelwagen?",
+        "tryout_cart_change:none": "Niets",
+        "tryout_cart_change:price_small": "De prijs van de eerste regel is 1 procent hoger",
+        "tryout_cart_make": "Proefwinkelwagen maken",
+        "tryout_cart_made": ("De proefwinkelwagen staat klaar. Open {link} in de browser waarin de uitbreiding van de assistent staat: de "
+                             "balk bovenaan de pagina laat de uitkomst zien."),
         "tryout_none_known": "De assistent kent nog geen inkooporders. Laat eerst een inkooporder uit Exact binnenkomen.",
         "tryout_refused": "Van deze inkooporder kan geen proefdocument worden gemaakt: {reason}.",
         "tryout_reason:no_lines": "zij heeft geen orderregels",
@@ -638,6 +890,11 @@ STRINGS: dict[str, dict[str, str]] = {
         "reason:no version selected": "Geen versie van de inkooporder gekozen",
         "reason:PO found otherwise than by the number recognition": ("Kijk na of dit de goede inkooporder is: de assistent vond haar niet "
                                                                      "aan het nummer achter een van de woorden van de nummerherkenning."),
+        "reason:the list of changes to enter in Exact could not be read": ("De lijst In Exact invoeren kon niet worden gelezen: de "
+                                                                           "assistent vergelijkt met de inkooporder zoals zij is "
+                                                                           "opgenomen."),
+        "reason:PO chosen by the items in the cart": ("Kijk na of dit de goede inkooporder is: de assistent koos haar op de artikelen in de "
+                                                      "winkelwagen."),
         "reason:split line: parts differ": "Gesplitste regel: de delen verschillen",
         "reason:no delivery date on the document": "Geen leverdatum op het document",
         "reason:no lead time known for the supplier": "Geen levertijd bekend voor de leverancier",
@@ -652,12 +909,19 @@ STRINGS: dict[str, dict[str, str]] = {
         "reason:not covered by a rule": "Voor dit verschil is geen vaste aanpak",
         "reason:prepared change: apply by hand": "Voorbereide wijziging: met de hand doorvoeren",
         "reason:write failed: *": "Schrijfactie mislukt",
+        "reason:write made, not verified: check in Exact": ("Wijziging in Exact gemaakt, maar de controle erna lukte niet: kijk in Exact of "
+                                                            "de waarde klopt"),
+        "reason:write outcome not known: check in Exact": ("Niet zeker of de wijziging in Exact is gemaakt: kijk in Exact welke waarde er "
+                                                           "staat"),
         "reason:not applied: an earlier write failed *": "Niet uitgevoerd: een eerdere schrijfactie is mislukt",
+        "reason:not applied: an earlier change waits for a look in Exact *": "Niet uitgevoerd: kijk eerst in Exact naar de eerdere wijziging",
         "reason:no address for the supplier": "Geen e-mailadres van de leverancier",
         "reason:message not sent": "Bericht niet verzonden",
         "reason:try-out document: nothing is sent": "Dit is een proefdocument: de assistent stuurt hierover niets naar een leverancier.",
         "reason:message bounced": "Bericht kwam terug",
         "reason:no answer in *": "Geen antwoord binnen de wachttijd",
+        "reason:supplier answered: read the reply": "De leverancier heeft geantwoord: lees het antwoord",
+        "reason:no question is open": "Er staat geen vraag meer open: besluit over deze zaak",
         "reason:other": "Andere reden",
     },
     "en": {
@@ -700,15 +964,33 @@ STRINGS: dict[str, dict[str, str]] = {
         "undo_failed": "The undo failed.",
         "write_refused": "The write was refused",
         "message_not_sent": "A message was not sent; the case stays for review.",
+        "message_filed": "The message was not sent but written as a file ({folder}): the settings have messages written as files.",
+        "not_sent:sign_in": "The Microsoft sign-in has lapsed: sign in again under Settings, Connections, and close the case again.",
+        "not_sent:unreachable": "The mailbox or the mail server could not be reached: close the case again later.",
+        "not_sent:refused": "The mailbox or the mail server refused the message: pass this on to the researcher.",
+        "not_sent:no_mailbox": "No mailbox is connected: connect a mailbox under Settings, Connections, and close the case again.",
+        "not_sent:no_password": "The mail server's password is not set: pass this on to the researcher.",
+        "not_sent:settings": "The settings cannot be read now: nothing was sent. Pass this on to the researcher.",
+        "not_sent:document": "The case's document cannot be read now: nothing was sent.",
+        "message_unconfirmed": ("Not sure whether the message was sent: the mailbox gave no confirmation. Look in Sent items. If it is not "
+                                "there, the case comes back to you after the wait and you ask the question again."),
+        "reply_unread": "A reply filed with this case cannot be read now: close the case again in a moment.",
         "question_open": "A question to the supplier is open",
         "decisions_damaged": "The decisions of this case cannot be read ({file}).",
         "waiting_hint:po": ("The assistant does not know purchase order {number} yet. When that purchase order comes in from Exact, the "
-                            "assistant checks this confirmation again by itself; you need not decide anything here. If it stays away, drag "
-                            "the PDF of the purchase order or the e-mail from Exact into the folder the assistant reads. If {number} is not "
-                            "one of your purchase order numbers, decide on this case yourself."),
+                            "assistant checks this confirmation again by itself; you need not decide anything here. If it stays away, give "
+                            "the PDF of the purchase order or the e-mail from Exact on the tab Files. If {number} is not one of your "
+                            "purchase order numbers, decide on this case yourself."),
         "waiting_hint:version": ("The assistant does not know version {version} of purchase order {number} yet. When that version comes in "
                                  "from Exact, the assistant checks this confirmation again by itself; you need not decide anything here. If "
-                                 "it stays away, drag the PDF of that version or the e-mail from Exact into the folder the assistant reads."),
+                                 "it stays away, give the PDF of that version or the e-mail from Exact on the tab Files."),
+        "entered_values": ("Since this purchase order was filed, this was entered in Exact: {changes}. The assistant compares with these "
+                           "values."),
+        "entered:price": "line {line}: price {value}",
+        "entered:delivery_date": "line {line}: delivery date {value}",
+        "entered:quantity": "line {line}: quantity {value}",
+        "entered_unread": ("The list Enter in Exact could not be read: the assistant compares with the purchase order as it was "
+                           "filed."),
         "choose_write": "Choose a write first.",
         "review_tab": "Review",
         "hand_tab": "Enter in Exact",
@@ -725,12 +1007,15 @@ STRINGS: dict[str, dict[str, str]] = {
         "hand_row:article_price": "article {item}: purchase price {old} → {new}",
         "hand_row:article_price_back": "article {item}: purchase price {old} back to the price before it",
         "hand_unknown": "unknown",
+        "hand_empty": "empty",
         "hand_week": "week {week} ({year})",
         "hand_hint": "Note: after this change the purchase order must be approved again.",
         "hand_entered": "The ticked rows have been entered",
         "hand_dropped": "Do not enter the ticked rows",
         "hand_block": "Block",
         "hand_block_entered": "Everything of this block has been entered",
+        "hand_pricelist": "Price list",
+        "hand_pricelist_entered": "All article prices of this price list have been entered",
         "hand_tick_first": "Tick what you mean first.",
         "hand_entered_one": "1 change noted as entered in Exact.",
         "hand_entered_many": "{n} changes noted as entered in Exact.",
@@ -742,6 +1027,12 @@ STRINGS: dict[str, dict[str, str]] = {
         "hand_unreadable_many": "{n} lines of the list could not be read; refresh the list in a minute.",
         "hand_put_back_row": "Put back: {row}",
         "hand_exact_shows": "Exact now shows {value}.",
+        "hand_tick_ended": ("You ticked this, but the purchase order that came in afterwards shows {value}. Enter the change in Exact, or "
+                            "tick again if it is already there."),
+        "hand_tick_ended_unfound": ("You ticked this, but this line cannot be found in the purchase order that came in afterwards. Look in "
+                                    "Exact whether the change is there and tick again, or take the row off the list."),
+        "hand_list_changed": ("The list Enter in Exact cannot be read: the file was changed outside the assistant. Pass this on to the "
+                              "researcher."),
         "hand_done": "Handled in the last 14 days",
         "hand_done_ticked": "(ticked by you on {date})",
         "hand_done_seen": "(seen in version {n} of the purchase order)",
@@ -753,6 +1044,11 @@ STRINGS: dict[str, dict[str, str]] = {
         "hand_reopen_seen": "The assistant saw this change in Exact itself. Choose Put back in Exact if the old value must return.",
         "hand_reopen_not": "The change does not return to the list: there is another change for the same line or article by now.",
         "hand_put_back_listed": "Not put back in Exact yet. The list now holds: {row}. Enter the old value in Exact and tick the row.",
+        "hand_put_back_other": ("Note: {old} is the value of the purchase order as the assistant read it; {source} showed {value}. "
+                                "Look in Exact which value goes back."),
+        "hand_put_back_source:marks": "the list (an earlier change that was entered)",
+        "hand_put_back_source:look": "the purchase order as the assistant last saw it",
+        "hand_put_back_listed_empty": "Not put back in Exact yet. The list now holds: {row}. Empty the field in Exact and tick the row.",
         "hand_put_back_on_list": "The put-back is on the list already.",
         "hand_put_back_done": "This change was put back already.",
         "hand_put_back_unknown": "The assistant does not know the old price of this article; put it back in Exact yourself.",
@@ -775,6 +1071,144 @@ STRINGS: dict[str, dict[str, str]] = {
         "hand_reopen_put_back": "This change was put back; it does not come back on the list.",
         "hand_done_choose_first": "Choose a change under Handled change first.",
         "hand_done_seen_export": "(seen in an export from Exact)",
+        "files_tab": "Files",
+        "files_title": "Give a file to the assistant",
+        "files_intro": ("If a document does not come from your mailbox by itself, give it here: a purchase order from Exact (PDF) or an "
+                        "order confirmation (PDF or e-mail). The assistant handles it at its next pass, within a minute."),
+        "files_intro_export": ("If a document does not come from your mailbox by itself, give it here: a purchase order from Exact (PDF), "
+                               "an order confirmation (PDF or e-mail) or an export from Exact (Excel or CSV). The assistant handles it at "
+                               "its next pass, within a minute."),
+        "files_choose": "Choose a file",
+        "files_give": "Give to the assistant",
+        "files_accepted": "{name} was accepted. Below you see within a minute what was done with it.",
+        "files_refused:type": "{name} was not accepted: the assistant reads PDF, PNG and e-mail (.eml).",
+        "files_refused:type_export": "{name} was not accepted: the assistant reads PDF, PNG, e-mail (.eml) and an export from Exact (Excel or CSV).",
+        "files_refused:empty": "{name} was not accepted: the file is empty.",
+        "files_refused:export": ("{name} was not accepted: the assistant reads an export from Exact only once its columns are set under "
+                                 "Settings, Connection to Exact."),
+        "files_choose_first": "Choose a file first.",
+        "files_done": "Handled last",
+        "files_column:time": "Time",
+        "files_column:file": "File",
+        "files_column:what": "What the assistant did",
+        "files_outcome:po": "Purchase order {number} filed (version {version})",
+        "files_outcome:export": "Export from Exact filed: {n} purchase orders, of which {m} new or changed",
+        "files_outcome:export_one": "Export from Exact filed: 1 purchase order, of which {m} new or changed",
+        "files_outcome:case": "Case opened for purchase order {number}",
+        "files_outcome:case_unknown": "Case opened, purchase order unknown",
+        "files_outcome:guess": "Case opened for purchase order {number}, a guess: check the case",
+        "files_outcome:answer": "A supplier's answer filed with its case",
+        "files_outcome:bounce": "A message of the assistant came back as undeliverable: filed with its case",
+        "files_outcome:auto": "An automatic reply (an out-of-office notice, for example) filed with its case",
+        "files_outcome:own": "Your own message filed with the case; this does not count as the supplier's answer",
+        "files_outcome:set_aside": "Not read after {n} days: the assistant no longer tries this file",
+        "files_outcome:recheck": "Purchase order {number} is in: the waiting case was checked again",
+        "files_outcome:unread": "A scan without readable text: the assistant could not read this document; look at it yourself",
+        "files_skipped:duplicate": "Received before: nothing done",
+        "files_skipped:class": "No purchase order or order confirmation: nothing done",
+        "files_skipped:type": "The assistant does not read this kind of file",
+        "files_skipped:numbers": "More than one purchase order number found: look at this document yourself",
+        "files_skipped:scan": "A scan without readable text: look at this document yourself",
+        "files_skipped:no_attachment": "An e-mail without an attachment: nothing done",
+        "files_skipped:not_an_export": "A spreadsheet without the export's column titles: nothing done",
+        "files_skipped:tryout": "A try-out document outside the test mode: nothing done",
+        "files_skipped:no_order_lines": "An export from Exact without order lines: nothing done",
+        "files_skipped:other": "Skipped: nothing done",
+        "files_error": "Could not be read. If it is a purchase order from Exact, check the layout under Settings, Connection to Exact.",
+        "files_error:no_po_number": "Export from Exact not filed: a row has an item code but no purchase order number",
+        "files_error:columns": "Export from Exact not filed: the columns of this file differ from those set",
+        "files_error:cells": ("Export from Exact not filed: a row has another number of cells than the row of column titles. Save the file as "
+                              "an Excel file (.xlsx) and give it again."),
+        "files_error:sheets": ("Export from Exact not filed: the Excel file has more than one sheet with data. Save the sheet with the order "
+                               "lines as a file of its own and give that."),
+        "files_error:hidden_sheet": ("Export from Exact not filed: the Excel file holds data on a hidden sheet only. Unhide the sheet and give "
+                                     "the file again."),
+        "files_error:export": "Export from Exact not filed: check the columns under Settings, Connection to Exact.",
+        "files_error:version": "Purchase order not filed: the assistant holds this version already from another file",
+        "pricelist_tab": "Price list",
+        "pricelist_unset": ("The columns of the export of the articles are not set yet. That is done at the installation: Settings, "
+                            "Connection to Exact, part 3."),
+        "pricelist_intro": ("Here you compare a supplier's price list with the purchase prices in Exact. For that the assistant needs the "
+                            "export of that supplier's articles from Exact. What changes, you put on the list Enter in Exact with one press; "
+                            "the assistant changes nothing in Exact."),
+        "pricelist_supplier": "Supplier",
+        "pricelist_supplier_help": "Choose the supplier, or type the name for a new supplier.",
+        "pricelist_state": "Purchase prices of {supplier} filed on {time} from {file}: {articles}.",
+        "pricelist_state_none": ("No purchase prices of {supplier} are filed yet. First give the export of this supplier's articles from "
+                                 "Exact."),
+        "pricelist_choose_supplier": "Choose a supplier first.",
+        "pricelist_stored_unreadable": "The filed purchase prices cannot be read. Give the export of the articles again.",
+        "pricelist_export": "Export of the articles from Exact (Excel or CSV)",
+        "pricelist_file_prices": "File purchase prices",
+        "pricelist_remove": "Remove this supplier's purchase prices",
+        "pricelist_removed": "The stored purchase prices of {supplier} were removed. What already stands on the list Enter in Exact stays.",
+        "pricelist_filed": "Purchase prices of {supplier} filed: {articles}; {passed}.",
+        "pricelist_filed_suppliers": "Purchase prices filed of {m} suppliers: {articles}; {passed}.",
+        "pricelist_articles_one": "1 article",
+        "pricelist_articles_many": "{n} articles",
+        "pricelist_passed_one": "1 row passed over",
+        "pricelist_passed_many": "{k} rows passed over",
+        "pricelist_refused:type": "{name} was not accepted: the assistant reads Excel (.xlsx) and CSV here.",
+        "pricelist_refused:columns": "The columns of this file differ from those set: check Settings, Connection to Exact, part 3.",
+        "pricelist_refused:supplier": "First choose the supplier whose articles these are.",
+        "pricelist_refused:name": "The supplier's name is too long or holds characters that do not belong in a name.",
+        "pricelist_refused:name_row": ("Row {row} of the export holds a supplier's name that is too long or holds characters that do not "
+                                       "belong in a name. Nothing was filed."),
+        "pricelist_refused:no_article": ("This export gave no article: no row has an item code and a price that can be read. Nothing was "
+                                         "filed."),
+        "pricelist_refused:heading": ("The column titles must stand in the first row of the file: remove the lines above them and give the "
+                                      "file again."),
+        "pricelist_list": "Price list (Excel or CSV)",
+        "pricelist_column:item_code": "Column with the item code",
+        "pricelist_column:price": "Column with the price",
+        "pricelist_column:basis": "Column with the price per (may be empty)",
+        "pricelist_column:valid_from": "Valid from (may be empty)",
+        "pricelist_column:valid_to": "Valid to (may be empty)",
+        "pricelist_columns_hint": ("If the list has a column for what a price is per (per 100, per box), point it out: otherwise the "
+                                   "assistant reads every price as a price per piece."),
+        "pricelist_problem:price": "Choose the column with the price.",
+        "pricelist_view": "View",
+        "pricelist_carry_out": "Put on the list Enter in Exact",
+        "pricelist_header:article": "Article",
+        "pricelist_header:current": "Purchase price in Exact",
+        "pricelist_header:list": "Price on the list",
+        "pricelist_header:outcome": "Outcome",
+        "pricelist_outcome:changes": "price changes",
+        "pricelist_outcome:unchanged": "unchanged",
+        "pricelist_outcome:unknown_article": "article not known in Exact",
+        "pricelist_outcome:unreadable_price": "price cannot be read",
+        "pricelist_outcome:other_basis": "price per another number: not compared",
+        "pricelist_outcome:not_yet_valid": "not valid yet",
+        "pricelist_outcome:expired": "expired",
+        "pricelist_outcome:duplicate": "duplicate row",
+        "pricelist_outcome:no_item_code": "no item code",
+        "pricelist_outcome:unreadable_valid_from": "valid from cannot be read",
+        "pricelist_outcome:unreadable_valid_to": "valid to cannot be read",
+        "pricelist_outcome:failed": "failed",
+        "pricelist_outcome:shared": "also with supplier {name}: enter this price in Exact yourself",
+        "pricelist_shared_more": "{names} and {n} more",
+        "pricelist_outcome:differs": "differs strongly: check the column \"price per\"",
+        "pricelist_outcome:ticked": "already ticked on the list Enter in Exact",
+        "pricelist_outcome:dropped": "taken off the list: put the row back there if the price must be entered after all",
+        "pricelist_row": "row {n}",
+        "pricelist_counts": "{changes}, {same}, {passed}.",
+        "pricelist_changes_one": "1 price changes",
+        "pricelist_changes_many": "{a} prices change",
+        "pricelist_same_one": "1 stays the same",
+        "pricelist_same_many": "{b} stay the same",
+        "pricelist_carried_one": "1 price change is on the list Enter in Exact.",
+        "pricelist_carried_many": "{n} price changes are on the list Enter in Exact.",
+        "pricelist_expired": "Some rows are expired: ask the supplier for a current list.",
+        "pricelist_changed": "The data changed since you viewed the list. View the list again.",
+        "pricelist_differs": ("A price more than three times as high or as low is not put on the list by the assistant: check the list, "
+                              "and enter a real change in Exact yourself."),
+        "pricelist_older": ("Note: for {articles} the list Enter in Exact still holds the price of an earlier price list of this supplier. "
+                            "This list asks another price, which the assistant does not put on the list: take that row off the list there "
+                            "and enter the right price in Exact yourself."),
+        "pricelist_not_prepared": "Not put on the list: {articles}. View the list again to try once more.",
+        "pricelist_columns_lost": "The columns of this list could not be kept: point them out again next time.",
+        "pricelist_log_lost": ("The assistant could not write these changes into its own log of the price list, so it cannot put them back "
+                               "itself later: pass this on to the researcher."),
         "settings_tab": "Settings",
         "settings_share": "Not available on a public link",
         "settings_no_file": "Not available: the page was started without a settings file",
@@ -843,6 +1277,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "settings_file_unreadable": ("The settings file cannot be read{fields}. Below are the settings the aid uses now. Saving works "
                                      "again once the file is repaired."),
         "settings_file_fields": ": check {fields}",
+        "settings_file_write_route": ('exact_base_url is set, but this version of the aid writes nothing in Exact: every change is '
+                                      'prepared for the tab "In Exact invoeren". Remove exact_base_url from the settings file. Below are '
+                                      'the settings the aid uses now. Saving works again once the file is repaired.'),
         "settings_group:handled": "What the aid may settle by itself",
         "settings_group:questions": "Questions to suppliers",
         "settings_group:digest": "Digest and language",
@@ -1143,14 +1580,44 @@ STRINGS: dict[str, dict[str, str]] = {
         "exact_export_refused:double_line_id": ("Row {row}: this line number stands on an earlier line of the same purchase order already. "
                                                 "Choose the column with the line number, or choose \"(not in the file)\": the assistant then "
                                                 "counts the lines itself."),
+        "exact_export_refused:surplus_cells": ("Row {row} of this file has more cells than the row of column titles. Usually a number or a "
+                                               "description then holds a comma without quotation marks. Save the file as an Excel file (.xlsx) "
+                                               "or with semicolons as the separator, and give it again."),
+        "exact_export_refused:cell_count": ("Row {row} of this file has another number of cells than the row of column titles. In a file with "
+                                            "commas as the separator a number or a description then usually holds a comma without quotation "
+                                            "marks. Save the file as an Excel file (.xlsx) or with semicolons as the separator, and give it "
+                                            "again."),
+        "exact_export_refused:hidden_sheet": ("This Excel file holds data on a hidden sheet only. The assistant reads no hidden sheets: unhide the "
+                                              "sheet, or save it as a file of its own, and give it again."),
+        "exact_export_refused:several_sheets": ("This Excel file has more than one sheet with data ({names}). The assistant reads one sheet: "
+                                                "save the sheet you mean as a file of its own and give that."),
         "exact_export_saved": "Saved.",
         "exact_export_changed": "Not saved: the connection was changed elsewhere meanwhile. Open the tab Settings again and check the columns.",
+        "exact_part_articles": "3. Purchase prices of articles as an export from Exact (for the price list)",
+        "exact_articles_intro": ("Choose a sample of the export of articles from Exact and point out the columns. If the export has no column "
+                                 "with the supplier, you choose the supplier when you give the export on the tab Price list."),
+        "exact_articles_sample": "Sample: an export of articles from Exact",
+        "exact_articles_columns": "Columns of the export of the articles",
+        "exact_articles_field:item_code": "Item code (required)",
+        "exact_articles_field:price": "Purchase price (required)",
+        "exact_articles_field:supplier": "Supplier",
+        "exact_articles_price": "Purchase price",
+        "exact_articles_problem:price": "Choose the column with the purchase price.",
+        "exact_articles_problem:none": ("The sample gave no article: no row below the column titles has an item code and a price that can be "
+                                        "read."),
+        "exact_articles_read": "{articles} read; {passed}.",
+        "exact_articles_read_reasons": "{articles} read; {passed} ({reasons}).",
+        "exact_articles_left:no_item_code": "no item code",
+        "exact_articles_left:no_supplier": "no supplier",
+        "exact_articles_left:no_price": "price cannot be read",
+        "exact_articles_left:twice": "article twice",
         "exact_state_to_enter": "Still to enter in Exact: {n}.",
         "hand_test_mode": "Test mode: enter these changes in the test Exact only.",
         "hand_tryout": "(try-out document)",
         "tryout_title": "Trying out with a purchase order from Exact",
         "tryout_intro": ("Without a supplier you can still try the assistant: for a purchase order it knows, the assistant makes a made-up "
-                         "order confirmation. You choose what differs. The try-out document stays on this PC."),
+                         "order confirmation. For the pre-check in the browser the assistant makes a made-up cart of the same purchase "
+                         "order. You choose what differs. The try-out document stays on this PC."),
         "tryout_switch": "Test mode: the assistant works with the test Exact",
         "tryout_saved": "Saved.",
         "tryout_saved_open": ("Saved. The list Enter in Exact still holds {n} changes from try-out documents. Do not enter them in the real "
@@ -1170,6 +1637,12 @@ STRINGS: dict[str, dict[str, str]] = {
         "tryout_made": ("The try-out confirmation was made. Send it as an attachment to your own mailbox, to the folder the assistant reads, "
                         "or give it to the assistant directly."),
         "tryout_given": "The try-out confirmation lies in the watched folder. The assistant opens the case at its next pass, within a minute.",
+        "tryout_cart_change": "What differs in the try-out cart?",
+        "tryout_cart_change:none": "Nothing",
+        "tryout_cart_change:price_small": "The price of the first line is 1 percent higher",
+        "tryout_cart_make": "Make try-out cart",
+        "tryout_cart_made": ("The try-out cart is ready. Open {link} in the browser that holds the assistant's extension: the bar at the top "
+                             "of the page shows the outcome."),
         "tryout_none_known": "The assistant knows no purchase orders yet. Let a purchase order from Exact come in first.",
         "tryout_refused": "No try-out document can be made of this purchase order: {reason}.",
         "tryout_reason:no_lines": "it has no order lines",
@@ -1231,6 +1704,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "reason:no version selected": "No version of the purchase order chosen",
         "reason:PO found otherwise than by the number recognition": ("Check that this is the right purchase order: the assistant did not "
                                                                      "find it by the number after a word of the number recognition."),
+        "reason:the list of changes to enter in Exact could not be read": ("The list Enter in Exact could not be read: the assistant "
+                                                                           "compares with the purchase order as it was filed."),
+        "reason:PO chosen by the items in the cart": "Check that this is the right purchase order: the assistant chose it by the items in the cart.",
         "reason:split line: parts differ": "Split line: the parts differ",
         "reason:no delivery date on the document": "No delivery date on the document",
         "reason:no lead time known for the supplier": "No lead time known for the supplier",
@@ -1245,12 +1721,19 @@ STRINGS: dict[str, dict[str, str]] = {
         "reason:not covered by a rule": "No set way of handling this difference",
         "reason:prepared change: apply by hand": "Prepared change: apply it by hand",
         "reason:write failed: *": "Write failed",
+        "reason:write made, not verified: check in Exact": ("Change made in Exact, but the check after it failed: look in Exact whether "
+                                                            "the value is right"),
+        "reason:write outcome not known: check in Exact": ("Not sure whether the change was made in Exact: look in Exact which value is "
+                                                           "there"),
         "reason:not applied: an earlier write failed *": "Not applied: an earlier write failed",
+        "reason:not applied: an earlier change waits for a look in Exact *": "Not applied: look in Exact at the earlier change first",
         "reason:no address for the supplier": "No e-mail address of the supplier",
         "reason:message not sent": "Message not sent",
         "reason:try-out document: nothing is sent": "This is a try-out document: the assistant sends nothing about it to a supplier.",
         "reason:message bounced": "Message bounced",
         "reason:no answer in *": "No answer within the wait",
+        "reason:supplier answered: read the reply": "The supplier answered: read the reply",
+        "reason:no question is open": "No question is open any more: decide on this case",
         "reason:other": "Another reason",
     },
 }

@@ -17,8 +17,12 @@ the settings, as plain text and as simple HTML with the same content. Its blocks
   by the review page's label (see below), then its field and its line when they are known.
 - Vraag gesteld aan de leverancier (Question sent to the supplier): the cases that wait for the supplier, each with the supplier and
   the template of each question in words. A request to the approver to approve a PO again is no question.
-- Mislukt (Failed): the failed cases, each with the first line of its error.
-- Overgeslagen (Skipped): the skipped files grouped by their reason, "<file>: <reason>", the reasons in alphabetical order.
+- Mislukt (Failed): the failed cases, each with the first line of its error. A case that failed at reading a scan, a document or a
+  page of it without a text layer, which Copilot does not read (unread_scan), is named by the label of the tab "Bestanden" for it,
+  in the language: "Scan zonder leesbare tekst: de assistent kon dit document niet lezen; bekijk het zelf".
+- Overgeslagen (Skipped): the skipped files grouped by their reason, "<file>: <reason>", the reasons in alphabetical order. A scan
+  the watched folder skipped is named by the words of the tab "Bestanden", in the language ("Scan zonder leesbare tekst: bekijk dit
+  document zelf"); every other reason as the scan wrote it.
 A case made from a try-out document (tryout_case of aid/tryout_mark.py) has " (proefdocument)" (" (try-out document)") behind its
 line in every block, its own digest line with no count of what to do in Exact, and each of its prepared rows says "(proefdocument)"
 in place of "(voorbereid)" and "(zelf in Exact doen)": the digest never tells the buyer to do anything in Exact for a try-out, and
@@ -71,12 +75,14 @@ from pydantic import BaseModel
 
 from aid.comparison import Flag, Uncompared
 from aid.execution.ops import WriteOp
-from aid.execution.writer import WriteLogEntry
+from aid.execution.writer import WriteLogEntry, read_before
 from aid.messaging import QUESTIONS, Mailer, Message, SentRecord
 from aid.pipeline import CaseResult, ReviewItem
 from aid.pipeline import _WORDS as _CASE_WORDS, _digest_line
+from aid.readers.copilot_client import NO_TEXT_LAYER
 from aid.review.hand_list import TAB
 from aid.review.i18n import STRINGS, reason_label
+from aid.review.intake import SKIPPED
 from aid.routing import findings_by_id
 from aid.settings import Settings
 from aid.tryout_mark import case_is_tryout
@@ -87,6 +93,10 @@ _AMOUNTS = ("po_line_price", "article_price", "po_line_quantity")      # the kin
 _YOURS = ("attach_document", "detach_document", "set_status")  # prepared, but on no list yet: the buyer does them in Exact himself
 _WRITE_NAME = re.compile(r" \((?:write: )?rule R\d+[^)]*\)")    # the pipeline's name of a write in a reason, " (rule R04, po_line_price,
                                                             # line 1)", and in the error of a case, " (write: rule R04, ...)"
+# How the error of a case begins that failed at reading a scan: Copilot's refusal of a document, or of a page, without a text layer
+# (NO_TEXT_LAYER and NO_TEXT_ON_PAGE of aid/readers/copilot_client.py, which begin with the same words).
+_UNREAD_SCAN = f"ReaderError: {NO_TEXT_LAYER.partition(':')[0]}"
+UNREAD = "files_outcome:unread"                  # the key of the label of such a case, on the tab "Bestanden" and in the digest
 _WORDS = {
     "nl": {"digest": "Dagoverzicht", "handled": "Behandelde zaken", "review": "Wacht op u", "waiting": "Vraag gesteld aan de leverancier",
            "failed": "Mislukt", "skipped": "Overgeslagen", "nothing": "Er zijn geen zaken behandeld en geen bestanden overgeslagen.",
@@ -102,7 +112,7 @@ _WORDS = {
            "document_one": "1 document", "documents_many": "{n} documenten",
            "undo": "ongedaan maken", "open": "beoordelen", "status": {"prepared": "(voorbereid)", "failed": "(mislukt)"},
            "yours": "(zelf in Exact doen)", "yours_count": "{n} in Exact zelf te doen", "tryout": "(proefdocument)",
-           "line": "regel", "lines": "regels", "of_document": "van het document", "unknown": "onbekend", "decimal": ",",
+           "line": "regel", "lines": "regels", "of_document": "van het document", "unknown": "onbekend", "empty": "leeg", "decimal": ",",
            "kinds": {"po_line_price": "prijs", "po_line_date": "levertijd", "po_line_quantity": "aantal", "article_price": "artikelprijs",
                      "attach_document": "bijlage", "detach_document": "bijlage", "set_status": "status"},
            "fields": {"price": "prijs", "quantity": "aantal", "unit": "eenheid", "delivery_date": "levertijd",
@@ -122,7 +132,7 @@ _WORDS = {
            "document_one": "1 document", "documents_many": "{n} documents",
            "undo": "undo", "open": "review", "status": {"prepared": "(prepared)", "failed": "(failed)"},
            "yours": "(do it in Exact yourself)", "yours_count": "{n} to do in Exact yourself", "tryout": "(try-out document)",
-           "line": "line", "lines": "lines", "of_document": "of the document", "unknown": "unknown", "decimal": ".",
+           "line": "line", "lines": "lines", "of_document": "of the document", "unknown": "unknown", "empty": "empty", "decimal": ".",
            "kinds": {"po_line_price": "price", "po_line_date": "delivery date", "po_line_quantity": "quantity", "article_price": "article price",
                      "attach_document": "attachment", "detach_document": "attachment", "set_status": "status"},
            "fields": {"price": "price", "quantity": "quantity", "unit": "unit", "delivery_date": "delivery date",
@@ -214,8 +224,10 @@ def build_digest(results: list[CaseResult], skipped: list[tuple[str, str]], sett
     blocks = [(words["handled"], [_handled(result, settings, words, result.case_id in made_up) for result in results]),
               (words["review"], [_in_review(result, settings, words, result.case_id in made_up) for result in results if result.status == "review"]),
               (words["waiting"], [_waiting(result, words, result.case_id in made_up) for result in results if result.status == "waiting"]),
-              (words["failed"], [_failed(result, words, result.case_id in made_up) for result in results if result.status == "failed"]),
-              (words["skipped"], [_Item([f"{name}: {reason}"], []) for name, reason in sorted(skipped, key=lambda skip: skip[1])])]
+              (words["failed"], [_failed(result, words, result.case_id in made_up, settings.language) for result in results
+                                 if result.status == "failed"]),
+              (words["skipped"], [_Item([f"{name}: {_skip_reason(reason, settings.language)}"], [])
+                                  for name, reason in sorted(skipped, key=lambda skip: skip[1])])]
     blocks = [(heading, items) for heading, items in blocks if items]
     return Digest(subject=f"{SUBJECT_PREFIX} {title}", text=_text(title, notes, blocks, words),
                   html=_html(title, notes, blocks, words, settings.language), period=period.isoformat())
@@ -264,7 +276,9 @@ def _write(entry: WriteLogEntry, case_id: str, settings: Settings, words: dict, 
     op = entry.op
     text = " ".join(part for part in (words["kinds"].get(op.kind, op.kind), _changed(op, words)) if part)
     if entry.previous is not None or entry.new is not None:
-        text += f": {_value(entry.previous, op.kind, words)} → {_value(entry.new, op.kind, words)}"
+        # a write made in a system into a field that was empty then says so, as the tab and the put-back do
+        before = words["empty"] if entry.status == "done" and read_before(entry) == "empty" else _value(entry.previous, op.kind, words)
+        text += f": {before} → {_value(entry.new, op.kind, words)}"
     if entry.status == "done":
         return [f"{text} ", _Link(words["undo"], undo_link(settings, case_id, entry.entry_id))]
     if tryout and entry.status == "prepared":
@@ -318,10 +332,24 @@ def _waiting(result: CaseResult, words: dict, tryout: bool = False) -> _Item:
     return _Item([_case(result, words, tryout) + (f": {', '.join(asked)}" if asked else "")], [])
 
 
-def _failed(result: CaseResult, words: dict, tryout: bool = False) -> _Item:
-    """A failed case: the case, with the first line of its error."""
-    error = _shown(result.error)
+def unread_scan(result: CaseResult) -> bool:
+    """Whether the case failed at reading a scan: its document, or a page of it, has no text layer, which Copilot does not read
+    (aid/readers/copilot_client.py). The parser's failure on a scan is not told apart: it names no template, as for any document no
+    template fits."""
+    return result.status == "failed" and (result.error or "").startswith(_UNREAD_SCAN)
+
+
+def _failed(result: CaseResult, words: dict, tryout: bool = False, language: str = "nl") -> _Item:
+    """A failed case: the case, with the first line of its error; a case that failed at reading a scan (unread_scan) with the label
+    of the tab "Bestanden" for it, in the language."""
+    error = STRINGS[language][UNREAD] if unread_scan(result) else _shown(result.error)
     return _Item([_case(result, words, tryout) + (f": {error}" if error else "")], [])
+
+
+def _skip_reason(reason: str, language: str) -> str:
+    """The reason of a skipped file as the block shows it: a scan without a text layer by the words of the tab "Bestanden" for it
+    (SKIPPED of aid/review/intake.py), in the language; any other reason as it is."""
+    return STRINGS[language]["files_skipped:scan"] if SKIPPED.get(reason) == "scan" else reason
 
 
 def _case(result: CaseResult, words: dict, tryout: bool = False) -> str:

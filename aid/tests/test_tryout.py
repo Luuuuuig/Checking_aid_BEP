@@ -1,7 +1,9 @@
 """Tests of the try-out confirmation (aid/tryout.py): a made-up order confirmation drawn from a purchase order that the PO store holds,
 read back with the parser (aid/readers/supplier_parser.py, which reads it as table_nl) and run as the runner runs a case. Every purchase
 order here is made up: those of the made-up set, its two exports, and the PO in the second made-up layout (aid/madeup/tryout)."""
+import csv
 import dataclasses
+import io
 import json
 import os
 import shutil
@@ -15,6 +17,8 @@ import pdfplumber
 import pytest
 from reportlab.pdfbase.pdfmetrics import stringWidth
 
+import aid.tryout
+from aid.capture_server import precheck
 from aid.case import load_case
 from aid.comparison import compare
 from aid.decider import NoDecider
@@ -25,6 +29,7 @@ from aid.matching import match_lines
 from aid.messaging import FileMailer
 from aid.pipeline import GUESSED_PO, CaseResult, Deps, read_with_parser, run_case
 from aid.po_store import PoStore, PoVersion
+from aid.readers.cart import first_heading, read_cart_html
 from aid.readers.llm_client import ReaderError
 from aid.readers.pdf_text import extract_lines, extract_rows
 from aid.readers.supplier_parser import detect_template, load_templates, read_with_template
@@ -37,12 +42,14 @@ from aid.review.page import _case_label, close_text, decision_text, offered_case
 from aid.runner import build_deps, run_loop
 from aid.schema import DocValue
 from aid.settings import Settings
+from aid.sources.capture import BY_ITEMS, NOT_SURE, cart_order
 from aid.sources.dropin import drop
 from aid.sources.mailbox import FOUND_HELD_NUMBER, scan_folder
 from aid.sources.upload import open_upload_case
 from aid.tests.conftest import SETTINGS, deps
-from aid.tests.helpers import ANDERS_LAYOUT, ANDERS_PO, EXPORT_COLUMNS
-from aid.tryout import CHANGES, REASONS, TryoutRefused, checked_confirmation, confirmation_pdf, file_name, known_pos, made_from
+from aid.tests.helpers import ANDERS_LAYOUT, ANDERS_PO, EXPORT_COLUMNS, filed_on
+from aid.tryout import (CART_CHANGES, CHANGES, REASONS, TryoutRefused, cart_html, cart_link, checked_cart, checked_confirmation,
+                        confirmation_pdf, file_name, known_pos, made_from, write_cart)
 from aid.tryout_mark import NOTHING_SENT, TRYOUT_NOT_SENT, TRYOUT_OUTSIDE, tryout_case, tryout_writer
 from aid.versioning import select_version
 
@@ -517,7 +524,7 @@ def test_a_po_in_the_second_made_up_layout_gives_a_try_out(tmp_path):
     r = run_case(case, d)
     assert [(f.field, f.po_line_ids, f.po_value.value, f.doc_value.value) for f in r.findings.flags] == [("price", ["1"], "12.50", "12.63")]
     assert (r.version.method, r.version.reason) == ("reference", "single version") and r.findings.uncompared == []
-    assert [a.rule_id for a in r.actions] == ["P01"] and [(item.finding_id, item.reason) for item in r.review_items] == [("F1", GUESSED_PO)]
+    assert [a.rule_id for a in r.actions] == ["G01"] and [(item.finding_id, item.reason) for item in r.review_items] == [("F1", GUESSED_PO)]
     assert (r.status, r.write_entries) == ("review", []) and open_changes(settings.cases_root / "prepared") == []
     decide(case, "RI1", "confirm", True)                                   # the buyer checks the order and takes the price over
     assert close_case(case, d).status == "closed"
@@ -872,9 +879,9 @@ def test_the_digest_marks_a_try_out_and_asks_nothing_of_exact_for_it(tmp_path, m
 
 def test_a_try_out_writes_through_the_prepared_writer_only(tmp_path, madeup_out):
     """Ruling Y18, finding 2 (the checkers' e7_rest_writer.py): a case made from a try-out writes through the prepared writer only,
-    never through a writer that reaches a system, whatever the Deps' writer is: here the runner's chain of the Exact writer and the
-    prepared writer (RetryingWriter, which build_deps makes when exact_base_url is set), at the run, and at the close and the undo of
-    the review page. A supplier's own confirmation in the same pass writes through the Exact writer as before."""
+    never through a writer that reaches a system, whatever the Deps' writer is: here a chain of a writer into a system and the
+    prepared writer (RetryingWriter, which no command builds: the test hands it to the Deps), at the run, and at the close and the
+    undo of the review page. A supplier's own confirmation in the same pass writes through the system's writer as before."""
     d = deps(tmp_path, madeup_out, settings=OPEN)
     settings = tryout_settings(tmp_path, exact_base_url="https://exact.example.com/api/")
     system = SystemWriter()
@@ -901,7 +908,8 @@ def test_a_try_out_writes_through_the_prepared_writer_only(tmp_path, madeup_out)
     assert {case_id for case_id, _ in system.asked} == {own.case_id} and closed.status == "closed"
     assert tryout_writer(chain, settings) is chain.fallback
     built = build_deps(settings.model_copy(update={"reader": "parser"}), {"AID_EXACT_TOKEN": "made-up-token"})     # the runner command's Deps
-    assert built.writer.primary.name == "exact_api" and tryout_writer(built.writer, settings).out_dir == settings.cases_root / "prepared"
+    assert type(built.writer) is PreparedWriter and tryout_writer(built.writer, settings) is built.writer         # no command builds a route
+    assert built.writer.out_dir == settings.cases_root / "prepared"
 
 
 def test_a_try_out_has_a_place_of_its_own_on_the_list(tmp_path, madeup_out):
@@ -1134,3 +1142,518 @@ def test_a_file_that_is_not_there_is_not_read_again(tmp_path, madeup_out, monkey
     writer.apply(op, "pricelist_S08_20261118T120000", "PL1", {"supplier": "S08"}, NOW)                # as the price-list import writes
     assert [(change.case_ids, change.tryout) for change in open_changes(writer.out_dir)] == [(["pricelist_S08_20261118T120000"], False)]
     assert pauses == []
+
+
+# --- Task 43: a try-out is made from the order as the aid compares it (amendment 4) ---
+
+FILED = datetime(2026, 11, 1, 9, 0)                  # when the store filed the order: before every try-out and every tick
+TICKED = NOW + timedelta(hours=1)                    # when the owner ticked a try-out's change as entered in the test Exact
+
+
+def tried(folder: Path, pdf: bytes) -> list[dict]:
+    """The lines of a try-out as the parser reads them back."""
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / "tryout.pdf"
+    path.write_bytes(pdf)
+    return lines_of(read_back(path))
+
+
+def test_a_second_try_out_is_made_from_the_order_with_the_entered_price(tmp_path, madeup_out):
+    """The owner's walk with two try-outs of one order in the test mode. The first has the price of the first line 1 percent up
+    (12.63); the rules take it over, and the owner enters it in the test Exact and ticks it. The next try-out is made from the
+    order as a try-out's case is compared with it, the entered price laid over the version: with "Niets" it prints 12.63 and its
+    case closes without a price item; with the price 1 percent up it prints one percent above the entered price, 12.76, and the
+    rules prepare the change from 12.63. The supplier's own confirmation of that order is compared with the order as printed:
+    nothing entered for a try-out reaches it."""
+    d = deps(tmp_path, madeup_out, settings=OPEN)
+    settings = tryout_settings(tmp_path / "walk")
+    prepared = settings.cases_root / "prepared"
+    filed_on(d.store, "250108", "v1", FILED)
+    po = made_from(d.store, "250108")
+    give(settings, d.store, "250108", "price_small")
+    runner_pass(settings, d.store)
+    [first] = results(settings)
+    assert [(f.field, f.po_value.value, f.doc_value.value) for f in first.findings.flags] == [("price", "12.50", "12.63")]
+    [asked] = [change for change in open_changes(prepared) if change.kind == "po_line_price"]
+    assert asked.tryout and mark(prepared, asked.ids, "entered", TICKED) == 1
+    assert tried(tmp_path / "none", checked_confirmation(po, "none", NOW, settings, d.store))[0]["unit_price"] == "12.63"
+    assert tried(tmp_path / "up", checked_confirmation(po, "price_small", NOW, settings, d.store))[0]["unit_price"] == "12.76"
+    assert tried(tmp_path / "far up", checked_confirmation(po, "price_large", NOW, settings, d.store))[0]["unit_price"] == "13.89"
+    assert po.document.lines[0].unit_price.value == "12.50" and made_from(d.store, "250108") == po         # the store holds the print
+    give(settings, d.store, "250108", "none", moment=NOW + timedelta(minutes=5))
+    runner_pass(settings, d.store)
+    second = results(settings)[-1]
+    assert (second.status, second.findings.flags, second.review_items) == ("closed", [], [])
+    record = load_case(settings.cases_root, second.case_id).read_step("entered")
+    assert record == {"version": 1, "replaced": [{"line_id": "1", "field": "price", "was": "12.50", "entered": "12.63",
+                                                  "marked_at": TICKED.isoformat(), "by": "buyer"}]}
+    give(settings, d.store, "250108", "price_small", moment=NOW + timedelta(minutes=10))
+    runner_pass(settings, d.store)
+    third = results(settings)[-1]
+    assert [(f.field, f.po_value.value, f.doc_value.value) for f in third.findings.flags] == [("price", "12.63", "12.76")]
+    assert [(e.op.kind, e.op.old_value, e.op.new_value) for e in third.write_entries[:1]] == [("po_line_price", "12.63", "12.76")]
+    assert [(change.old_value, change.new_value, change.tryout) for change in open_changes(prepared) if change.kind == "po_line_price"] == [
+        ("12.63", "12.76", True)]
+    shutil.copy(madeup_out / "MU08_conf.pdf", settings.watched_folder / "MU08_conf.pdf")       # the supplier's own confirmation: 12.70
+    runner_pass(settings, d.store)
+    own = results(settings)[-1]
+    assert [(f.field, f.po_value.value, f.doc_value.value) for f in own.findings.flags] == [("price", "12.50", "12.70")]
+    assert not (settings.cases_root / own.case_id / "steps" / "03_entered.json").exists()
+
+
+def test_a_try_out_follows_the_change_marked_last_and_is_not_made_while_the_list_cannot_be_read(tmp_path, madeup_out, monkeypatch):
+    """In a case made from a try-out the change marked last decides for a line, so a try-out is made from that value: the supplier's
+    own change, entered after the try-out's, is the price a try-out with "Niets" prints. A version filed after the ticks is printed
+    as it is. While the list cannot be read, no try-out is made: the error is raised, so that the page says that it did not work,
+    and nothing is written."""
+    import pathlib
+
+    d = deps(tmp_path, madeup_out, settings=OPEN)
+    settings = tryout_settings(tmp_path / "walk")
+    prepared = settings.cases_root / "prepared"
+    filed_on(d.store, "250108", "v1", FILED)
+    po = made_from(d.store, "250108")
+    give(settings, d.store, "250108", "price_small")
+    shutil.copy(madeup_out / "MU08_conf.pdf", settings.watched_folder / "MU08_conf.pdf")
+    runner_pass(settings, d.store)
+    made_up, own = sorted((change for change in open_changes(prepared) if change.kind == "po_line_price"), key=lambda change: not change.tryout)
+    assert (made_up.new_value, made_up.tryout, own.new_value, own.tryout) == ("12.63", True, "12.70", False)
+    mark(prepared, made_up.ids, "entered", TICKED)
+    mark(prepared, own.ids, "entered", TICKED + timedelta(minutes=5))
+    assert tried(tmp_path / "none", checked_confirmation(po, "none", NOW, settings, d.store))[0]["unit_price"] == "12.70"
+    real = pathlib.Path.read_bytes
+
+    def read_bytes(self):
+        if self.name == "marks.jsonl":
+            raise PermissionError(13, "The process cannot access the file because it is being used by another process", str(self))
+        return real(self)
+    before = sorted(path for path in tmp_path.rglob("*") if path.is_file())
+    with monkeypatch.context() as held:
+        held.setattr(pathlib.Path, "read_bytes", read_bytes)
+        with pytest.raises(PermissionError):
+            checked_confirmation(po, "none", NOW, settings, d.store)
+    assert sorted(path for path in tmp_path.rglob("*") if path.is_file()) == before
+    # the review round of Task 43, W9: an export filed after the ticks shows the old 12.50. The try-out is made from the order as
+    # its case will be compared: the list is brought in line with that export first, which ends the supplier's own tick (the
+    # try-out's is left), so the try-out prints the try-out's 12.63 and not the 12.70 that no longer counts
+    export = tmp_path / "export_after.csv"
+    export.write_text("po_number,line_id,item_code,description,quantity,unit,unit_price,price_basis,delivery_date\n"
+                      "250108,1,KM-0801,Manometer 0-10 bar,3,st,12.50,1,2026-11-16\n250108,2,KM-0802,Zeskantbout M10 x 40,50,st,0.42,1,2026-11-16\n",
+                      encoding="utf-8")
+    assert d.store.from_export(export, {name: name for name in export.read_text(encoding="utf-8").splitlines()[0].split(",")})
+    filed_on(d.store, "250108", "e1", TICKED + timedelta(hours=1))
+    assert tried(tmp_path / "ended", checked_confirmation(po, "none", NOW, settings, d.store))[0]["unit_price"] == "12.63"
+    assert [change.state for change in changes(prepared)[0] if change.kind == "po_line_price" and not change.tryout] == ["open"]
+    filed_on(d.store, "250108", "v1", TICKED + timedelta(hours=2))                # had the order been filed after the ticks
+    assert tried(tmp_path / "later", checked_confirmation(po, "none", NOW, settings, d.store))[0]["unit_price"] == "12.50"
+# --- the try-out cart (Task 41, rule 6 and amendments 3 and 4) ---
+
+CART_HEADING = "Proefwinkel (verzonnen pagina)"
+SHOP_URL = "http://127.0.0.1:7870/tryout/250108_price_small.html"      # the address the extension sends with the try-out cart of 250108
+READ_BACK = ("item_code", "quantity", "unit", "unit_price", "price_basis")   # what the cart reader gives back of each line
+
+
+def cart_of(folder: Path, html: str, name: str = "cart.html"):
+    """The page as the cart reader reads it."""
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / name).write_text(html, encoding="utf-8")
+    return read_cart_html(folder / name)
+
+
+def capture_deps(settings: Settings, store: PoStore, writer=None) -> Deps:
+    """The Deps of the capture server on these settings and this store: the cart reader behind the parser, no decider, no mailer."""
+    return Deps(settings=settings, store=store, reader=read_with_parser, decider=NoDecider(),
+                writer=writer or PreparedWriter(settings.cases_root / "prepared"), mailer=None, clock=lambda: NOW)
+
+
+def test_the_try_out_cart_reads_back_and_a_higher_price_gives_a_difference(tmp_path, madeup_out):
+    """Rule 6: a try-out cart says in its heading that it is made up, states the number of its order as the made-up carts do, and holds
+    the lines of the PO as the store holds it with at most the one change. Read back by the cart reader it gives the PO's item codes,
+    quantities, units, prices and price bases; with "price_small" the price of the first line is 1 percent higher (12.50 becomes
+    12.63), which the comparison finds as the one difference. write_cart writes the page as <cases_root>/tryout/<PO>_<change>.html."""
+    d = deps(tmp_path, madeup_out, settings=OPEN)
+    po = d.store.as_it_stands("250108")
+    assert CART_CHANGES == ("none", "price_small") and set(CART_CHANGES) < set(CHANGES)
+    for change, price in (("none", "12.50"), ("price_small", "12.63")):
+        html = cart_html(po, change, NOW.date())
+        cart = cart_of(tmp_path, html)
+        assert (cart.supplier.value, cart.po_reference.value, cart.capture_date.value, cart.currency.value) == (
+            CART_HEADING, "250108", "2026-11-12", "EUR")
+        expected = [{field: getattr(line, field).value for field in READ_BACK} for line in po.document.lines]
+        assert expected[0]["unit_price"] == "12.50"
+        expected[0]["unit_price"] = price
+        assert [{field: getattr(line, field).value for field in READ_BACK} for line in cart.lines] == expected, change
+        assert not any(getattr(line, field).uncertain for line in cart.lines for field in READ_BACK)
+        findings = compare(match_lines(cart, po.document, NoDecider()), cart, po.document, "cart")
+        assert [(flag.field, flag.po_line_ids, flag.po_value.value, flag.doc_value.value) for flag in findings.flags] == (
+            [] if change == "none" else [("price", ["1"], "12.50", "12.63")]), change
+        assert findings.uncompared == []
+        assert f"<h1>{CART_HEADING}</h1>" in html and "<p>Uw referentie: 250108</p>" in html and f"<p>{NOTE_ROW}</p>" in html
+        assert checked_cart(po, change, NOW, OPEN.model_copy(update={"cases_root": tmp_path / "cases"}), d.store) == html
+        name = write_cart(tmp_path / "cases", po, change, NOW.date())
+        assert name == f"250108_{change}.html" and (tmp_path / "cases" / "tryout" / name).read_text(encoding="utf-8") == html
+    assert sorted(path.name for path in (tmp_path / "cases" / "tryout").iterdir()) == ["250108_none.html", "250108_price_small.html"]
+    assert not (tmp_path / "cases" / "tmp").exists()                           # the read-back's own folder is gone again
+    assert cart_html(po, "none", NOW.date()) != cart_html(po, "none", NOW.date() + timedelta(days=1))    # the day stands on the page
+    assert cart_link("250108_none.html") == "http://127.0.0.1:7870/tryout/250108_none.html"
+    assert cart_link("IB 26#1_none.html") == "http://127.0.0.1:7870/tryout/IB%2026%231_none.html"
+    with pytest.raises(ValueError):
+        cart_html(po, "price_large", NOW.date())                                # no change of a try-out cart
+
+
+def test_a_try_out_cart_prints_each_value_as_the_order_holds_it(tmp_path, madeup_out):
+    """Rule 6: the lines of the PO as the store holds it. A quantity in the thousands, a price of three decimals, a price basis of 100,
+    a unit that is no piece, a description with a mark of HTML in it, a line without a unit and one without a price basis read back
+    as the order holds them, each cell only when the line states the value; a line with a discount or a net price prints the price
+    the comparison compares. A PO known from an export states no currency, and nor does its try-out cart."""
+    d = deps(tmp_path, madeup_out, settings=OPEN)
+    po = d.store.as_it_stands("250108")
+    lines = with_line(with_line(po, 0, quantity="1000", unit_price="0.125", price_basis="100", unit="doos", description="Slang <10 mm> & koppeling"),
+                      1, unit=None, price_basis=None)
+    cart = cart_of(tmp_path, cart_html(lines, "price_small", NOW.date()))
+    first, second = cart.lines[0], cart.lines[1]
+    assert [getattr(first, field).value for field in READ_BACK] == [po.document.lines[0].item_code.value, "1000", "doos", "0.126", "100"]
+    assert first.description.value == "Slang <10 mm> & koppeling" and (second.unit.value, second.price_basis.value) == (None, None)
+    findings = compare(match_lines(cart, lines.document, NoDecider()), cart, lines.document, "cart")
+    assert [(flag.field, flag.doc_value.value) for flag in findings.flags] == [("price", "0.126")]
+    priced = with_line(with_line(po, 0, unit_price="10.00", discount_pct="5"), 1, net_price="0.40")
+    cart = cart_of(tmp_path, cart_html(priced, "price_small", NOW.date()))
+    assert [line.unit_price.value for line in cart.lines[:2]] == ["9.60", "0.40"]
+    export = tmp_path / "rows.csv"
+    export.write_text(EXPORT_TITLES + "250150,1,KM-0801,Manometer 0-10 bar,3,st,12.50,1,2026-11-16\n"
+                      "250150,2,KM-0802,Pakking,5,st,2.00,1,2026-11-16\n", encoding="utf-8")
+    [look] = d.store.from_export(export, EXPORT_COLUMNS)
+    page = cart_html(look, "none", NOW.date())
+    assert "Valuta" not in page and cart_of(tmp_path, page).currency.value is None and "Valuta: EUR" in cart_html(po, "none", NOW.date())
+
+
+def test_a_try_out_cart_is_read_back_before_it_leaves_the_page(tmp_path, madeup_out, monkeypatch):
+    """Amendment 4 (Task 33's ruling Y1 for a cart): before the page offers the link, the aid reads the cart page back with the cart
+    reader and compares it with the order as the store holds it, which is what the pre-check will compare the cart with. It is
+    refused, with the reasons of a try-out and nothing written, when the order has no lines or no price to raise ("no_lines",
+    "no_price"), when the page would read back as anything but the order with the chosen change, or would not be known as a try-out
+    ("read_back"), and when the pre-check, asked at the moment of making, would not find its order or would only guess it
+    ("not_found"): an order whose number the cart reader does not read from the page, unless it is the one order filed that day
+    that holds exactly the cart's items and is not sent."""
+    d = deps(tmp_path, madeup_out, settings=OPEN)
+    settings = OPEN.model_copy(update={"cases_root": tmp_path / "cases"})
+    po = d.store.as_it_stands("250108")
+    today = NOW.date()
+
+    def reason(order: PoVersion, change: str = "none", store: PoStore = d.store, now: datetime = NOW) -> str:
+        return refused(order, change, lambda: checked_cart(order, change, now, settings, store))
+    empty = po.model_copy(update={"document": po.document.model_copy(update={"lines": []})})
+    assert reason(empty) == "no_lines" and refused(empty, "none", lambda: cart_html(empty, "none", today)) == "no_lines"
+    unpriced = po.model_copy(update={"document": po.document.model_copy(update={"lines": [
+        line.model_copy(update={"unit_price": DocValue(), "net_price": DocValue()}) for line in po.document.lines]})})
+    assert reason(unpriced, "price_small") == "no_price"
+    # a reader that misreads a unit, and a page the reader cannot read
+    real = aid.tryout.read_cart_html
+
+    def misreading(path: Path):
+        doc = real(path)
+        line = doc.lines[1].model_copy(update={"unit": DocValue(value="m", text="m")})
+        return doc.model_copy(update={"lines": [doc.lines[0], line, *doc.lines[2:]]})
+
+    def unreadable(path: Path):
+        raise ReaderError(f"no cart table in {path.name}")
+    for reader in (misreading, unreadable):
+        monkeypatch.setattr(aid.tryout, "read_cart_html", reader)
+        for change in CART_CHANGES:
+            assert reason(po, change) == "read_back", (reader.__name__, change)
+    monkeypatch.undo()
+    # the pre-check compares with the order as the store holds it: a try-out of other lines, or of a currency the cart reader does
+    # not know, would show more than the chosen change
+    assert reason(with_line(po, 1, quantity="7")) == "read_back" and reason(with_header(po, currency="CHF")) == "read_back"
+    assert reason(with_line(po, 0, item_code="Totaal", quantity=None)) == "read_back"       # a row the cart reader takes for a total
+    # an order of another number form: the cart reader does not read its number from the page
+    store = PoStore(tmp_path / "store2")
+    store.add(ANDERS_PO, ANDERS_LAYOUT)                                          # known from a PDF: by its items it is a guess
+    anders = store.as_it_stands("IB-2600417")
+    assert cart_of(tmp_path, cart_html(anders, "none", today)).po_reference.value is None
+    assert reason(anders, "none", store) == "not_found"
+    export = tmp_path / "anders.csv"
+    export.write_text(EXPORT_TITLES + "IB-2600501,1,KM-0801,Manometer 0-10 bar,3,st,12.50,1,2026-11-16\n"
+                      "IB-2600501,2,KM-0802,Pakking,5,st,2.00,1,2026-11-16\n", encoding="utf-8")
+    [look] = store.from_export(export, EXPORT_COLUMNS)
+    filed_on(store, "IB-2600501", "e1", NOW - timedelta(hours=1))                # filed today, the one order with exactly these items: found
+    assert cart_order(cart_of(tmp_path, cart_html(look, "none", today)), store, settings.cases_root, NOW) == ("IB-2600501", BY_ITEMS)
+    assert checked_cart(look, "price_small", NOW, settings, store)
+    assert reason(look, "price_small", store, NOW + timedelta(days=1)) == "not_found"       # made the day after: a guess by then
+    assert cart_order(cart_of(tmp_path, cart_html(look, "none", today)), store, settings.cases_root, NOW + timedelta(days=1)) == (
+        "IB-2600501", NOT_SURE)
+    twin = tmp_path / "twin.csv"
+    twin.write_text(export.read_text(encoding="utf-8").replace("IB-2600501", "IB-2600502"), encoding="utf-8")
+    store.from_export(twin, EXPORT_COLUMNS)                                      # a second such order of the day: a guess
+    filed_on(store, "IB-2600502", "e1", NOW - timedelta(minutes=30))
+    assert reason(look, "price_small", store) == "not_found"
+    # a page the aid would not know as a try-out is never given
+    monkeypatch.setattr(aid.tryout, "is_tryout", lambda path: False)
+    assert reason(po) == "read_back"
+    monkeypatch.undo()
+    assert checked_cart(po, "price_small", NOW, settings, d.store)
+    assert not (tmp_path / "cases").exists()                                     # nothing written, the read-back's folder gone
+    assert set(REASONS) >= {"no_lines", "no_price", "read_back", "not_found"}
+
+
+def test_a_try_out_cart_holds_no_markup_of_its_order(tmp_path, madeup_out):
+    """The review's finding 15: every value of the order is printed as text. An item code and a description that hold a script tag
+    and a closing td, a description with an image tag, a number and a currency with a tag in them: the page holds each of them
+    escaped and holds no such tag, its table has the six cells of each line and no more, and the cart reader reads the values back
+    as the order holds them."""
+    d = deps(tmp_path, madeup_out, settings=OPEN)
+    po = d.store.as_it_stands("250108")
+    code, description = "</td><script>window.a=1</script>", "Slang </td><td><script>window.b=1</script> 10 mm"
+    hostile = with_line(with_line(po, 0, item_code=code, description=description), 1, description="Koppeling <img src=x onerror=window.c=1>")
+    hostile = with_header(hostile, currency="EUR</p><script>window.d=1</script>").model_copy(update={"po_number": "250108</p><script>e"})
+    page = cart_html(hostile, "none", NOW.date())
+    rows = len(po.document.lines)
+    assert "<script" not in page and "<img" not in page and page.count("</script>") == 0
+    assert (page.count("<td>"), page.count("</td>"), page.count("<tr>"), page.count("<p>")) == (6 * rows, 6 * rows, rows + 1, 4)
+    for printed in ("<td>&lt;/td&gt;&lt;script&gt;window.a=1&lt;/script&gt;</td>",
+                    "<td>Slang &lt;/td&gt;&lt;td&gt;&lt;script&gt;window.b=1&lt;/script&gt; 10 mm</td>",
+                    "<td>Koppeling &lt;img src=x onerror=window.c=1&gt;</td>", "<p>Uw referentie: 250108&lt;/p&gt;&lt;script&gt;e</p>",
+                    "<p>Valuta: EUR&lt;/p&gt;&lt;script&gt;window.d=1&lt;/script&gt;</p>"):
+        assert printed in page, printed
+    cart = cart_of(tmp_path, page)
+    assert (cart.lines[0].item_code.text, cart.lines[0].description.value) == (code, description) and len(cart.lines) == rows
+    assert cart.lines[1].description.value == "Koppeling <img src=x onerror=window.c=1>"
+
+
+def test_a_try_out_cart_that_the_pre_check_would_check_against_another_order_is_refused(tmp_path, madeup_out):
+    """The review's finding 16, with its two stores: the read-back refuses a cart when the pre-check would compare it with another
+    order than the one it is made of, also when that other order would be found for sure. An order of another number form, known
+    from a PDF of an earlier day, beside an order of today with the same items: the cart of the first would be checked against the
+    second. An order whose number goes on after six digits, beside the order of the first six: the cart reader reads no number
+    from its page, so the items decide, and its cart is given only while it is the one order of the day with those items."""
+    settings = OPEN.model_copy(update={"cases_root": tmp_path / "cases"})
+    today = NOW.date()
+
+    def rows(number: str, po: PoVersion) -> str:
+        """An export of the order `number` with the lines of the PO."""
+        held = io.StringIO()
+        written = csv.writer(held, lineterminator="\n")
+        written.writerow(EXPORT_TITLES.strip().split(","))
+        for line in po.document.lines:
+            written.writerow([number, line.line_id, line.item_code.value, line.description.value, line.quantity.value, "st",
+                              line.unit_price.value, line.price_basis.value or "1", line.delivery_date.value or "2026-11-20"])
+        return held.getvalue()
+    # the first store: IB-2600417 as a PDF version, and IB-2600418 from an export with the same items
+    store = PoStore(tmp_path / "store1")
+    version = store.add(ANDERS_PO, ANDERS_LAYOUT).version
+    filed_on(store, "IB-2600417", f"v{version}", NOW - timedelta(days=1))
+    anders = store.as_it_stands("IB-2600417")
+    (tmp_path / "next.csv").write_text(rows("IB-2600418", anders), encoding="utf-8")
+    store.from_export(tmp_path / "next.csv", EXPORT_COLUMNS)
+    filed_on(store, "IB-2600418", "e1", NOW - timedelta(hours=1))
+    cart = cart_of(tmp_path, cart_html(anders, "none", today))
+    assert cart.po_reference.value is None and cart_order(cart, store, settings.cases_root, NOW) == ("IB-2600418", BY_ITEMS)
+    assert refused(anders, "none", lambda: checked_cart(anders, "none", NOW, settings, store)) == "not_found"
+    assert refused(anders, "price_small", lambda: checked_cart(anders, "price_small", NOW, settings, store)) == "not_found"
+    assert checked_cart(store.as_it_stands("IB-2600418"), "none", NOW, settings, store)      # the order of today: its own cart is given
+    # the second store: 250108 as a PDF version, and 250108-01 from an export with the same lines
+    d = deps(tmp_path / "second", madeup_out, settings=OPEN)
+    po = d.store.as_it_stands("250108")
+    filed_on(d.store, "250108", "v1", NOW - timedelta(days=1))
+    (tmp_path / "follow.csv").write_text(rows("250108-01", po), encoding="utf-8")
+    [follow] = d.store.from_export(tmp_path / "follow.csv", EXPORT_COLUMNS)
+    filed_on(d.store, "250108-01", "e1", NOW - timedelta(hours=1))
+    page = cart_html(follow, "none", today)
+    assert "<p>Uw referentie: 250108-01</p>" in page and cart_of(tmp_path, page).po_reference.value is None      # no part of it is read
+    assert checked_cart(follow, "none", NOW, settings, d.store) == page          # the one order of today with these items: found
+    answer = precheck(page, SHOP_URL, capture_deps(settings, d.store), settings)
+    assert (answer.po_number, answer.verdict) == ("250108-01", "match")
+    assert answer.message == "Winkelwagen komt overeen met inkooporder 250108-01 (gekozen op de artikelen in de winkelwagen)"
+    assert checked_cart(po, "none", NOW, settings, d.store)                      # the cart of 250108 states its number: found by it
+    filed_on(d.store, "250108", "v1", NOW - timedelta(hours=2))                  # both filed today: the aid cannot tell them apart
+    assert refused(follow, "none", lambda: checked_cart(follow, "none", NOW, settings, d.store)) == "not_found"
+
+
+def test_the_case_of_a_try_out_cart_takes_its_orders_supplier_and_never_the_pages_heading(tmp_path, madeup_out):
+    """The review's findings 14 and 26: the heading of a try-out cart names the try-out shop, which is no supplier. The case takes
+    the supplier of its order, and has none when the order names none, as an order known from an export without a supplier column
+    does: the digest line and the list name no supplier then. With "Eerste zaken van een leverancier" above 0 such a case always
+    comes to the buyer, since no supplier's cases can be counted for it; at 0 the rules settle it. A webshop's own cart still takes
+    the name its page prints when its order names no supplier."""
+    d = deps(tmp_path, madeup_out, settings=OPEN)
+    export = tmp_path / "rows.csv"
+    export.write_text(EXPORT_TITLES + "250150,1,KM-0801,Manometer 0-10 bar,3,st,12.50,1,2026-11-16\n"
+                      "250150,2,KM-0802,Pakking,5,st,2.00,1,2026-11-16\n", encoding="utf-8")
+    [look] = d.store.from_export(export, EXPORT_COLUMNS)
+    assert look.supplier is None
+    settings = tryout_settings(tmp_path, po_store_root=d.store.root)
+    html = checked_cart(look, "price_small", NOW, settings, d.store)
+    answer = precheck(html, SHOP_URL, capture_deps(settings, d.store), settings)
+    assert (answer.verdict, answer.status, answer.po_number) == ("match", "closed", "250150")
+    [r] = results(settings)
+    assert r.supplier is None and r.digest_line == "voorcontrole PO 250150: afgesloten, 2 voorbereide wijzigingen"
+    assert load_case(settings.cases_root, answer.case_id).read_step("route")["context"]["supplier"] == ""
+    listed = sorted(hand_list.row_text(change, settings.cases_root, "nl") for change in changes(settings.cases_root / "prepared")[0])
+    assert listed == ["artikel KM-0801: inkoopprijs onbekend → 12,63 (proefdocument)", "regel 1 (KM-0801): prijs 12,50 → 12,63 (proefdocument)"]
+    assert CART_HEADING not in (settings.cases_root / answer.case_id / "steps" / "08_result.json").read_text(encoding="utf-8")
+    real = precheck(html.replace(CART_HEADING, "S08"), "https://shop.example.com/cart", capture_deps(settings, d.store), settings)
+    assert next(r for r in results(settings) if r.case_id == real.case_id).supplier == "S08"       # a webshop's cart: the page's name
+    # with first cases above 0: the try-out cart of an order without a supplier always comes to the buyer
+    first = tryout_settings(tmp_path / "first", po_store_root=d.store.root, first_cases_review=1)
+    for change in CART_CHANGES:
+        tried = precheck(checked_cart(look, change, NOW, first, d.store), SHOP_URL, capture_deps(first, d.store), first)
+        assert (tried.verdict, tried.status) == ("differences", "review"), change
+        assert "eerste zaken van deze leverancier gaan naar de inkoper" in [entry["text"] for entry in tried.lines], change
+        case = load_case(first.cases_root, tried.case_id)
+        for item in next(r for r in results(first) if r.case_id == tried.case_id).review_items:
+            decide(case, item.item_id, "confirm")
+        assert close_case(case, capture_deps(first, d.store)).status == "closed", change     # closed, and still no supplier's case
+    # an order without a supplier that holds no line either gives a case without a supplier too: the cart without an order
+    lost = precheck(html.replace("KM-0801", "XX-0001").replace("KM-0802", "XX-0002").replace("250150", "259999"), SHOP_URL,
+                    capture_deps(settings, d.store), settings)
+    assert lost.verdict == "no_po" and next(r for r in results(settings) if r.case_id == lost.case_id).supplier is None
+
+
+def test_the_case_of_a_try_out_confirmation_of_an_order_without_a_supplier_keeps_the_printed_name(tmp_path, madeup_out):
+    """The other side of the rule of a try-out cart's supplier (the check's mutant R1): only the heading of a try-out cart is
+    never taken for a supplier. A try-out confirmation is treated as any confirmation: the case of one whose order names no
+    supplier, an order known from an export without a supplier column, takes the name the reader read from the document. The
+    parser reads none from a try-out's first row, so the case has none; a reader that takes that row for the supplier's name, as
+    a model may, gives the case that name, as before this task."""
+    d = deps(tmp_path, madeup_out, settings=OPEN)
+    export = tmp_path / "rows.csv"
+    export.write_text(EXPORT_TITLES + "250150,1,KM-0801,Manometer 0-10 bar,3,st,12.50,1,2026-11-16\n"
+                      "250150,2,KM-0802,Pakking,5,st,2.00,1,2026-11-16\n", encoding="utf-8")
+    [look] = d.store.from_export(export, EXPORT_COLUMNS)
+    assert look.supplier is None
+
+    def naming(path: Path, kind: str):
+        doc = read_with_parser(path, kind)
+        return doc.model_copy(update={"supplier": DocValue(value=SUPPLIER_ROW, text=SUPPLIER_ROW)})
+    for reader, name in ((read_with_parser, None), (naming, SUPPLIER_ROW)):
+        settings = tryout_settings(tmp_path / ("named" if name else "unnamed"), po_store_root=d.store.root)
+        give(settings, d.store, "250150", "none")
+        runner_pass(settings, d.store, reader=reader)
+        [result] = results(settings)
+        case = load_case(settings.cases_root, result.case_id)
+        assert case.kind == "confirmation" and tryout_case(case) and case.po_number == "250150"
+        assert result.supplier == name and case.read_step("route")["context"]["supplier"] == (name or "")
+    assert SUPPLIER_ROW == "Proefleverancier (verzonnen document)"
+
+
+def test_a_case_made_from_a_try_out_cart_has_every_guard_of_a_try_out(tmp_path, madeup_out):
+    """Amendment 3: a try-out cart is a try-out for every guard of Task 33. aid/tryout_mark.py knows a capture case made from it by the
+    first heading of its page, "Proefwinkel (verzonnen pagina)". Its order is found by the number on the page, never guessed, also
+    for an order that was sent already. It writes through the prepared writer only, whatever the Deps' writer is, and its changes
+    stand at a place of their own on the list "In Exact invoeren" with "(proefdocument)": a real cart with the same lines, checked the
+    same day, is a case of its own, written through the system's writer or listed beside the try-out's change."""
+    d = deps(tmp_path, madeup_out, settings=OPEN)
+    settings = tryout_settings(tmp_path, po_store_root=d.store.root, capture_token="made-up-token-for-the-tests")
+    po = d.store.as_it_stands("250108")
+    assert d.store.versions("250108")
+    assert cart_order(cart_of(tmp_path, cart_html(po, "none", NOW.date())), d.store, settings.cases_root, NOW) == ("250108", None)
+    html = checked_cart(po, "price_small", NOW, settings, d.store)
+    system = SystemWriter()
+    chain = RetryingWriter(system, PreparedWriter(settings.cases_root / "prepared"))
+    answer = precheck(html, SHOP_URL, capture_deps(settings, d.store, chain), settings)
+    assert (answer.verdict, answer.status, answer.po_number) == ("match", "closed", "250108")
+    assert answer.message == "Winkelwagen komt overeen met inkooporder 250108; 1 regel op de inkooporder voorbereid"
+    case = load_case(settings.cases_root, answer.case_id)
+    assert tryout_case(case) and aid.tryout_mark.case_is_tryout(settings.cases_root, answer.case_id) and case.po_found_by is None
+    assert aid.tryout_mark.is_tryout(case.input_files[0]) and aid.tryout_mark.CART_HEADING == CART_HEADING
+    [r] = results(settings)
+    assert [(entry.op.kind, entry.status) for entry in r.write_entries] == [("po_line_price", "prepared"), ("article_price", "prepared")]
+    assert system.asked == [] and r.supplier == "S08"                           # the case takes the PO's supplier, not the page's heading
+    # a real cart with the same lines, the same day: a case of its own, not answered from the try-out's
+    real = html.replace(CART_HEADING, "S08")
+    own = precheck(real, "https://shop.example.com/cart", capture_deps(settings, d.store, chain), settings)
+    assert own.case_id != answer.case_id and not tryout_case(load_case(settings.cases_root, own.case_id))
+    assert {case_id for case_id, _ in system.asked} == {own.case_id} and own.message == (
+        "Winkelwagen komt overeen met inkooporder 250108; 1 regel op de inkooporder bijgewerkt")
+    assert precheck(html, SHOP_URL, capture_deps(settings, d.store, chain), settings).case_id == answer.case_id       # each its own case
+    again = html.replace("<body>", "<body><!-- again -->")                      # the same try-out cart in a page of other bytes
+    assert precheck(again, SHOP_URL, capture_deps(settings, d.store, chain), settings).case_id == answer.case_id
+    # both prepared: the try-out's change and the real one stand side by side on the list, the try-out's marked
+    settings = tryout_settings(tmp_path / "list", po_store_root=d.store.root)
+    for page in (html, real):
+        assert precheck(page, SHOP_URL, capture_deps(settings, d.store), settings).verdict == "match"
+    prepared = settings.cases_root / "prepared"
+    listed = sorted((change.state, change.tryout, hand_list.row_text(change, settings.cases_root, "nl")) for change in changes(prepared)[0])
+    assert listed == [("open", False, "artikel KM-0801: inkoopprijs onbekend → 12,63"), ("open", False, "regel 1 (KM-0801): prijs 12,50 → 12,63"),
+                      ("open", True, "artikel KM-0801: inkoopprijs onbekend → 12,63 (proefdocument)"),
+                      ("open", True, "regel 1 (KM-0801): prijs 12,50 → 12,63 (proefdocument)")]
+
+
+def test_a_try_out_cart_page_is_known_by_its_bytes_and_its_first_heading(tmp_path, madeup_out, monkeypatch):
+    """Amendment 3: aid/tryout_mark.py knows a try-out cart by the page alone. A page saved as HTML is one when its bytes hold the
+    heading as the aid writes it and its first heading is that text, also in the copy of the page that a browser sends (other bytes
+    around it, .htm). A webshop's page, which does not hold the text, is none, and is not even read as a page: a buyer's cases hold
+    many of them, and each is asked once. A page that holds the text elsewhere, or as a later heading, is none either, and nor is a
+    page whose bytes hold the text nowhere in one piece."""
+    d = deps(tmp_path, madeup_out, settings=OPEN)
+    page = cart_html(d.store.as_it_stands("250108"), "none", NOW.date())
+    read = []
+    monkeypatch.setattr(aid.tryout_mark, "first_heading", lambda path: read.append(path.name) or first_heading(path))
+
+    def asked(name: str, html: str) -> bool:
+        (tmp_path / name).write_text(html, encoding="utf-8")
+        return aid.tryout_mark.is_tryout(tmp_path / name)
+    assert asked("tryout.html", page) and asked("copy.htm", page.replace("<body>", '<body><div id="other">Welkom</div>'))
+    assert not asked("shop.html", (madeup_out / "CART02.html").read_text(encoding="utf-8")) and read == ["tryout.html", "copy.htm"]
+    assert not asked("renamed.html", page.replace(CART_HEADING, "S08"))
+    assert not asked("later.html", page.replace("<body>", "<body><h1>S08</h1>"))               # a later heading
+    assert not asked("text.html", page.replace(f"<h1>{CART_HEADING}</h1>", f"<h1>S08</h1><p>{CART_HEADING}</p>"))    # no heading at all
+    split = page.replace(f"<h1>{CART_HEADING}</h1>", "<h1>Proefwinkel <b>(verzonnen pagina)</b></h1>")
+    assert asked("split.html", split)                                           # its title holds the text, and its heading reads as it
+    assert not asked("untitled.html", split.replace(f"<title>{CART_HEADING}</title>", "<title>Winkel</title>"))     # the text nowhere
+    assert read == ["tryout.html", "copy.htm", "later.html", "text.html", "split.html"]     # only a page that holds the text is read
+    assert not asked("page.txt", page) and not aid.tryout_mark.is_tryout(tmp_path / "missing.html")
+    assert aid.tryout_mark.is_tryout(tmp_path / "tryout.html") and len(read) == 5            # asked again: the answer is kept
+
+
+def test_the_digest_marks_a_try_out_cart_and_it_is_no_suppliers_first_case(tmp_path, madeup_out):
+    """Amendment 3: the digest marks the case of a try-out cart with "(proefdocument)" and leaves its changes out of the count of the
+    changes to enter in Exact, and the case is no supplier's first case: with "Eerste zaken van een leverancier" at 1, a try-out cart
+    of S08's order that closed leaves S08's own cart the supplier's first case, which comes to the buyer."""
+    d = deps(tmp_path, madeup_out, settings=OPEN)
+    settings = tryout_settings(tmp_path, po_store_root=d.store.root, digest="per_case")
+    po = d.store.as_it_stands("250108")
+    html = checked_cart(po, "price_small", NOW, settings, d.store)
+    assert precheck(html, SHOP_URL, capture_deps(settings, d.store), settings).verdict == "match"
+    runner_pass(settings, d.store)
+    [text] = digest_texts(settings)
+    lines = text.splitlines()
+    assert lines[:2] == ["Dagoverzicht 12-11-2026", "Behandelde zaken"]         # no line of changes to enter: the try-out's are left out
+    start = lines.index("- voorcontrole PO 250108 (S08): afgesloten, 2 voorbereide wijzigingen (proefdocument)")
+    assert lines[start + 1:start + 3] == ["    - prijs regel 1: 12,50 → 12,63 (proefdocument)",
+                                          "    - artikelprijs KM-0801: onbekend → 12,63 (proefdocument)"]
+    # no supplier's first case
+    first = tryout_settings(tmp_path / "first", po_store_root=d.store.root, first_cases_review=1)
+    tried = precheck(html, SHOP_URL, capture_deps(first, d.store), first)
+    assert (tried.verdict, tried.status) == ("differences", "review")           # S08 is new: the try-out comes to the buyer (R11)
+    case = load_case(first.cases_root, tried.case_id)
+    for item in results(first)[0].review_items:
+        decide(case, item.item_id, "confirm")
+    assert close_case(case, capture_deps(first, d.store)).status == "closed"
+    own = precheck(html.replace(CART_HEADING, "S08"), "https://shop.example.com/cart", capture_deps(first, d.store), first)
+    assert (own.verdict, own.status) == ("differences", "review")
+    assert "eerste zaken van deze leverancier gaan naar de inkoper" in [entry["text"] for entry in own.lines]
+
+
+# --- Task 43 meets Task 41: a try-out cart is made from the order as a try-out's case is compared with it ---
+
+def test_a_try_out_cart_starts_from_what_was_entered_for_an_earlier_try_out(tmp_path, madeup_out):
+    """The first round's concern 12, settled at the merge. A try-out raised the price of the first line to 12,63; the rules took it
+    over, and the owner entered it in the test Exact and ticked it. A case made from a try-out is compared with the order with that
+    value laid over it, so the next try-out cart is made from that order: with "Niets" its first line prints 12.63 and read back
+    it is the compared order without a change, and with the price 1 percent up it prints 12.76. Before, the cart printed the 12.50
+    of the order as filed, and its own case found a difference that no change of the cart had made. The store keeps the print."""
+    d = deps(tmp_path, madeup_out, settings=OPEN)
+    settings = tryout_settings(tmp_path / "walk")
+    prepared = settings.cases_root / "prepared"
+    filed_on(d.store, "250108", "v1", FILED)
+    po = d.store.as_it_stands("250108")
+    assert cart_of(tmp_path, checked_cart(po, "none", NOW, settings, d.store)).lines[0].unit_price.value == "12.50"       # nothing entered yet
+    give(settings, d.store, "250108", "price_small")
+    runner_pass(settings, d.store)
+    [asked] = [change for change in open_changes(prepared) if change.kind == "po_line_price"]
+    assert asked.tryout and mark(prepared, asked.ids, "entered", TICKED) == 1
+    for change, price in (("none", "12.63"), ("price_small", "12.76")):
+        page = checked_cart(po, change, NOW, settings, d.store)
+        assert cart_of(tmp_path, page).lines[0].unit_price.value == price, change
+    assert d.store.as_it_stands("250108") == po and po.document.lines[0].unit_price.value == "12.50"

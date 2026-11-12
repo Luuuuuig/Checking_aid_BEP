@@ -7,7 +7,8 @@ document or any connection:
     <out>/cases.csv       the 22 made-up cases (20 confirmations, 2 saved cart pages) for the batch
     <out>/cases/          one folder per case after the run (steps/, audit.json, write_log.jsonl, dispositions.csv)
     <out>/cases/prepared/prepared_changes.csv   the changes the aid would make in Exact, prepared for the buyer
-    <out>/cases/outbox/   the questions to the suppliers as .eml files, once a run has a mailer (the review page and the runner)
+    <out>/cases/outbox/   the messages written as .eml files instead of sent: the runner's, and on a prepared folder (whose
+                          settings say send_via "file") the questions of the review page too
     <out>/po_store/       the PO versions of the made-up PO PDFs and the looks that the two ERP exports gave
     <out>/inbox/          the watched folder of the runner, empty; drop a made-up confirmation in it and start the runner
     <out>/summary.csv     one row per case: the status, the flags, the writes, the messages, the review items
@@ -20,7 +21,10 @@ environment variable ANTHROPIC_API_KEY, calls the service for every document and
 this demo only; company documents go to Microsoft 365 Copilot (aid/readers/copilot_client.py) and to no other service.
 
 --prepare-only writes the folder and files the purchase orders but runs no case: the folder to watch the runner loop work by
-itself, because a document a folder has seen once counts as a duplicate afterwards and opens no second case.
+itself, because a document a folder has seen once counts as a duplicate afterwards and opens no second case. Its settings say
+send_via "file": the runner and the review page write every message of this folder as a file, whatever is connected. The folder
+of a run keeps the default, "auto", with nothing connected: its runner writes files too, and its review page asks no question,
+since it has no way to send one, and says so (give the folder a prepared one's send_via "file" to see the question as a file).
 
 After the run: python3 -m aid.review --settings <out>/settings.json opens the review page on 127.0.0.1:7860, and
 python3 -m aid.runner --settings <out>/settings.json --poll-seconds 5 --max-passes 3 runs the loop over <out>/inbox. Nothing is
@@ -66,7 +70,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{out} exists and is not empty; choose another folder or pass --force to run into it", file=sys.stderr)
         return 2
     out.mkdir(parents=True, exist_ok=True)
-    settings_path = write_settings(out)
+    settings_path = write_settings(out, files_only=args.prepare_only)
     cases_path = write_cases(out)
     (out / "inbox").mkdir(exist_ok=True)
     if args.prepare_only:
@@ -102,15 +106,21 @@ def live_reader(settings: Settings):
     return reader, LlmDecider(client)
 
 
-def write_settings(out: Path) -> Path:
+def write_settings(out: Path, files_only: bool = False) -> Path:
     """<out>/settings.json: the example settings with the parser as the reader, the folders under <out>, the new-supplier rule
     off and a lead time per made-up supplier; no authorization limit, so the re-approval rule stays off until one is set in the
-    file. The file is read back through load_settings, so a demo never starts from settings that do not load."""
+    file. With files_only (the prepared folder, which the runner and the review page then work on) also send_via "file": the
+    made-up set sends nothing by its settings, not by the absence of a mailbox, so that a sign-in made on its settings tab sends
+    nothing either, and a question asked on its review page is written to cases/outbox. The settings of the batch's own run are
+    left as they were, since each case's audit record keeps the settings of its run and the batch's files are compared with those
+    of earlier runs. The file is read back through load_settings, so a demo never starts from settings that do not load."""
     data = json.loads(EXAMPLE_SETTINGS.read_text(encoding="utf-8"))
     data.update({"reader": "parser", "cases_root": "cases", "po_store_root": "po_store", "watched_folder": "inbox",
                  "first_cases_review": 0,             # every made-up supplier has one case: the new-supplier rule would send all to review
                  "capture_token": DEMO_TOKEN,         # made up, for the test shop of the capture server; a real token stays out of files
                  "supplier_lead_times": {spec.po.supplier: LEAD_TIME_DAYS for spec in load_specs(SPEC_DIR)}})
+    if files_only:
+        data["send_via"] = "file"
     path = out / "settings.json"
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
     load_settings(path)

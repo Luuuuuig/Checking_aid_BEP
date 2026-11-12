@@ -1,6 +1,7 @@
 """A try-out confirmation: a made-up order confirmation drawn from a purchase order that the PO store holds, with at most one change,
 so that the owner can try the whole chain on an order of the test account of Exact without a supplier and without the AI service (the
-plan's decision D15). Nothing made up may reach a supplier, the approver or the live system: the review page offers a try-out only in
+plan's decision D15); and a try-out cart, a made-up cart page of that order for the pre-check in the browser (the last part
+below). Nothing made up may reach a supplier, the approver or the live system: the review page offers a try-out only in
 the test mode and while no authorization limit is set (the part "Proefdraaien" of aid/review/page.py), every try-out is read back
 before it leaves the page (checked_confirmation, below), no change of a try-out is one that the routing (aid/routing.py) asks a
 supplier about (no quantity and no missing line), and a case made from a try-out never sends a message (aid/tryout_mark.py).
@@ -29,6 +30,13 @@ second as a duplicate.
 made_from gives the version a try-out of a PO is made from: its latest PDF version, which a confirmation is matched against while the
 PO has one (PoStore.candidates of aid/po_store.py), also when a look from an export came after it. A PO known from an export only (a
 look) has no PDF version to quote: its try-out names the PO alone ("Uw inkooporder <number>"), and its case is compared with the look.
+A try-out is made from the order as the aid compares it: checked_confirmation lays the values that the marks of the list "In Exact
+invoeren" say Exact holds over that version first, as the case of a try-out gets them (as_compared; as_entered of
+aid/execution/by_hand.py, the marks of the try-outs' own changes included, after the list was brought in line with the PO as it
+stands, as the pipeline does), and draws and reads back the try-out of that order. So
+after the owner entered and ticked the change of an earlier try-out, a try-out with no change prints the entered value and its case
+closes without a difference, and one with the price 1 percent up prints one percent above the entered price. The store is not
+changed. While the list cannot be read, no try-out is made: the error is raised, and the page says that it did not work.
 The parser reads the PO number, and with it the version quoted, of a number of six to eight digits (the template table_nl); the case
 of another number finds its PO as the watched folder finds one (aid/sources/mailbox.py), and checked_confirmation makes such a
 try-out only when that finds it.
@@ -91,33 +99,89 @@ file_name names the PDF "PROEF orderbevestiging <PO number> <time>.pdf", and kno
 dropdown. Nothing here writes a file outside the folder of the read-back: the page offers the PDF as a download or puts it into the
 watched folder (aid/sources/dropin.py), and from there on a try-out is an ordinary case: scanned, run and listed like any other, but
 for the guards of aid/tryout_mark.py.
+
+The try-out cart. For the pre-check in the browser the owner tries the chain with a try-out cart: a page of a try-out shop, made of a
+PO as it stands in the store (PoStore.as_it_stands, which is what a cart is compared with), with at most one change (CartChange:
+"none", or "price_small", the price of the first line that states one 1 percent up, as above). cart_html draws it in Dutch, as the
+made-up cart pages are (aid/madeup/generate.py):
+
+    <h1> Proefwinkel (verzonnen pagina)          the first heading, CART_HEADING: "try-out shop (made-up page)", by which the aid
+                                                 knows a try-out cart. It names the try-out shop and no supplier: the case takes
+                                                 the PO's supplier and never this heading, and has none when the PO names none
+                                                 (aid/pipeline.py), as a PO known from an export without a supplier column does
+    <h2> Winkelwagen
+    Datum: <the day of making>
+    Uw referentie: <PO number>                   the cart reader reads a number of six to eight digits there (aid/readers/cart.py), so
+                                                 that the order is found by its number, never guessed (aid/sources/capture.py); a
+                                                 number of another form, also one that goes on behind six to eight digits, is
+                                                 not read, and the cart's items decide
+    Valuta: <currency>                           only when the PO states a currency
+    Artikelnummer Omschrijving Aantal Eenheid Prijs Per      the cart table, a row for each line of the PO
+    Dit is een proefdocument van de inkoopassistent. Het komt niet van een leverancier.
+
+Each cell is printed only when the line states the value, and every value of the order is printed as text (escaped), so that
+nothing an order holds is markup of the page: the item code and the description as the store holds them, the quantity
+and the price (the one the comparison compares, as above) with a comma before the decimals as they are and no mark between the
+thousands, which the cart reader, given no number convention, reads back as it stands; "st" for a piece and any other unit as the
+store holds it; and the price basis. A cart has no delivery dates. The day stands on the page and no moment: a try-out cart of the
+same order and change made again on the same day is the same page, which the pre-check answers from the case it opened, as it
+answers any page it has seen.
+
+write_cart writes the page as <cases_root>/tryout/<PO number>_<change>.html, whole or not at all, and the capture server serves it
+as /tryout/<name> while try-outs are offered (aid/capture_server.py; cart_link gives the address on this PC). Before the page
+offers that link, checked_cart reads the page back with the cart reader, as checked_confirmation reads a try-out confirmation back,
+in the same folder under <cases_root>/tmp/work, and refuses with TryoutRefused unless:
+- cart_html makes the page ("no_lines", "no_price"), the cart reader reads it, the aid knows it as a try-out by its heading
+  (is_tryout of aid/tryout_mark.py), and, compared as a cart with the PO as the store holds it, which is what the pre-check will
+  compare it with, its only flag is the chosen change and it leaves uncompared what the PO compared with itself leaves uncompared;
+  else "read_back";
+- the pre-check, asked the same rule with the same arguments at the moment of making (cart_order of aid/sources/capture.py, with
+  the cases of the settings and that moment), would find the order the cart is made of, and not only guess it, nor find another
+  order in its place: by the number on the page, or, for a number that the cart reader does not read, as the one order filed that
+  day that holds exactly the cart's items and is not sent; else "not_found". So a cart of such an order is given on the day of its
+  export only.
+A capture case made from a try-out cart is a try-out for every guard of aid/tryout_mark.py. With "Eerste zaken van een leverancier"
+above 0 it comes to the buyer until that many cases of its order's supplier were closed (a try-out is no supplier's case), and
+always when its order names no supplier.
 """
+import os
 import re
 from collections import Counter
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
+from html import escape
 from pathlib import Path
 from typing import Literal, get_args
+from urllib.parse import quote
 
 from reportlab.pdfbase.pdfmetrics import stringWidth
 
 from aid.case import TEMPORARY, WORK, load_case, work_copy_folder
 from aid.comparison import Findings, compare, date_span
 from aid.decider import NoDecider
+from aid.execution.by_hand import FOLDER as LIST_FOLDER
+from aid.execution.by_hand import as_entered, filed_of, reconcile
 from aid.madeup.generate import (BODY, BOLD, CONFIRMATION_WORDS, CONTENT_WIDTH, GAP, LINES_PER_PAGE, REGULAR, UNIT_WORDS, Column, Row, Text,
                                  day_text, pdf_bytes)
 from aid.matching import match_lines, norm_code
 from aid.pipeline import read_with_parser
 from aid.po_store import PoStore, PoVersion
+from aid.readers.cart import read_cart_html
 from aid.readers.llm_client import ReaderError
 from aid.schema import DocLine, Document
 from aid.settings import Settings
+from aid.sources.capture import GUESSES, cart_order
 from aid.sources.mailbox import scan_folder
-from aid.tryout_mark import FIRST_ROW
+from aid.tryout_mark import CART_HEADING, FIRST_ROW, is_tryout
 from aid.versioning import select_version
 
 Change = Literal["none", "price_small", "price_large", "date_later", "date_much_later"]
 CHANGES: tuple[str, ...] = get_args(Change)      # in the order the page offers them
+CartChange = Literal["none", "price_small"]      # the changes of a try-out cart, each one of CHANGES
+CART_CHANGES: tuple[str, ...] = get_args(CartChange)
+CART_FOLDER = "tryout"                           # under cases_root: the try-out carts, which the capture server serves as /tryout/<name>
+CART_SHOP = "http://127.0.0.1:7870"              # the capture server on this PC, as the launcher starts it (aid/start.py, ADDRESSES)
+CART_TITLES = ("Artikelnummer", "Omschrijving", "Aantal", "Eenheid", "Prijs", "Per")      # the column titles of a try-out cart
 RAISED = {"price_small": 1, "price_large": 10}   # percent up
 LATER = {"date_later": 3, "date_much_later": 60}  # days later
 # why a PO gives no try-out (TryoutRefused), in the order they are found
@@ -168,10 +232,12 @@ def confirmation_pdf(po: PoVersion, change: Change, moment: datetime) -> bytes:
 
 
 def checked_confirmation(po: PoVersion, change: Change, moment: datetime, settings: Settings, store: PoStore) -> bytes:
-    """The try-out of confirmation_pdf, read back before it leaves the page (see the module docstring): returned only when the parser
-    reads it as the PO with the change alone and the scan, with these settings and this store, finds its PO and the version it was
-    made from. Raises TryoutRefused with the reason otherwise; nothing is written but in the folder of the read-back under
-    <cases_root>/tmp/work, which goes again at once."""
+    """The try-out of confirmation_pdf, made from the version as a case made from a try-out is compared with it (as_compared) and read
+    back before it leaves the page (see the module docstring): returned only when the parser reads it as that order with the change
+    alone and the scan, with these settings and this store, finds its PO and the version it was made from. Raises TryoutRefused with
+    the reason otherwise, and the OSError of a list "In Exact invoeren" that cannot be read; nothing is written but in the folder
+    of the read-back under <cases_root>/tmp/work, which goes again at once."""
+    po = as_compared(po, settings, store, moment)
     pdf = confirmation_pdf(po, change, moment)
     expected = _changed(po.document.lines, change)[2]
     name = file_name(po, moment)
@@ -189,6 +255,20 @@ def checked_confirmation(po: PoVersion, change: Change, moment: datetime, settin
         if not _version_chosen(doc, po, store):
             raise TryoutRefused("version", "the aid would not choose the version of the PO the try-out was made from")
     return pdf
+
+
+def as_compared(po: PoVersion, settings: Settings, store: PoStore, now: datetime) -> PoVersion:
+    """The version of the store as a case made from a try-out is compared with it (aid/pipeline.py): the list "In Exact invoeren"
+    brought in line with the PO as it stands first, at now (reconcile of aid/execution/by_hand.py, as the pipeline does before it
+    compares: a tick that a newer print contradicts counts no more), then the values that the marks of the list say Exact holds
+    laid over the version, those of the try-outs' own changes too (as_entered); the version itself when no mark counts for it, or
+    when the store cannot say when it was filed. An OSError of the list's files is raised."""
+    filed = filed_of(store, po)
+    if filed is None:
+        return po
+    prepared = Path(settings.cases_root) / LIST_FOLDER
+    reconcile(prepared, store, Path(settings.cases_root), now, po.po_number)
+    return as_entered(po, prepared, filed, settings.authorization_limit, tryout=True)[0]
 
 
 def file_name(po: PoVersion, now: datetime) -> str:
@@ -221,6 +301,116 @@ def made_from(store: PoStore, po_number: str) -> PoVersion | None:
     an export only, the PO as it stands, its latest look; None for a PO the store does not know."""
     versions = store.versions(po_number)
     return versions[-1] if versions else store.as_it_stands(po_number)
+
+
+# --- the try-out cart ---
+
+def cart_html(po: PoVersion, change: CartChange, today: date) -> str:
+    """The try-out cart of the PO with the change, made on the day `today`, as a page of the try-out shop (see the module
+    docstring). Raises TryoutRefused for a PO without lines ("no_lines") and, for "price_small", for a PO none of whose lines states
+    a price ("no_price"), and ValueError for a change that is none of CART_CHANGES."""
+    if change not in CART_CHANGES:
+        raise ValueError(f"{change!r} is no change of a try-out cart")
+    lines = po.document.lines
+    if not lines:
+        raise TryoutRefused("no_lines", "the PO has no order lines")
+    prices = _changed(lines, change)[0]
+    head = "".join(f"<th>{title}</th>" for title in CART_TITLES)
+    body = "\n".join("      <tr>" + "".join(f"<td>{escape(text)}</td>" for text in _cart_cells(line, price)) + "</tr>"
+                     for line, price in zip(lines, prices))
+    currency = po.document.currency.value
+    stated = f"  <p>{CONFIRMATION_WORDS['nl']['currency']} {escape(currency)}</p>\n" if currency is not None else ""
+    return f"""<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<title>{CART_HEADING}</title>
+<style>
+  body {{ font-family: Helvetica, Arial, sans-serif; margin: 2em; }}
+  table.cart {{ border-collapse: collapse; }}
+  table.cart th, table.cart td {{ border-bottom: 1px solid #ccc; padding: 0.4em 1em; text-align: left; }}
+</style>
+</head>
+<body>
+  <h1>{CART_HEADING}</h1>
+  <h2>Winkelwagen</h2>
+  <p>Datum: {day_text(today, 'nl')}</p>
+  <p>Uw referentie: {escape(po.po_number)}</p>
+{stated}  <table class="cart">
+    <thead>
+      <tr>{head}</tr>
+    </thead>
+    <tbody>
+{body}
+    </tbody>
+  </table>
+  <p>{NOTE_ROW}</p>
+</body>
+</html>
+"""
+
+
+def write_cart(cases_root: Path, po: PoVersion, change: CartChange, today: date) -> str:
+    """Write the try-out cart of cart_html as <cases_root>/tryout/<PO number>_<change>.html, whole or not at all, and return the
+    name of the file, by which the capture server serves it (cart_link gives its address). A cart made again of the same order with
+    the same change takes the place of the earlier one. Raises what cart_html raises, and writes nothing then."""
+    page = cart_html(po, change, today)
+    name = f"{po.po_number}_{change}.html"
+    folder = Path(cases_root) / CART_FOLDER
+    folder.mkdir(parents=True, exist_ok=True)
+    temporary = folder / f".{name}.tmp"
+    temporary.write_bytes(page.encode("utf-8"))
+    os.replace(temporary, folder / name)
+    return name
+
+
+def checked_cart(po: PoVersion, change: CartChange, now: datetime, settings: Settings, store: PoStore) -> str:
+    """The try-out cart of cart_html, made at `now`, whose day stands on the page, from the order as a case made from a try-out is
+    compared with it (as_compared: a change of a try-out that was entered and ticked counts in the next try-out's case, so the next
+    cart starts from it), and read back before the page offers its link (see the module docstring): returned only when the cart
+    reader reads it as the PO as it stands, compared so, with the change alone, the aid knows it as a try-out, and the pre-check,
+    asked at `now` with this store and the cases of the settings, would find its PO and not only guess it, and no other order in
+    its place. Raises TryoutRefused with the reason otherwise, and the OSError of a list "In Exact invoeren" that cannot be read;
+    nothing is written but in the folder of the read-back under <cases_root>/tmp/work, which goes again at once."""
+    po = as_compared(po, settings, store, now)
+    page = cart_html(po, change, now.date())
+    expected = _changed(po.document.lines, change)[2]
+    with work_copy_folder(Path(settings.cases_root) / TEMPORARY / WORK, "aid_tryout_") as folder:
+        path = folder / "cart.html"
+        path.write_bytes(page.encode("utf-8"))
+        try:
+            cart = read_cart_html(path)
+        except ReaderError:
+            raise TryoutRefused("read_back", "the cart reader does not read the try-out cart") from None
+        known = is_tryout(path)
+    standing = store.as_it_stands(po.po_number)
+    standing = as_compared(standing, settings, store, now) if standing is not None else None
+    if not known:
+        raise TryoutRefused("read_back", "the aid would not know the try-out cart as a try-out")
+    if standing is not None and not _reads_as(cart, standing, expected, "cart"):
+        raise TryoutRefused("read_back", "read back, the try-out cart differs from the PO as the store holds it in more than the change")
+    number, how = cart_order(cart, store, Path(settings.cases_root), now)
+    if standing is None or number != po.po_number or how in GUESSES:
+        raise TryoutRefused("not_found", "the pre-check would not find the PO of the try-out cart")
+    return page
+
+
+def cart_link(name: str) -> str:
+    """The address of the try-out cart `name` (as write_cart returns it) on the capture server of this PC."""
+    return f"{CART_SHOP}/{CART_FOLDER}/{quote(name)}"
+
+
+def _cart_cells(line: DocLine, price: str | None) -> list[str]:
+    """What the row of one line prints under each of CART_TITLES; `price` is the price of the try-out, with the change."""
+    unit = line.unit.value
+    return [line.item_code.value or "", line.description.value or "", _plain(line.quantity.value),
+            UNIT_WORDS["nl"].get(unit, unit) if unit is not None else "", _plain(price), line.price_basis.value or ""]
+
+
+def _plain(number: str | None) -> str:
+    """A number in normal form as a try-out cart prints it: a comma before its decimals as they are and no mark between the
+    thousands, so that the cart reader, which is given no number convention, reads it back as it stands; "" for no number."""
+    return number.replace(".", ",") if number is not None else ""
 
 
 # --- the rows ---
@@ -405,13 +595,14 @@ def _delivery(value: str) -> str:
 
 # --- the read-back ---
 
-def _reads_as(doc: Document, po: PoVersion, expected: list[tuple]) -> bool:
-    """Whether the try-out as the parser read it is the PO with the change alone: the comparison's flags are exactly the expected one
-    (none for "none"), and it leaves uncompared what the PO compared with itself leaves uncompared. A PO the comparison refuses to
-    compare (it raises ValueError for a match that puts one PO line id in two pairs, as two lines with the same id give) is not."""
+def _reads_as(doc: Document, po: PoVersion, expected: list[tuple], kind: Literal["confirmation", "cart"] = "confirmation") -> bool:
+    """Whether the try-out as its reader read it is the PO with the change alone, compared as a document of `kind`: the comparison's
+    flags are exactly the expected one (none for "none"), and it leaves uncompared what the PO compared with itself leaves
+    uncompared. A PO the comparison refuses to compare (it raises ValueError for a match that puts one PO line id in two pairs, as
+    two lines with the same id give) is not."""
     try:
-        findings = compare(match_lines(doc, po.document, NoDecider()), doc, po.document, "confirmation")
-        alone = compare(match_lines(po.document, po.document, NoDecider()), po.document, po.document, "confirmation")
+        findings = compare(match_lines(doc, po.document, NoDecider()), doc, po.document, kind)
+        alone = compare(match_lines(po.document, po.document, NoDecider()), po.document, po.document, kind)
     except ValueError:
         return False
     return [_flag(flag) for flag in findings.flags] == expected and _uncompared(findings) == _uncompared(alone)

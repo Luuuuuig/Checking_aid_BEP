@@ -1,7 +1,12 @@
 Dear colleague,
 
+{% if cart %}
+Purchase order PO {{ po }} is being changed, because the cart
+at supplier {{ supplier }} differs from the order:
+{% else %}
 Purchase order PO {{ po }} is being changed, because the order
 confirmation of supplier {{ supplier }} differs from the order:
+{% endif %}
 
 {% set kinds = {"po_line_price": "Price of the PO line", "po_line_date": "Delivery date of the PO line",
                 "po_line_quantity": "Quantity of the PO line", "article_price": "Article price"} %}

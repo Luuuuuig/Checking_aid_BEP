@@ -6,7 +6,7 @@ import json
 import os
 import re
 import shutil
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -20,7 +20,7 @@ from aid.readers.po_export import is_folder_name
 from aid.readers.po_pdf import read_po_pdf
 from aid.schema import DocValue
 from aid.tests.conftest import SETTINGS
-from aid.tests.helpers import ANDERS_LAYOUT, ANDERS_PO, MADEUP_LAYOUT, document_from_spec
+from aid.tests.helpers import ANDERS_LAYOUT, ANDERS_PO, MADEUP_LAYOUT, document_from_spec, given_on
 
 SPECS = {spec.case_id: spec for spec in load_specs(Path(__file__).resolve().parents[1] / "madeup" / "spec")}
 COLUMNS = {field: field for field in EXPORT_COLUMNS}          # the made-up export names its columns after the aid's fields
@@ -177,6 +177,23 @@ def test_find_by_lines_names_the_pos_whose_latest_version_has_two_of_the_codes(m
     store.add(drawn_po(tmp_path / "v3.pdf", header={"version": "Versie 3"}, cells={("1", "Artikel"): "KM-0391", ("2", "Artikel"): "KM-0392"}))
     assert store.find_by_lines(document_from_spec("MU03")) == ["250099", "1000000"]    # 250103's latest version keeps only KM-0303
     assert PoStore(tmp_path / "nothing").find_by_lines(document_from_spec("MU03")) == []
+
+
+def test_as_they_stand_gives_each_po_as_it_stands_in_the_order_of_the_numbers(madeup_out, tmp_path):
+    """as_they_stand gives each PO of the store once, as as_it_stands gives it (its latest PDF version, or its latest look when that
+    was filed after it), the shorter number first and then by its text. A folder that holds no version and no look is no PO, and a
+    store without a folder has none."""
+    store = PoStore(tmp_path / "store")
+    for name in ("MU03_po_v1.pdf", "MU03_po_v2.pdf", "MU01_po_v1.pdf"):
+        store.add(madeup_out / name)
+    store.add(drawn_po(tmp_path / "1000000.pdf", header={"po_reference": "Inkooporder 1000000"}))
+    store.from_export(madeup_out / "CART01_export.csv", COLUMNS)
+    (store.root / "250000").mkdir()                                                # a folder without a version or a look
+    standing = list(store.as_they_stand())
+    assert [(po.po_number, po.version, po.pdf_path.suffix) for po in standing] == [
+        ("250101", 1, ".pdf"), ("250103", 2, ".pdf"), ("250201", 1, ".csv"), ("1000000", 1, ".pdf")]
+    assert standing == [store.as_it_stands(number) for number in ("250101", "250103", "250201", "1000000")]
+    assert list(PoStore(tmp_path / "nothing").as_they_stand()) == []
 
 
 # --- filing the POs of an export ---
@@ -376,7 +393,9 @@ def test_from_export_on_a_workbook_equals_the_csv(madeup_out, tmp_path):
         assert Decimal(line.unit_price.value) == Decimal(other.unit_price.value) and not line.unit_price.uncertain
     assert (version.document.lines[0].unit_price.text, from_csv.document.lines[0].unit_price.text) == ("12.5", "12.50")
     assert store.from_export(xlsx, COLUMNS) == [version] and store.snapshots("250202") == [version] and store.versions("250202") == []
-    assert stored_files(tmp_path / "store" / "250202") == [tmp_path / "store" / "250202" / "e1", tmp_path / "store" / "250202" / "e1" / "po.json"]
+    # the same workbook again files nothing; the store notes in given.txt that it was given a print of the order once more (W16)
+    assert stored_files(tmp_path / "store" / "250202") == [tmp_path / "store" / "250202" / "e1", tmp_path / "store" / "250202" / "e1" / "given.txt",
+                                                           tmp_path / "store" / "250202" / "e1" / "po.json"]
     assert store.from_export(madeup_out / "CART02_export.csv", COLUMNS) == [version]      # the same rows in the CSV file: nothing new
 
 
@@ -513,6 +532,24 @@ def test_a_version_stored_from_another_pdf_is_refused_by_the_setting_with_a_layo
     made_up.add(madeup_out / "MU03_po_v1.pdf")
     with pytest.raises(ValueError, match=r"other\.pdf is version 1 of PO 250103, which is stored from another file"):
         made_up.add(other)
+
+
+def test_a_version_held_from_another_file_is_refused_with_a_class_of_its_own(madeup_out, tmp_path):
+    """Ruling O6: the refusal of a version number that the store holds from another file is a VersionHeld, a ValueError of its own, in
+    both its wordings (with a layout and without one), so that the scan tells it apart by its class and never by its text. Other
+    refusals of the store stay plain ValueErrors."""
+    from aid.po_store import VersionHeld
+    assert issubclass(VersionHeld, ValueError)
+    other = drawn_po(tmp_path / "other.pdf", version=2, header={"version": "Versie 1"})     # version 2's lines, printed as version 1
+    for name, layout in (("layout", MADEUP_LAYOUT), ("made_up", None)):
+        store = PoStore(tmp_path / name)
+        store.add(madeup_out / "MU03_po_v1.pdf", layout)
+        with pytest.raises(VersionHeld, match="from another file"):
+            store.add(other, layout)
+    for name in ("MU05_conf.pdf", "MU01_conf.pdf"):
+        with pytest.raises(ValueError) as refused:
+            PoStore(tmp_path / "plain").add(madeup_out / name)
+        assert type(refused.value) is ValueError, name
 
 
 # --- an export is a look at the PO, kept beside its PDF versions (Task 40) ---
@@ -670,6 +707,31 @@ def test_the_po_as_it_stands_in_the_four_orders_of_filing(madeup_out, tmp_path):
         store.filed_at("250101", "../250103/v1")
 
 
+def test_when_the_po_as_it_stands_was_filed(madeup_out, tmp_path):
+    """filed_last gives when the PO as it stands was filed: its latest PDF version, or its latest look when that was filed after it,
+    by the times of their po.json files; an earlier version or look does not count, and a PO the store does not know has none."""
+    store = PoStore(tmp_path / "store")
+    for n in (1, 2):
+        store.add(madeup_out / f"MU03_po_v{n}.pdf")
+    filed(store, "250103", "v1", 40)
+    filed(store, "250103", "v2", 10)                                                # the latest version, whenever the first was filed
+    assert store.filed_last("250103") == store.filed_at("250103", "v2") == datetime.fromtimestamp(FILED + 600).astimezone()
+    rows = export_rows(madeup_out / "CART02_export.csv")
+    store.from_export(written_export(tmp_path / "first.csv", rows), COLUMNS)
+    store.from_export(written_export(tmp_path / "second.csv", [rows[0] | {"quantity": "6"}, *rows[1:]]), COLUMNS)
+    filed(store, "250202", "e1", 30)
+    filed(store, "250202", "e2", 20)                                                # the latest look, whenever the first was filed
+    assert store.filed_last("250202") == store.filed_at("250202", "e2")
+    store.from_export(written_export(tmp_path / "250101.csv", rows_of("MU01")), COLUMNS)
+    store.add(madeup_out / "MU01_po_v1.pdf")
+    filed(store, "250101", "e1", 0)
+    filed(store, "250101", "v1", 5)                                                 # an export, then a PDF: the PDF stands
+    assert store.filed_last("250101") == store.filed_at("250101", "v1")
+    filed(store, "250101", "e1", 6)                                                 # a PDF, then an export: the look stands
+    assert store.filed_last("250101") == store.filed_at("250101", "e1")
+    assert store.filed_last("250199") is None and store.filed_last("..") is None
+
+
 def test_a_look_carries_the_number_and_the_supplier_of_the_latest_pdf_version(madeup_out, tmp_path):
     """A look is given with the number of the latest PDF version of its PO, 1 without one, and with that version's supplier when its
     export names none; a supplier the export names stays. Its po.json keeps what the export gave, so the look follows a later PDF."""
@@ -751,3 +813,129 @@ def test_a_pdf_that_prints_version_1_is_filed_after_an_export(madeup_out, tmp_pa
     assert store.versions("250101") == [pdf] and store.snapshots("250101") == [look.model_copy(update={"supplier": "S01"})]
     unnumbered = store.add(drawn_po(tmp_path / "unnumbered.pdf", "MU01", header={"version": None}))
     assert unnumbered.version == 2 and [v.version for v in store.versions("250101")] == [1, 2]
+
+
+def test_add_and_from_export_say_what_they_filed_now_and_what_was_filed_before(madeup_out, tmp_path):
+    """Task 37: so that the scan can tell a file it filed before, add appends the PO number to `filed` only when it files the PDF now,
+    not when the store holds it already, and from_export appends to `taken` the POs that had taken the file before (ruling E1: it files
+    nothing more for them), not a PO whose rows a new file only repeats, which keeps the file in its latest look's same_rows.txt."""
+    store = PoStore(tmp_path / "store")
+    first: list[str] = []
+    assert store.add(madeup_out / "MU01_po_v1.pdf", filed=first).version == 1 and first == ["250101"]
+    again: list[str] = []
+    assert store.add(madeup_out / "MU01_po_v1.pdf", None, again).version == 1 and again == []
+    assert store.add(madeup_out / "MU01_po_v1.pdf").version == 1                          # without the list, as before
+    filed, taken = [], []
+    store.from_export(madeup_out / "CART02_export.csv", COLUMNS, filed=filed, taken=taken)
+    assert (filed, taken) == (["250202"], [])
+    filed, taken = [], []
+    store.from_export(madeup_out / "CART02_export.csv", COLUMNS, filed=filed, taken=taken)
+    assert (filed, taken) == ([], ["250202"])
+    filed, taken = [], []
+    store.from_export(written_export(tmp_path / "same.csv", export_rows(madeup_out / "CART02_export.csv")), COLUMNS, filed=filed, taken=taken)
+    assert (filed, taken) == ([], [])                                                      # the same rows in a new file
+    filed, taken = [], []
+    store.from_export(tmp_path / "same.csv", COLUMNS, filed=filed, taken=taken)
+    assert (filed, taken) == ([], ["250202"])                                             # that file again: kept in same_rows.txt
+
+
+# --- a print that shows nothing new is a look at the order at the time it was given (Task 43, the second review round, W16) ---
+
+LONG_AGO = datetime(2026, 9, 1, 8, 0)                    # before any day these tests can run on
+
+
+def long_ago(store: PoStore, po_number: str, look: str, minutes: int = 0) -> datetime:
+    """Set the time of the version or the look, when it was filed and when a print of it was last given, to `minutes` after
+    LONG_AGO, so that what the store notes next is later whatever the day of the run: that time."""
+    moment = LONG_AGO.timestamp() + 60 * minutes
+    for name in ("po.json", "given.txt"):
+        if (store.root / po_number / look / name).exists():
+            os.utime(store.root / po_number / look / name, (moment, moment))
+    return datetime.fromtimestamp(moment).astimezone()
+
+
+def test_a_print_given_again_is_a_look_at_the_order_at_the_time_it_was_given(madeup_out, tmp_path):
+    """W16 (the check's findings 1 and 6): an export whose rows for the PO are those of its latest look files nothing, and the store
+    notes the moment: given_at is then later than filed_at, which stays. So do the same rows in another file, the look's own file
+    given again, and a PDF that is the latest version the store holds. An older look's file and an older PDF version note
+    nothing: they are not the PO as it stands. A version or look never given again has given_at equal to filed_at."""
+    store = PoStore(tmp_path / "store")
+    rows = export_rows(madeup_out / "CART02_export.csv")
+    [first] = store.from_export(madeup_out / "CART02_export.csv", COLUMNS)
+    folder = tmp_path / "store" / "250202" / "e1"
+    filed_first = long_ago(store, "250202", "e1")
+    assert not (folder / "given.txt").exists() and store.given_at("250202", "e1") == store.filed_at("250202", "e1") == filed_first
+    assert store.from_export(written_export(tmp_path / "same.csv", rows), COLUMNS) == [first]          # the same rows, another file
+    assert (folder / "given.txt").read_bytes() == b"" and store.filed_at("250202", "e1") == filed_first
+    assert store.given_at("250202", "e1") > filed_first and len(store.snapshots("250202")) == 1
+    noted = long_ago(store, "250202", "e1", 5)
+    assert (store.filed_at("250202", "e1"), store.given_at("250202", "e1")) == (noted, noted)
+    for again in (madeup_out / "CART02_export.csv", tmp_path / "same.csv"):       # the look's own file, and the one it kept
+        noted = long_ago(store, "250202", "e1", 5)
+        assert store.from_export(again, COLUMNS) == [first] and store.given_at("250202", "e1") > noted, again.name
+    [second] = store.from_export(written_export(tmp_path / "changed.csv", [rows[0] | {"unit_price": "12.60"}, *rows[1:]]), COLUMNS)
+    noted = long_ago(store, "250202", "e1", 5)
+    assert store.from_export(madeup_out / "CART02_export.csv", COLUMNS) == [first]     # the file of an older look: not the PO as it stands
+    assert store.given_at("250202", "e1") == noted and not (tmp_path / "store" / "250202" / "e2" / "given.txt").exists()
+    with pytest.raises(FileNotFoundError):
+        store.given_at("250202", "e3")
+    with pytest.raises(ValueError):
+        store.given_at("250202", "../250202/e1")
+    v1, v2 = (store.add(madeup_out / f"MU03_po_v{n}.pdf") for n in (1, 2))
+    filed_v1, filed_v2 = long_ago(store, "250103", "v1"), long_ago(store, "250103", "v2", 1)
+    assert store.add(madeup_out / "MU03_po_v2.pdf") == v2 and store.given_at("250103", "v2") > filed_v2 == store.filed_at("250103", "v2")
+    assert store.add(madeup_out / "MU03_po_v1.pdf") == v1 and store.given_at("250103", "v1") == filed_v1      # an older version
+    assert sorted(path.name for path in (tmp_path / "store" / "250103" / "v2").iterdir()) == ["given.txt", "po.json", "po.pdf"]
+    assert sorted(path.name for path in (tmp_path / "store" / "250103" / "v1").iterdir()) == ["po.json", "po.pdf"]
+
+
+def test_the_print_given_last_and_the_po_as_it_stands(madeup_out, tmp_path):
+    """W16: what a document is compared with keeps to the filing times: a look filed before the latest PDF version does not stand
+    again when an export with its rows comes after that PDF. The print given last (given_last) does follow it: the list judges a
+    tick against the export that came after the PDF, and against the PDF once that is given after the export. A PO with PDFs
+    only, or with looks only, has its latest one as both."""
+    store = PoStore(tmp_path / "store")
+    [look] = store.from_export(written_export(tmp_path / "250101.csv", rows_of("MU01")), COLUMNS)
+    pdf = store.add(madeup_out / "MU01_po_v1.pdf")
+    long_ago(store, "250101", "e1")
+    long_ago(store, "250101", "v1", 5)
+    assert store.as_it_stands("250101") == pdf and store.given_last("250101") == (pdf, "v1")
+    store.from_export(written_export(tmp_path / "next day.csv", rows_of("MU01")), COLUMNS)      # the same rows, given after the PDF
+    given = look.model_copy(update={"supplier": "S01"})
+    assert store.given_last("250101") == (given, "e1")
+    assert store.as_it_stands("250101") == pdf and store.candidates("250101", "cart") == store.candidates("250101", "confirmation") == [pdf]
+    given_on(store, "250101", "e1", LONG_AGO + timedelta(minutes=10))                # that export came ten minutes after LONG_AGO
+    store.add(madeup_out / "MU01_po_v1.pdf")                                         # the PDF, given after that
+    assert store.given_last("250101") == (pdf, "v1") and store.as_it_stands("250101") == pdf
+    given_on(store, "250101", "v1", LONG_AGO + timedelta(minutes=10))                # given at the same time: the PDF
+    assert store.given_last("250101") == (pdf, "v1")
+    given_on(store, "250101", "v1", LONG_AGO + timedelta(minutes=9))
+    assert store.given_last("250101") == (given, "e1") and store.as_it_stands("250101") == pdf
+    [alone] = store.from_export(madeup_out / "CART02_export.csv", COLUMNS)            # looks only, and PDFs only
+    v1, v2 = (store.add(madeup_out / f"MU03_po_v{n}.pdf") for n in (1, 2))
+    assert store.given_last("250202") == (alone, "e1") and store.given_last("250103") == (v2, "v2")
+    assert store.given_last("250199") is None and store.given_last("..") is None
+
+
+def test_a_file_that_lay_there_already_is_no_new_giving(madeup_out, tmp_path):
+    """W16 and ruling E1 together: the scan handles a file that stays in the watched folder again at every pass. The store is told
+    when the file came to the folder (`arrived`), and a file that lay there already when the store last noted a print that shows
+    the PO so notes nothing: it is given once. A file that came later is given again. Without `arrived`, every call is a giving."""
+    store = PoStore(tmp_path / "store")
+    [look] = store.from_export(madeup_out / "CART02_export.csv", COLUMNS, arrived=LONG_AGO)
+    pdf = store.add(madeup_out / "MU03_po_v1.pdf", arrived=LONG_AGO)
+    for po_number, name in (("250202", "e1"), ("250103", "v1")):
+        filed = long_ago(store, po_number, name, 10)                               # filed ten minutes after the file came
+        for _ in range(2):                                                         # the same file at the passes that follow
+            assert store.from_export(madeup_out / "CART02_export.csv", COLUMNS, arrived=LONG_AGO) == [look]
+            assert store.add(madeup_out / "MU03_po_v1.pdf", arrived=LONG_AGO) == pdf
+            assert store.given_at(po_number, name) == filed and not (store.root / po_number / name / "given.txt").exists()
+    same = written_export(tmp_path / "same.csv", export_rows(madeup_out / "CART02_export.csv"))
+    assert store.from_export(same, COLUMNS, arrived=LONG_AGO) == [look]             # the same rows, in a file that lay there too
+    assert store.given_at("250202", "e1") == store.filed_at("250202", "e1")
+    later = datetime.fromtimestamp(LONG_AGO.timestamp() + 3600)                     # an hour after: put there anew
+    assert store.from_export(same, COLUMNS, arrived=later) == [look] and store.given_at("250202", "e1") > store.filed_at("250202", "e1")
+    assert store.add(madeup_out / "MU03_po_v1.pdf", arrived=later) == pdf and store.given_at("250103", "v1") > store.filed_at("250103", "v1")
+    noted = long_ago(store, "250202", "e1", 120)                                    # noted two hours after: that file lies there still
+    assert store.from_export(same, COLUMNS, arrived=later) == [look] and store.given_at("250202", "e1") == noted
+    assert store.from_export(same, COLUMNS) == [look] and store.given_at("250202", "e1") > noted          # no time told: a giving

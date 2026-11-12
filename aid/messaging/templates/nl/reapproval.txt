@@ -1,7 +1,12 @@
 Beste collega,
 
+{% if cart %}
+Inkooporder PO {{ po }} wordt gewijzigd, omdat de
+winkelwagen bij leverancier {{ supplier }} afwijkt van de order:
+{% else %}
 Inkooporder PO {{ po }} wordt gewijzigd, omdat de
 orderbevestiging van leverancier {{ supplier }} afwijkt van de order:
+{% endif %}
 
 {% set kinds = {"po_line_price": "Prijs van de orderregel", "po_line_date": "Leverdatum van de orderregel",
                 "po_line_quantity": "Aantal van de orderregel", "article_price": "Artikelprijs"} %}

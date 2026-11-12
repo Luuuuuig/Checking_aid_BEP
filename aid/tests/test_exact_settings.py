@@ -850,7 +850,7 @@ def test_every_reason_the_reader_refuses_a_file_for_has_a_sentence_of_its_own(tm
     from aid.tests.test_po_export import NL as MAP
     from aid.tests.test_po_export import REFUSED, REFUSED_FILES, texts, write_csv, write_xlsx
     rows_named = {"no_po_number", "po_number_date", "po_number_no_digit", "po_number_no_folder", "no_line_id", "line_id_date", "double_line_id",
-                  "double_column"}
+                  "double_column", "surplus_cells", "cell_count"}
     for strings in (NL, EN):
         sentences = [strings[f"exact_export_refused:{reason}"] for reason in REFUSALS]
         assert len(set(sentences)) == len(REFUSALS)                                  # a sentence of its own for each reason
@@ -858,6 +858,8 @@ def test_every_reason_the_reader_refuses_a_file_for_has_a_sentence_of_its_own(tm
             sentence = strings[f"exact_export_refused:{reason}"]
             assert ("{row}" in sentence) == (reason in rows_named), reason
             assert ("{column}" in sentence) == (reason in ("no_column", "double_column")), reason
+            assert ("{names}" in sentence) == (reason == "several_sheets"), reason
+        assert "pricelist_refused:sheets" not in strings        # one sentence, under one key, wherever a workbook is given
         assert "{row}" in strings["exact_export_refused:unreadable_row"]              # a workbook cell that cannot be read, by its row
     for language in ("nl", "en"):
         strings = STRINGS[language]
@@ -875,8 +877,10 @@ def test_every_reason_the_reader_refuses_a_file_for_has_a_sentence_of_its_own(tm
             values = {"export_columns": MAP, "export_decimal_comma": False, "export_fill_down": False}
             tried = export_trial(path, values, language)
             key = f"exact_export_refused:{reason}" + ("_row" if row is not None else "")
-            assert tried.reading is None and tried.problems == [strings[key].format(row=row)], case
-            assert not [text for text in hidden if text in tried.problems[0]], case
+            assert tried.reading is None and tried.problems == [strings[key].format(row=row, names="Open, Geleverd")], case
+            if reason != "several_sheets":                      # that sentence names the sheets, and nothing else of the file
+                assert not [text for text in hidden if text in tried.problems[0]], case
+            assert "Overzicht" not in tried.problems[0], case
 
 
 def test_a_text_column_in_the_other_convention_is_a_problem_and_a_number_cell_never_is(tmp_path):
@@ -1277,3 +1281,183 @@ def test_the_table_of_the_first_rows_shows_rows_1_to_15(tmp_path):
     long = write_sheet(tmp_path / "long.csv", [["Inkooporder", "Artikel", "Aantal"], *[["250301", f"KM-{n}", str(n)] for n in range(1, 30)]])
     head = table_head(long)
     assert [row[0] for row in head] == [str(n) for n in range(1, 16)] and head[-1] == ["15", "250301", "KM-14", "14"]
+
+
+# --- part 3: the export of articles (Task 42) ---
+
+from aid.review.exact_settings import (ARTICLE_FORM, ARTICLE_ROWS, article_label, articles_from_form, articles_headers,  # noqa: E402
+                                       articles_rows, articles_text, articles_trial, form_from_articles, saved_articles)
+
+ARTICLES_FORM = {"item_code": "Artikel", "price": "Inkoopprijs", "supplier": NO_COLUMN, "numbers": "comma"}     # one supplier's articles
+ARTICLES_SAVED = {"article_columns": {"item_code": "Artikel", "price": "Inkoopprijs"}, "article_decimal_comma": True}
+
+
+def articles_sample(path: Path, rows: list[list], titles: tuple = ("Artikel", "Omschrijving", "Inkoopprijs")) -> Path:
+    """A made-up export of articles: a title above the row of column titles, then the rows (write_sheet)."""
+    return write_sheet(path, [["Artikelen van een leverancier (verzonnen voorbeeld)"], [], list(titles), *rows])
+
+
+def test_the_form_of_part_3_gives_the_two_settings_or_names_what_is_missing():
+    """Amendment 3: part 3 sets the columns of the export of articles and the convention of its numbers, and nothing else."""
+    settings, problems = articles_from_form(ARTICLES_FORM, "nl")
+    assert problems == {} and settings == ARTICLES_SAVED
+    named, problems = articles_from_form({"item_code": " Artikel ", "price": "Inkoopprijs", "supplier": "Crediteur", "numbers": "point"}, "en")
+    assert problems == {} and named == {"article_columns": {"item_code": "Artikel", "price": "Inkoopprijs", "supplier": "Crediteur"},
+                                        "article_decimal_comma": False}
+    assert Settings.model_validate(SETTINGS.model_dump() | named).article_columns == named["article_columns"]
+    assert articles_from_form({"numbers": "comma"}, "nl") == (None, {"item_code": "Kies de kolom met de artikelcode.",
+                                                                      "price": "Kies de kolom met de inkoopprijs."})
+    assert articles_from_form(ARTICLES_FORM | {"price": NO_COLUMN}, "en") == (None, {"price": "Choose the column with the purchase price."})
+    assert articles_from_form(ARTICLES_FORM | {"supplier": " ARTIKEL "}, "nl") == (
+        None, {"supplier": NL["exact_export_problem:more_than_once"].format(column="\"Artikel\"")})
+    # the form back from the settings, and the two settings as the page keeps them
+    assert form_from_articles(SETTINGS.model_copy(update=ARTICLES_SAVED)) == ARTICLES_FORM
+    assert form_from_articles(SETTINGS) == {"item_code": NO_COLUMN, "price": NO_COLUMN, "supplier": NO_COLUMN, "numbers": "point"}
+    assert saved_articles(SETTINGS) == {"article_columns": {}, "article_decimal_comma": False}
+    assert saved_articles(SETTINGS.model_copy(update=ARTICLES_SAVED)) == ARTICLES_SAVED
+    assert ARTICLE_FORM == ("item_code", "price", "supplier")
+    assert [article_label(field, "nl") for field in ARTICLE_FORM] == ["Artikelcode (verplicht)", "Inkoopprijs (verplicht)", "Leverancier"]
+    assert [article_label(field, "en") for field in ARTICLE_FORM] == ["Item code (required)", "Purchase price (required)", "Supplier"]
+
+
+def test_the_trial_read_of_part_3_counts_what_it_read_and_names_what_it_passes_over(tmp_path):
+    """Amendment 3: the trial read says how many articles it read and how many rows it passed over, with the count of each reason that
+    occurs, a count of one in the singular, and shows the first rows as read; it writes nothing."""
+    sample = articles_sample(tmp_path / "artikelen.csv", [["KM-1001", "Slang", "12,50"], ["KM-1002", "Klem", "op aanvraag"], ["KM-1003", "Ring", "8,00"],
+                                                          ["KM-1003", "Ring", "8,10"], [None, "Totaal", "28,60"], ["KM-1005", "Kap", "1.000"]])
+    before = sorted(path.name for path in tmp_path.iterdir())
+    tried = articles_trial(sample, ARTICLES_SAVED, "nl")
+    assert tried.problems == [] and articles_text(tried, "nl") == (
+        "2 artikelen gelezen; 4 rijen overgeslagen (zonder artikelcode: 1, prijs niet te lezen: 1, artikel dubbel: 2).")
+    assert articles_text(articles_trial(sample, ARTICLES_SAVED, "en"), "en") == (
+        "2 articles read; 4 rows passed over (no item code: 1, price cannot be read: 1, article twice: 2).")
+    assert articles_headers(ARTICLES_SAVED, "nl") == ["Rij", "Artikelcode", "Inkoopprijs"]
+    assert articles_headers(ARTICLES_SAVED, "en") == ["Row", "Item code", "Purchase price"]
+    assert articles_rows(tried, ARTICLES_SAVED, "nl") == [["4", "KM-1001", "12.5 (12,50)"], ["9", "KM-1005", "1000 (1.000)"]]
+    assert sorted(path.name for path in tmp_path.iterdir()) == before
+    # a count of one in the singular, and no brackets when nothing was passed over
+    one = articles_sample(tmp_path / "een.csv", [["KM-1001", "Slang", "12,50"], ["KM-1002", "Klem", None]])
+    assert articles_text(articles_trial(one, ARTICLES_SAVED, "nl"), "nl") == "1 artikel gelezen; 1 rij overgeslagen (prijs niet te lezen: 1)."
+    assert articles_text(articles_trial(one, ARTICLES_SAVED, "en"), "en") == "1 article read; 1 row passed over (price cannot be read: 1)."
+    clean = articles_sample(tmp_path / "schoon.xlsx", [["KM-1001", "Slang", 12.5], ["KM-1002", "Klem", 8]])
+    assert articles_text(articles_trial(clean, ARTICLES_SAVED, "nl"), "nl") == "2 artikelen gelezen; 0 rijen overgeslagen."
+    assert articles_text(articles_trial(clean, ARTICLES_SAVED, "en"), "en") == "2 articles read; 0 rows passed over."
+    assert articles_rows(articles_trial(clean, ARTICLES_SAVED, "nl"), ARTICLES_SAVED, "nl") == [["4", "KM-1001", "12.5"], ["5", "KM-1002", "8"]]
+    assert (NL["exact_articles_read"].format(articles=NL["pricelist_articles_many"], passed=NL["pricelist_passed_many"]),
+            EN["exact_articles_read"].format(articles=EN["pricelist_articles_many"], passed=EN["pricelist_passed_many"])) == (
+        "{n} artikelen gelezen; {k} rijen overgeslagen.", "{n} articles read; {k} rows passed over.")
+    assert [(NL[f"exact_articles_left:{reason}"], EN[f"exact_articles_left:{reason}"]) for reason in ("no_item_code", "no_price", "twice",
+                                                                                                    "no_supplier")] == [
+        ("zonder artikelcode", "no item code"), ("prijs niet te lezen", "price cannot be read"), ("artikel dubbel", "article twice"),
+        ("zonder leverancier", "no supplier")]
+    # with a supplier column the table names the supplier of each row, and a row without one is counted
+    named = {"article_columns": {"item_code": "Artikel", "price": "Inkoopprijs", "supplier": "Leverancier"}, "article_decimal_comma": True}
+    several = articles_sample(tmp_path / "alle.csv", [["KM-1001", "S01", "12,50"], ["KM-2001", "S02", "3,20"], ["KM-9001", "", "1,00"]],
+                              titles=("Artikel", "Leverancier", "Inkoopprijs"))
+    tried = articles_trial(several, named, "nl")
+    assert articles_text(tried, "nl") == "2 artikelen gelezen; 1 rij overgeslagen (zonder leverancier: 1)."
+    assert articles_headers(named, "nl") == ["Rij", "Artikelcode", "Inkoopprijs", "Leverancier"] == articles_headers(None, "nl")
+    assert articles_rows(tried, named, "nl") == [["4", "KM-1001", "12.5 (12,50)", "S01"], ["5", "KM-2001", "3.2 (3,20)", "S02"]]
+    # the table shows the first rows only
+    many = articles_sample(tmp_path / "veel.csv", [[f"KM-{n:04d}", "Deel", "1,00"] for n in range(40)])
+    assert len(articles_rows(articles_trial(many, ARTICLES_SAVED, "nl"), ARTICLES_SAVED, "nl")) == ARTICLE_ROWS == 15
+
+
+def test_the_trial_read_of_part_3_names_each_problem_by_a_sentence(tmp_path):
+    """A refusal of the reader is its fixed sentence, the other decimal mark in the price column names the choice that fits, and a sample
+    that gives no article says so; none of them shows what a cell holds."""
+    sample = articles_sample(tmp_path / "artikelen.csv", [["KM-1001", "Slang", "13,75"], ["KM-1002", "Klem", "8,00"]])
+    wrong = articles_trial(sample, ARTICLES_SAVED | {"article_decimal_comma": False}, "nl")
+    assert wrong.problems == [NL["exact_problem:convention_comma"].format(column="\"Inkoopprijs\"")]
+    assert articles_text(wrong, "nl") == "2 artikelen gelezen; 0 rijen overgeslagen.\n\n" + wrong.problems[0]
+    points = articles_sample(tmp_path / "punten.csv", [["KM-1001", "Slang", "12.50"]])
+    assert articles_trial(points, ARTICLES_SAVED, "en").problems == [EN["exact_problem:convention_point"].format(column="\"Inkoopprijs\"")]
+    book = articles_sample(tmp_path / "artikelen.xlsx", [["KM-1001", "Slang", 12.5]])           # a number cell proves no convention
+    assert articles_trial(book, ARTICLES_SAVED, "nl").problems == [] == articles_trial(book, ARTICLES_SAVED | {"article_decimal_comma": False}, "nl").problems
+    nothing = articles_sample(tmp_path / "niets.csv", [[None, "Totaal", "20,50"], ["KM-1002", "Klem", "op aanvraag"]])
+    tried = articles_trial(nothing, ARTICLES_SAVED, "nl")
+    assert tried.problems == ["Het voorbeeld gaf geen artikel: geen rij onder de kolomnamen heeft een artikelcode en een prijs die te lezen is."]
+    assert articles_text(tried, "nl").startswith("0 artikelen gelezen; 2 rijen overgeslagen (zonder artikelcode: 1, prijs niet te lezen: 1).\n\n")
+    assert articles_trial(nothing, ARTICLES_SAVED, "en").problems == [
+        "The sample gave no article: no row below the column titles has an item code and a price that can be read."]
+    old = tmp_path / "artikelen.xls"
+    old.write_bytes(sample.read_bytes())
+    refused = articles_trial(old, ARTICLES_SAVED, "nl")
+    assert refused.reading is None and refused.problems == [NL["exact_export_refused:file_type"]] and articles_rows(refused, ARTICLES_SAVED, "nl") == []
+    assert articles_text(refused, "nl") == NL["exact_export_refused:file_type"]
+    other = articles_trial(sample, {"article_columns": {"item_code": "Artikel", "price": "Prijs"}, "article_decimal_comma": True}, "nl")
+    assert other.problems == [NL["exact_export_refused:no_column"].format(column="\"Prijs\"")]
+    for trial_read in (wrong, tried, refused, other):
+        assert not re.search(r"KM-1|13,75|Slang|Totaal|aanvraag", articles_text(trial_read, "nl"))
+    with pytest.raises(OSError):
+        articles_trial(tmp_path / "weg.csv", ARTICLES_SAVED, "nl")
+
+
+# --- the second review round of the price list on the page (rulings Z16 and Z17): the samples of parts 2 and 3 ---
+
+def test_a_sample_with_a_filled_cell_beyond_its_titles_is_refused_with_its_row(tmp_path):
+    """Ruling Z16: the samples of parts 2 and 3 are read as the exports are. A row with a filled cell beyond the last column title,
+    a decimal comma without quotation marks in a comma file, refuses the trial read of the sample ("Testen", and "Opslaan" with it)
+    with the row named, so that no columns are saved from a file cut wrongly; a sample whose rows only end in empty cells is read as
+    before. The first rows of the sample are still shown, as the file is cut, so that the owner sees what is wrong, and so that a
+    heading above the titles that the block took for the titles can still be passed by with "Rij met de kolomnamen"."""
+    from aid.review.exact_settings import sample_head
+    orders = tmp_path / "orders.csv"
+    orders.write_text("Inkooporder,Artikel,Aantal,Prijs\n250301,KM-3101,1000,12,50\n250301,KM-3102,25,4.80\n", encoding="utf-8")
+    articles = tmp_path / "artikelen.csv"
+    articles.write_text("Artikelen (verzonnen voorbeeld)\n\nArtikel,Omschrijving,Inkoopprijs\nKM-1001,Slang,12,70\n", encoding="utf-8")
+    sentence = ("Rij 2 van dit bestand heeft een ander aantal cellen dan de rij met kolomtitels. In een bestand met komma's als "
+                "scheidingsteken staat er dan meestal een komma in een getal of in een omschrijving zonder aanhalingstekens. Sla het bestand op "
+                "als Excel-bestand (.xlsx) of met puntkomma's als scheidingsteken, en geef het opnieuw.")     # a comma file: ruling Z30
+    values = {"export_columns": {"po_number": "Inkooporder", "item_code": "Artikel", "quantity": "Aantal", "unit_price": "Prijs"},
+              "export_decimal_comma": True, "export_fill_down": False}
+    tried = export_trial(orders, values, "nl")
+    assert tried.reading is None and tried.problems == [sentence]
+    trial = articles_trial(articles, ARTICLES_SAVED, "en")
+    assert trial.reading is None and trial.problems == [
+        "Row 4 of this file has another number of cells than the row of column titles. In a file with commas as the separator a number or "
+        "a description then usually holds a comma without quotation marks. Save the file as an Excel file (.xlsx) or with semicolons as "
+        "the separator, and give it again."]
+    assert NL["exact_export_refused:cell_count"].format(row=2) == sentence
+    # ruling Z30, the check's c16b samples: a row with room at its end, and a row shorter than the titles
+    orders.write_text("Inkooporder,Artikel,Aantal,Prijs,Opmerking\n250301,KM-3101,1000,12,50,\n", encoding="utf-8")
+    assert export_trial(orders, values, "nl").problems == [sentence]
+    articles.write_text("Artikel,Omschrijving,Inkoopprijs,Opmerking\nKM-1001,Slang,12.70,\nKM-1002,Klem,8\n", encoding="utf-8")
+    assert articles_trial(articles, ARTICLES_SAVED, "nl").problems == [sentence.replace("Rij 2", "Rij 3")]
+    orders.write_text("Inkooporder,Artikel,Aantal,Prijs\n250301,KM-3101,1000,12,50\n250301,KM-3102,25,4.80\n", encoding="utf-8")
+    # a semicolon file keeps ruling Z16's sentence, for a filled cell beyond the last title
+    semicolons = tmp_path / "puntkomma.csv"
+    semicolons.write_text("Inkooporder;Artikel;Aantal;Prijs\n250301;KM-3101;1000;12,50;x\n", encoding="utf-8")
+    assert export_trial(semicolons, values, "nl").problems == [NL["exact_export_refused:surplus_cells"].format(row=2)]
+    assert NL["exact_export_refused:surplus_cells"].startswith("Rij {row} van dit bestand heeft meer cellen dan de rij met kolomtitels.")
+    assert sample_head(orders)[0][1] == ["2", "250301", "KM-3101", "1000", "12", "50"]         # shown as it is cut
+    fine = tmp_path / "goed.csv"
+    fine.write_text('Inkooporder,Artikel,Aantal,Prijs,,\n250301,KM-3101,1000,"12,50",,\n250301,KM-3102,25,"4,80", ,\n', encoding="utf-8")
+    assert sample_head(fine)[1:] == (1, ["Inkooporder", "Artikel", "Aantal", "Prijs"])
+    assert export_trial(fine, values, "nl").reading.rows == 2
+
+
+def test_a_sample_with_data_on_a_hidden_sheet_only_is_told_so(tmp_path):
+    """Ruling Z33, parts 2 and 3: a sample whose only data stands on a hidden sheet is refused at once, and by the trial read, in
+    words that say so."""
+    from openpyxl import Workbook
+    from aid.review.exact_settings import refusal_text, sample_head
+    book = Workbook()
+    book.active.title = "Leeg"
+    hidden = book.create_sheet("Vorige week")
+    for row in (["Inkooporder", "Artikel", "Aantal", "Prijs"], ["250301", "KM-3101", 1000, 12.5]):
+        hidden.append(row)
+    hidden.sheet_state = "hidden"
+    sample = tmp_path / "orders.xlsx"
+    book.save(sample)
+    dutch = ("Dit Excel-bestand heeft alleen gegevens op een verborgen werkblad. De assistent leest geen verborgen werkbladen: maak het "
+             "werkblad zichtbaar, of sla het op als een eigen bestand, en geef het opnieuw.")
+    english = ("This Excel file holds data on a hidden sheet only. The assistant reads no hidden sheets: unhide the sheet, or save it as a "
+               "file of its own, and give it again.")
+    with pytest.raises(ExportRefused) as refused:
+        sample_head(sample)
+    assert refused.value.reason == "hidden_sheet" and (refusal_text(refused.value, "nl"), refusal_text(refused.value, "en")) == (dutch, english)
+    values = {"export_columns": {"po_number": "Inkooporder", "item_code": "Artikel", "quantity": "Aantal", "unit_price": "Prijs"},
+              "export_decimal_comma": True, "export_fill_down": False}
+    assert export_trial(sample, values, "nl").problems == [dutch]
+    assert articles_trial(sample, {"article_columns": {"item_code": "Artikel", "price": "Prijs"}, "article_decimal_comma": True}, "en").problems == [english]

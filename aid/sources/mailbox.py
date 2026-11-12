@@ -20,8 +20,11 @@ done, and never into the system's temporary folder, outside the aid's folders.
 
 Answers. An .eml that answers a question of the aid, by the Message-ID that its In-Reply-To or References header names (the
 message id of a record in a case's messages/sent.jsonl other than a re-approval request), is filed into that case with file_answer of aid/pipeline.py, which
-sorts a reply, a bounce and an automatic reply with file_reply of aid/messaging; a real reply puts the case in review, so that its
-wait ends and the buyer reads it. Such an e-mail is handled: it moves to processed/, its attachments open no case, and it is listed
+sorts a reply, a bounce, an automatic reply and a message of the aid's own side with file_reply of aid/messaging; a real reply puts
+the case in review, so that the wait of its question ends and the buyer reads it. An e-mail whose sender is the buyer's address,
+the aid's or the mailbox's of the settings, or one that scan_folder is given besides (the signed-in account's), is of the aid's
+own side: the buyer is in copy of every question, so his own reply to all names it, and it is no supplier's answer. Such an e-mail
+is handled: it moves to processed/, its attachments open no case, and it is listed
 in ScanResult.replies as (file, case id), and its case in ScanResult.answered when it is a real reply. An e-mail that answers no
 question of the aid is unpacked as any other. A case whose saved result cannot be read leaves the e-mail in the folder as an error,
 with no copy filed.
@@ -38,7 +41,9 @@ It is filed with PoStore.from_export and the three export settings: each of its 
 look gets the next look, beside the PO's PDF versions (aid/po_store.py), and a PO whose rows are the same files nothing. An export
 file is filed once: the same file given again, also after a newer export of its POs, and a file or an e-mail that stays in the
 folder and is handled again at every pass, files nothing more (the store knows the file by its sha256), so an older export never
-comes back on top of a newer one. The exports are filed before the PO PDFs and the confirmations of the same scan, and among
+comes back on top of a newer one. An export or a PO PDF that files nothing because the store holds the PO so already is still a
+look at the order at the time it was given (PoStore.given_at, aid/po_store.py): the scan tells the store when the file came to
+the folder (_arrived), so that a file put there anew counts as given again, and one that stays there as given once. The exports are filed before the PO PDFs and the confirmations of the same scan, and among
 themselves in the order of the modification times of their files in the folder, an attachment by the time of its e-mail file, the
 name breaking a tie only: of two exports of one PO that wait for the same pass the newer stands, whatever their names. Each is
 listed in ScanResult.stored_exports with the PO numbers of the file and those whose look it filed (none when it is given again). An
@@ -133,14 +138,36 @@ of page 1 of extract_lines of aid/readers/pdf_text.py, as _first_page_text joins
 of the store.
 
 Filing. A file that was handled, whatever came of it, moves to processed/ in the folder under its own name, or with _2, _3 and so on
-before the extension when processed/ holds that name already. A file that raised an exception (a PDF that cannot be read, an export
-that the store refuses, a decider that cannot be reached) stays where it is and is skipped as "error: <message>"; the next scan
-tries it again, and so classes it again, which asks the decider again when no keyword settles the class. An e-mail stays when any of
+before the extension when processed/ holds that name already (to_processed). A file that raised an exception (a PDF that cannot be
+read, an export that the store refuses, a decider that cannot be reached) stays where it is and is skipped as "error: <message>"; the
+next scan tries it again, and so classes it again, which asks the decider again when no keyword settles the class. So does a file that
+was handled and cannot be moved (another program holds it), skipped as an error as well. An e-mail stays when any of
 its attachments raised, and the attachments that were handled are then handled again: a case for a confirmation is not opened twice
 (the duplicate check), the PO store files a PDF once, and an export given again files nothing.
 
 Review items. cases_root/review_items.jsonl has one JSON line for each item that the buyer must look at, appended:
 {"time": <the scan's time>, "file": <the name used in the list of skipped items>, "reason": <the reason>}.
+
+Events. ScanResult.events says what became of each document, for the tab "Bestanden" of the review page (aid/review/intake.py, where
+the runner appends them to <cases_root>/intake.jsonl): (the name as the list of skipped items names it, the outcome, the detail), by
+file and an e-mail's attachments in their order, as the skipped list is. The outcomes:
+- "po": a PO PDF filed in the store, with "<PO number> v<version>";
+- "export": an export of the ERP filed, with "<the number of its POs> <the number of those whose look was new or changed>";
+- "case": a case opened for a confirmation, with the case id; "guess" when its PO was found otherwise than as the pattern's one
+  number (po_found_by);
+- "answer": an e-mail filed as the answer to a question of the aid, with the id of its case; "bounce" for a bounce of a message of
+  the aid, "auto" for an automatic reply and "own" for a message of the aid's own side (the buyer's own reply to all, which is no
+  supplier's answer), as file_reply of aid/messaging sorts them (answer_outcome);
+- "skipped": a document left alone, with the reason of the list of skipped items. A file the scan filed before is "skipped" with the
+  reason "duplicate" as well: a confirmation by the duplicate search, a PO PDF that the store holds already (PoStore.add files it as
+  the version it is, which files nothing) and an export file that the store has taken before (it files nothing more). Those two are
+  listed in stored_pos and stored_exports all the same, and not in the list of skipped items. An export that holds the column titles
+  and no order line files nothing and is skipped as NO_ORDER_LINES, and listed in stored_exports with no PO;
+- "error": a document or a file that raised and stays in the folder, with the detail of error_detail: "export: <reason>" for an export
+  that the store refused (ExportRefused.reason, one of REFUSALS of aid/readers/po_export.py), "version" for a PO PDF whose version
+  number the store holds from another file (VersionHeld), and "" for any other error: the text of an error is never an event's. A
+  file that was handled and cannot be moved has no event of an error: the event of what it became stays its event, and the skipped
+  list names the failure of the move.
 """
 import hashlib
 import json
@@ -163,11 +190,12 @@ from pydantic import BaseModel
 
 from aid.case import TEMPORARY, WORK, Case, find_case_by_hash, open_case, sha256_file, work_copy_folder
 from aid.decider import MIN_CONFIDENCE, Decider, Decision
-from aid.pipeline import file_answer, is_real_reply
-from aid.po_store import PoStore
+from aid.messaging import kind_of
+from aid.pipeline import file_answer
+from aid.po_store import PoStore, VersionHeld
 from aid.po_store import _item_codes            # the item codes of a PO's Document, as find_by_lines takes them
 from aid.readers.pdf_text import extract_lines
-from aid.readers.po_export import EXPORT_SUFFIXES, is_export
+from aid.readers.po_export import EXPORT_SUFFIXES, ExportRefused, is_export
 from aid.readers.po_layout import PoLayout
 from aid.readers.po_pdf import fits, header_lines, layout_first_page
 from aid.readers.supplier_parser import LayoutTemplate, detect_template, load_templates, read_with_template
@@ -180,6 +208,9 @@ EXPORT = "export"                                # the kind of an export of the 
 # Why a .csv or .xlsx file is skipped while export_columns is set: is_export does not take it, because no row of it holds every column
 # title of the map or it cannot be read as a table (see the module docstring).
 NOT_AN_EXPORT = "spreadsheet without the export's column titles"
+# Why an export is skipped that holds the column titles of the map and no order line (an overview exported with a filter that matches
+# nothing): it files nothing.
+NO_ORDER_LINES = "export without order lines"
 
 # The keywords of each class; the order of the classes matters (see the module docstring). Compared as whole words after lower-casing
 # and removing accents, so "auftragsbestätigung" also finds "AUFTRAGSBESTÄTIGUNG" and "Auftragsbestatigung", and "factuur" does not
@@ -228,6 +259,9 @@ class ScanResult(BaseModel):
     # (the name as the skipped list names it, the PO numbers of the file, and those of them that were new or changed, whose look it
     # filed) of each export of the ERP filed in the store, in the order of filing
     stored_exports: list[tuple[str, list[str], list[str]]] = []
+    # (the name as the skipped list names it, the outcome, the detail) of each document, by file and an e-mail's attachments in their
+    # order: what the tab "Bestanden" of the review page shows of it (see "Events" in the module docstring)
+    events: list[tuple[str, str, str]] = []
 
 
 # --- classes ---
@@ -654,17 +688,18 @@ def _unpacking(cases_root: Path, files: list[Path]) -> Iterator[Path | None]:
 
 
 def scan_folder(folder: Path, store: PoStore, cases_root: Path, settings: Settings, now: datetime,
-                decider: Decider | None = None) -> ScanResult:
+                decider: Decider | None = None, own: Iterable[str | None] = ()) -> ScanResult:
     """Handle every file in the folder as the module docstring says, and return what came of it.
 
     Exports and PO PDFs go into `store`, cases are opened under `cases_root`, `settings` gives the PO number pattern and the export
-    settings, and `now` is the time of the scan: the time in the id of each case and in each review item. A file whose name starts
-    with a dot (".DS_Store") is neither read, skipped nor moved, and so is a folder. Raises FileNotFoundError if the folder does not
-    exist."""
+    settings, and `now` is the time of the scan: the time in the id of each case and in each review item. `own` gives addresses of
+    the aid's own side besides those of the settings (the signed-in account's, which the runner knows): an e-mail from one of them
+    that names a question is the buyer's own message and no supplier's answer. A file whose name starts with a dot (".DS_Store")
+    is neither read, skipped nor moved, and so is a folder. Raises FileNotFoundError if the folder does not exist."""
     folder = Path(folder)
     files = sorted(path for path in folder.iterdir() if path.is_file() and not path.name.startswith("."))
     modified = {path: _modified(path) for path in files}
-    scan = _Scan(folder, store, Path(cases_root), settings, now, decider)
+    scan = _Scan(folder, store, Path(cases_root), settings, now, decider, own)
     with _unpacking(Path(cases_root), files) as scratch:          # the attachments of the e-mails, until the scan is done
         documents = [document for number, path in enumerate(files) for document in scan.unpack(number, path, scratch)]
         # The exports first, by the time of their file (of its e-mail for an attachment), then the PO PDFs, then the rest; within
@@ -685,6 +720,18 @@ def _modified(path: Path) -> int:
         return 0
 
 
+def _arrived(path: Path) -> datetime | None:
+    """When a file of the folder came to it, as the PO store asks (PoStore.add and from_export): the later of its modification
+    time and the time it was made there (its creation time where the system gives one, else the time its entry last changed),
+    so that a file that stays in the folder and is handled again at every pass counts as given once, and a file put there anew
+    as given again. None for a file that cannot be looked at."""
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return datetime.fromtimestamp(max(stat.st_mtime, getattr(stat, "st_birthtime", stat.st_ctime)))
+
+
 Place = tuple[int, int]                          # (the number of the file in the folder's order, the number of the attachment in its e-mail)
 
 
@@ -703,10 +750,13 @@ class _Document:
 class _Scan:
     """One pass over the folder: the arguments of scan_folder, what has come of the files so far and which files must stay."""
 
-    def __init__(self, folder: Path, store: PoStore, cases_root: Path, settings: Settings, now: datetime, decider: Decider | None):
+    def __init__(self, folder: Path, store: PoStore, cases_root: Path, settings: Settings, now: datetime, decider: Decider | None,
+                 own: Iterable[str | None] = ()):
         self.folder, self.store, self.cases_root, self.settings, self.now, self.decider = folder, store, cases_root, settings, now, decider
+        self.own = (settings.buyer_email, settings.aid_email, settings.mailbox, *own)    # the addresses of the aid's own side
         self.outcome = ScanResult()
         self.skips: list[tuple[Place, str, str]] = []    # (place, name, reason)
+        self.events: list[tuple[Place, str, str, str]] = []   # (place, name, outcome, detail)
         self.kept: set[Path] = set()                     # the files that stay in the folder
         self.opened: set[str] = set()                    # the sha256 of the confirmations that a case was opened for in this scan
         self.templates: list[LayoutTemplate] | None = None
@@ -719,10 +769,12 @@ class _Scan:
         module docstring). The attachments of an e-mail are written into `scratch` (see _unpacking)."""
         try:
             if path.suffix.lower() == ".eml":
-                if (case_id := file_answer(self.cases_root, path, self.now, language=self.settings.language)) is not None:
+                if (case_id := file_answer(self.cases_root, path, self.now, language=self.settings.language, own=self.own)) is not None:
                     self.outcome.replies.append((path.name, case_id))
-                    if is_real_reply(path):
+                    outcome = answer_outcome(path, self.own)
+                    if outcome == "answer":                      # a real reply: no bounce, no automatic or own message (is_real_reply)
                         self.outcome.answered.append(case_id)
+                    self.events.append(((number, 0), path.name, outcome, case_id))
                     return []
                 email_text, attachments = extract_eml(path, scratch)
                 parts = [((number, n), f"{path.name}/{attachment.name}", attachment) for n, attachment in enumerate(attachments, 1)]
@@ -784,12 +836,25 @@ class _Scan:
             if is_tryout_text(document.text) and not offers_tryouts(self.settings):
                 self.skip(document.place, document.label, TRYOUT_OUTSIDE)
             elif document.kind == EXPORT:
-                settings, filed = self.settings, []
+                settings, filed, taken = self.settings, [], []
                 looks = self.store.from_export(document.path, settings.export_columns, settings.export_decimal_comma,
-                                               settings.export_fill_down, filed)
-                self.outcome.stored_exports.append((document.label, [look.po_number for look in looks], filed))
+                                               settings.export_fill_down, filed, taken, _arrived(document.origin))
+                numbers = [look.po_number for look in looks]
+                self.outcome.stored_exports.append((document.label, numbers, filed))
+                if not numbers:                                      # the column titles and no order line: nothing filed
+                    self.skip(document.place, document.label, NO_ORDER_LINES)
+                elif set(numbers) <= set(taken):                     # every PO of the file has taken it before: filed before
+                    self.event(document, "skipped", "duplicate")
+                else:
+                    self.event(document, EXPORT, f"{len(numbers)} {len(filed)}")
             elif document.kind == "po_pdf":
-                self.outcome.stored_pos.append(self.store.add(document.path, self.settings.po_layout).po_number)
+                filed = []
+                version = self.store.add(document.path, self.settings.po_layout, filed, _arrived(document.origin))
+                self.outcome.stored_pos.append(version.po_number)
+                if filed:
+                    self.event(document, "po", f"{version.po_number} v{version.version}")
+                else:                                                # the store held it already: filed before
+                    self.event(document, "skipped", "duplicate")
             elif document.kind == "confirmation":
                 self._confirmation(document)
             elif document.kind is None and not document.text.strip():
@@ -818,8 +883,10 @@ class _Scan:
         else:
             po_number, found_by = po_without_number(document.path, "\n".join(part for part in (document.email_text, document.text) if part),
                                                     document.text, self.store, self._templates)
-        self.outcome.new_cases.append(self._open_case(document.path, po_number, found_by).case_id)
+        case_id = self._open_case(document.path, po_number, found_by).case_id
+        self.outcome.new_cases.append(case_id)
         self.opened.add(document.sha256)
+        self.event(document, "guess" if found_by is not None else "case", case_id)
 
     def _templates(self) -> list[LayoutTemplate]:
         """The layout templates of the quick read, read at their first use in the scan."""
@@ -832,43 +899,86 @@ class _Scan:
         how its PO was found when not as the pattern's one number."""
         return open_free(self.cases_root, "confirmation", [path], po_number, self.now, found_by)
 
+    def event(self, document: _Document, outcome: str, detail: str) -> None:
+        """Note what became of the document (see "Events" in the module docstring)."""
+        self.events.append((document.place, document.label, outcome, detail))
+
     def skip(self, place: Place, label: str, reason: str, review: bool = False) -> None:
         """Note that the item is left alone. A review item is written first, so that a failure to write it is an error and not a skip."""
         if review:
             _append_line(self.cases_root / REVIEW_ITEMS_FILE, {"time": self.now.isoformat(), "file": label, "reason": reason})
         self.skips.append((place, label, reason))
+        self.events.append((place, label, "skipped", reason))
 
-    def fail(self, place: Place, origin: Path, label: str, error: Exception) -> None:
-        """Note an exception: the file stays where it is, and the item is skipped as an error."""
+    def fail(self, place: Place, origin: Path, label: str, error: Exception, event: bool = True) -> None:
+        """Note an exception: the file stays where it is, and the item is skipped as an error. Its event holds the detail that
+        error_detail gives, never the text of the error; a file that was handled and could not be moved has none (`event` False), so
+        that the event of what it became stays its event (see "Events" in the module docstring)."""
         self.kept.add(origin)
-        self.skip(place, label, f"error: {' '.join(str(error).split()) or type(error).__name__}")
+        self.skips.append((place, label, f"error: {' '.join(str(error).split()) or type(error).__name__}"))
+        if event:
+            self.events.append((place, label, "error", error_detail(error)))
 
     def file_away(self, files: list[Path]) -> None:
-        """Move the files that stay no longer to processed/."""
+        """Move the files that stay no longer to processed/ (to_processed). One that cannot be moved stays, skipped as an error."""
         for number, path in enumerate(files):
             if path in self.kept:
                 continue
             try:
-                processed = self.folder / PROCESSED_FOLDER
-                processed.mkdir(exist_ok=True)
-                path.rename(processed / _free_name(path.name, lambda candidate: (processed / candidate).exists()))
+                to_processed(path)
             except OSError as error:
-                self.fail((number, 0), path, path.name, error)
+                self.fail((number, 0), path, path.name, error, event=False)
 
     def finish(self) -> ScanResult:
-        """The result. What was skipped is listed by file, an e-mail's attachments in their order in the e-mail."""
+        """The result. What was skipped is listed by file, an e-mail's attachments in their order in the e-mail, and so are the events;
+        two skips of one place, a document skipped and the failure of the move of its file, keep the order in which they came."""
         self.outcome.skipped = [(label, reason) for _, label, reason in sorted(self.skips, key=lambda skip: skip[0])]
+        self.outcome.events = [(label, outcome, detail) for _, label, outcome, detail in sorted(self.events, key=lambda event: event[0])]
         return self.outcome
+
+
+def answer_outcome(eml: Path, own: Iterable[str | None] = ()) -> str:
+    """The outcome of an e-mail filed as the answer to a question of the aid, as file_reply of aid/messaging sorts it (kind_of, with
+    the addresses of the aid's own side): "bounce" for a bounce, "auto" for an automatic reply, "own" for a message of the aid's
+    own side, and "answer" for a real reply."""
+    kind = kind_of(eml, own)
+    return "answer" if kind == "reply" else kind
+
+
+def error_detail(error: Exception) -> str:
+    """The detail of the event of an error (see "Events" in the module docstring), by the class of the error and never by its text:
+    "export: <reason>" for an export that the store refused (ExportRefused), "version" for a PO PDF whose version number the store holds
+    from another file (VersionHeld of aid/po_store.py), and "" for any other error."""
+    if isinstance(error, ExportRefused):
+        return f"export: {error.reason}"
+    if isinstance(error, VersionHeld):
+        return "version"
+    return ""
+
+
+def to_processed(path: Path) -> Path:
+    """Move a file of the folder into its processed/, made when it is missing, under its own name or with _2, _3 and so on before
+    the extension when processed/ holds that name already, and return where it went. An OSError is not caught."""
+    processed = path.parent / PROCESSED_FOLDER
+    processed.mkdir(exist_ok=True)
+    target = processed / _free_name(path.name, lambda candidate: (processed / candidate).exists())
+    path.rename(target)
+    return target
 
 
 def _append_line(path: Path, item: dict) -> None:
     """Add the item as the last JSON line of the file, creating the file and its folder on first use. When the file does not end
     with a newline (a crash cut its last line off), the item starts a line of its own."""
-    line = json.dumps(item, ensure_ascii=False).encode("utf-8")
+    _append_lines(path, [item])
+
+
+def _append_lines(path: Path, items: list[dict]) -> None:
+    """Add the items as the last JSON lines of the file, in one write, as _append_line adds one."""
+    lines = b"".join(json.dumps(item, ensure_ascii=False).encode("utf-8") + b"\n" for item in items)
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "ab+") as f:
         if f.seek(0, os.SEEK_END) > 0:
             f.seek(-1, os.SEEK_END)
             if f.read(1) != b"\n":
-                line = b"\n" + line
-        f.write(line + b"\n")                    # the file is opened for appending, so this goes to its end
+                lines = b"\n" + lines
+        f.write(lines)                           # the file is opened for appending, so this goes to its end

@@ -9,7 +9,9 @@ writes its output to the case folder as steps/<nn>_<name>.json and records it in
     02_read_document  the supplier's document, the first input file of the case, as deps.reader reads it
     03_version        the version the document answers (aid/versioning.py), among those of step 01. A cart is checked against the PO
                       as it stands: the last of step 01, the latest PDF version or the look from the export
-    04_match          the line pairs (aid/matching.py)
+    03_entered        written only when it has something to say: the values entered in Exact that took the place of the selected
+                      version's own (see "Entered values" below), or that the list of them could not be read
+    04_match          the line pairs (aid/matching.py), with the selected version as Exact holds it by step 03_entered
     05_compare        the findings (aid/comparison.py), with the selected version as their version
     06_route          the context of the case and the actions (aid/routing.py), each action also a decision in the audit
     07_execute        the actions carried out, in their order
@@ -34,16 +36,46 @@ by the ids the routing gives them.
 A case whose PO number was found otherwise than as the one number of the PO number pattern (case.json's po_found_by: a held number
 chosen among the pattern's numbers, a held number when the pattern found none, the quick read by lines, or the runner's check again of
 a case without a number; aid/sources/mailbox.py) is the aid's guess, so it goes to the buyer. Like R11, but outside the routing, one
-REVIEW action of the pipeline's own rule GUESSED_RULE covers the whole case, with the reason GUESSED_PO and every finding in the order
+REVIEW action of the pipeline's own rule GUESSED_RULE, "G01", covers the whole case, with the reason GUESSED_PO and every finding in the order
 the routing gives them, and takes the place of the routing's actions: nothing is written or asked, and the case is in review. When
 no version was selected, an action of R09 with the reason "no version selected" (NO_VERSION), as the routing makes it, follows it, so
-that the buyer sees that nothing was compared and decides that item as any other.
+that the buyer sees that nothing was compared and decides that item as any other. So it is for a cart whose order the pre-check
+could only guess by the cart's items (aid/sources/capture.py: an order the aid is not sure of, or one that was sent already): its
+action has the reason GUESSED_CART, by which the review page and the digest name that guess in its own words.
+
+Entered values. The aid changes nothing in Exact: the buyer enters each change from the list "In Exact invoeren" and ticks it off,
+or the aid sees it in a newer print of the order (aid/execution/by_hand.py). Which version is selected never rests on those marks:
+select_version gets what the store gives, as step 01 holds it. Once the version is selected, the values that the marks say Exact
+holds are laid over it (as_entered of that module: an entered or seen change counts for a version that the store was last given
+before its mark, and a version or a look given after the mark is taken as it is, PoStore.given_at: a print that shows nothing new
+is a look at the order at the time it was given; in a case made from a try-out, tryout_case of aid/tryout_mark.py, the
+marks of the try-outs' changes count as well, and in no other case), and everything after it works with that version: the lines are
+matched and compared with it, so that a second confirmation with the price the buyer entered has no price flag and one that returns
+to the old price is flagged against the entered one; the old value of a change that the rules prepare, the PO's total and whether it
+is above the authorization, the request to the approver and the values the review page and the pre-check show as the order's are its
+values. Step 01 keeps the versions as the store gave them. Step 03_entered, {"version": n, "replaced": [{"line_id", "field", "was",
+"entered", "marked_at", "by"}]}, is written and recorded in the audit only when a value was replaced: without a mark that counts, a
+case has the steps, the result and the audit record it had before entered values existed; a step file that an earlier attempt of
+the case left is removed when the run writes none. Before the values are laid over the version, the list is brought in line with
+the PO as it stands (reconcile of that module, for this PO): a change that the newest print shows is marked as seen, and a tick that
+a print given after it contradicts is ended, also one in which the tick's line cannot be found, so that no case closes as confirmed
+on such a tick. While the list cannot be read
+(another program holds prepared_changes.csv or marks.jsonl, or the first cannot be understood), the case is compared with the
+version as it is, and step 03_entered says so: {"version": n, "replaced": [], "unread": true}; the review page names either above
+its lists. The aid then does not know what Exact holds, and a change prepared or requested twice is worse than a case the buyer
+looks at: like a guessed PO (above), one REVIEW action of the pipeline's own rule UNREAD_RULE, with the reason UNREAD_LIST, covers
+the whole case and takes the place of the routing's actions, so that nothing is prepared, requested or sent and every difference
+is the buyer's to decide; with a guessed PO as well, the action of GUESSED_RULE covers the findings and one of UNREAD_RULE follows
+it. After the comparison, when the document names again the value that the marks say Exact holds for a line, the open changes of
+that line and field leave the list (withdraw of that module): a later document asked another value, and the supplier returns to
+the entered one. A case whose PO is a guess, or that ran without the list, takes nothing off it.
 
 The context of the routing. The supplier is the PO's: that of the selected version, else of the latest stored version (a PO keeps its
-supplier), else the name the document prints, as for a cart whose export names no supplier. Its lead time is the one the settings
+supplier), else the name the document prints, as for a cart whose export names no supplier; but for a try-out cart (aid/tryout.py),
+whose heading names the try-out shop and no supplier, there is none then. Its lead time is the one the settings
 give it, and cases_seen_for_supplier counts the other cases under cases_root whose steps/08_result.json is closed for that supplier.
-Whether the PO is above the authorization comes from the selected version, the delivery dates, price bases and item codes from its
-lines, and the document to attach is the input file the reader read.
+Whether the PO is above the authorization comes from the selected version as the case is compared with it, the delivery dates, price
+bases and item codes from its lines, and the document to attach is the input file the reader read.
 
 Execution carries out the actions in their order, so that R01, the routing's last action, comes last.
 - An AUTO action applies each of its operations through deps.writer, with the action's finding ids and its flags, values and sources
@@ -52,8 +84,14 @@ Execution carries out the actions in their order, so that R01, the routing's las
   or prepared because the aid has no write route (the prepared writer as the writer), is done with. A change the writer could only
   prepare after the write route failed, which the entry's error says (as the fallback of RetryingWriter gives it), is a review item
   "prepared change: apply by hand", and a change it could not make at all (status "failed") a review item "write failed: <why>":
-  a failed call becomes a prepared change and a review item (design specification, section 6). Once a write waits for the buyer so,
+  a failed call becomes a prepared change and a review item (design specification, section 6). A change the system accepted that
+  no attempt could check (status "done" with an error, as RetryingWriter returns the entry of an UnverifiedWrite) is logged as
+  made and is a review item "write made, not verified: check in Exact": it is never prepared. Neither is a change whose write got
+  no answer, or no clear one, and that no read settled (the entry of an UnknownWrite, outcome_not_known): it is logged the same
+  way and is a review item "write outcome not known: check in Exact". Once a write waits for the buyer so,
   no later operation of the case goes to the writer: each is a review item "not applied: an earlier write failed (<the write>)",
+  or, behind one of the two that ask the buyer to look in Exact, where no write failed, "not applied: an earlier change waits for
+  a look in Exact (<the write>)",
   without an entry and without a line in the write log, so that a PO is never confirmed (R01's set_status) over a correction that
   was not made. An R10 action then sends its request to the approver to approve the PO again (template "reapproval",
   render_reapproval of aid/messaging) for the changes it made before such a failure, and no request when it made none.
@@ -68,7 +106,11 @@ time and refused copies (refused_cc, the buyer's copy that the server refused, w
 which then goes to the case's messages/sent.jsonl. Without a mailer each message is "not sent (no mailer)". A question to a supplier
 the settings give no address is "not sent (no address for the supplier)", and a message the mailer cannot send, whatever it raises,
 is "not sent (<the error's class>)", the audit keeping the error's text: each finding of the message is then a review item, "no
-address for the supplier" or "message not sent", and the run goes on. No message about a case made from a try-out document is sent
+address for the supplier" or "message not sent", and the run goes on. A mailer that could not confirm the hand-over of a message
+(HandOverUnconfirmed of aid/messaging: the failure came at or after it) leaves it unknown whether the message left: the message is
+recorded as sent, with "unconfirmed" true and the id it would carry, and its record goes to sent.jsonl, so that a reply or a bounce
+that names it is filed with the case and belongs to its question, the case waits, and nothing is sent a second time under another
+id. No message about a case made from a try-out document is sent
 (tryout_case of aid/tryout_mark.py: its document's first row is the try-out's): without asking the mailer, each is recorded as "not
 sent (try-out document: nothing is sent)", and each finding of the message is a review item with the reason "try-out document:
 nothing is sent", so that the case comes to the buyer instead of waiting for an answer. Such a case writes through the prepared
@@ -85,10 +127,14 @@ path the result is written as step 08 and the audit record is saved, so that run
 The digest line names the PO, the supplier and the status, and counts the writes made, the changes prepared and the writes failed,
 each on its own. The line of a cart begins with the word for the pre-check ("voorcontrole", in English "pre-check").
 
-escalate_pending ends the wait for the suppliers' answers, when the batch or the runner calls it: a waiting case whose latest question
-bounced, or has no reply after settings.ask_wait_working_days working days (ended_waits of aid/messaging), gets a review item in its
-saved result and the escalation in its audit record, once per question. A case whose files cannot be read is named, and the others
-go on.
+escalate_pending ends the wait for the suppliers' answers, when the batch or the runner calls it. Of a waiting case, each question
+that a bounce belongs to and no reply, and the latest question without a reply or a bounce of its own once
+settings.ask_wait_working_days working days have passed since it was sent (ended_waits of aid/messaging), gets a review item in the
+case's saved result and the escalation in its audit record, once per question. A reply belongs to the question it names, so the
+reply to one question ends no other question's wait, and an escalation covers the question it names and the earlier ones whose
+own wait had ended by then. Only the messages of the cases that wait are read. A waiting case whose files cannot be read is named,
+and the others go on. end_empty_waits, which the runner calls after it, brings a case back to the buyer that waits while no
+question of it is out, so that no case waits for good.
 
 waits_for_po tells from a saved result whether its case waits for its PO: in review with no version selected because version
 selection had no candidate, no version of the PO stored ("po"), or no stored version that the document quotes ("version <n>"). The
@@ -97,25 +143,27 @@ what the case folder must hold for that, and waiting_for_po that the case has a 
 nothing.
 
 file_answer files an e-mail that answers a question of the aid into its case: the mailbox (aid/sources/mailbox.py) calls it for each
-e-mail in the watched folder. The e-mail answers a question when its In-Reply-To or References header names a Message-ID whose part
-before the "@" is the message id of a record in a case's messages/sent.jsonl that is not a re-approval request (the approver's
-answer to one is handled as any other e-mail). file_reply of aid/messaging files it under replies/,
-bounces/ or auto/, and the case's audit record lists it under "answers". A real reply gives the case's saved result a review item
-"supplier answered: read the reply" (one per reply) and the status review (a failed case keeps its status), so that the wait ends
-and the buyer decides; a bounce is left to escalate_pending, and an automatic reply changes nothing.
+e-mail in the watched folder. The e-mail answers a question when it names one (named_ids of aid/messaging): its In-Reply-To or
+References header, or for a delivery report in the standard form the Message-ID of the message it returns, names a Message-ID whose
+part before the "@" is the message id of a record in a case's messages/sent.jsonl that is not a re-approval request (the approver's
+answer to one is handled as any other e-mail). Of the ids an e-mail names, the first that is a question of a case decides which
+case it belongs to, whichever folder comes first. file_reply of aid/messaging files it under replies/, bounces/, auto/ or own/, and
+the case's audit record lists it under "answers", with the question it names. A real reply gives the case's saved result a review
+item "supplier answered: read the reply" (one per reply) and the status review (a failed case keeps its status), so that the buyer
+reads it; it answers the question it names and no other question of the case (aid/messaging). A bounce is left to
+escalate_pending, an automatic reply changes nothing, and neither does an e-mail of the aid's own side (the buyer's own reply to
+all, by its sender), which is no supplier's answer.
 
 record_dispositions writes the aid's own decisions on a case to its disposition log (evaluation protocol v2, section 6.4).
 """
 import csv
-import email
 import json
 import re
 import time
 import traceback
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from datetime import datetime
-from email import policy
 from pathlib import Path
 from typing import Literal
 
@@ -125,11 +173,14 @@ from aid.audit import AUDIT_FILE, Audit
 from aid.case import Case, _write_json, load_case        # _write_json: the audit record is rewritten whole or not at all, as audit.py does
 from aid.comparison import Field, Findings, Flag, Uncompared, compare
 from aid.decider import Decider, Decision, DecisionAnswer, LlmDecider, decision_request
+from aid.execution.by_hand import FIELDS as LIST_FIELDS
+from aid.execution.by_hand import FOLDER as LIST_FOLDER
+from aid.execution.by_hand import as_entered, filed_of, reconcile, withdraw
 from aid.execution.ops import WriteOp
-from aid.execution.writer import LOG_FILE, WriteLog, WriteLogEntry, Writer, WriterError
+from aid.execution.writer import LOG_FILE, WriteLog, WriteLogEntry, Writer, WriterError, outcome_not_known
 from aid.matching import match_lines
-from aid.messaging import (MESSAGES, REAPPROVAL, SENT_FILE, Mailer, ended_waits, file_reply, is_auto_reply, is_bounce, record_escalation,
-                           record_sent, render, render_reapproval)
+from aid.messaging import (MESSAGES, REAPPROVAL, REPLIES, SENT_FILE, EndedWait, HandOverUnconfirmed, Mailer, ended_waits, file_reply,
+                           kind_of, named_ids, outstanding_questions, record_escalation, record_sent, render, render_reapproval)
 from aid.po_store import PoStore, PoVersion
 from aid.readers.cart import is_cart_page, read_cart_html
 from aid.readers.llm_client import LlmResponse, ReaderError
@@ -152,14 +203,24 @@ UNSENT = "message not sent"
 BOUNCED = "message bounced"                      # the reason of the review item of a question that bounced
 UNREADABLE = "unreadable"                        # escalate_pending's reason for a case whose files it cannot read
 PREPARED_BY_HAND = "prepared change: apply by hand"
+NOT_VERIFIED = "write made, not verified: check in Exact"     # the review item of a change the system accepted whose check failed
+NOT_SURE = "write outcome not known: check in Exact"          # the review item of a change whose write got no clear answer
+LOOKS = (NOT_VERIFIED, NOT_SURE)                 # the reasons of an item that asks the buyer to look in Exact
 NOT_APPLIED = "not applied: an earlier write failed"
+NOT_APPLIED_LOOK = "not applied: an earlier change waits for a look in Exact"      # the same behind an item of LOOKS: no write failed
 CUT_OFF = "run cut off after writes: check the write log"     # the review item of a case whose run was cut off after a write or a message
 ANSWERED = "supplier answered: read the reply"   # the review item of a case whose supplier replied
+NO_QUESTION = "no question is open"              # the review item of a case that waited while no question of it was out (end_empty_waits)
 # The reasons of version selection (aid/versioning.py) when it had no candidate: no version of the PO stored, and a quoted version
 # that is not stored ("quotes version 2, which is not stored").
 NO_STORED_VERSION, QUOTES_VERSION = "no stored version", "quotes version "
 GUESSED_PO = "PO found otherwise than by the number recognition"     # the reason of a case whose PO was guessed (case.json's po_found_by)
-GUESSED_RULE = "P01"                             # the pipeline's own rule of that reason: one REVIEW action for the whole case, as R11
+GUESSED_CART = "PO chosen by the items in the cart"                   # that reason for a cart, whose order was guessed by its items
+GUESSED_RULE = "G01"                             # the pipeline's own rule of that reason: one REVIEW action for the whole case, as R11;
+                                                 # an id of its own: P01 is the price list's rule (aid/pricelist.py)
+UNREAD_LIST = "the list of changes to enter in Exact could not be read"     # the reason of a case that ran while it could not
+UNREAD_RULE = "L01"                              # the pipeline's own rule of that reason: one REVIEW action for the whole case, as G01
+ENTERED_STEP = "03_entered.json"                 # the step file of the values entered in Exact, under a case's steps
 DISPOSITION_FILE = "dispositions.csv"
 DISPOSITION_COLUMNS = ("case_id", "version_selected", "line_id", "field", "decision", "source", "note")   # evaluation/templates/dispositions.csv
 
@@ -235,6 +296,8 @@ class _Run:
         self.by_id: dict[str, Flag | Uncompared] = {}
         self.supplier: str | None = None
         self.po_lines: dict[str, DocLine] = {}   # the lines of the selected version by line id, which a question's table shows
+        self.listed = False                          # the list "In Exact invoeren" was read for the selected version (entered)
+        self.unread = False                          # that list could not be read: the case goes to the buyer (UNREAD_RULE)
         self.ctx: CaseContext | None = None
         self.actions: list[Action] = []
         self.entries: list[WriteLogEntry] = []
@@ -312,9 +375,14 @@ class _Run:
         self.begin("version")
         self.version = select_version(doc, versions[-1:] if self.case.kind == "cart" else versions, self.decider)
         po = next((version for version in versions if version.version == self.version.version), None)
-        self.po_lines = {line.line_id: line for line in po.document.lines} if po is not None else {}
-        self.supplier = (po.supplier if po is not None else None) or self.supplier or doc.supplier.value
+        # the name the document prints, but never the heading of a try-out cart, which names the try-out shop and no supplier
+        printed = None if self.case.kind == "cart" and tryout_case(self.case) else doc.supplier.value
+        self.supplier = (po.supplier if po is not None else None) or self.supplier or printed
         self.end(3, self.version)
+
+        self.begin("entered")
+        po = self.entered(po)                        # from here on the version as Exact holds it by the marks of the list
+        self.po_lines = {line.line_id: line for line in po.document.lines} if po is not None else {}
 
         self.begin("match")
         match = match_lines(doc, po.document, self.decider) if po is not None else None
@@ -324,16 +392,22 @@ class _Run:
         if po is not None:
             self.findings = compare(match, doc, po.document, self.case.kind).model_copy(update={"version": self.version.version})
         self.end(5, self.findings if self.findings is not None else {"skipped": NO_VERSION})
+        self.withdrawn(po)
 
         self.begin("route")
         nothing = Findings(version=None, flags=[], matches=[], uncompared=[])                     # nothing compared: R09 reviews the case
         findings = self.findings if self.findings is not None else nothing
         self.ctx = ctx = self.context(po)
         self.actions = route(findings, ctx, self.settings)
-        if self.case.po_found_by is not None:        # a guessed PO: the buyer checks it first (see the module docstring)
+        guessed = GUESSED_CART if self.case.kind == "cart" else GUESSED_PO
+        whole = [(GUESSED_RULE, guessed)] if self.case.po_found_by is not None else []             # a guessed PO: the buyer checks it first
+        whole += [(UNREAD_RULE, UNREAD_LIST)] if self.unread else []                              # no list: the aid does not know what Exact holds
+        if whole:                                    # the whole case goes to the buyer (see the module docstring)
             finding_ids = [flag.flag_id for flag in sorted(findings.flags, key=_id_order)] + _uncompared_ids(findings)
             unversioned = [Action(route="REVIEW", rule_id="R09", finding_ids=[], reason=NO_VERSION)] if findings.version is None else []
-            self.actions = [Action(route="REVIEW", rule_id=GUESSED_RULE, finding_ids=finding_ids, reason=GUESSED_PO), *unversioned]
+            self.actions = [Action(route="REVIEW", rule_id=whole[0][0], finding_ids=finding_ids, reason=whole[0][1]),
+                            *(Action(route="REVIEW", rule_id=rule_id, finding_ids=[], reason=reason) for rule_id, reason in whole[1:]),
+                            *unversioned]
         self.by_id = findings_by_id(findings)
         for action in self.actions:
             self.audit.decision(action.rule_id, _thresholds(action, ctx, self.settings), self.inputs(action, ctx), action.route)
@@ -352,6 +426,52 @@ class _Run:
         seconds = time.monotonic() - self.started
         self.case.write_step(number, self.step, payload)
         self.audit.step(self.step, payload, seconds)
+
+    def entered(self, po: PoVersion | None) -> PoVersion | None:
+        """The selected version with the values that the marks of the list "In Exact invoeren" say Exact holds laid over it (as_entered
+        of aid/execution/by_hand.py; see the module docstring), for a case made from a try-out with the marks of the try-outs' changes
+        too. The list is first brought in line with the PO as it stands (reconcile of that module, for this PO), so that a tick that a
+        newer print contradicts counts no more. Step 03_entered is written, and recorded in the audit, only when a value was replaced,
+        or when the list cannot be read and the version is therefore taken as it is (unread); a step file that an earlier attempt of
+        the case left is removed when this run writes none. Without a selected version, and when the store cannot say when it was
+        last given the version, nothing is laid over it."""
+        written = False
+        try:
+            filed = filed_of(self.deps.store, po) if po is not None else None
+            if filed is None:
+                return po
+            prepared = Path(self.settings.cases_root) / LIST_FOLDER
+            try:
+                reconcile(prepared, self.deps.store, Path(self.settings.cases_root), self.deps.clock(), po.po_number)
+                laid, replaced = as_entered(po, prepared, filed, self.settings.authorization_limit, tryout_case(self.case))
+            except OSError:                          # another program holds a file of the list, or it cannot be understood
+                self.unread = written = True
+                self.end(3, {"version": po.version, "replaced": [], "unread": True})
+                return po
+            self.listed = True
+            if replaced:
+                written = True
+                self.end(3, {"version": po.version, "replaced": replaced})
+            return laid
+        finally:
+            if not written:
+                (self.case.root / "steps" / ENTERED_STEP).unlink(missing_ok=True)
+
+    def withdrawn(self, po: PoVersion | None) -> None:
+        """Take off the list the open changes of the lines whose value this case's document names again as the marks say Exact holds
+        it (withdraw of aid/execution/by_hand.py): a later document asked another value, and the supplier returns to the entered one.
+        Only for a case that was compared with the list read, and whose PO is no guess; a list that cannot be written just then
+        keeps its rows."""
+        if po is None or self.findings is None or not self.listed or self.case.po_found_by is not None:
+            return
+        confirmed = {(match.po_line_ids[0], match.field) for match in self.findings.matches
+                     if match.field in LIST_FIELDS.values() and len(match.po_line_ids) == 1}
+        try:
+            if confirmed:
+                withdraw(po, Path(self.settings.cases_root) / LIST_FOLDER, confirmed, self.deps.clock(), f"case {self.case.case_id}",
+                         tryout_case(self.case))
+        except OSError:
+            pass
 
     def read(self) -> Document:
         """Step 02: the case's first input file, read by deps.reader. When the reader returns its model's response, the call is
@@ -400,15 +520,15 @@ class _Run:
         only (tryout_writer of aid/tryout_mark.py)."""
         log = WriteLog(self.case.root)
         writer = tryout_writer(self.deps.writer, self.settings) if tryout_case(self.case) else self.deps.writer
-        stopped = False                              # a write waits for the buyer: no later operation goes to the writer
+        stopped = None                               # why no later operation goes to the writer, once a write waits for the buyer
         for action in self.actions:
             if action.route == "AUTO":
                 evidence = {"finding_ids": action.finding_ids, "findings": self.covered(action)}
                 finding_id = action.finding_ids[0] if action.finding_ids else None
                 made = []                                # the operations of the action that were made, or prepared by design
                 for op in action.ops:
-                    if stopped:
-                        self.review(f"{NOT_APPLIED} ({_write_name(action.rule_id, op)})", finding_id)
+                    if stopped is not None:
+                        self.review(f"{stopped} ({_write_name(action.rule_id, op)})", finding_id)
                         continue
                     self.writing = _write_name(action.rule_id, op)
                     entry = writer.apply(op, self.case.case_id, action.rule_id, evidence, self.deps.clock())
@@ -416,7 +536,7 @@ class _Run:
                     self.audit.write(entry)
                     if (reason := _waits_for_the_buyer(entry)) is not None:
                         self.review(reason, finding_id, entry.entry_id)
-                        stopped = True
+                        stopped = NOT_APPLIED_LOOK if reason in LOOKS else NOT_APPLIED
                     else:
                         made.append(op)
                     log.append(entry)
@@ -461,14 +581,17 @@ class _Run:
             self.record(action, template, items, f"not sent ({UNADDRESSED})")
             self.review_findings(UNADDRESSED, action.finding_ids)
             return
+        unconfirmed = {}
         try:
             sent = self.deps.mailer.send(message)
+        except HandOverUnconfirmed as doubt:         # it may have left: recorded as sent, so that a reply finds its case, and not sent again
+            sent, unconfirmed = doubt.record, {"unconfirmed": True}
         except Exception as error:                   # whatever stops the mailer, the run goes on and the buyer sends the message
             self.record(action, template, items, f"not sent ({type(error).__name__})", error=f"{type(error).__name__}: {error}")
             self.review_findings(UNSENT, action.finding_ids)
             return
         self.record(action, template, items, SENT, message_id=sent.message_id, to=sent.to, subject=sent.subject, sent_at=sent.sent_at,
-                    refused_cc=sent.refused_cc)
+                    refused_cc=sent.refused_cc, **unconfirmed)
         record_sent(self.case, sent)                 # after the result and the audit, so that a message sent is never without a record
 
     def record(self, action: Action, template: str, items: list[dict], status: str, error: str | None = None,
@@ -597,12 +720,16 @@ def _write_name(rule_id: str, op: WriteOp) -> str:
 
 
 def _waits_for_the_buyer(entry: WriteLogEntry) -> str | None:
-    """Why a write waits for the buyer: a change the writer could not make, or one it could only prepare after the write route failed
-    (the entry's error says so); None for a change made, or prepared because the aid has no write route."""
+    """Why a write waits for the buyer: a change the writer could not make, one it could only prepare after the write route failed,
+    one the system accepted whose check failed, or one whose write got no clear answer (the entry's error says so, on a prepared
+    entry and on one logged as made; the note of outcome_not_known tells the last two apart); None for a change made and checked,
+    or prepared because the aid has no write route."""
     if entry.status == "failed":
         return f"write failed: {entry.error or 'the writer made no change'}"
     if entry.status == "prepared" and entry.error is not None:
         return PREPARED_BY_HAND
+    if entry.status == "done" and entry.error is not None:
+        return NOT_SURE if outcome_not_known(entry) else NOT_VERIFIED
     return None
 
 
@@ -642,22 +769,26 @@ def _digest_line(po_number: str | None, supplier: str | None, status: Status, en
 
 def escalate_pending(cases_root: Path, now: datetime, settings: Settings) -> list[tuple[str, str]]:
     """End the wait of each question of ended_waits (aid/messaging) under cases_root at now, with the wait of the settings, and return
-    (case id, reason) pairs in the order of the case folders.
+    (case id, reason) pairs in the order of the case folders, those of one case in the order its questions were sent.
 
-    Only a case whose saved result (steps/08_result.json) is waiting is escalated: the result gets a review item without a finding,
-    "message bounced" or "no answer in <n> working days" ("1 working day"), the status review and the digest line to match; the
-    case's audit.json gets {"case_id", "message_id", "reason", "at"} in its list "escalations", rewritten whole; and
-    messages/escalated.jsonl notes the question, so that it is escalated once while a question sent after it waits on its own. A
-    result that is closed, in review or failed is left alone, and a case whose run was cut off before its result is left until it
-    has one. A case whose files cannot be read (its messages, its case.json, its result or its audit record) is returned as (case id,
-    "unreadable: <the class of the error>"), and the others go on."""
-    days = settings.ask_wait_working_days
+    Only a case whose saved result (steps/08_result.json) is waiting is escalated, and only of such a case are the messages read
+    (_may_wait): the result gets a review item without a finding for each of its questions whose wait ended, "message bounced" or
+    "no answer in <n> working days" ("1 working day"), the status review and the digest line to match; the case's audit.json gets
+    {"case_id", "message_id", "reason", "at"} for each in its list "escalations", rewritten whole; and messages/escalated.jsonl
+    notes each question, so that it is escalated once while any other question waits on its own. A result that is closed, in
+    review or failed is left alone, and a case whose run was cut off before its result is left until it has one. A waiting case
+    whose files cannot be read (its messages, a filed reply at that moment, its case.json, its result or its audit record) is
+    returned as (case id, "unreadable: <the class of the error>"), and the others go on."""
+    days, root = settings.ask_wait_working_days, Path(cases_root)
     silent = f"no answer in {days} working {'day' if days == 1 else 'days'}"
-    ended, unreadable = ended_waits(cases_root, now, days)
+    ended, unreadable = ended_waits(root, now, days, waiting=lambda case_id: _may_wait(root / case_id / "steps" / RESULT_FILE))
     outcome = [(case_id, f"{UNREADABLE}: {error}") for case_id, error in unreadable]
+    by_case: dict[str, list[EndedWait]] = {}
     for wait in ended:
+        by_case.setdefault(wait.case_id, []).append(wait)
+    for case_id, waits in by_case.items():
         try:
-            case = load_case(cases_root, wait.case_id)
+            case = load_case(cases_root, case_id)
             path, audit_path = case.root / "steps" / RESULT_FILE, case.root / AUDIT_FILE
             if not path.exists():
                 continue
@@ -668,18 +799,81 @@ def escalate_pending(cases_root: Path, now: datetime, settings: Settings) -> lis
             if not isinstance(record, dict):
                 raise ValueError(f"{audit_path} holds no audit record")
         except (OSError, ValueError) as error:
-            outcome.append((wait.case_id, f"{UNREADABLE}: {type(error).__name__}"))
+            outcome.append((case_id, f"{UNREADABLE}: {type(error).__name__}"))
             continue
-        reason = BOUNCED if wait.bounced else silent
-        item = ReviewItem(item_id=f"RI{len(result.review_items) + 1}", finding_id=None, reason=reason, field=None, po_value=None, doc_value=None)
-        case.write_step(8, "result", result.model_copy(update={
-            "review_items": [*result.review_items, item], "status": "review",
-            "digest_line": _digest_line(case.po_number, result.supplier, "review", result.write_entries, settings.language, case.kind)}))
-        escalation = {"case_id": wait.case_id, "message_id": wait.message_id, "reason": reason, "at": now.isoformat()}
-        _write_json(audit_path, record | {"escalations": [*record.get("escalations", []), escalation]})
-        record_escalation(case, reason, now, wait.message_id)    # last: a case whose result is in review is not escalated again anyway
-        outcome.append((wait.case_id, reason))
+        reasons = [BOUNCED if wait.bounced else silent for wait in waits]
+        escalations = [{"case_id": case_id, "message_id": wait.message_id, "reason": reason, "at": now.isoformat()}
+                       for wait, reason in zip(waits, reasons)]
+        _back_to_the_buyer(case, result, reasons, settings.language)
+        _write_json(audit_path, record | {"escalations": [*record.get("escalations", []), *escalations]})
+        for wait, reason in zip(waits, reasons):         # last: a case whose result is in review is not escalated again anyway
+            record_escalation(case, reason, now, wait.message_id)
+        outcome += [(case_id, reason) for reason in reasons]
     return sorted(outcome, key=lambda pair: pair[0])
+
+
+def end_empty_waits(cases_root: Path, now: datetime, settings: Settings) -> list[tuple[str, str]]:
+    """Bring each case under cases_root back to the buyer that waits while no question of it is out, and return (case id, reason)
+    pairs in the order of the case folders: the net under every path to a case that would wait for good. The runner calls it at
+    each pass, after escalate_pending.
+
+    A case whose saved result is waiting and whose messages hold no question that is still out (outstanding_questions of
+    aid/messaging: none that waits for an answer, none that bounced and was not shown yet; a case that sent nothing has none) gets
+    a review item without a finding, the status review and the digest line to match: "supplier answered: read the reply" when its
+    replies/ folder holds more replies than the result has such items (a reply put there by hand, or one whose item was lost), else
+    "no question is open". Its audit.json gets {"case_id", "message_id": None, "reason", "at"} in its list "escalations";
+    messages/escalated.jsonl is left as it is, since no question is concerned. A case whose question is out, and a result that is
+    closed, in review or failed, is left alone. A case whose files cannot be read is passed over: escalate_pending names it."""
+    days, outcome = settings.ask_wait_working_days, []
+    for path in sorted(Path(cases_root).glob(f"*/steps/{RESULT_FILE}")):
+        if not _may_wait(path):
+            continue
+        case_id, folder = path.parents[1].name, path.parents[1] / MESSAGES
+        try:
+            if (folder / SENT_FILE).exists() and outstanding_questions(folder, days):
+                continue
+            case = load_case(cases_root, case_id)
+            result = CaseResult.model_validate_json(path.read_text(encoding="utf-8"))
+            if result.status != "waiting":
+                continue
+            audit_path = case.root / AUDIT_FILE
+            record = json.loads(audit_path.read_text(encoding="utf-8"))
+            if not isinstance(record, dict):
+                raise ValueError(f"{audit_path} holds no audit record")
+            replies = sum(reply.is_file() for reply in (folder / REPLIES).iterdir()) if (folder / REPLIES).is_dir() else 0
+        except (OSError, ValueError):
+            continue
+        reason = ANSWERED if replies > sum(item.reason == ANSWERED for item in result.review_items) else NO_QUESTION
+        _back_to_the_buyer(case, result, [reason], settings.language)
+        ended = {"case_id": case_id, "message_id": None, "reason": reason, "at": now.isoformat()}
+        _write_json(audit_path, record | {"escalations": [*record.get("escalations", []), ended]})
+        outcome.append((case_id, reason))
+    return outcome
+
+
+def _back_to_the_buyer(case: Case, result: CaseResult, reasons: list[str], language: str) -> None:
+    """Write the saved result of a waiting case back as one in review, with a review item without a finding for each reason."""
+    items = [ReviewItem(item_id=f"RI{len(result.review_items) + number}", finding_id=None, reason=reason, field=None, po_value=None,
+                        doc_value=None) for number, reason in enumerate(reasons, 1)]
+    case.write_step(8, "result", result.model_copy(update={
+        "review_items": [*result.review_items, *items], "status": "review",
+        "digest_line": _digest_line(case.po_number, result.supplier, "review", result.write_entries, language, case.kind)}))
+
+
+_STATUS = re.compile(rb'"status":\s*"(\w+)"')    # the status of a saved result, which is its second field
+
+
+def _may_wait(result: Path) -> bool:
+    """Whether the saved result at this path can be a waiting one, told from its first bytes without parsing it: False for a
+    result whose status reads otherwise, True for a waiting one and for a file whose status cannot be told so (missing, unreadable,
+    damaged), which its caller then reads whole and reports. A pass over many cases asks this before it reads anything else of a
+    case, so that closed cases and cases in review cost one short read each."""
+    try:
+        with open(result, "rb") as f:
+            status = _STATUS.search(f.read(512))
+    except OSError:
+        return True
+    return status is None or status.group(1) == b"waiting"
 
 
 def waits_for_po(result: CaseResult) -> str | None:
@@ -698,71 +892,69 @@ def waits_for_po(result: CaseResult) -> str | None:
 
 # --- the answers of the suppliers ---
 
-_MESSAGE_ID = re.compile(r"<([^<>@\s]+)@[^<>\s]*>")      # a Message-ID, "<local part@domain>", whose local part is the aid's message id
-
-
-def file_answer(cases_root: Path, eml: Path, now: datetime, language: str = "nl") -> str | None:
+def file_answer(cases_root: Path, eml: Path, now: datetime, language: str = "nl", own: Iterable[str | None] = ()) -> str | None:
     """File the e-mail into the case whose sent question it answers (see the module docstring) and return the case id; None when it
     answers no question of the aid (a re-approval request is none), and then nothing is filed. A real reply puts the case's saved
     result in review with the item ANSWERED, one item per reply, and the digest line in `language` (the settings' language, which
     the mailbox passes); a failed result keeps its status, and a case without a result yet keeps the reply until its run ends. A
-    bounce and an automatic reply leave the result as it is. The saved result is read and the new one built before the e-mail is
-    copied, and the copy is removed when the result cannot be written, so that an e-mail tried again leaves one copy: a result that
-    cannot be read raises ValueError with nothing filed. A case whose sent.jsonl cannot be read is passed over, line by line. The
-    case's audit.json, when it has one, gets {"file", "filed_under", "at"} in its list "answers", at now."""
-    with open(eml, "rb") as f:
-        mail = email.message_from_binary_file(f, policy=policy.default)
-    named = set()
-    for header in ("In-Reply-To", "References"):
-        for value in mail.get_all(header) or []:
-            named.update(_MESSAGE_ID.findall(str(value)))
-    if not named:
+    bounce, an automatic message and a message of the aid's own side (its sender is one of `own`: the buyer's address, the aid's
+    and the mailbox's, kind_of of aid/messaging) leave the result as it is. The saved result is read and the new one built before
+    the e-mail is copied, and the copy is removed when the result cannot be written, so that an e-mail tried again leaves one copy:
+    a result that cannot be read raises ValueError with nothing filed. A case whose sent.jsonl cannot be read is passed over, line
+    by line. The case's audit.json, when it has one, gets {"file", "filed_under", "at", "message_id"} in its list "answers", at
+    now: the message id is the question that the e-mail names first, the one it belongs to."""
+    own = tuple(own)
+    named = named_ids(eml)
+    found = _case_of(Path(cases_root), named) if named else None
+    if found is None:
         return None
-    case_id = _case_of(Path(cases_root), named)
-    if case_id is None:
-        return None
+    case_id, question = found
     case = load_case(cases_root, case_id)
     path = case.root / "steps" / RESULT_FILE
     answered = None                                  # the result with the reply's review item, when there is one to write
-    if is_real_reply(eml) and path.exists():
+    if is_real_reply(eml, own) and path.exists():
         result = CaseResult.model_validate_json(path.read_text(encoding="utf-8"))
         status = "failed" if result.status == "failed" else "review"
         item = ReviewItem(item_id=f"RI{len(result.review_items) + 1}", finding_id=None, reason=ANSWERED, field=None, po_value=None, doc_value=None)
         answered = result.model_copy(update={
             "review_items": [*result.review_items, item], "status": status,
             "digest_line": _digest_line(case.po_number, result.supplier, status, result.write_entries, language, case.kind)})
-    filed = file_reply(case, eml)
+    filed = file_reply(case, eml, own)
     if answered is not None:
         try:
             case.write_step(8, "result", answered)
         except BaseException:
             filed.unlink(missing_ok=True)
             raise
-    _note_answer(case, filed, now)
+    _note_answer(case, filed, now, question)
     return case_id
 
 
-def is_real_reply(eml: Path) -> bool:
-    """Whether file_reply files the e-mail under replies/: neither a bounce nor an automatic reply."""
-    return not is_bounce(eml) and not is_auto_reply(eml)
+def is_real_reply(eml: Path, own: Iterable[str | None] = ()) -> bool:
+    """Whether file_reply files the e-mail under replies/: no bounce, no automatic message and no message of the aid's own side."""
+    return kind_of(eml, own) == "reply"
 
 
-def _note_answer(case: Case, filed: Path, now: datetime) -> None:
-    """Add the filed answer to the list "answers" of the case's audit.json, rewritten whole; a case without a readable audit record
-    is left as it is, since the answer is filed in messages/ all the same."""
+def _note_answer(case: Case, filed: Path, now: datetime, question: str) -> None:
+    """Add the filed answer, with the message id of the question it names, to the list "answers" of the case's audit.json, rewritten
+    whole; a case without a readable audit record is left as it is, since the answer is filed in messages/ all the same."""
     path = case.root / AUDIT_FILE
     try:
         record = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return
     if isinstance(record, dict):
-        answer = {"file": filed.name, "filed_under": filed.parent.name, "at": now.isoformat()}
+        answer = {"file": filed.name, "filed_under": filed.parent.name, "at": now.isoformat(), "message_id": question}
         _write_json(path, record | {"answers": [*record.get("answers", []), answer]})
 
 
-def _case_of(cases_root: Path, message_ids: set[str]) -> str | None:
-    """The id of the first case (in folder order) whose messages/sent.jsonl holds a question (any template but the re-approval
-    request) with one of the message ids, or None. A line that cannot be read is passed over, and so is a file."""
+def _case_of(cases_root: Path, message_ids: list[str]) -> tuple[str, str] | None:
+    """The case an e-mail that names these message ids belongs to, and the question of it that the e-mail names: of the ids, in the
+    order in which an e-mail's names count (named_ids of aid/messaging), the first that is a question (any template but the
+    re-approval request) in the messages/sent.jsonl of a case decides, whichever folder comes first. None when no case holds one.
+    A line that cannot be read is passed over, and so is a file."""
+    order = {name: number for number, name in reversed(list(enumerate(message_ids)))}
+    best: tuple[int, str, str] | None = None         # (the place of the id among message_ids, the case id, the id)
     for path in sorted(cases_root.glob(f"*/{MESSAGES}/{SENT_FILE}")):
         try:
             lines = path.read_bytes().split(b"\n")
@@ -773,9 +965,14 @@ def _case_of(cases_root: Path, message_ids: set[str]) -> str | None:
                 record = json.loads(line) if line.strip() else None
             except ValueError:
                 continue
-            if isinstance(record, dict) and record.get("template") != REAPPROVAL and record.get("message_id") in message_ids:
-                return path.parents[1].name
-    return None
+            if not isinstance(record, dict) or record.get("template") == REAPPROVAL:
+                continue
+            place = order.get(record.get("message_id")) if isinstance(record.get("message_id"), str) else None
+            if place is not None and (best is None or place < best[0]):
+                best = (place, path.parents[1].name, record["message_id"])
+        if best is not None and best[0] == 0:        # the id that counts first: no other case can come before it
+            break
+    return best[1:] if best is not None else None
 
 
 # --- the disposition log ---

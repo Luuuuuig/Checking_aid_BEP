@@ -55,6 +55,7 @@ import pytest
 from aid.capture_server import _close_history
 from aid.case import load_case, open_case
 from aid.decider import NoDecider
+from aid.execution import by_hand
 from aid.execution.by_hand import FOLDER, MARKS_FILE, _marks, changes, mark, reopen
 from aid.execution.ops import WriteOp
 from aid.execution.writer import PREPARED_FILE, UNDO_RULE_ID, PreparedWriter, WriteLog, undo_case
@@ -227,10 +228,25 @@ class World:
         for key, text in NL.items():
             if key.startswith("hand_") and "{" not in text and text == note:
                 return key
+        note = note.partition(" Let op: ")[0]        # the sentence about another old value follows the note of a put-back made (W10)
         for key in NAMING:
             if re.fullmatch(re.escape(NL[key]).replace(re.escape("{row}"), ".+"), note, re.S):
                 return key
         return "?" + note
+
+    def other_before(self, change, put, found: list) -> str:
+        """The sentence that the note of a put-back made now ends with when the aid's own records give another value for what Exact
+        held before the change than the put-back names (the review round of Task 43, W10): by the marks, the value of the last
+        change of the place entered or seen before the change put back; else what the order as it stands shows, when that is
+        neither the value entered nor the value named. "" when the records give no other value."""
+        place = by_hand.place_of(change)
+        at = next(index for index, one in enumerate(found) if one.ids == change.ids)
+        held = [one.new_value for one in found[:at] if by_hand.place_of(one) == place and one.state in ("entered", "seen")]
+        known, source = (held[-1], "marks") if held else (by_hand.shown_now(put, self.deps.store, self.cases_root), "look")
+        if known is None or same(known, put.new_value) or (source == "look" and same(known, put.old_value)):
+            return ""
+        return " " + NL["hand_put_back_other"].format(old=hand_list._value(put.new_value, put.kind, "nl"),
+                                                      value=hand_list._value(known, put.kind, "nl"), source=NL[f"hand_put_back_source:{source}"])
 
     def entered(self) -> set[str]:
         """The entry ids that a tick as entered covered, and that no tick taken back since took away."""
@@ -313,8 +329,8 @@ class World:
         if key == "hand_put_back_listed":
             if put is None or put.state != "open":
                 self.fail(f"listed, but the put-back is {put and put.state}")
-            if note != NL[key].format(row=hand_list.label_of(put, self.deps.store, self.cases_root, "nl")):
-                self.fail(f"listed names another row: {note}")
+            if note != NL[key].format(row=hand_list.label_of(put, self.deps.store, self.cases_root, "nl")) + self.other_before(change, put, found):
+                self.fail(f"listed names another row, or says another value from before: {note}")
             self.accepted.add(put.ids[0])
         if key == "hand_put_back_on_list":
             if put is None or put.state != "open":

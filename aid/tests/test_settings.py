@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from aid.readers.po_layout import PoLayout
-from aid.settings import Settings, SettingsInvalid, load_settings, update_settings_file
+from aid.settings import WRITE_ROUTE_SET, Settings, SettingsInvalid, load_settings, read_settings, update_settings_file
 
 
 def test_example_settings_load(tmp_path):
@@ -187,3 +187,61 @@ def test_the_settings_load_without_the_pdf_libraries():
     root = Path(__file__).resolve().parents[2]
     done = subprocess.run([sys.executable, "-B", "-c", code], cwd=root, capture_output=True, text=True, timeout=120)
     assert done.returncode == 0 and done.stdout.strip() == "[]", done.stderr
+
+
+# --- no command builds the write route into Exact (ruling V10) ---
+
+ROUTE_SENTENCE = ('exact_base_url is set, but this version of the aid writes nothing in Exact: every change is prepared for the tab '
+                  '"In Exact invoeren". Remove exact_base_url from the settings file.')
+PACKAGE = Path(__file__).resolve().parents[1]
+
+
+def test_a_settings_file_in_which_exact_base_url_is_set_is_refused_with_one_sentence(tmp_path):
+    """A settings file that sets exact_base_url is refused wherever a file is read: load_settings and read_settings raise the one
+    sentence, which names the key and what to do and never the address, and a save refuses and leaves the file as it was. So does a
+    save that would set the key in a file that holds none."""
+    assert WRITE_ROUTE_SET == ROUTE_SENTENCE
+    example = json.loads(Path("aid/settings.example.json").read_text(encoding="utf-8"))
+    p = tmp_path / "s.json"
+    p.write_text(json.dumps(example | {"exact_base_url": "https://exact.example.com/api"}, indent=2))
+    before = p.read_bytes()
+    with pytest.raises(ValueError) as info:
+        load_settings(p)
+    assert str(info.value) == ROUTE_SENTENCE and "exact.example.com" not in str(info.value)
+    with pytest.raises(SettingsInvalid) as refused:
+        read_settings(p)
+    assert str(refused.value) == ROUTE_SENTENCE and refused.value.fields == ["exact_base_url"]
+    with pytest.raises(SettingsInvalid) as refused:
+        update_settings_file(p, {"price_pct": "3.0"})
+    assert str(refused.value) == ROUTE_SENTENCE and p.read_bytes() == before
+    p.write_text(json.dumps(example, indent=2))
+    before = p.read_bytes()
+    with pytest.raises(SettingsInvalid) as refused:
+        update_settings_file(p, {"exact_base_url": "https://exact.example.com/api"})
+    assert str(refused.value) == ROUTE_SENTENCE and p.read_bytes() == before
+
+
+@pytest.mark.parametrize("held", [{"exact_base_url": None}, {"exact_base_url": ""}, {},
+                                  {"exact_endpoints": {"po_line": "po/{po}/lines/{line}"}, "exact_fields": {"po_line_price": "NetPrice"}}])
+def test_a_settings_file_with_exact_base_url_empty_or_absent_loads_as_before(tmp_path, held):
+    """The key null, empty or absent loads, also in an older file that still holds the paths and the field names of a route; and the
+    model itself keeps the three keys, for the writer's own tests, which build the settings in code."""
+    example = json.loads(Path("aid/settings.example.json").read_text(encoding="utf-8"))
+    example.pop("exact_base_url")
+    p = tmp_path / "s.json"
+    p.write_text(json.dumps(example | held))
+    settings = load_settings(p)
+    assert not settings.exact_base_url and settings.exact_endpoints == held.get("exact_endpoints", {})
+    assert update_settings_file(p, {"price_pct": "3.0"}).price_pct == Decimal("3.0")
+    in_code = Settings.model_validate(json.loads(settings.model_dump_json()) | {"exact_base_url": "https://exact.example.com/api"})
+    assert in_code.exact_base_url == "https://exact.example.com/api" and {"exact_endpoints", "exact_fields"} <= set(Settings.model_fields)
+
+
+def test_no_command_builds_the_route_or_reads_its_token():
+    """Outside its own module no part of the aid makes an ExactApiWriter, and none names the environment variable of its token: the
+    route is built by the tests of the writer only."""
+    sources = {path.relative_to(PACKAGE).as_posix(): path.read_text(encoding="utf-8")
+               for path in PACKAGE.rglob("*.py") if "tests" not in path.relative_to(PACKAGE).parts}
+    assert len(sources) > 20 and "execution/exact_api.py" in sources
+    assert [name for name, source in sources.items() if "AID_EXACT_TOKEN" in source] == []
+    assert [name for name, source in sources.items() if "ExactApiWriter" in source and name != "execution/exact_api.py"] == []

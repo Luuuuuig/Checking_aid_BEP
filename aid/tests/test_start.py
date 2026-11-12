@@ -2003,6 +2003,28 @@ def test_a_settings_file_that_cannot_be_read_ends_with_2_naming_the_field_and_no
     assert f"the settings file does not exist: {folder / 'missing.json'}" in capsys.readouterr().out
 
 
+def test_a_settings_file_in_which_exact_base_url_is_set_ends_with_2_and_the_one_sentence(folder, monkeypatch, capsys):
+    """Ruling V10: no command builds the write route into Exact. The launcher's check of the settings refuses a file that sets
+    exact_base_url with the one sentence, on the console and in start.log, and starts nothing; with the key null it starts."""
+    sentence = ('exact_base_url is set, but this version of the aid writes nothing in Exact: every change is prepared for the tab '
+                '"In Exact invoeren". Remove exact_base_url from the settings file.')
+    data = json.loads((REPO_ROOT / "aid" / "settings.example.json").read_text(encoding="utf-8"))
+    (folder / "settings.json").write_text(json.dumps(data | {"exact_base_url": "https://exact.example.com/api"}), encoding="utf-8")
+    monkeypatch.setattr(start, "supervise", lambda *a, **k: pytest.fail("started"))
+    monkeypatch.setattr(start, "background", lambda *a, **k: pytest.fail("started"))
+    for arguments in ([], ["--background"], ["--resume"]):
+        assert start.main(["--settings", str(folder / "settings.json"), *arguments]) == 2
+        out = capsys.readouterr()
+        assert out.out.splitlines() == [f"the settings are refused: {sentence}"] and out.err == ""
+    lines = log(folder).splitlines()
+    assert len(lines) == 3 and all(line.endswith(f" the settings are refused: {sentence}") for line in lines)
+    assert "exact.example.com" not in log(folder)
+    assert sorted(entry.name for entry in folder.iterdir()) == ["logs", "settings.json"]
+    (folder / "settings.json").write_text(json.dumps(data | {"exact_base_url": None}), encoding="utf-8")
+    monkeypatch.setattr(start, "supervise", lambda *a, **k: 0)
+    assert start.main(["--settings", str(folder / "settings.json")]) == 0 and "refused" not in capsys.readouterr().out
+
+
 def test_a_poll_time_that_is_not_positive_is_refused(folder, capsys):
     assert start.main(["--settings", str(folder / "settings.json"), "--poll-seconds", "0"]) == 2
 

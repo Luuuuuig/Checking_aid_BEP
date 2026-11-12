@@ -287,7 +287,8 @@
     let title;
     if (answer && COLOURS[answer.verdict]) {
       kind = answer.verdict;
-      title = TITLES[kind];
+      // The aid's own title, when its answer has one (a cart of whose purchase order it is not sure), else that of the verdict.
+      title = typeof answer.title === "string" && answer.title ? answer.title : TITLES[kind];
     } else {
       kind = "failed";
       if (reply.error === "reload") {

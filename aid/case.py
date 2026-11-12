@@ -12,13 +12,16 @@ messages, the writes and the audit record.
             replies/          the suppliers' replies, filed by file_reply
             bounces/          the bounces
             auto/             the automatic replies, such as an out-of-office notice
+            own/              the messages of the aid's own side that name a question (the buyer's own reply to all)
             escalated.jsonl   the questions whose wait ended in review
         write_log.jsonl   one line per write or prepared change (aid/execution/writer.py)
         dispositions.csv  the aid's decisions in the evaluation's form (aid/pipeline.py, record_dispositions)
         decisions.jsonl   the buyer's decisions on the review page (aid/review)
         audit.json        the audit record of the run (aid/audit.py)
 
-The case id is "<PO number>_<time of opening>", or "unknown_<time of opening>" when no PO number is known.
+The case id is "<PO number>_<time of opening>", or "unknown_<time of opening>" when no PO number is known. names_a_folder says
+whether an id can be the name of a case folder at all: the prepared changes also hold the case ids of price lists, which name a
+supplier as it was typed and no folder (aid/pricelist.py), and nothing is looked up in the file system for an id that names none.
 
 A case.json that cannot be read (torn, not JSON, not the object open_case writes) makes load_case raise ValueError naming the
 folder, and find_case_by_hash pass over the folder, so that one damaged folder does not stop the intake of new documents.
@@ -38,6 +41,8 @@ from typing import Literal, get_args
 from pydantic import BaseModel
 
 CaseKind = Literal["confirmation", "cart"]
+NAME_BYTES_MAX = 255                             # the most bytes the name of a folder has on the systems the aid runs on
+_NOT_ON_WINDOWS = frozenset('<>:"|?*')            # the characters Windows refuses in the name of a folder, the separators aside
 
 
 @dataclass
@@ -117,9 +122,14 @@ def find_case_by_hash(cases_root: Path, digest: str) -> Case | None:
     """Return the first case (in folder-name order) that has an input file with this sha256, or None.
     Reads every case.json; anything in cases_root that is not a case is skipped, and so is a folder whose
     case.json cannot be read (load_case names it)."""
+    return next(find_cases_by_hash(cases_root, digest), None)
+
+
+def find_cases_by_hash(cases_root: Path, digest: str) -> Iterator[Case]:
+    """Each case that has an input file with this sha256, in folder-name order, read as find_case_by_hash reads them."""
     cases_root = Path(cases_root)
     if not cases_root.is_dir():
-        return None
+        return
     for root in sorted(cases_root.iterdir()):
         if not (root / "case.json").is_file():
             continue
@@ -128,8 +138,7 @@ def find_case_by_hash(cases_root: Path, digest: str) -> Case | None:
         except (OSError, ValueError):
             continue
         if any(f["sha256"] == digest for f in meta["files"]):
-            return _case_from_meta(root, meta)
-    return None
+            yield _case_from_meta(root, meta)
 
 
 def load_case(cases_root: Path, case_id: str) -> Case:
@@ -144,6 +153,19 @@ def _require_folder_name(case_id: str) -> None:
     """A case id is one folder name, so that no id can point outside cases_root."""
     if case_id in ("", ".", "..") or Path(case_id).name != case_id:
         raise ValueError(f"{case_id!r} cannot be the name of a case folder")
+
+
+def names_a_folder(case_id: str, windows: bool | None = None) -> bool:
+    """Whether a case id can be the name of a case folder on this system, so that a case with this id can exist: one folder name, as
+    load_case and open_case require it; no NUL character; at most NAME_BYTES_MAX bytes in UTF-8; and on Windows (`windows`, by
+    default whether this system is one) none of the characters that Windows refuses in a name. The case id of a price list holds
+    the supplier's name as it was typed ("pricelist_<supplier>_<time>", aid/pricelist.py), so it need not be one; nothing is looked
+    up in the file system for an id that is none."""
+    if case_id in ("", ".", "..") or Path(case_id).name != case_id or "\x00" in case_id:
+        return False
+    if len(case_id.encode("utf-8", "surrogatepass")) > NAME_BYTES_MAX:
+        return False
+    return not ((os.name == "nt" if windows is None else windows) and any(char in _NOT_ON_WINDOWS for char in case_id))
 
 
 def _read_meta(root: Path) -> dict:

@@ -36,7 +36,9 @@ marked uncertain, never a guess; an empty cell is no value. The header values:
 - supplier: the text of the first heading (h1 to h6), in a block of its own or in a cell of a table row, whose line it then cites,
   else the title of the page, which has no source;
 - po_reference: the PO number of the first line that holds one (PO_NUMBER: a label that is a word of its own, as in "Uw referentie:
-  250201", and a number of 6 to 8 digits that ends there, so that "Repo 250201" and "Order 1234567890" hold none);
+  250201", and a number of 6 to 8 digits that ends there, so that "Repo 250201" and "Order 1234567890" hold none, and nor does a
+  number that goes on, as "250301-01", "250301A", "250301/2", "250301.1", "250301_01", "250301,5" and "250301:2" do; "250301.",
+  "250301," and "250301:" at the end of a text or before a space are read);
 - currency: the first currency code or word on the page (EUR, euro, USD, GBP), else the first currency sign (€, $, £);
 - capture_date: the date of <meta name="capture-date" content="...">, which has no source: its content read as a date, or the
   date part of a date and time ("2026-11-03T14:05:00+01:00": the text before the "T" or the space, when the rest is a time). When the
@@ -44,6 +46,9 @@ marked uncertain, never a guess; an empty cell is no value. The header values:
   "Datum: 03-11-2026" does (the date runs to the end of the line or of its cell); else the day the file was last modified, which has
   no text and no source (a case keeps the time of its copy, see aid/case.py).
 A cart has no document date, version or Incoterm. A page without a cart table raises ReaderError "no cart table in <file name>".
+
+first_heading gives the text of the first heading of a page, the one the supplier is read from, for a page with or without a cart
+table: by that heading the aid knows a try-out cart page, which it makes itself (aid/tryout.py, aid/tryout_mark.py).
 """
 import re
 from dataclasses import dataclass
@@ -60,7 +65,12 @@ from aid.schema import (DocLine, DocValue, Document, SourceRef, normalize_basis,
 
 # A PO number on the page. The pattern of the settings (po_number_pattern) is not available to a reader, so it is written here, with
 # the words for a reference that a cart page uses. The label is a word of its own and the number takes every digit that follows it.
-PO_NUMBER = re.compile(r"(?<![^\W\d_])(?i:PO|Inkooporder|Bestelling|Bestellung|Order|Referentie|Reference)[\s:#-]*(\d{6,8})(?!\d)")
+# A number that goes on is another number, of which no part is read: one followed directly by a letter, or by a separator (a
+# hyphen, an en dash, a slash, a full stop, an underscore, a comma, a colon) with a letter or a digit right behind it ("250301A",
+# "250301-01", "250301/2", "250301.1", "250301_01", "250301,5", "250301:2"). A separator at the end of the text or before a space,
+# as the full stop that ends a sentence, ends the number.
+PO_NUMBER = re.compile(r"(?<![^\W\d_])(?i:PO|Inkooporder|Bestelling|Bestellung|Order|Referentie|Reference)[\s:#-]*(\d{6,8})"
+                       r"(?!\d|[^\W\d_]|[-\u2013/._,:][^\W_])")
 # The folded header texts of the columns the reader knows, by the field each column holds; a cart table has the first three.
 COLUMN_NAMES = {"item_code": ("artikel", "item", "product", "artikelnummer"), "quantity": ("aantal", "qty", "quantity", "menge"),
                 "unit_price": ("prijs", "price", "preis"), "description": ("omschrijving", "description", "beschreibung"),
@@ -112,6 +122,14 @@ def read_cart_html(path: Path) -> Document:
                  for number, row in enumerate(rows, 1)]
     return Document(kind="cart", supplier=_supplier(soup, lines), po_reference=_po_reference(lines), currency=_currency(lines),
                     capture_date=capture_date, lines=doc_lines, source_file=path.name, pages=1, reader="cart_html")
+
+
+def first_heading(path: Path) -> str:
+    """The text of the first heading (h1 to h6) of the page saved as HTML at `path`, as read_cart_html reads the supplier from it: in
+    a block of its own or in a cell of a table row; "" for a page without a heading that a browser shows. The title of the page is
+    no heading."""
+    heading = _supplier_line(_page_lines(BeautifulSoup(Path(path).read_bytes(), "lxml")))
+    return _heading_text(heading) if heading is not None else ""
 
 
 def read_cart_image(path: Path, client: LlmClient) -> tuple[Document, LlmResponse]:
@@ -258,11 +276,16 @@ def _normalise(field: str, text: str, day: date | None) -> str | None:
 
 
 def _supplier(soup: BeautifulSoup, lines: list[_Line]) -> DocValue:
-    for line in lines:
-        if heading := _heading_text(line):
-            return DocValue(value=heading, text=heading, source=_source(line))
+    if (line := _supplier_line(lines)) is not None:
+        heading = _heading_text(line)
+        return DocValue(value=heading, text=heading, source=_source(line))
     title = " ".join(soup.title.get_text().split()) if soup.title is not None else ""
     return DocValue(value=title, text=title) if title else DocValue()
+
+
+def _supplier_line(lines: list[_Line]) -> _Line | None:
+    """The first line of the page that holds the text of a heading, which is the supplier; None for a page without one."""
+    return next((line for line in lines if _heading_text(line)), None)
 
 
 def _heading_text(line: _Line) -> str:

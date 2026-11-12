@@ -37,7 +37,7 @@ from aid.tests.helpers import (ANDERS_FORM, ANDERS_LAYOUT, ANDERS_MEANINGS, ANDE
                                EXPORT_NL, EXPORT_NL_COLUMNS, EXPORT_NL_FORM, EXPORT_NL_ORDERS, EXPORT_NL_READ, EXPORT_NL_READ_EN,
                                EXPORT_NL_TITLES, MADEUP_LAYOUT, SAMPLES, SORTED_BY_DATE, SORTED_BY_DATE_COLUMNS, SORTED_BY_DATE_LONG, TABS_TITLES, TIE_TITLES,
                                TITLE_COMMAS, WIDE_TITLES, write_cut_samples, write_sheet, write_title_samples)
-from aid.tryout import CHANGES, confirmation_pdf
+from aid.tryout import CART_CHANGES, CHANGES, cart_html, confirmation_pdf
 
 FOLDER = "AAMkADMadeUpFolder0001="
 SIX = {"ms_tenant_id": TENANT_ID, "ms_client_id": CLIENT_ID, "mailbox": None, "mail_folder": FOLDER, "mail_folder_name": "Orderbevestigingen",
@@ -541,12 +541,19 @@ def test_the_review_command_gives_the_page_its_settings_file_and_its_share_and_s
         def launch(self, **options):
             built.append(options)
 
+        def block_thread(self):
+            built.append("waiting for the page")
+
     monkeypatch.setattr(review, "build_app", lambda d, **options: (built.append(options), Page())[1])
     assert review.main(["--settings", str(path)]) == 0
     assert review.main(["--settings", str(path), "--share"]) == 0               # made-up settings: the link is allowed
-    guards = [options.pop("app_kwargs") for options in built if "app_kwargs" in options]
-    assert built == [{"settings_file": path, "share": False}, {"server_name": "127.0.0.1", "share": False, "ssr_mode": False},
-                     {"settings_file": path, "share": True}, {"server_name": "127.0.0.1", "share": True, "ssr_mode": False}]
+    guards = [options.pop("app_kwargs") for options in built if isinstance(options, dict) and "app_kwargs" in options]
+    # the page gets the environment too, where it looks up the password of the aid's mailbox for the mailer of a close (Task 44); it
+    # is launched without holding the thread, so that the command can remove the page library's empty folder after the launch, and
+    # the command then waits for the page itself (the review round of Task 44, ruling S28)
+    launched = {"server_name": "127.0.0.1", "ssr_mode": False, "prevent_thread_lock": True}
+    assert built == [{"settings_file": path, "share": False, "environ": os.environ}, launched | {"share": False}, "waiting for the page",
+                     {"settings_file": path, "share": True, "environ": os.environ}, launched | {"share": True}, "waiting for the page"]
     for guard in guards:                                      # each launch with the check of the Host header, and nothing else
         assert list(guard) == ["middleware"] and [middleware.cls for middleware in guard["middleware"]] == [review.OwnHost]
     assert len(guards) == 2
@@ -964,6 +971,40 @@ def test_a_file_that_cannot_be_read_shows_one_line_and_the_settings_in_use_and_e
     assert opened(page, "en")["line"] == "" and changed(page, digest_time="08:00")["note"] == nl["settings_buyer_saved"]
 
 
+def test_a_file_in_which_exact_base_url_is_set_shows_the_sentence_of_the_route_and_every_save_refuses(tmp_path, madeup_out):
+    """Ruling V10: no command builds the write route into Exact. A settings file that gets exact_base_url while the page runs is
+    not used: the tab says why in the buyer's language, shows the settings in use, and every save refuses with the same line and
+    leaves the file as it is; with the key taken out the line goes and a save works."""
+    path, page, made = tab(tmp_path, madeup_out, **BUYER)
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    assert changed(page, price_pct="5")["note"] == nl["settings_buyer_saved"]
+    good = held(path)
+    by_hand(path, exact_base_url="https://exact.example.com/api", price_pct="9")
+    before = path.read_bytes()
+    line = nl["settings_file_write_route"]
+    assert line == ('exact_base_url staat ingesteld, maar deze versie van de assistent schrijft niets in Exact: elke wijziging wordt '
+                    'klaargezet op het tabblad "In Exact invoeren". Haal exact_base_url uit het instellingenbestand. Hieronder staan de '
+                    'instellingen die de assistent nu gebruikt. Opslaan kan pas weer als het bestand is hersteld.')
+    assert en["settings_file_write_route"] == (
+        'exact_base_url is set, but this version of the aid writes nothing in Exact: every change is prepared for the tab "In Exact '
+        'invoeren". Remove exact_base_url from the settings file. Below are the settings the aid uses now. Saving works again once the '
+        'file is repaired.')
+    shown = opened(page)
+    assert shown["line"] == f"**{line}**" and shown["price_pct"] == "5"                         # the settings in use, not the file's
+    assert opened(page, "en")["line"] == f"**{en['settings_file_write_route']}**"
+    values = [shown[field] for field in BUYER_FIELDS]
+    values[BUYER_FIELDS.index("digest_time")] = "08:00"
+    refused = save(page, values, shown["filled"])
+    assert (refused["note"], refused["line"]) == (line, f"**{line}**") and refused["digest_time"] == SAME
+    refused = save_supplier(page, NEW_SUPPLIER, name="B BV", lead_time="6")
+    assert (refused["note"], refused["line"], refused["table"]) == (line, f"**{line}**", SAME)
+    assert handler(page, "save_settings")("", "", "", None, "file", {"mailbox": "", "folders": {}}, "nl")[0] == line
+    assert handler(page, "save_reader")("parser", "nl")[1] == line
+    assert path.read_bytes() == before
+    path.write_text(json.dumps(good, indent=4), encoding="utf-8")                              # the key taken out: the line goes
+    assert opened(page)["line"] == "" and changed(page, digest_time="08:00")["note"] == nl["settings_buyer_saved"]
+
+
 def test_a_file_that_is_locked_refuses_a_save_with_the_same_line(tmp_path, madeup_out, monkeypatch):
     path, page, made = tab(tmp_path, madeup_out, **BUYER)
     shown, before, read = opened(page), path.read_bytes(), Path.read_bytes
@@ -1141,7 +1182,8 @@ def test_the_note_of_a_supplier_save_is_cleared_by_the_buyers_own_choice_only(tm
     gr = import_gradio()
     path, page, made = tab(tmp_path, madeup_out, **BUYER)
     [dropdown] = [block for block in page.blocks.values() if isinstance(block, gr.Dropdown) and block.label == STRINGS["nl"]["settings_supplier_choice"]
-                  and not (block.elem_id or "").startswith("export-field-")]        # not the supplier's column of the export (Task 39)
+                  and not (block.elem_id or "").startswith(("export-field-", "articles-field-", "pricelist-"))]   # not the supplier's column
+    # of an export (Tasks 39 and 42), nor the supplier of the tab Prijslijst
     [note] = [block for block in page.blocks.values() if getattr(block, "elem_id", None) == "settings-supplier-note"]
     bound = {(getattr(f.fn, "__name__", ""), event): f for f in page.fns.values() for block, event in f.targets if block == dropdown._id}
     assert sorted(bound) == [("supplier_chosen", "change"), ("supplier_picked", "input")]
@@ -1511,8 +1553,10 @@ def test_the_buyers_part_shows_no_rule_code_and_no_setting_name_and_says_the_lim
     for language in ("nl", "en"):
         strings = STRINGS[language]
         mine = [value for key, value in strings.items() if key.startswith(("settings_group", "settings_field", "settings_help", "settings_supplier",
-                                                                            "settings_buyer", "settings_problem", "settings_limit", "settings_file"))]
+                                                                            "settings_buyer", "settings_problem", "settings_limit", "settings_file"))
+                and key != "settings_file_write_route"]    # the one line that names a key of the file: the key the owner must take out
         assert mine and not [text for text in mine if CODE.search(text)], language
+        assert CODE.findall(strings["settings_file_write_route"]) == ["_"] * 4 and strings["settings_file_write_route"].count("exact_base_url") == 2
         assert all(strings[f"settings_help:{field}"] for field in BUYER_FIELDS)
         assert not [text for text in mine if "—" in text or "–" in text], language          # no dash as punctuation
     assert STRINGS["nl"]["settings_limit"] in texts and "installatie" in STRINGS["nl"]["settings_limit"]
@@ -1672,7 +1716,7 @@ def test_the_page_tells_the_browser_to_keep_none_of_its_files(tmp_path, madeup_o
 # --- the documents say what the tab does ---
 
 def manual_sections() -> dict[str, str]:
-    """The manual's sections by their number ("2.7", "3.14", "5", "7"), each with its own text only."""
+    """The manual's sections by their number ("2.8", "3.14", "5", "7"), each with its own text only."""
     sections, number = {}, None
     for line in Path("aid/MANUAL.md").read_text(encoding="utf-8").splitlines():
         if (heading := re.match(r"#{2,3} (\d+(?:\.\d+)?)\.? ", line)) is not None:
@@ -1684,7 +1728,7 @@ def manual_sections() -> dict[str, str]:
 
 def test_the_manual_names_the_tab_as_the_page_does():
     nl, manual = STRINGS["nl"], manual_sections()
-    buyers = manual["2.7"]
+    buyers = manual["2.8"]
     for key in ([f"settings_group:{group}" for group in ("handled", "questions", "digest", "approval")]
                 + [f"settings_field:{field}" for field in BUYER_FIELDS]
                 + ["settings_digest:daily", "settings_digest:per_case", "settings_buyer_save", "settings_buyer_saved", "settings_buyer_unchanged",
@@ -1713,7 +1757,7 @@ def test_the_manual_names_the_tab_as_the_page_does():
 
 
 def test_the_manual_and_the_readme_say_what_a_save_does_and_does_not_do():
-    manual, guide = manual_sections()["2.7"], manual_sections()["7"]
+    manual, guide = manual_sections()["2.8"], manual_sections()["7"]
     # what was checked before a save keeps its outcome, and a cart is checked anew only when the cart itself changes: on the same day,
     # since the capture server answers the same cart from its case for the rest of that day only (the same page byte for byte on any day)
     assert "keeps its outcome" in manual and "on the same day a cart is checked anew, with the new values, only when the cart itself changes" in manual
@@ -2135,7 +2179,7 @@ def test_the_manual_and_the_readme_say_how_the_layout_is_set_on_the_page():
     assert "the layout first, the mailbox second" in exact and "not on a shared screen" in exact and "ANDERS_po_v1.pdf" in exact
     assert "test walk" in exact and "B2" in exact and "\"Bestelnummer\"" in exact and "\"Artikelcode\"" in exact
     assert "3.17" in manual["3.12"] and "Until the trial read on the page exists" not in manual["3.12"]
-    assert "3.17" in manual["2.7"] and "3.17" in manual["3.2"] and "`po_layout`, `po_senders`, `review_url`" not in manual["3.2"]
+    assert "3.17" in manual["2.8"] and "3.17" in manual["3.2"] and "`po_layout`, `po_senders`, `review_url`" not in manual["3.2"]
     readme = Path("aid/README.md").read_text(encoding="utf-8")
     assert nl["exact_title"] in readme and "section 3.17" in readme
 
@@ -2746,7 +2790,7 @@ def test_the_export_part_is_wired_as_the_page_shows_it(tmp_path, madeup_out):
     order = [block for block in inside(exact) if isinstance(block, (gr.Markdown, gr.Textbox, gr.Radio, gr.Button, gr.Dataframe, gr.Dropdown,
                                                                      gr.Checkbox, gr.File, gr.Number))]
     names = [name(block) for block in order]
-    part = names[names.index(f"### {nl['exact_part_export']}"):names.index(f"### {nl['tryout_title']}")]    # Task 33's part follows, last
+    part = names[names.index(f"### {nl['exact_part_export']}"):names.index(f"### {nl['exact_part_articles']}")]    # part 3 follows (Task 42)
     labels = [field_label(field, "nl") for field in EXPORT_FORM]
     sample, row, numbers, tick, page_language = (nl["exact_export_sample"], nl["exact_export_header_row"], nl["exact_export_field:numbers"],
                                                  nl["exact_export_field:fill_down"], nl["language"])
@@ -2762,7 +2806,7 @@ def test_the_export_part_is_wired_as_the_page_shows_it(tmp_path, madeup_out):
     assert bound("export_saved") == ([(f"button {nl['exact_save']}", "click")], inputs,
                                      ["export-note", "exact-state", "export filled", "export-read", "export-lines"])
     assert bound("export_relabel")[0] == [(page_language, "change")]
-    shown = {name(block): block for block in order[names.index(f"### {nl['exact_part_export']}"):]}
+    shown = {name(block): block for block in order[names.index(f"### {nl['exact_part_export']}"):names.index(f"### {nl['exact_part_articles']}")]}
     assert shown[sample].file_types is None and (shown[row].precision, shown[row].minimum, shown[row].value) == (0, None, None)   # M3, M4
     assert shown[nl["exact_meaning:line_id"]].info == nl["exact_export_help:line_id"]
     assert [shown[label].info for label in labels if label != nl["exact_meaning:line_id"]] == [None] * 11
@@ -3097,7 +3141,9 @@ TRYOUT_OPENED = ("switch", "filled", "why", "controls", "po", "download", "note"
 TRYOUT_MADE = ("po", "download", "note")                    # what "Proefbevestiging maken (pdf)" and "... direct aan de assistent geven" give
 SWITCHED = ("switch", "filled", "why", "controls", "po", "note")                      # what the switch gives
 TRYOUT_RELABELLED = ("title", "intro", "switch", "why", "po", "change", "make", "give", "note")
-TRYOUT_HANDLERS = {"tryout_opened", "tryout_refreshed", "tryout_made", "tryout_given", "tryout_chosen", "test_mode_saved", "tryout_relabel"}
+TRYOUT_HANDLERS = {"tryout_opened", "tryout_refreshed", "tryout_made", "tryout_given", "tryout_chosen", "test_mode_saved", "tryout_relabel",
+                   "tryout_cart_made", "tryout_cart_relabel"}
+CART_MADE = ("po", "note")                                  # what "Proefwinkelwagen maken" gives
 NOW = datetime(2026, 11, 12, 9, 0)                    # the page's clock in these tests (deps())
 SHOWN_PART, HIDDEN_PART = {"__type__": "update", "visible": True}, {"__type__": "update", "visible": False}
 NO_DOWNLOAD = {"__type__": "update", "value": None, "visible": False}
@@ -3258,12 +3304,22 @@ def test_the_try_out_part_stands_at_the_end_of_the_exact_block(tmp_path, madeup_
     shown = [block for block in inside(exact) if isinstance(block, (gr.Markdown, gr.Checkbox, gr.Dropdown, gr.Radio, gr.Button, gr.File))]
     part = [name(block) for block in shown][[name(block) for block in shown].index(f"### {nl['tryout_title']}"):]
     assert part == [f"### {nl['tryout_title']}", nl["tryout_intro"], nl["tryout_switch"], "tryout-why", nl["tryout_po"], nl["tryout_change"],
-                    f"button {nl['tryout_make']}", f"button {nl['tryout_give']}", "tryout-download", "tryout-note"]
+                    f"button {nl['tryout_make']}", f"button {nl['tryout_give']}", "tryout-download", "tryout-cart-change",
+                    f"button {nl['tryout_cart_make']}", "tryout-note"]
     [controls] = [block for block in inside(exact) if getattr(block, "elem_id", None) == "tryout-controls"]
     assert controls.visible is False and [name(block) for block in inside(controls) if block in shown] == [
-        nl["tryout_po"], nl["tryout_change"], f"button {nl['tryout_make']}", f"button {nl['tryout_give']}", "tryout-download"]
+        nl["tryout_po"], nl["tryout_change"], f"button {nl['tryout_make']}", f"button {nl['tryout_give']}", "tryout-download",
+        "tryout-cart-change", f"button {nl['tryout_cart_make']}"]
     [change] = [block for block in inside(exact) if getattr(block, "label", None) == nl["tryout_change"]]
     assert change.choices == [(nl[f"tryout_change:{value}"], value) for value in CHANGES] and change.value == "none"
+    # Task 41: the try-out cart has a choice of its own under a question of its own, with the two changes a cart can show, and one
+    # button; the two questions read differently, so that the page says which choice belongs to the cart
+    [cart_change] = [block for block in inside(exact) if getattr(block, "label", None) == nl["tryout_cart_change"]]
+    assert cart_change.elem_id == "tryout-cart-change" and cart_change.value == "none" and isinstance(cart_change, gr.Radio)
+    assert (nl["tryout_cart_change"], en["tryout_cart_change"]) == ("Wat wijkt af in de proefwinkelwagen?", "What differs in the try-out cart?")
+    assert nl["tryout_cart_change"] != nl["tryout_change"] and en["tryout_cart_change"] != en["tryout_change"]
+    assert cart_change.choices == [(nl[f"tryout_cart_change:{value}"], value) for value in CART_CHANGES] == [
+        ("Niets", "none"), ("De prijs van de eerste regel is 1 procent hoger", "price_small")]
     language = nl["language"]
     part_outputs = [nl["tryout_switch"], "filled", "tryout-why", "tryout-controls", nl["tryout_po"]]
     assert bound("tryout_opened") == ([(nl["settings_tab"], "select"), ("page", "load")], [language], [*part_outputs, "tryout-download", "tryout-note"])
@@ -3277,6 +3333,14 @@ def test_the_try_out_part_stands_at_the_end_of_the_exact_block(tmp_path, madeup_
     assert bound("test_mode_saved") == ([(nl["tryout_switch"], "input")], [nl["tryout_switch"], "filled", language], [*part_outputs, "tryout-note"])
     assert bound("tryout_relabel")[0] == [(language, "change")]
     assert bound("tryout_relabel")[1] == [language, nl["tryout_change"]]
+    assert bound("tryout_cart_made") == ([(f"button {nl['tryout_cart_make']}", "click")], [nl["tryout_po"], "tryout-cart-change", language],
+                                         [nl["tryout_po"], "tryout-note"])
+    assert bound("tryout_cart_relabel") == ([(language, "change")], [language, "tryout-cart-change"],
+                                            ["tryout-cart-change", f"button {nl['tryout_cart_make']}"])
+    assert handler(page, "tryout_cart_relabel")("en", "price_small") == (
+        {"__type__": "update", "label": en["tryout_cart_change"], "value": "price_small",
+         "choices": [("Nothing", "none"), ("The price of the first line is 1 percent higher", "price_small")]},
+        {"__type__": "update", "value": "Make try-out cart"})
     relabelled = named(TRYOUT_RELABELLED, handler(page, "tryout_relabel")("en", "price_small"))
     assert (relabelled["title"], relabelled["intro"], relabelled["why"], relabelled["note"]) == (
         f"### {en['tryout_title']}", en["tryout_intro"], en["tryout_not_offered"], "")
@@ -3300,20 +3364,82 @@ def test_the_try_out_part_stands_at_the_end_of_the_exact_block(tmp_path, madeup_
         "The delivery date of the first line is three days later", "The delivery date of the first line is sixty days later"]
     assert (nl["tryout_title"], en["tryout_title"]) == ("Proefdraaien met een inkooporder uit Exact", "Trying out with a purchase order from Exact")
     assert nl["tryout_intro"] == ("Zonder leverancier kunt u de assistent toch proberen: bij een inkooporder die de assistent kent, maakt de "
-                                  "assistent een verzonnen orderbevestiging. U kiest wat er afwijkt. Het proefdocument blijft op deze pc.")
+                                  "assistent een verzonnen orderbevestiging. Voor de voorcontrole in de browser maakt de assistent van "
+                                  "dezelfde inkooporder een verzonnen winkelwagen. U kiest wat er afwijkt. Het proefdocument blijft op deze "
+                                  "pc.")
     assert en["tryout_intro"] == ("Without a supplier you can still try the assistant: for a purchase order it knows, the assistant makes a "
-                                  "made-up order confirmation. You choose what differs. The try-out document stays on this PC.")
+                                  "made-up order confirmation. For the pre-check in the browser the assistant makes a made-up cart of the "
+                                  "same purchase order. You choose what differs. The try-out document stays on this PC.")
     assert (nl["tryout_po"], en["tryout_po"], nl["tryout_change"], en["tryout_change"]) == ("Inkooporder", "Purchase order", "Wat wijkt af?",
                                                                                             "What differs?")
     assert (nl["tryout_make"], en["tryout_make"]) == ("Proefbevestiging maken (pdf)", "Make try-out confirmation (PDF)")
     assert (nl["tryout_give"], en["tryout_give"]) == ("Proefbevestiging direct aan de assistent geven",
                                                       "Give the try-out confirmation to the assistant directly")
+    assert (nl["tryout_cart_make"], en["tryout_cart_make"]) == ("Proefwinkelwagen maken", "Make try-out cart")
+    assert nl["tryout_cart_made"] == ("De proefwinkelwagen staat klaar. Open {link} in de browser waarin de uitbreiding van de assistent staat: "
+                                      "de balk bovenaan de pagina laat de uitkomst zien.")
+    assert en["tryout_cart_made"] == ("The try-out cart is ready. Open {link} in the browser that holds the assistant's extension: the bar at "
+                                      "the top of the page shows the outcome.")
     for key in [key for key in nl if key.startswith("tryout_")]:
         assert re.findall(r"\{(\w+)\}", nl[key]) == re.findall(r"\{(\w+)\}", en[key]) and not re.search(r"[—–_]", nl[key] + en[key]), key
     # not there on a share link, nor without a settings file
     assert not {getattr(f.fn, "__name__", "") for f in tab(tmp_path / "share", madeup_out, share=True, **BUYER)[1].fns.values()} & TRYOUT_HANDLERS
     assert not {getattr(f.fn, "__name__", "") for f in build_app(deps(tmp_path / "nofile", madeup_out)).fns.values()} & TRYOUT_HANDLERS
     assert TRYOUT_HANDLERS <= {getattr(f.fn, "__name__", "") for f in page.fns.values()}
+
+
+def test_the_try_out_cart_button_writes_the_page_and_gives_its_link(tmp_path, madeup_out):
+    """Task 41, rule 6 and amendment 4: "Proefwinkelwagen maken" writes the try-out cart of the order chosen, as it stands in the
+    store, with the change chosen under the cart's own question, "Wat wijkt af in de proefwinkelwagen?", as
+    <cases_root>/tryout/<PO>_<change>.html, once the page read back as the order with that change alone; its note gives the link to
+    it on the capture server, and nothing else is written. A
+    press with no order chosen takes the order filed last. The button is offered where a try-out is, and an order that gives no
+    try-out cart is refused with the sentence of its reason, nothing written."""
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    folder, page = offered_page(tmp_path / "offered", madeup_out)
+    store = PoStore(folder / "po_store")
+    assert named(CART_MADE, handler(page, "tryout_cart_made")(None, "none", "nl")) == {
+        "po": {"__type__": "update", "choices": [], "value": None}, "note": nl["tryout_none_known"]}
+    po = store.add(madeup_out / "MU08_po_v1.pdf")
+    before = files(tmp_path)
+    made = named(CART_MADE, handler(page, "tryout_cart_made")("250108", "price_small", "nl"))
+    link = "http://127.0.0.1:7870/tryout/250108_price_small.html"
+    assert made == {"po": SAME, "note": nl["tryout_cart_made"].format(link=f"[{link}]({link})")}
+    written = folder / "cases" / "tryout" / "250108_price_small.html"
+    assert set(files(tmp_path)) - set(before) == {written}                      # the one file written; the read-back's folder is gone
+    assert written.read_text(encoding="utf-8") == cart_html(po, "price_small", NOW.date())           # made on the day of the page's clock
+    assert "<h1>Proefwinkel (verzonnen pagina)</h1>" in written.read_text(encoding="utf-8")
+    again = named(CART_MADE, handler(page, "tryout_cart_made")(None, None, "en"))       # nothing chosen: the order filed last, no change
+    link = "http://127.0.0.1:7870/tryout/250108_none.html"
+    assert again == {"po": {"__type__": "update", "choices": [("250108 (S08)", "250108")], "value": "250108"},
+                     "note": en["tryout_cart_made"].format(link=f"[{link}]({link})")}
+    assert (folder / "cases" / "tryout" / "250108_none.html").read_text(encoding="utf-8") == cart_html(po, "none", NOW.date())
+    # the cart is made of the order as it stands: a look from an export filed after the PDF, which is what the pre-check compares with
+    export_of(folder, "250108,1,KM-0801,Manometer 0-10 bar,3,st,13.00,1,2026-11-16\n250108,2,KM-0802,Pakking,5,st,2.00,1,2026-11-16\n")
+    v1 = store.root / "250108" / "v1" / "po.json"
+    os.utime(store.root / "250108" / "e1" / "po.json", (v1.stat().st_mtime + 60, v1.stat().st_mtime + 60))
+    assert handler(page, "tryout_cart_made")("250108", "none", "nl")[1].startswith("De proefwinkelwagen staat klaar.")
+    assert "<td>13,00</td>" in (folder / "cases" / "tryout" / "250108_none.html").read_text(encoding="utf-8")
+    # an order that gives no try-out cart: no price to raise, and an order the pre-check would only guess
+    export_of(folder, "250160,1,KM-0901,Pakking,5,st,,1,2026-11-16\n250160,2,KM-0902,Sluitring,100,st,,1,2026-11-16\n")
+    store.add(ANDERS_PO, ANDERS_LAYOUT)
+    before = files(tmp_path)
+    for po_number, change, reason in (("250160", "price_small", "no_price"), ("IB-2600417", "none", "not_found")):
+        for language, strings in (("nl", nl), ("en", en)):
+            assert named(CART_MADE, handler(page, "tryout_cart_made")(po_number, change, language)) == {
+                "po": SAME, "note": strings["tryout_refused"].format(reason=strings[f"tryout_reason:{reason}"])}, (po_number, language)
+    assert files(tmp_path) == before
+    # not offered: the line why, and nothing written
+    for n, values in enumerate(({}, {"test_mode": True, "authorization_limit": "5000.00"})):
+        closed_folder = tmp_path / f"closed_{n}"
+        path, closed, made = tab(closed_folder, madeup_out, **(BUYER | values))
+        PoStore(closed_folder / "po_store").add(madeup_out / "MU08_po_v1.pdf")
+        before = files(tmp_path)
+        assert named(CART_MADE, handler(closed, "tryout_cart_made")("250108", "none", "nl")) == {"po": SAME, "note": nl["tryout_not_offered"]}
+        assert files(tmp_path) == before, values
+    # a settings file that cannot be read: its line, nothing written
+    (folder / "settings.json").write_text("{ not json", encoding="utf-8")
+    assert named(CART_MADE, handler(page, "tryout_cart_made")("250108", "none", "nl")) == {"po": SAME, "note": unreadable("nl")}
 
 
 def offered_page(tmp_path: Path, madeup_out: Path, **values):
@@ -3539,3 +3665,311 @@ def test_the_documents_say_what_the_review_round_of_the_try_out_settled():
     assert '1. Open "Koppeling met Exact (bij de installatie)" and switch the test mode off' in exact          # ruling Y25 of the second round
     for section in (exact, folder, settings_section, tab_section):
         assert not re.search(r"[—–]", section)
+
+
+# --- the connection to Exact, part 3: the columns of an export of articles set from a sample (Task 42) ---
+
+from aid.review.exact_settings import ARTICLE_FORM, article_label, articles_headers  # noqa: E402
+from aid.tests.helpers import write_sheet  # noqa: E402
+
+ARTICLE_CHOSEN = tuple(f"field:{field}" for field in ARTICLE_FORM)                             # the three dropdowns, by the field of each
+ARTICLES_OPENED = (*ARTICLE_CHOSEN, "numbers", "offered", "articles_filled")                    # the fill of part 3, in its order
+ARTICLES_SAMPLE_SHOWN = ("head", "sample_note", "row", *ARTICLE_CHOSEN, "offered", "reading", "rows", "note")
+ARTICLES_HEADER_SHOWN = (*ARTICLE_CHOSEN, "offered", "sample_note")
+ARTICLES_TESTED = ("reading", "rows", "note")                                                   # what "Testen" gives
+ARTICLES_SAVED = ("note", "articles_filled", "reading", "rows")                                 # what "Opslaan" gives
+ARTICLES_RELABEL = ("part", "intro", "sample", "head", "sample_note", "row", *ARTICLE_CHOSEN, "numbers", "test", "save", "note", "reading", "rows")
+NO_ARTICLES = {"article_columns": {}, "article_decimal_comma": False}                           # a file without the two settings
+SAVED_ARTICLES = {"article_columns": {"item_code": "Artikel", "price": "Inkoopprijs"}, "article_decimal_comma": True}
+ARTICLES_FORM = {"item_code": "Artikel", "price": "Inkoopprijs", "supplier": NO_COLUMN, "numbers": "comma"}
+ARTICLE_TITLES = ["Artikel", "Omschrijving", "Inkoopprijs"]
+ARTICLES_MINE = {"articles_opened", "articles_sample_shown", "articles_header_shown", "articles_tested", "articles_saved", "articles_relabel"}
+
+
+def articles_sample(tmp_path: Path, name: str = "artikelen.csv", titles: list[str] | None = None, rows: list[list] | None = None) -> Path:
+    """A made-up export of articles in a folder of its own, as the page library hands a sample over: a title above the row of column
+    titles, then three articles of which one has no price that can be read."""
+    rows = [["KM-1001", "Slang", "12,50"], ["KM-1002", "Klem", "8,00"], ["KM-1003", "Ring", "op aanvraag"]] if rows is None else rows
+    return write_sheet(tmp_path / "gradio" / "articles" / name, [["Artikelen van een leverancier (verzonnen voorbeeld)"], [],
+                                                                  titles or ARTICLE_TITLES, *rows])
+
+
+def articles_args(sample, form: dict | None = None, filled: dict | None = NO_ARTICLES, language: str = "nl") -> list:
+    """The inputs of "Testen" and "Opslaan" of part 3: the sample as the page library hands it over (a path), the column chosen in each
+    dropdown, the number convention, what the part was filled with (the two settings as the file held them), then the page's language."""
+    form = ARTICLES_FORM if form is None else form
+    return [None if sample is None else str(sample), *[form[field] for field in ARTICLE_FORM], form["numbers"], filled, language]
+
+
+def test_part_3_saves_its_columns_and_stores_no_prices(tmp_path, madeup_out):
+    """Amendment 3: part 3 sets the columns of the export of articles and tests them on a sample, as part 2 does for the export of order
+    lines. "Testen" writes nothing; "Opslaan" writes the two settings and nothing else, and stores no price; the tab Prijslijst then
+    takes the export itself."""
+    path, page, made = tab(tmp_path, madeup_out, **(BUYER | NO_ARTICLES))
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    sample = articles_sample(tmp_path)
+    none = [NO_COLUMN] * 3
+    shown = named(ARTICLES_SAMPLE_SHOWN, handler(page, "articles_sample_shown")(str(sample), *none, "nl"))
+    assert shown["head"] == {"headers": ["Rij", "A", "B", "C"], "data": table_head(sample)} and shown["sample_note"] == ""
+    assert shown["row"] == 3 and shown["offered"] == ARTICLE_TITLES                         # the row with the column titles, found
+    assert [shown[name] for name in ARTICLE_CHOSEN] == [{"__type__": "update", "choices": offered(ARTICLE_TITLES), "value": NO_COLUMN}] * 3
+    os.utime(path, ns=(1_700_000_000_000_000_000, 1_700_000_000_000_000_000))
+    before = path.read_bytes()
+    tested = named(ARTICLES_TESTED, handler(page, "articles_tested")(*articles_args(sample)))
+    assert tested["reading"] == "2 artikelen gelezen; 1 rij overgeslagen (prijs niet te lezen: 1)." and tested["note"] == ""
+    assert tested["rows"]["value"] == {"headers": ["Rij", "Artikelcode", "Inkoopprijs"],
+                                       "data": [["4", "KM-1001", "12.5 (12,50)"], ["5", "KM-1002", "8 (8,00)"]]}
+    english = named(ARTICLES_TESTED, handler(page, "articles_tested")(*articles_args(sample, language="en")))
+    assert english["reading"] == "2 articles read; 1 row passed over (price cannot be read: 1)."
+    assert english["rows"]["value"]["headers"] == ["Row", "Item code", "Purchase price"]
+    assert path.read_bytes() == before and path.stat().st_mtime_ns == 1_700_000_000_000_000_000        # "Testen" writes nothing
+    text, held_before = path.read_text(encoding="utf-8"), held(path)
+    saved = named(ARTICLES_SAVED, handler(page, "articles_saved")(*articles_args(sample)))
+    assert saved["note"] == "Opgeslagen." and saved["articles_filled"] == SAVED_ARTICLES and saved["reading"] == tested["reading"]
+    after = held(path)
+    assert {key: after[key] for key in SAVED_ARTICLES} == SAVED_ARTICLES and list(after) == list(held_before)
+    assert path.read_text(encoding="utf-8") == text.replace(
+        '"article_columns": {}', '"article_columns": {\n        "item_code": "Artikel",\n        "price": "Inkoopprijs"\n    }').replace(
+        '"article_decimal_comma": false', '"article_decimal_comma": true')                 # every other key keeps its place and its bytes
+    # no price is stored, nothing is filed and no copy of the sample is made
+    assert not (tmp_path / "cases").exists() and not (tmp_path / "po_store").exists() and not (tmp_path / "inbox").exists()
+    assert sorted(p.name for p in sample.parent.iterdir()) == ["artikelen.csv"]
+    assert "Opslaan en opnemen" not in nl.values() and "Save and file" not in en.values()
+    # the same save again, from the part as the first save left it, writes nothing
+    os.utime(path, ns=(1_700_000_000_000_000_000, 1_700_000_000_000_000_000))
+    again = named(ARTICLES_SAVED, handler(page, "articles_saved")(*articles_args(sample, filled=saved["articles_filled"])))
+    assert again["note"] == "Opgeslagen." and path.stat().st_mtime_ns == 1_700_000_000_000_000_000
+    # the part opens with the saved columns, and the tab Prijslijst now offers its content
+    opened_now = named(ARTICLES_OPENED, handler(page, "articles_opened")(None, None, "nl"))
+    assert [opened_now[name]["value"] for name in ARTICLE_CHOSEN] == ["Artikel", "Inkoopprijs", NO_COLUMN]
+    assert (opened_now["numbers"], opened_now["offered"], opened_now["articles_filled"]) == ("comma", ["Artikel", "Inkoopprijs"], SAVED_ARTICLES)
+    assert handler(page, "pricelist_opened")(None, "nl")[1] == {"__type__": "update", "visible": True}
+    assert company_values(load_settings(path)) == ["article_columns is not empty"]
+    # an export with a supplier column: the third dropdown takes it
+    several = articles_sample(tmp_path, "alle.xlsx", ["Artikel", "Crediteur", "Inkoopprijs"], [["KM-1001", "S01", 12.5], ["KM-2001", "S02", 3.2]])
+    form = ARTICLES_FORM | {"supplier": "Crediteur", "numbers": "point"}
+    named_save = named(ARTICLES_SAVED, handler(page, "articles_saved")(*articles_args(several, form, saved["articles_filled"])))
+    assert named_save["note"] == "Opgeslagen." and named_save["reading"] == "2 artikelen gelezen; 0 rijen overgeslagen."
+    assert named_save["rows"]["value"] == {"headers": ["Rij", "Artikelcode", "Inkoopprijs", "Leverancier"],
+                                           "data": [["4", "KM-1001", "12.5", "S01"], ["5", "KM-2001", "3.2", "S02"]]}
+    assert held(path)["article_columns"] == {"item_code": "Artikel", "price": "Inkoopprijs", "supplier": "Crediteur"}
+    assert held(path)["article_decimal_comma"] is False
+
+
+def test_a_save_of_part_3_is_refused_with_each_problem_and_writes_nothing(tmp_path, madeup_out):
+    """Any problem of the form or of the sample refuses "Opslaan", each named in the page's language, and nothing is written; a form that
+    another browser tab overtook is refused as part 2's."""
+    path, page, made = tab(tmp_path, madeup_out, **(BUYER | NO_ARTICLES))
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    sample = articles_sample(tmp_path)
+    before = path.read_bytes()
+
+    def refused(*args) -> dict:
+        result = named(ARTICLES_SAVED, handler(page, "articles_saved")(*args))
+        assert path.read_bytes() == before and result["articles_filled"] == args[-2]
+        return result
+
+    assert refused(*articles_args(None))["note"] == "Niet opgeslagen: Kies eerst een voorbeeld."
+    nothing = refused(*articles_args(sample, {"item_code": NO_COLUMN, "price": None, "supplier": NO_COLUMN, "numbers": "comma"}))
+    assert nothing["note"] == "Niet opgeslagen: Kies de kolom met de artikelcode. Kies de kolom met de inkoopprijs."
+    assert (nothing["reading"], nothing["rows"]["value"]["data"]) == ("", [])
+    twice = refused(*articles_args(sample, ARTICLES_FORM | {"supplier": "Artikel"}, language="en"))
+    assert twice["note"] == "Not saved: " + en["exact_export_problem:more_than_once"].format(column="\"Artikel\"")
+    wrong = refused(*articles_args(sample, ARTICLES_FORM | {"numbers": "point"}))
+    assert wrong["note"] == "Niet opgeslagen: " + nl["exact_problem:convention_comma"].format(column="\"Inkoopprijs\"")
+    assert wrong["reading"].startswith("2 artikelen gelezen; 1 rij overgeslagen (prijs niet te lezen: 1).")
+    lacking = refused(*articles_args(sample, ARTICLES_FORM | {"price": "Nettoprijs"}))
+    assert lacking["note"] == "Niet opgeslagen: " + nl["exact_export_refused:no_column"].format(column="\"Nettoprijs\"")
+    old = sample.with_name("artikelen.xls")
+    old.write_bytes(sample.read_bytes())
+    assert refused(*articles_args(old))["note"] == "Niet opgeslagen: " + nl["exact_export_refused:file_type"]
+    empty = articles_sample(tmp_path, "leeg.csv", rows=[[None, "Totaal", "20,50"]])
+    assert refused(*articles_args(empty))["note"] == "Niet opgeslagen: " + nl["exact_articles_problem:none"]
+    gone = refused(*articles_args(tmp_path / "gone.csv"))
+    assert gone["note"] == "Niet opgeslagen: " + nl["exact_export_unopenable"]
+    # the same problems under "Testen", in the note or where the reading stands, and still nothing written
+    tested = named(ARTICLES_TESTED, handler(page, "articles_tested")(*articles_args(None, ARTICLES_FORM | {"price": NO_COLUMN})))
+    assert tested == {"reading": "", "rows": tested["rows"], "note": "Kies de kolom met de inkoopprijs. Kies eerst een voorbeeld."}
+    assert named(ARTICLES_TESTED, handler(page, "articles_tested")(*articles_args(old)))["reading"] == nl["exact_export_refused:file_type"]
+    assert named(ARTICLES_TESTED, handler(page, "articles_tested")(*articles_args(tmp_path / "gone.csv")))["note"] == nl["exact_export_unopenable"]
+    # a form filled before another browser tab saved: refused inside the lock, with the note of part 2
+    by_hand(path, article_columns={"item_code": "Code", "price": "Prijs"})
+    before = path.read_bytes()
+    overtaken = refused(*articles_args(sample))
+    assert overtaken["note"] == nl["exact_export_changed"]
+    assert refused(*articles_args(sample, filled=None))["note"] == nl["exact_export_changed"]
+    assert path.read_bytes() == before
+
+
+def test_part_3_is_wired_as_the_page_shows_it_and_switches_its_language(tmp_path, madeup_out):
+    """The built page: part 3 below part 2 and above the try-out in the folded block, its controls in their order, each handler's
+    trigger, inputs and outputs, its buttons 'Testen' and 'Opslaan', and the part in English after a switch of the language. On a
+    share link and without a settings file the part is not on the page (rule 11)."""
+    gr = import_gradio()
+    path, page, made = tab(tmp_path, madeup_out, **BUYER)
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    [settings] = [block for block in page.blocks.values() if isinstance(block, gr.Tab) and block.label == nl["settings_tab"]]
+    [exact] = [block for block in settings.children if isinstance(block, gr.Accordion) and block.label == nl["exact_title"]]
+
+    def inside(block) -> list:
+        return [block, *[found for child in getattr(block, "children", []) for found in inside(child)]]
+    [fill] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == "articles_opened"]
+    states = {id(fill.outputs[-2]): "offered", id(fill.outputs[-1]): "articles filled"}
+    assert all(isinstance(state, gr.State) for state in fill.outputs[-2:])
+
+    def name(component) -> str:
+        if id(component) in states:
+            return states[id(component)]
+        if isinstance(component, gr.Button):
+            return f"button {component.value}"
+        if component.elem_id:
+            return component.elem_id
+        return getattr(component, "label", None) or str(getattr(component, "value", ""))
+
+    def bound(fn_name: str) -> tuple:
+        [f] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == fn_name]
+        return (sorted((name(page.blocks[block]) if block != page._id else "page", event) for block, event in f.targets),
+                [name(component) for component in f.inputs], [name(component) for component in f.outputs])
+
+    order = [block for block in inside(exact) if isinstance(block, (gr.Markdown, gr.Textbox, gr.Radio, gr.Button, gr.Dataframe, gr.Dropdown,
+                                                                     gr.Checkbox, gr.File, gr.Number))]
+    titles = [block.value for block in order if isinstance(block, gr.Markdown) and str(block.value).startswith("### ")]
+    assert titles[-3:] == [f"### {nl['exact_part_export']}", f"### {nl['exact_part_articles']}", f"### {nl['tryout_title']}"]
+    names = [name(block) for block in order]
+    part = names[names.index(f"### {nl['exact_part_articles']}"):names.index(f"### {nl['tryout_title']}")]
+    fields = [f"articles-field-{field}" for field in ARTICLE_FORM]
+    test, save = f"button {nl['exact_test']}", f"button {nl['exact_save']}"
+    assert part == [f"### {nl['exact_part_articles']}", nl["exact_articles_intro"], "articles-sample", "articles-head", "articles-sample-note",
+                    "articles-row", *fields, "articles-numbers", test, save, "articles-note", "articles-read", "articles-rows"]
+    page_language = nl["language"]
+    assert bound("articles_opened") == ([(nl["settings_tab"], "select"), ("page", "load")], ["articles-sample", "articles-row", page_language],
+                                        [*fields, "articles-numbers", "offered", "articles filled"])
+    assert bound("articles_sample_shown") == ([("articles-sample", "change")], ["articles-sample", *fields, page_language],
+                                              ["articles-head", "articles-sample-note", "articles-row", *fields, "offered", "articles-read",
+                                               "articles-rows", "articles-note"])
+    assert bound("articles_header_shown") == ([("articles-row", "input")], ["articles-sample", "articles-row", *fields, page_language],
+                                              [*fields, "offered", "articles-sample-note"])
+    inputs = ["articles-sample", *fields, "articles-numbers", "articles filled", page_language]
+    [tested] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == "articles_tested"]
+    [saved] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == "articles_saved"]
+    by_id = {block.elem_id: block for block in order if getattr(block, "elem_id", None)}
+    assert tested.targets == [(by_id["articles-test"]._id, "click")] and saved.targets == [(by_id["articles-save"]._id, "click")]
+    assert (by_id["articles-test"].value, by_id["articles-save"].value) == ("Testen", "Opslaan")
+    assert [name(component) for component in tested.inputs] == inputs == [name(component) for component in saved.inputs]
+    assert [by_id[key] for key in ("articles-read", "articles-rows", "articles-note")] == tested.outputs
+    assert saved.outputs == [by_id["articles-note"], fill.outputs[-1], by_id["articles-read"], by_id["articles-rows"]]
+    assert bound("articles_relabel")[0] == [(page_language, "change")]
+    assert by_id["articles-sample"].file_types is None and by_id["articles-sample"].label == "Voorbeeld: een export van artikelen uit Exact"
+    assert [(by_id[field].label, by_id[field].choices, by_id[field].value) for field in fields] == [
+        (label, [(nl["exact_export_no_column"], NO_COLUMN)], NO_COLUMN) for label in ("Artikelcode (verplicht)", "Inkoopprijs (verplicht)", "Leverancier")]
+    assert by_id["articles-numbers"].choices == [(nl["exact_numbers:comma"], "comma"), (nl["exact_numbers:point"], "point")]
+    assert by_id["articles-rows"].interactive is False and by_id["articles-head"].interactive is False
+    # the part in English
+    sample = articles_sample(tmp_path)
+    shown = named(ARTICLES_RELABEL, handler(page, "articles_relabel")("en", str(sample), 3, "Artikel", "Inkoopprijs", NO_COLUMN, ARTICLE_TITLES, "comma"))
+    assert shown["part"] == "### 3. Purchase prices of articles as an export from Exact (for the price list)"
+    assert shown["intro"] == ("Choose a sample of the export of articles from Exact and point out the columns. If the export has no column with "
+                              "the supplier, you choose the supplier when you give the export on the tab Price list.")
+    assert (shown["sample"]["label"], shown["row"]["label"]) == ("Sample: an export of articles from Exact", en["exact_export_header_row"])
+    assert shown["head"]["value"] == {"headers": ["Row", "A", "B", "C"], "data": table_head(sample)}
+    assert [shown[name]["label"] for name in ARTICLE_CHOSEN] == ["Item code (required)", "Purchase price (required)", "Supplier"]
+    assert [shown[name]["value"] for name in ARTICLE_CHOSEN] == ["Artikel", "Inkoopprijs", NO_COLUMN]
+    assert [shown[name]["choices"] for name in ARTICLE_CHOSEN] == [offered(ARTICLE_TITLES, "en")] * 3
+    assert (shown["numbers"]["value"], shown["test"]["value"], shown["save"]["value"]) == ("comma", "Test", "Save")
+    assert (shown["note"], shown["reading"], shown["rows"]["value"]) == ("", "", {"headers": articles_headers(None, "en"), "data": []})
+    assert (nl["exact_part_articles"], nl["exact_articles_intro"]) == (
+        "3. Inkoopprijzen van artikelen als export uit Exact (voor de prijslijst)",
+        "Kies een voorbeeld van de export van artikelen uit Exact en wijs de kolommen aan. Heeft de export geen kolom met de leverancier, dan "
+        "kiest u de leverancier wanneer u de export op het tabblad Prijslijst geeft.")
+    assert [article_label(field, "nl") for field in ARTICLE_FORM] == ["Artikelcode (verplicht)", "Inkoopprijs (verplicht)", "Leverancier"]
+    # another row with the column titles offers its titles, and a sample of another type is named by its sentence
+    first = named(ARTICLES_HEADER_SHOWN, handler(page, "articles_header_shown")(str(sample), 1, NO_COLUMN, NO_COLUMN, NO_COLUMN, "nl"))
+    assert first["offered"] == ["Artikelen van een leverancier (verzonnen voorbeeld)"] and first["sample_note"] == ""
+    old = sample.with_name("artikelen.xls")
+    old.write_bytes(sample.read_bytes())
+    refused = named(ARTICLES_SAMPLE_SHOWN, handler(page, "articles_sample_shown")(str(old), NO_COLUMN, NO_COLUMN, NO_COLUMN, "en"))
+    assert (refused["sample_note"], refused["head"]["data"], refused["row"]) == (en["exact_export_refused:file_type"], [], None)
+    assert [refused[name] for name in (*ARTICLE_CHOSEN, "offered")] == [SAME] * 4
+    # rule 11: on a share link and without a settings file the part is not on the page
+    for built in (tab(tmp_path / "share", madeup_out, share=True)[1], build_app(deps(tmp_path / "nofile", madeup_out))):
+        assert not {getattr(f.fn, "__name__", "") for f in built.fns.values()} & ARTICLES_MINE
+    assert ARTICLES_MINE <= {getattr(f.fn, "__name__", "") for f in page.fns.values()}
+
+
+def test_the_sample_of_part_3_is_read_from_the_sheet_the_buyer_sees(tmp_path, madeup_out):
+    """Ruling Z1 of the review round of the price list: the sample of part 3 is read as the export of the articles is read on the tab
+    Prijslijst. A hidden sheet is never read; the one visible sheet that holds data is read, whatever its place; a workbook with more
+    than one such sheet is refused by the names of those sheets, shown as text, under the sample and under "Testen", and nothing is
+    saved. Since ruling Z17 of the second round the sample of part 2 is read by the same rule (the test below)."""
+    from openpyxl import Workbook
+
+    from aid.review.exact_settings import sample_head
+
+    def book(name: str, sheets: list[tuple[str, list[list], str]]) -> Path:
+        workbook = Workbook()
+        workbook.remove(workbook.active)
+        for title, rows, state in sheets:
+            sheet = workbook.create_sheet(title)
+            sheet.sheet_state = state
+            for row in rows:
+                sheet.append(row)
+        made = tmp_path / "gradio" / "articles" / name
+        made.parent.mkdir(parents=True, exist_ok=True)
+        workbook.save(made)
+        return made
+
+    path, page, made = tab(tmp_path, madeup_out, **(BUYER | NO_ARTICLES))
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    none = [NO_COLUMN] * 3
+    seen = book("artikelen.xlsx", [("2025 (oud)", [["Code", "Naam", "Oude prijs"], ["KM-1001", "Slang", 9.99]], "hidden"),
+                                   ("Artikelen", [ARTICLE_TITLES, ["KM-1001", "Slang", 12.5], ["KM-1002", "Klem", 8]], "visible")])
+    shown = named(ARTICLES_SAMPLE_SHOWN, handler(page, "articles_sample_shown")(str(seen), *none, "nl"))
+    assert (shown["sample_note"], shown["row"], shown["offered"]) == ("", 1, ARTICLE_TITLES)
+    assert shown["head"]["data"] == [["1", *ARTICLE_TITLES], ["2", "KM-1001", "Slang", "12.5"], ["3", "KM-1002", "Klem", "8"]]
+    tested = named(ARTICLES_TESTED, handler(page, "articles_tested")(*articles_args(seen)))
+    assert tested["reading"] == "2 artikelen gelezen; 0 rijen overgeslagen." and tested["rows"]["value"]["data"][0] == ["2", "KM-1001", "12.5"]
+    assert sample_head(seen)[2] == ARTICLE_TITLES               # one rule for every sample (ruling Z17 of the second round)
+    two = book("twee.xlsx", [("Slangen", [ARTICLE_TITLES, ["KM-1001", "Slang", 12.5]], "visible"),
+                             ("_Klemmen_", [ARTICLE_TITLES, ["KM-1002", "Klem", 8]], "visible")])
+    before = path.read_bytes()
+    for language, strings in (("nl", nl), ("en", en)):
+        sentence = strings["exact_export_refused:several_sheets"].format(names="Slangen, \\_Klemmen\\_")
+        refused = named(ARTICLES_SAMPLE_SHOWN, handler(page, "articles_sample_shown")(str(two), *none, language))
+        assert (refused["sample_note"], refused["head"]["data"], refused["row"]) == (sentence, [], None)
+        tested = named(ARTICLES_TESTED, handler(page, "articles_tested")(*articles_args(two, language=language)))
+        assert tested["reading"] == sentence and tested["rows"]["value"]["data"] == []
+    saved = named(ARTICLES_SAVED, handler(page, "articles_saved")(*articles_args(two)))
+    assert saved["note"] == "Niet opgeslagen: " + nl["exact_export_refused:several_sheets"].format(names="Slangen, \\_Klemmen\\_") and path.read_bytes() == before
+    assert nl["exact_export_refused:several_sheets"].format(names="A, B") == (
+        "Dit Excel-bestand heeft meer dan één werkblad met gegevens (A, B). De assistent leest één werkblad: sla het werkblad dat u bedoelt "
+        "op als een eigen bestand en geef dat.")
+
+
+def test_the_sample_of_part_2_is_read_from_the_sheet_the_buyer_sees(tmp_path, madeup_out):
+    """Ruling Z17 of the second review round of the price list: part 2's sample, an export of order lines, is read from the one
+    visible sheet that holds data, as every Excel file the aid reads. A hidden first sheet was shown and read as the order. A
+    workbook with more than one visible sheet with data is refused by the names of those sheets, shown as text, under the sample,
+    under "Testen" and at "Opslaan", which writes nothing."""
+    from aid.tests.test_po_export import ROWS, TITLES, sheets
+    path, page, made = tab(tmp_path, madeup_out, **BUYER)
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    form = {field: NO_COLUMN for field in EXPORT_FORM} | {"po_number": "Inkooporder", "line_id": "Regel", "item_code": "Artikel",
+                                                         "quantity": "Aantal", "numbers": "point", "fill_down": False}
+    seen = sheets(tmp_path / "gradio" / "orders" / "export.xlsx", [("vorige week", [TITLES, ROWS[2]], "hidden"),
+                                                                    ("Orderregels", [TITLES, ROWS[0], ROWS[1]], "visible")])
+    shown = named(EXPORT_SAMPLE_SHOWN, handler(page, "export_sample_shown")(str(seen), *NONE_CHOSEN, "nl"))
+    assert (shown["sample_note"], shown["row"], shown["offered"]) == ("", 1, TITLES)
+    assert [row[3] for row in shown["head"]["data"]] == ["Artikel", "KM-3101", "KM-3102"]          # the sheet that is seen
+    tested = named(EXPORT_TESTED, handler(page, "export_tested")(*export_args(seen, form)))
+    assert tested["note"] == "" and "250302" not in json.dumps(tested["lines"], ensure_ascii=False)   # PO 250302 stands on the hidden sheet
+    two = sheets(tmp_path / "gradio" / "orders2" / "export.xlsx", [("Open", [TITLES, ROWS[0]], "visible"), ("_Geleverd_", [TITLES, ROWS[2]], "visible")])
+    before = path.read_bytes()
+    for language, strings in (("nl", nl), ("en", en)):
+        sentence = strings["exact_export_refused:several_sheets"].format(names="Open, \\_Geleverd\\_")
+        refused = named(EXPORT_SAMPLE_SHOWN, handler(page, "export_sample_shown")(str(two), *NONE_CHOSEN, language))
+        assert (refused["sample_note"], refused["head"]["data"], refused["row"]) == (sentence, [], None)
+        tested = named(EXPORT_TESTED, handler(page, "export_tested")(*export_args(two, form, language=language)))
+        assert tested["reading"] == sentence
+    saved = named(EXPORT_SAVED, handler(page, "export_saved")(*export_args(two, form)))
+    assert saved["note"] == "Niet opgeslagen: " + nl["exact_export_refused:several_sheets"].format(names="Open, \\_Geleverd\\_") and path.read_bytes() == before
+

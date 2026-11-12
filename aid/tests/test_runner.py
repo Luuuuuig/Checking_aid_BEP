@@ -4,7 +4,8 @@ import json
 import os
 import shutil
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
+from email.message import EmailMessage
 from types import SimpleNamespace
 
 import pytest
@@ -15,8 +16,7 @@ from aid.case import open_case
 from aid.connections.microsoft import MicrosoftAccount
 from aid.connections.secrets import SecretStore
 from aid.decider import LlmDecider, NoDecider
-from aid.execution.exact_api import ExactApiWriter
-from aid.execution.writer import PreparedWriter, RetryingWriter, WriterError
+from aid.execution.writer import PreparedWriter
 from aid.messaging import FileMailer, MailerError, SmtpMailer
 from aid.pipeline import read_with_parser, record_dispositions, run_case
 from aid.readers.copilot_client import CopilotClient
@@ -335,21 +335,83 @@ def test_build_deps_without_exact_or_smtp_prepares_and_files(tmp_path):
     assert d.store.root == tmp_path / "po_store"
 
 
-def test_build_deps_with_exact_and_smtp(tmp_path):
-    settings, _ = settings_file(tmp_path, exact_base_url="https://exact.example.com/api", smtp_host="smtp.example.com", smtp_user="aid@example.com",
-                                exact_endpoints={"po_line": "po/{po}/lines/{line}"}, exact_fields={"po_line_price": "NetPrice"})
-    environ = {"AID_MAIL_PASSWORD": "made-up-password", "AID_EXACT_TOKEN": "made-up-token"}
-    d = build_deps(settings, environ)
-    assert isinstance(d.writer, RetryingWriter) and isinstance(d.writer.primary, ExactApiWriter) and isinstance(d.writer.fallback, PreparedWriter)
-    exact = d.writer.primary
-    assert exact.base_url == "https://exact.example.com/api" and exact.endpoints == {"po_line": "po/{po}/lines/{line}"}
-    assert exact.fields["po_line_price"] == "NetPrice" and exact.token() == "made-up-token"
-    environ["AID_EXACT_TOKEN"] = "changed"; assert exact.token() == "changed"           # read at each call
-    del environ["AID_EXACT_TOKEN"]
-    with pytest.raises(WriterError, match="AID_EXACT_TOKEN"):
-        exact.token()
+def test_build_deps_with_smtp(tmp_path):
+    settings, _ = settings_file(tmp_path, smtp_host="smtp.example.com", smtp_user="aid@example.com")
+    d = build_deps(settings, {"AID_MAIL_PASSWORD": "made-up-password"})
+    assert isinstance(d.writer, PreparedWriter)
     assert isinstance(d.mailer, SmtpMailer) and (d.mailer.host, d.mailer.port, d.mailer.user, d.mailer.sender) == (
         "smtp.example.com", 587, "aid@example.com", SETTINGS.aid_email)
+
+
+class Asked(dict):
+    """An environment that keeps the names it was asked for."""
+
+    def __init__(self, *args, **values):
+        super().__init__(*args, **values)
+        self.names = []
+
+    def get(self, name, default=None):
+        self.names.append(name)
+        return super().get(name, default)
+
+    def __getitem__(self, name):
+        self.names.append(name)
+        return super().__getitem__(name)
+
+    def __contains__(self, name):
+        self.names.append(name)
+        return super().__contains__(name)
+
+
+ROUTE_SENTENCE = ('exact_base_url is set, but this version of the aid writes nothing in Exact: every change is prepared for the tab '
+                  '"In Exact invoeren". Remove exact_base_url from the settings file.')
+ROUTE = {"exact_base_url": "https://exact.example.com/api", "exact_endpoints": {"po_line": "po/{po}/lines/{line}"},
+         "exact_fields": {"po_line_price": "NetPrice"}}
+
+
+def test_build_deps_always_gives_the_prepared_writer_and_reads_no_token(tmp_path):
+    """Ruling V10: no command builds the write route. Whatever the settings hold (here the three keys of a route, set in code, as
+    no file can hold them), the writer of the command's Deps is the prepared writer, and the token's variable is never asked for."""
+    settings, _ = settings_file(tmp_path)
+    environ = Asked({"AID_MAIL_PASSWORD": "made-up-password", "AID_EXACT_TOKEN": "made-up-token"})
+    d = build_deps(settings.model_copy(update=ROUTE), environ)
+    assert type(d.writer) is PreparedWriter and d.writer.out_dir == tmp_path / "cases" / "prepared"
+    assert "AID_EXACT_TOKEN" not in environ.names
+    assert not hasattr(aid.runner, "TOKEN_ENV") and not hasattr(aid.runner, "_token")
+
+
+def test_the_runner_refuses_a_settings_file_in_which_exact_base_url_is_set(tmp_path, capsys):
+    """Ruling V10: the command ends with 2 and the one sentence, and writes nothing: no watched folder, no cases, no log."""
+    _, path = settings_file(tmp_path)
+    data = json.loads(path.read_text(encoding="utf-8")) | ROUTE
+    path.write_text(json.dumps(data), encoding="utf-8")
+    assert main(["--settings", str(path), "--max-passes", "1", "--poll-seconds", "0"]) == 2
+    err = capsys.readouterr().err
+    assert err.splitlines() == [f"aid.runner: {ROUTE_SENTENCE}"] and "exact.example.com" not in err
+    assert sorted(entry.name for entry in tmp_path.iterdir()) == ["settings.json"]
+
+
+@pytest.mark.parametrize("held", [{"exact_base_url": None}, {"exact_base_url": ""}, {"exact_base_url": None, "exact_endpoints": ROUTE["exact_endpoints"]}])
+def test_the_runner_starts_as_before_with_exact_base_url_empty(tmp_path, capsys, held):
+    _, path = settings_file(tmp_path)
+    path.write_text(json.dumps(json.loads(path.read_text(encoding="utf-8")) | held), encoding="utf-8")
+    assert main(["--settings", str(path), "--max-passes", "1", "--poll-seconds", "0"]) == 0
+    assert capsys.readouterr().err == "" and (tmp_path / "inbox").is_dir() and (tmp_path / "cases").is_dir()
+
+
+def test_a_running_runner_keeps_its_settings_when_the_file_gets_exact_base_url(tmp_path):
+    """A settings file that gets the key while the runner runs is not used: the settings in use are kept and the log holds the
+    sentence, as for any file that does not validate."""
+    settings, path = settings_file(tmp_path)
+    (tmp_path / "cases").mkdir()
+    loop = aid.runner._Loop(build_deps(settings, {}), path, lambda new: build_deps(new, {}))
+    stat = path.stat()
+    path.write_text(json.dumps(json.loads(path.read_text(encoding="utf-8")) | ROUTE), encoding="utf-8")
+    os.utime(path, ns=(stat.st_mtime_ns + 1_000_000_000, stat.st_mtime_ns + 1_000_000_000))
+    loop.reload()
+    log = (tmp_path / "cases" / "runner.log").read_text(encoding="utf-8")
+    assert log.endswith(f" settings: {ROUTE_SENTENCE}; the settings in use are kept\n") and "exact.example.com" not in log
+    assert loop.deps.settings == settings and type(loop.deps.writer) is PreparedWriter
 
 
 def test_build_deps_without_the_mailbox_password_files_the_messages(tmp_path):
@@ -446,12 +508,12 @@ def test_a_settings_file_that_fails_stops_the_command_without_its_values(tmp_pat
 
 # --- round 2: the answers in the runner ---
 
-def answer_to_the_question(out, inbox, name="antwoord.eml", subject="Re: Vraag over orderbevestiging PO 250111"):
-    """A made-up reply in the inbox to the question the file mailer wrote to `out`."""
+def answer_to_the_question(out, inbox, name="antwoord.eml", subject="Re: Vraag over orderbevestiging PO 250111", sender="s11@example.com"):
+    """A made-up reply in the inbox, from this sender, to the question the file mailer wrote to `out`."""
     from email import message_from_bytes, policy
     [question] = [path for path in out.glob("*.eml") if "Dagoverzicht" not in path.read_text(encoding="utf-8")]
     message_id = message_from_bytes(question.read_bytes(), policy=policy.default)["Message-ID"]
-    (inbox / name).write_bytes(f"From: s11@example.com\nTo: aid@example.com\nSubject: {subject}\nIn-Reply-To: {message_id}\n\n"
+    (inbox / name).write_bytes(f"From: {sender}\nTo: aid@example.com\nSubject: {subject}\nIn-Reply-To: {message_id}\n\n"
                                "De hoeveelheid klopt.\n".encode())
     return question
 
@@ -476,7 +538,7 @@ def test_a_reply_is_reported_in_the_next_digest(tmp_path, madeup_out):
     [latest] = [path for path in digests_in(out) if "13-11-2026" in path.read_text(encoding="utf-8")]
     text = latest.read_text(encoding="utf-8")
     block = text[text.index("Wacht op u"):]
-    assert "250111" in block and "supplier answered: read the reply" in block
+    assert "250111" in block and "De leverancier heeft geantwoord: lees het antwoord" in block      # the reason by its label (Task 44)
 
 
 def test_a_bounce_is_not_reported_as_an_answer(tmp_path, madeup_out):
@@ -959,6 +1021,8 @@ def test_the_runner_passes_the_open_changes_and_open_rows_alone_make_no_per_case
     d = loop_deps(tmp_path, madeup_out, clock=AFTER_DIGEST_TIME, mailer=FileMailer(out, clock=lambda: AFTER_DIGEST_TIME))
     prepared = d.settings.cases_root / "prepared"
     d = d.model_copy(update={"writer": PreparedWriter(prepared)})                  # where build_deps has the changes prepared
+    for stored in d.store.root.glob("*/*/po.json"):  # filed before the tick below, whatever day the suite runs: a print filed after a
+        os.utime(stored, (datetime(2026, 11, 1, 9, 0).timestamp(),) * 2)           # tick that shows another value ends it (Task 43, W9)
     link = list_link(d.settings)
 
     def texts() -> list[str]:
@@ -2356,3 +2420,812 @@ def test_a_list_that_cannot_be_compared_is_logged_once_and_the_pass_goes_on(tmp_
     log = (d.settings.cases_root / "runner.log").read_text(encoding="utf-8").splitlines()
     assert [line.split(" ", 1)[1] for line in log] == ["list of changes: OSError: made-up failure", "list of changes: ran after an earlier failure"]
     assert (d.settings.cases_root / "digests" / "2026-11-12.txt").exists()
+
+
+def test_the_pass_marks_a_change_seen_with_the_time_of_marking(tmp_path, madeup_out, monkeypatch):
+    """The review round of Task 43, W12 (finding 13): the list is compared with the order at the clock's time when that stage runs,
+    not at the time the pass began, so that a mark "seen" is later than every print that the pass filed before it."""
+    import aid.runner
+
+    times = iter(datetime(2026, 11, 12, 9, 0) + timedelta(seconds=n) for n in range(10000))
+    d = loop_deps(tmp_path, madeup_out).model_copy(update={"clock": lambda: next(times)})
+    calls = []
+
+    def seen(prepared, store, cases_root, now):
+        calls.append(now)
+        return 0
+    monkeypatch.setattr(aid.runner, "reconcile", seen)
+    shutil.copy(madeup_out / "MU08_conf.pdf", d.settings.watched_folder)
+    assert run_loop(d, tmp_path / "STOP", poll_seconds=0, max_passes=1) == 1
+    assert len(calls) == 1 and calls[0] > datetime(2026, 11, 12, 9, 0, 1)         # the pass began at 9:00:00, or a second after
+    case = next(path for path in d.settings.cases_root.iterdir() if path.name.startswith("250108_"))
+    started = datetime.fromisoformat(json.loads((case / "audit.json").read_text(encoding="utf-8"))["started_at"])
+    assert calls[0] > started                                                    # after the case of this pass ran
+
+
+# --- the intake file of the tab 'Bestanden' (Task 37) ---
+
+from aid.case import sha256_file  # noqa: E402
+from aid.review.intake import INTAKE_FILE, recent, shown  # noqa: E402
+
+
+def intake_lines(d) -> list[tuple[str, str, str]]:
+    """The lines of <cases_root>/intake.jsonl as (file, outcome, detail), in the order they were written."""
+    path = d.settings.cases_root / INTAKE_FILE
+    if not path.exists():
+        return []
+    return [(line["file"], line["outcome"], line["detail"]) for line in map(json.loads, path.read_text(encoding="utf-8").splitlines())]
+
+
+def test_the_runner_writes_one_intake_line_per_event_and_an_error_file_once(tmp_path, madeup_out):
+    """Rules 5 and 6 and amendment 6: each pass appends a line to the intake file for each event of its scan, at the time of the pass:
+    the file, the outcome and the detail, no more. A file that stays in the watched folder as an error is handled again at every pass
+    and gets one line, also over a restart of the runner, since the record of what was written is kept in the digest state; the same
+    name with another content is another file, with a line of its own. A file that left the folder and is given again is a new
+    arrival, with its line each time. Once the error is put right the file's new outcome gets its line and its record goes."""
+    now = [NINE]
+    d = loop_deps(tmp_path, madeup_out).model_copy(update={"clock": lambda: now[0]})
+    inbox, root, stop = d.settings.watched_folder, d.settings.cases_root, tmp_path / "STOP"
+    shutil.copy(madeup_out / "MU01_conf.pdf", inbox)
+    (inbox / "bad.pdf").write_bytes(b"not a PDF")
+    (inbox / "notes.docx").write_bytes(b"made-up")
+    assert run_loop(d, stop, poll_seconds=0, max_passes=3) == 3
+    first = [("MU01_conf.pdf", "case", "250101_20261112T090000"), ("bad.pdf", "error", ""), ("notes.docx", "skipped", "unsupported file type: .docx")]
+    assert intake_lines(d) == first
+    assert [json.loads(line) for line in (root / INTAKE_FILE).read_text(encoding="utf-8").splitlines()][0] == {
+        "time": "2026-11-12T09:00:00", "file": "MU01_conf.pdf", "outcome": "case", "detail": "250101_20261112T090000"}
+    state = json.loads((root / "digest_state.json").read_text(encoding="utf-8"))
+    assert state["intake"] == {"bad.pdf": {"sha256": sha256_file(inbox / "bad.pdf"), "since": "2026-11-12T09:00:00",
+                                           "written": [["bad.pdf", "error", ""]]}}
+    now[0] = datetime(2026, 11, 12, 9, 5)
+    assert run_loop(d, stop, poll_seconds=0, max_passes=2) == 2                               # a restart: still one line
+    assert intake_lines(d) == first
+    (inbox / "bad.pdf").write_bytes(b"still not a PDF")                                     # another content under the same name
+    run_loop(d, stop, poll_seconds=0, max_passes=2)
+    assert intake_lines(d)[3:] == [("bad.pdf", "error", "")]
+    for minute in (10, 11):                                                                   # given again after it left the folder
+        now[0] = datetime(2026, 11, 12, 9, minute)
+        shutil.copy(madeup_out / "MU01_conf.pdf", inbox)
+        run_loop(d, stop, poll_seconds=0, max_passes=1)
+    assert intake_lines(d)[4:] == [("MU01_conf.pdf", "skipped", "duplicate")] * 2
+    shutil.copy(madeup_out / "MU02_conf.pdf", inbox / "bad.pdf")                              # the error put right
+    now[0] = datetime(2026, 11, 12, 9, 12)
+    run_loop(d, stop, poll_seconds=0, max_passes=2)
+    assert intake_lines(d)[6:] == [("bad.pdf", "case", "250102_20261112T091200")] and not (inbox / "bad.pdf").exists()
+    assert "intake" not in json.loads((root / "digest_state.json").read_text(encoding="utf-8"))
+    assert sorted(path.name for path in root.iterdir() if path.is_file()) == ["digest_state.json", INTAKE_FILE, "runner.log"]
+
+
+def test_an_e_mail_that_stays_as_an_error_gets_the_lines_of_its_attachments_once(tmp_path, madeup_out):
+    """Rule 5 for an e-mail that stays in the folder because one of its attachments raised: every pass handles its attachments again,
+    and the second outcome of one that was handled, received before, is no new line, nor is the error again."""
+    d = loop_deps(tmp_path, madeup_out)
+    inbox = d.settings.watched_folder
+    mail = EmailMessage()
+    mail["From"], mail["To"], mail["Subject"] = "s01@example.com", "aid@example.com", "Orderbevestiging"
+    mail.set_content("Bijgaand onze orderbevestiging.")
+    mail.add_attachment((madeup_out / "MU01_conf.pdf").read_bytes(), maintype="application", subtype="pdf", filename="MU01_conf.pdf")
+    mail.add_attachment(b"not a PDF", maintype="application", subtype="pdf", filename="kapot.pdf")
+    (inbox / "m.eml").write_bytes(bytes(mail))
+    assert run_loop(d, tmp_path / "STOP", poll_seconds=0, max_passes=4) == 4
+    assert intake_lines(d) == [("m.eml/MU01_conf.pdf", "case", "250101_20261112T090000"), ("m.eml/kapot.pdf", "error", "")]
+    assert (inbox / "m.eml").exists()
+
+
+def test_a_case_checked_again_gets_its_line(tmp_path, madeup_out):
+    """Task 36's check again writes its own line, after the lines of the scan of its pass: the document of the case that waited, the
+    outcome "recheck" and the id of the new case, shown as 'Inkooporder 250101 is binnen: de wachtende zaak is opnieuw
+    gecontroleerd'."""
+    now = [NINE]
+    d = waiting_deps(tmp_path, madeup_out, now)
+    loop = _Loop(d)
+    shutil.copy(madeup_out / "MU01_conf.pdf", d.settings.watched_folder)
+    _pass(loop)
+    [first] = cases_of(d, "250101")
+    now[0] = datetime(2026, 11, 12, 9, 2)
+    shutil.copy(madeup_out / "MU01_po_v1.pdf", d.settings.watched_folder)
+    _pass(loop)
+    [_, second] = cases_of(d, "250101")
+    assert intake_lines(d) == [("MU01_conf.pdf", "case", first.name), ("MU01_po_v1.pdf", "po", "250101 v1"),
+                               ("MU01_conf.pdf", "recheck", second.name)]
+    assert [shown(line, "nl") for line in recent(d.settings.cases_root)] == [
+        "Inkooporder 250101 is binnen: de wachtende zaak is opnieuw gecontroleerd", "Inkooporder 250101 opgenomen (versie 1)",
+        "Zaak geopend voor inkooporder 250101"]
+
+
+def test_an_intake_file_that_cannot_be_written_is_logged_once_and_the_pass_goes_on(tmp_path, madeup_out):
+    """Ruling O3 (finding 3): an intake file that cannot be written (a folder in its place here; another program could hold it) is
+    logged as the stage "intake file" once in a run of the loop, with the number of lines that wait, and the cases run as before. The
+    loop keeps those lines, each with the time of its own pass, and writes them in their order before the lines of the next pass that
+    can write, which the log says too: the line of the case opened in the pass that failed is written, at the time of that pass, and a
+    file that stays has its one line."""
+    now = [NINE]
+    d = loop_deps(tmp_path, madeup_out).model_copy(update={"clock": lambda: now[0]})
+    root = d.settings.cases_root
+    (root / INTAKE_FILE).mkdir(parents=True)
+    shutil.copy(madeup_out / "MU01_conf.pdf", d.settings.watched_folder)
+    (d.settings.watched_folder / "bad.pdf").write_bytes(b"not a PDF")
+    loop = _Loop(d)
+    _pass(loop)
+    now[0] = datetime(2026, 11, 12, 9, 1)
+    _pass(loop)
+    assert len(list(root.glob("250101_*/steps/08_result.json"))) == 1
+
+    def intake_log() -> list[str]:
+        lines = (root / "runner.log").read_text(encoding="utf-8").splitlines()
+        return [line.split(" ", 1)[1].replace("PermissionError", "IsADirectoryError") for line in lines if " intake file: " in line]
+    waiting = "intake file: IsADirectoryError: 2 lines could not be written; they wait for the next pass"   # PermissionError on Windows
+    assert intake_log() == [waiting]
+    state = json.loads((root / "digest_state.json").read_text(encoding="utf-8"))
+    assert state["intake"]["bad.pdf"]["written"] == []                  # ruling O17: the line only waits, so the record names none
+    (root / INTAKE_FILE).rmdir()
+    now[0] = datetime(2026, 11, 12, 9, 2)
+    _pass(loop)
+    _pass(loop)
+    assert intake_lines(d) == [("MU01_conf.pdf", "case", "250101_20261112T090000"), ("bad.pdf", "error", "")]
+    assert [line["time"] for line in recent(root)] == ["2026-11-12T09:00:00"] * 2
+    assert intake_log() == [waiting, "intake file: ran after an earlier failure; 2 lines that waited are written"]
+    state = json.loads((root / "digest_state.json").read_text(encoding="utf-8"))
+    assert state["intake"]["bad.pdf"]["written"] == [["bad.pdf", "error", ""]]    # written now, and so in the record
+
+
+# --- the review round of the intake file (rulings O1 to O4, O7, O8 and O10) ---
+
+from datetime import timedelta  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+from aid.madeup.generate import TRYOUT_EXPORT_COLUMNS  # noqa: E402
+from aid.review.exact_settings import unread  # noqa: E402
+from aid.runner import STAY_DAYS  # noqa: E402
+from aid.tests.fakes import FakeDecider  # noqa: E402
+from aid.tests.helpers import ANDERS_LAYOUT  # noqa: E402
+
+DAY = timedelta(days=1)
+FAR = datetime(2100, 1, 1)                     # a time long after any file of a test came into the watched folder (unread counts by it)
+EXPORT_NL = REPO_ROOT / "aid" / "madeup" / "tryout" / "EXPORT_nl.csv"     # the made-up export in a Dutch form: refused with the made-up map
+
+
+class DeciderDown:
+    """A decider whose service cannot be reached: it raises, as the client of a real one does."""
+    name = "unreachable"
+
+    def decide(self, d):
+        raise ConnectionError("made-up: no connection")
+
+
+def raw_intake(d) -> list[dict]:
+    path = d.settings.cases_root / INTAKE_FILE
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()] if path.exists() else []
+
+
+def intake_record(d) -> dict:
+    return json.loads((d.settings.cases_root / "digest_state.json").read_text(encoding="utf-8")).get("intake", {})
+
+
+def test_a_file_that_cannot_be_opened_has_one_line_until_it_can_be_read(tmp_path, madeup_out, monkeypatch):
+    """Ruling O1 (finding 1, the reviewers' probe_locked.py): a file that stays because it cannot even be opened (another program holds
+    it without sharing it; here sha256_file raises PermissionError for it) is kept in the record by its name, without a sha256, and
+    counts as the same file at every pass until its content can be read: over four passes it has one error line, and once it can be
+    read the line of what it became, its PO filed. One that is still an error once it can be read gets no second line, since a line
+    that says the same as the last line of its document is never written again, and from then on its record holds its sha256."""
+    now = [NINE]
+    d = waiting_deps(tmp_path, madeup_out, now)
+    inbox, root = d.settings.watched_folder, d.settings.cases_root
+    held = {"Inkooporder 250101.pdf", "kapot.pdf"}
+    real = aid.runner.sha256_file
+
+    def sha256_file(path):
+        if Path(path).parent == inbox and Path(path).name in held:
+            raise PermissionError(13, "made-up: the file is in use by another program")
+        return real(path)
+    monkeypatch.setattr(aid.runner, "sha256_file", sha256_file)
+    monkeypatch.setattr("aid.sources.mailbox.sha256_file", sha256_file)
+    shutil.copy(madeup_out / "MU01_po_v1.pdf", inbox / "Inkooporder 250101.pdf")
+    (inbox / "kapot.pdf").write_bytes(b"not a PDF")
+    loop = _Loop(d)
+    for minute in range(1, 7):
+        if minute == 5:
+            held.clear()                                           # the other program lets go of the files
+        now[0] = datetime(2026, 11, 12, 9, minute)
+        _pass(loop)
+        if minute == 4:
+            assert intake_lines(d) == [("Inkooporder 250101.pdf", "error", ""), ("kapot.pdf", "error", "")]
+            assert {name: record["sha256"] for name, record in intake_record(d).items()} == {"Inkooporder 250101.pdf": None, "kapot.pdf": None}
+    assert intake_lines(d) == [("Inkooporder 250101.pdf", "error", ""), ("kapot.pdf", "error", ""), ("Inkooporder 250101.pdf", "po", "250101 v1")]
+    assert raw_intake(d)[-1]["time"] == "2026-11-12T09:05:00" and (inbox / "processed" / "Inkooporder 250101.pdf").exists()
+    assert intake_record(d) == {"kapot.pdf": {"sha256": real(inbox / "kapot.pdf"), "since": "2026-11-12T09:01:00", "written": [["kapot.pdf", "error", ""]]}}
+    (inbox / "kapot.pdf").write_bytes(b"another content under the same name")
+    now[0] = datetime(2026, 11, 12, 9, 7)
+    _pass(loop)
+    assert intake_lines(d)[3:] == [("kapot.pdf", "error", "")]
+
+
+def test_received_before_is_written_after_a_line_that_told_no_filing(tmp_path, madeup_out):
+    """Ruling O2 (finding 2): while a file stays, 'received before' of one of its documents is kept back only when the last line written
+    of that document told a filing (a PO, a case, a guess, an export, an answer, a check again) or was 'received before' itself; after a
+    line that says it could not be read it is written, so that the table's last word on the document is true. The reviewers' two
+    sequences: a PO refused while the layout was wrong and given again once it is right, under a name that sorts first; and a scan
+    given twice while the decider raised, whose copy is received before once the decider answers."""
+    now = [NINE]
+    d = waiting_deps(tmp_path / "layout", madeup_out, now)
+    inbox = d.settings.watched_folder
+    loop = _Loop(d.model_copy(update={"settings": d.settings.model_copy(update={"po_layout": ANDERS_LAYOUT})}))
+    shutil.copy(madeup_out / "MU01_po_v1.pdf", inbox / "Inkooporder 250101.pdf")
+    now[0] = datetime(2026, 11, 12, 9, 1)
+    _pass(loop)
+    loop.deps = d                                                  # the layout put right: for the made-up PO, no layout
+    shutil.copy(madeup_out / "MU01_po_v1.pdf", inbox / "Inkooporder 250101 (1).pdf")
+    now[0] = datetime(2026, 11, 12, 9, 2)
+    _pass(loop)
+    assert intake_lines(d) == [("Inkooporder 250101.pdf", "error", ""), ("Inkooporder 250101 (1).pdf", "po", "250101 v1"),
+                               ("Inkooporder 250101.pdf", "skipped", "duplicate")]
+    assert sorted(path.name for path in (inbox / "processed").iterdir()) == ["Inkooporder 250101 (1).pdf", "Inkooporder 250101.pdf"]
+    now = [NINE]
+    d = waiting_deps(tmp_path / "decider", madeup_out, now)
+    inbox = d.settings.watched_folder
+    loop = _Loop(d.model_copy(update={"decider": DeciderDown()}))
+    shutil.copy(madeup_out / "MU05_conf.pdf", inbox / "scan bevestiging.pdf")
+    now[0] = datetime(2026, 11, 12, 9, 1)
+    _pass(loop)
+    shutil.copy(madeup_out / "MU05_conf.pdf", inbox / "scan bevestiging_2.pdf")       # given again on the tab: the name is taken
+    now[0] = datetime(2026, 11, 12, 9, 2)
+    _pass(loop)
+    loop.deps = d.model_copy(update={"decider": FakeDecider("confirmation", 0.9)})
+    now[0] = datetime(2026, 11, 12, 9, 3)
+    _pass(loop)
+    [case] = [path.name for path in d.settings.cases_root.iterdir() if (path / "case.json").exists()]
+    assert intake_lines(d) == [("scan bevestiging.pdf", "error", ""), ("scan bevestiging_2.pdf", "error", ""),
+                               ("scan bevestiging.pdf", "case", case), ("scan bevestiging_2.pdf", "skipped", "duplicate")]
+    assert intake_record(d) == {}
+
+
+def test_a_check_again_whose_line_cannot_be_written_has_it_written_at_the_next_pass(tmp_path, madeup_out):
+    """Ruling O3: the line of a check again that cannot be written waits in the loop as the lines of the scan do, after them, and is
+    written at the next pass with the time of the pass that checked the case again."""
+    now = [NINE]
+    d = waiting_deps(tmp_path, madeup_out, now)
+    root, inbox = d.settings.cases_root, d.settings.watched_folder
+    loop = _Loop(d)
+    shutil.copy(madeup_out / "MU01_conf.pdf", inbox)
+    _pass(loop)
+    [first] = cases_of(d, "250101")
+    (root / INTAKE_FILE).rename(root / "intake.kept")
+    (root / INTAKE_FILE).mkdir()
+    now[0] = datetime(2026, 11, 12, 9, 2)
+    shutil.copy(madeup_out / "MU01_po_v1.pdf", inbox)
+    _pass(loop)
+    [_, second] = cases_of(d, "250101")
+    (root / INTAKE_FILE).rmdir()
+    (root / "intake.kept").rename(root / INTAKE_FILE)
+    now[0] = datetime(2026, 11, 12, 9, 3)
+    _pass(loop)
+    assert [(line["time"][11:16], line["file"], line["outcome"], line["detail"]) for line in raw_intake(d)] == [
+        ("09:00", "MU01_conf.pdf", "case", first.name), ("09:02", "MU01_po_v1.pdf", "po", "250101 v1"),
+        ("09:02", "MU01_conf.pdf", "recheck", second.name)]
+
+
+def test_the_record_lives_in_the_loop_while_the_state_cannot_be_written(tmp_path, madeup_out):
+    """Ruling O4 (finding 4, the reviewers' sequence): the record of the lines written of the files that stay is kept in the loop beside
+    the state, as a closed digest period is: within a run of the loop the loop's record decides, and the copy in the state file is what
+    a new run starts from. While digest_state.json cannot be written (a folder stands where its new copy is written) over four passes,
+    a broken PDF and an e-mail with a confirmation and a broken attachment have three lines, not fifteen; once the state can be
+    written its copy holds the record."""
+    now = [NINE]
+    d = waiting_deps(tmp_path, madeup_out, now)
+    root, inbox = d.settings.cases_root, d.settings.watched_folder
+    loop = _Loop(d)
+    shutil.copy(madeup_out / "MU01_po_v1.pdf", inbox / "po.pdf")
+    now[0] = datetime(2026, 11, 12, 9, 1)
+    _pass(loop)
+    (root / "digest_state.json.tmp").mkdir()
+    (inbox / "kapot.pdf").write_bytes(b"not a PDF")
+    mail = EmailMessage()
+    mail["From"], mail["To"], mail["Subject"] = "sales@s01.example.com", "aid@example.com", "Orderbevestiging"
+    mail.set_content("Bijgaand onze orderbevestiging.")
+    mail.add_attachment((madeup_out / "MU01_conf.pdf").read_bytes(), maintype="application", subtype="pdf", filename="conf.pdf")
+    mail.add_attachment(b"not a PDF either", maintype="application", subtype="pdf", filename="stuk.pdf")
+    (inbox / "m1.eml").write_bytes(bytes(mail))
+    for minute in (2, 3, 4, 5):
+        now[0] = datetime(2026, 11, 12, 9, minute)
+        _pass(loop)
+    (root / "digest_state.json.tmp").rmdir()
+    for minute in (6, 7):
+        now[0] = datetime(2026, 11, 12, 9, minute)
+        _pass(loop)
+    assert intake_lines(d) == [("po.pdf", "po", "250101 v1"), ("kapot.pdf", "error", ""), ("m1.eml/conf.pdf", "case", "250101_20261112T090200"),
+                               ("m1.eml/stuk.pdf", "error", "")]
+    assert {name: record["since"] for name, record in intake_record(d).items()} == {"kapot.pdf": "2026-11-12T09:02:00", "m1.eml": "2026-11-12T09:02:00"}
+    now[0] = datetime(2026, 11, 12, 9, 8)
+    assert run_loop(d, tmp_path / "STOP", poll_seconds=0, max_passes=1) == 1                  # a new run starts from the state's copy
+    assert len(intake_lines(d)) == 4
+
+
+def test_the_lines_of_a_scan_are_written_before_its_cases_are_reported(tmp_path, madeup_out):
+    """Ruling O4 (the reviewers' seed 100326): the intake lines of a scan are written first, before the cases that a supplier's reply
+    put in review are reported and the scan's skipped list is noted, so that a failure there (the state cannot be written, which the
+    report of a case raises) loses no line; the file that stays keeps its one line at the next pass."""
+    from aid.tests.test_mailbox import answer_eml, asked_case
+    now = [NINE]
+    d = loop_deps(tmp_path, madeup_out).model_copy(update={"clock": lambda: now[0]})
+    root, inbox = d.settings.cases_root, d.settings.watched_folder
+    asked = asked_case(tmp_path, madeup_out)
+    (root / "digest_state.json.tmp").mkdir()
+    answer_eml(inbox / "antwoord.eml", "Re: Vraag over orderbevestiging PO 250117")
+    (inbox / "kapot.pdf").write_bytes(b"not a PDF")
+    loop = _Loop(d)
+    _pass(loop)
+    now[0] = datetime(2026, 11, 12, 9, 1)
+    _pass(loop)
+    assert intake_lines(d) == [("antwoord.eml", "answer", asked.case_id), ("kapot.pdf", "error", "")]
+    assert "scan: " in (root / "runner.log").read_text(encoding="utf-8")
+
+
+def test_a_handled_file_that_cannot_be_moved_keeps_its_one_line(tmp_path, madeup_out, monkeypatch):
+    """Ruling O7 (finding 6, the reviewers' sequence): a file that the scan handled and cannot move to processed/ (on Windows another
+    program holds it; here Path.rename raises PermissionError for one pass) keeps the line of what it became as its only line; the
+    digest and runner.log name the failure of the move, as before. At the next pass it is received before, which is kept back after
+    its filing line, and it is moved."""
+    now = [NINE]
+    d = waiting_deps(tmp_path, madeup_out, now)
+    root, inbox = d.settings.cases_root, d.settings.watched_folder
+    rename = Path.rename
+
+    def refused(self, target):
+        if self.name == "po.pdf" and self.parent == inbox:
+            raise PermissionError(13, "made-up: the file is in use by another program")
+        return rename(self, target)
+    shutil.copy(madeup_out / "MU01_po_v1.pdf", inbox / "po.pdf")
+    monkeypatch.setattr(Path, "rename", refused)
+    loop = _Loop(d)
+    _pass(loop)
+    assert intake_lines(d) == [("po.pdf", "po", "250101 v1")] and (inbox / "po.pdf").exists()
+    assert "scan po.pdf: error: " in (root / "runner.log").read_text(encoding="utf-8")
+    monkeypatch.setattr(Path, "rename", rename)
+    now[0] = datetime(2026, 11, 12, 9, 1)
+    _pass(loop)
+    assert intake_lines(d) == [("po.pdf", "po", "250101 v1")] and (inbox / "processed" / "po.pdf").exists() and intake_record(d) == {}
+
+
+def test_a_file_that_stays_thirty_days_is_set_aside_with_one_line(tmp_path, madeup_out):
+    """Ruling O8: a file that stays is not tried for ever. Its record holds since when (the time of the pass that wrote its first line
+    as a staying file), and a pass that tries it again, finds it still an error and comes STAY_DAYS days or more after that moves it to
+    processed/ as a handled file and writes one line, the outcome "set_aside" with the whole days since then. A broken PDF and a refused
+    export, at passes 29 and 31 days after the first (the Deps' clock): nothing at day 29, set aside at day 31. The state line of the
+    unread files no longer counts them, and their record goes."""
+    now = [NINE]
+    d = waiting_deps(tmp_path, madeup_out, now)
+    d = d.model_copy(update={"settings": d.settings.model_copy(update={"export_columns": TRYOUT_EXPORT_COLUMNS, "export_decimal_comma": True})})
+    root, inbox = d.settings.cases_root, d.settings.watched_folder
+    shutil.copy(EXPORT_NL, inbox / "export.csv")
+    (inbox / "kapot.pdf").write_bytes(b"not a PDF")
+    loop = _Loop(d)
+    _pass(loop)
+    first = [("export.csv", "error", "export: no_po_number"), ("kapot.pdf", "error", "")]
+    assert intake_lines(d) == first and STAY_DAYS == 30
+    now[0] = NINE + 29 * DAY
+    _pass(loop)
+    assert intake_lines(d) == first and unread(inbox, FAR) == 2
+    now[0] = NINE + 31 * DAY
+    _pass(loop)
+    assert intake_lines(d) == [*first, ("export.csv", "set_aside", "31"), ("kapot.pdf", "set_aside", "31")]
+    assert raw_intake(d)[-1]["time"] == "2026-12-13T09:00:00"
+    assert sorted(path.name for path in (inbox / "processed").iterdir()) == ["export.csv", "kapot.pdf"]
+    assert unread(inbox, FAR) == 0 and intake_record(d) == {}
+    now[0] = NINE + 32 * DAY
+    _pass(loop)
+    assert len(intake_lines(d)) == 4
+
+
+def test_a_file_read_on_day_31_is_filed_and_a_file_replaced_under_its_name_starts_anew(tmp_path, madeup_out):
+    """Ruling O8: a file read on day 31 because the layout was put right is filed, not set aside; a file with another content under the
+    same name starts anew, so a file replaced on day 20 stays until day 50, when 30 days have passed since its new first line."""
+    now = [NINE]
+    d = waiting_deps(tmp_path, madeup_out, now)
+    inbox = d.settings.watched_folder
+    loop = _Loop(d.model_copy(update={"settings": d.settings.model_copy(update={"po_layout": ANDERS_LAYOUT})}))
+    shutil.copy(madeup_out / "MU01_po_v1.pdf", inbox / "Inkooporder 250101.pdf")
+    (inbox / "kapot.pdf").write_bytes(b"not a PDF")
+    _pass(loop)
+    now[0] = NINE + 20 * DAY
+    (inbox / "kapot.pdf").write_bytes(b"still not a PDF")                         # another content under the same name
+    _pass(loop)
+    now[0] = NINE + 31 * DAY
+    loop.deps = d                                                                    # the layout put right
+    _pass(loop)
+    assert intake_lines(d) == [("Inkooporder 250101.pdf", "error", ""), ("kapot.pdf", "error", ""), ("kapot.pdf", "error", ""),
+                               ("Inkooporder 250101.pdf", "po", "250101 v1")]
+    assert (inbox / "processed" / "Inkooporder 250101.pdf").exists() and (inbox / "kapot.pdf").exists()
+    assert intake_record(d)["kapot.pdf"]["since"] == "2026-12-02T09:00:00"
+    now[0] = NINE + 49 * DAY
+    _pass(loop)
+    assert len(intake_lines(d)) == 4 and (inbox / "kapot.pdf").exists()
+    now[0] = NINE + 50 * DAY
+    _pass(loop)
+    assert intake_lines(d)[4:] == [("kapot.pdf", "set_aside", "30")] and (inbox / "processed" / "kapot.pdf").exists()
+
+
+def test_an_e_mail_with_a_failing_attachment_is_set_aside_whole(tmp_path, madeup_out):
+    """Ruling O8: an e-mail that stays because one of its attachments is an error is set aside whole, with one line that names the
+    e-mail; the attachment it filed before is received before, which is no new line."""
+    now = [NINE]
+    d = loop_deps(tmp_path, madeup_out).model_copy(update={"clock": lambda: now[0]})
+    inbox = d.settings.watched_folder
+    mail = EmailMessage()
+    mail["From"], mail["To"], mail["Subject"] = "sales@s01.example.com", "aid@example.com", "Orderbevestiging"
+    mail.set_content("Bijgaand onze orderbevestiging.")
+    mail.add_attachment((madeup_out / "MU01_conf.pdf").read_bytes(), maintype="application", subtype="pdf", filename="MU01_conf.pdf")
+    mail.add_attachment(b"not a PDF", maintype="application", subtype="pdf", filename="kapot.pdf")
+    (inbox / "m.eml").write_bytes(bytes(mail))
+    loop = _Loop(d)
+    _pass(loop)
+    now[0] = NINE + 31 * DAY
+    _pass(loop)
+    assert intake_lines(d) == [("m.eml/MU01_conf.pdf", "case", "250101_20261112T090000"), ("m.eml/kapot.pdf", "error", ""),
+                               ("m.eml", "set_aside", "31")]
+    assert [path.name for path in inbox.iterdir()] == ["processed"] and (inbox / "processed" / "m.eml").exists()
+
+
+def test_a_file_to_set_aside_that_cannot_be_moved_is_tried_again_without_a_second_line(tmp_path, madeup_out, monkeypatch):
+    """Ruling O8: a file that is to be set aside and cannot be moved then (another program holds it) stays, is tried again at the next
+    pass without a second line, and has its one line "set_aside" once it is moved; the failure of the move is logged once."""
+    now = [NINE]
+    d = waiting_deps(tmp_path, madeup_out, now)
+    root, inbox = d.settings.cases_root, d.settings.watched_folder
+    (inbox / "kapot.pdf").write_bytes(b"not a PDF")
+    loop = _Loop(d)
+    _pass(loop)
+    rename = Path.rename
+
+    def refused(self, target):
+        if self.name == "kapot.pdf" and self.parent == inbox:
+            raise PermissionError(13, "made-up: the file is in use by another program")
+        return rename(self, target)
+    monkeypatch.setattr(Path, "rename", refused)
+    for minute in (0, 1):
+        now[0] = NINE + 31 * DAY + minute * timedelta(minutes=1)
+        _pass(loop)
+    assert intake_lines(d) == [("kapot.pdf", "error", "")] and (inbox / "kapot.pdf").exists()
+    log = [line.split(" ", 1)[1] for line in (root / "runner.log").read_text(encoding="utf-8").splitlines() if "set aside" in line]
+    assert log == ["set aside kapot.pdf: PermissionError: the file stays in the watched folder and is tried again at the next pass"]
+    monkeypatch.setattr(Path, "rename", rename)
+    now[0] = NINE + 32 * DAY
+    _pass(loop)
+    assert intake_lines(d) == [("kapot.pdf", "error", ""), ("kapot.pdf", "set_aside", "32")] and (inbox / "processed" / "kapot.pdf").exists()
+
+
+@pytest.mark.parametrize("record", [
+    {"kapot.pdf": {"sha256": 3, "since": "2026-11-12T09:00:00", "written": []}},                       # a sha256 that is no text
+    {"kapot.pdf": {"sha256": None, "since": "gisteren", "written": []}},                               # a since that is no time
+    {"kapot.pdf": {"sha256": None, "written": []}},                                                    # no since
+    {"kapot.pdf": {"sha256": None, "since": "2026-11-12T09:00:00", "written": [["kapot.pdf", "error"]]}},  # a line of two parts
+    {"kapot.pdf": {"sha256": None, "since": "2026-11-12T09:00:00", "written": [], "x": 1}},          # a key too many
+    ["kapot.pdf"]])
+def test_a_state_whose_intake_record_has_not_its_form_starts_fresh(tmp_path, madeup_out, record):
+    """Ruling O10 (c), amendment 6: a state file whose intake record has not its form is not taken as it is: a fresh state is started,
+    with one line in the log that names the key, and the file that stays gets its line again. A record of a file that cannot be read
+    (no sha256) is a record of its form."""
+    d = loop_deps(tmp_path, madeup_out)
+    root, inbox = d.settings.cases_root, d.settings.watched_folder
+    root.mkdir(parents=True)
+    (root / "digest_state.json").write_text(json.dumps({"last_sent": None, "reported": [], "skipped": [], "intake": record}), encoding="utf-8")
+    (inbox / "kapot.pdf").write_bytes(b"not a PDF")
+    assert run_loop(d, tmp_path / "STOP", poll_seconds=0, max_passes=1) == 1
+    log = (root / "runner.log").read_text(encoding="utf-8").splitlines()
+    assert [line.split(" ", 1)[1] for line in log if "digest_state.json" in line] == [
+        "digest_state.json: ValueError: its intake is not the lines written of the files that stay in the watched folder; a fresh state is started"]
+    assert intake_lines(d) == [("kapot.pdf", "error", "")]
+    well_formed = {"kapot.pdf": {"sha256": None, "since": "2026-11-12T08:00:00", "written": [["kapot.pdf", "error", ""]]}}
+    (root / "digest_state.json").write_text(json.dumps({"last_sent": None, "reported": [], "skipped": [], "intake": well_formed}), encoding="utf-8")
+    assert run_loop(d, tmp_path / "STOP", poll_seconds=0, max_passes=1) == 1
+    assert intake_lines(d) == [("kapot.pdf", "error", "")] and intake_record(d)["kapot.pdf"]["since"] == "2026-11-12T08:00:00"
+
+
+# --- the second review round (rulings O17 to O19 and O23) ---
+
+def test_a_runner_stopped_while_lines_wait_writes_the_line_of_a_file_that_stays_at_its_next_run(tmp_path, madeup_out):
+    """Ruling O17 (findings 2 and 5, the checkers' d_stop.py and my_stop_cmp.py): the record of a file that stays, in the loop and in the
+    state, names as written only the lines that intake.jsonl holds; a line that waits in the loop is added to it when its write
+    succeeds. So a runner that stops while lines wait loses those lines (ruling O3 allows that: here the line of the case of a
+    confirmation, which exists all the same), and the next run writes the line of the file that still stays, once, at the time of its
+    own pass. One line of the first write that failed is "1 line could not be written; it waits for the next pass" (ruling O23)."""
+    now = [datetime(2026, 11, 12, 9, 1)]
+    d = loop_deps(tmp_path, madeup_out).model_copy(update={"clock": lambda: now[0]})
+    root, inbox, stop = d.settings.cases_root, d.settings.watched_folder, tmp_path / "STOP"
+    (root / INTAKE_FILE).mkdir(parents=True)
+    shutil.copy(madeup_out / "MU01_conf.pdf", inbox / "bevestiging.pdf")
+    (inbox / "kapot.pdf").write_bytes(b"not a PDF")
+    assert run_loop(d, stop, poll_seconds=0, max_passes=2) == 2        # then STOP: the run ends between two passes
+    assert intake_record(d) == {"kapot.pdf": {"sha256": sha256_file(inbox / "kapot.pdf"), "since": "2026-11-12T09:01:00", "written": []}}
+    (root / INTAKE_FILE).rmdir()
+    now[0] = datetime(2026, 11, 12, 9, 3)
+    assert run_loop(d, stop, poll_seconds=0, max_passes=3) == 3
+    assert [(line["time"][11:16], line["file"], line["outcome"]) for line in raw_intake(d)] == [("09:03", "kapot.pdf", "error")]
+    assert len(cases_of(d, "250101")) == 1 and intake_record(d)["kapot.pdf"]["written"] == [["kapot.pdf", "error", ""]]
+    # a pass whose one line cannot be written says so in the singular
+    (root / INTAKE_FILE).rename(root / "intake.kept")
+    (root / INTAKE_FILE).mkdir()
+    (inbox / "notes.docx").write_bytes(b"made-up")
+    now[0] = datetime(2026, 11, 12, 9, 10)
+    run_loop(d, stop, poll_seconds=0, max_passes=1)
+    log = (root / "runner.log").read_text(encoding="utf-8").replace("PermissionError", "IsADirectoryError")
+    assert "intake file: IsADirectoryError: 1 line could not be written; it waits for the next pass" in log
+
+
+def test_a_file_set_aside_is_named_in_runner_log_and_once_in_the_next_digest(tmp_path, madeup_out):
+    """Ruling O18 (finding 3, the checkers' d_safe.py po_waited_for): a set-aside is told in three places: its line on the tab, a line
+    in runner.log with the file and its whole days, and once in the next digest's list of skipped files, with the reason "set aside
+    after {n} days without being read" as the digest gives its other reasons. A PO PDF that the layout of the settings does not fit,
+    and that a case waits for, with passes after the time of the daily digest: the digest of each day it stays names its error, the
+    digest of the pass that sets it aside names the file once, with the set-aside, and the next digest does not name it."""
+    start = datetime(2026, 11, 12, 16, 31)
+    now = [start]
+    d = waiting_deps(tmp_path, madeup_out, now)
+    root, inbox = d.settings.cases_root, d.settings.watched_folder
+    loop = _Loop(d.model_copy(update={"settings": d.settings.model_copy(update={"po_layout": ANDERS_LAYOUT})}))
+    shutil.copy(madeup_out / "MU01_po_v1.pdf", inbox / "Inkooporder 250101.pdf")
+    shutil.copy(madeup_out / "MU01_conf.pdf", inbox / "bevestiging.pdf")
+
+    def named(day: str) -> list[str]:
+        text = (root / "digests" / f"{day}.txt").read_text(encoding="utf-8")
+        return [line.strip() for line in text.splitlines() if "Inkooporder 250101.pdf" in line]
+    for days in (0, 29, 30, 31):
+        now[0] = start + days * DAY
+        _pass(loop)
+    assert [line.startswith("- Inkooporder 250101.pdf: error: ") for line in named("2026-11-12") + named("2026-12-11")] == [True, True]
+    assert named("2026-12-12") == ["- Inkooporder 250101.pdf: set aside after 30 days without being read"]
+    assert named("2026-12-13") == []
+    assert intake_lines(d)[-1] == ("Inkooporder 250101.pdf", "set_aside", "30")
+    log = [line.split(" ", 1)[1] for line in (root / "runner.log").read_text(encoding="utf-8").splitlines() if " set aside " in f" {line}"]
+    assert log == ["set aside Inkooporder 250101.pdf: not read after 30 days; moved to processed/"]
+
+
+def test_a_document_whose_lines_go_error_skipped_error_gets_its_third_line(tmp_path, madeup_out):
+    """Ruling O19 (finding 4, the checkers' mutant M6 and my_m6.py): of a file that stays, a line is kept back only when it says the same
+    as the last line of its document, not as any line of it. An e-mail stays for a broken attachment; its scan, which only the AI
+    service can class, is an error while the service cannot be reached, then a document to look at while the service cannot class it,
+    then an error again: three lines, so that the table's last word on the scan is true."""
+    now = [NINE]
+    d = waiting_deps(tmp_path, madeup_out, now)
+    inbox = d.settings.watched_folder
+    mail = EmailMessage()
+    mail["From"], mail["To"], mail["Subject"] = "sales@s05.example.com", "aid@example.com", "Orderbevestiging"
+    mail.set_content("Bijgaand onze orderbevestiging.")
+    mail.add_attachment((madeup_out / "MU05_conf.pdf").read_bytes(), maintype="application", subtype="pdf", filename="scan.pdf")
+    mail.add_attachment(b"not a PDF", maintype="application", subtype="pdf", filename="kapot.pdf")
+    (inbox / "m1.eml").write_bytes(bytes(mail))
+    loop = _Loop(d)
+    for minute, decider in ((1, DeciderDown()), (2, FakeDecider(None, 0.0)), (3, DeciderDown()), (4, DeciderDown())):
+        loop.deps = d.model_copy(update={"decider": decider})
+        now[0] = datetime(2026, 11, 12, 9, minute)
+        _pass(loop)
+    assert intake_lines(d) == [("m1.eml/scan.pdf", "error", ""), ("m1.eml/kapot.pdf", "error", ""),
+                               ("m1.eml/scan.pdf", "skipped", "no text layer; class unknown"), ("m1.eml/scan.pdf", "error", "")]
+
+
+def test_a_file_replaced_under_its_name_while_it_cannot_be_read_gets_its_own_line_and_its_own_30_days(tmp_path, madeup_out, monkeypatch):
+    """Ruling O19 (finding 4, the checkers' mutant M14 and d_o1.py): a file whose content was read keeps that content in its record
+    while it cannot be read, so that another content under its name, which can be read a pass later, is another file: a broken file stays
+    from day 0; on day 20 it is replaced under its name by another broken file that another program holds for one pass (no new line:
+    it counts as the same file); a minute later it can be read, and as another content it gets its own error line, and its own 30 days:
+    nothing on day 30, set aside 30 days after its own line."""
+    now = [NINE]
+    d = waiting_deps(tmp_path, madeup_out, now)
+    inbox = d.settings.watched_folder
+    held = set()
+    real = aid.runner.sha256_file
+
+    def sha256_file(path):
+        if Path(path).parent == inbox and Path(path).name in held:
+            raise PermissionError(13, "made-up: the file is in use by another program")
+        return real(path)
+    monkeypatch.setattr(aid.runner, "sha256_file", sha256_file)
+    monkeypatch.setattr("aid.sources.mailbox.sha256_file", sha256_file)
+    (inbox / "kapot.pdf").write_bytes(b"not a PDF")
+    loop = _Loop(d)
+    _pass(loop)
+    first = real(inbox / "kapot.pdf")
+    (inbox / "kapot.pdf").write_bytes(b"another file that is not a PDF either")
+    held.add("kapot.pdf")
+    now[0] = NINE + 20 * DAY
+    _pass(loop)
+    assert intake_lines(d) == [("kapot.pdf", "error", "")] and intake_record(d)["kapot.pdf"]["sha256"] == first   # kept while held
+    held.clear()
+    now[0] = NINE + 20 * DAY + timedelta(minutes=1)
+    _pass(loop)
+    assert intake_lines(d) == [("kapot.pdf", "error", ""), ("kapot.pdf", "error", "")]
+    assert intake_record(d)["kapot.pdf"]["since"] == "2026-12-02T09:01:00"
+    now[0] = NINE + 30 * DAY
+    _pass(loop)
+    assert len(intake_lines(d)) == 2 and (inbox / "kapot.pdf").exists()
+    now[0] = NINE + 50 * DAY + timedelta(minutes=1)
+    _pass(loop)
+    assert intake_lines(d)[2:] == [("kapot.pdf", "set_aside", "30")]
+
+
+def test_received_before_is_kept_back_after_a_guess_and_an_export(tmp_path, madeup_out, monkeypatch):
+    """Ruling O19 (finding 8, the checkers' O2-b and O2-c): a guess and an export are filings, so that "received before" of their file,
+    which cannot be moved for two passes (another program holds it), is kept back after their line: one line each, and the files move
+    once they can."""
+    now = [NINE]
+    d = waiting_deps(tmp_path, madeup_out, now)
+    d = d.model_copy(update={"settings": d.settings.model_copy(update={"export_columns": EXPORT_COLUMNS})})
+    inbox = d.settings.watched_folder
+    d.store.add(madeup_out / "MU01_po_v1.pdf")
+    referenced(inbox / "referentie.pdf")                                  # "Uw referentie 250101": the PO found by a held number
+    (inbox / "orderregels.csv").write_text(export_csv(SPECS["MU02"]), encoding="utf-8")
+    rename = Path.rename
+
+    def refused(self, target):
+        if self.parent == inbox and self.name in ("referentie.pdf", "orderregels.csv"):
+            raise PermissionError(13, "made-up: the file is in use by another program")
+        return rename(self, target)
+    monkeypatch.setattr(Path, "rename", refused)
+    loop = _Loop(d)
+    for minute in (0, 1, 2):
+        now[0] = datetime(2026, 11, 12, 9, minute)
+        _pass(loop)
+    monkeypatch.setattr(Path, "rename", rename)
+    now[0] = datetime(2026, 11, 12, 9, 3)
+    _pass(loop)
+    [case] = [path.name for path in cases_of(d, "250101")]
+    assert intake_lines(d) == [("orderregels.csv", "export", "1 1"), ("referentie.pdf", "guess", case)]
+    assert sorted(path.name for path in (inbox / "processed").iterdir()) == ["orderregels.csv", "referentie.pdf"]
+
+
+# --- a question asked on the page is sent, and a reply belongs to its question (Task 44) ---
+
+from email import message_from_bytes, policy  # noqa: E402
+
+import aid.messaging.microsoft_mailer  # noqa: E402
+import aid.review.page  # noqa: E402
+from aid.messaging.microsoft_mailer import AutoMailer, MicrosoftMailer  # noqa: E402
+from aid.review.page import build_app, close_text  # noqa: E402
+
+
+def test_a_question_without_a_reply_comes_back_through_the_loop_after_a_reply_to_another(tmp_path, madeup_out):
+    """Through the runner's own passes, with the clock moved. Thursday 12 November, 9:00: MU12 comes in, the rules ask S12 about the
+    unit and two items wait for the buyer. 11:00: the supplier's reply to that question is filed. Friday 10:00: the buyer asks about
+    the price on the review page and keeps the rest: the case waits for the supplier. The reply to the first question does not answer
+    the second: one minute after its three working days, on Wednesday 18 November at 10:01, the pass brings the case back, and the
+    digest of that day names it under "Wacht op u" with "Geen antwoord binnen de wachttijd"."""
+    now = [NINE]
+    out = tmp_path / "sent"
+    d = loop_deps(tmp_path, madeup_out, mailer=FileMailer(out, sender="aid@example.com", clock=lambda: now[0]))
+    d = d.model_copy(update={"clock": lambda: now[0], "settings": d.settings.model_copy(update={"supplier_emails": {"S12": "sales@s12.example.com"}})})
+    inbox, stop = d.settings.watched_folder, tmp_path / "STOP"
+    shutil.copy(madeup_out / "MU12_conf.pdf", inbox)
+    run_loop(d, stop, poll_seconds=0, max_passes=1)
+    [case] = cases_of(d, "250112")
+    case = load_case(d.settings.cases_root, case.name)
+    [first] = [json.loads(line)["message_id"] for line in (case.root / "messages" / "sent.jsonl").read_text(encoding="utf-8").splitlines()]
+    now[0] = datetime(2026, 11, 12, 11, 0)
+    (inbox / "antwoord.eml").write_bytes(f"From: sales@s12.example.com\nTo: aid@example.com\nSubject: Re: Vraag over orderbevestiging PO 250112\n"
+                                         f"In-Reply-To: <{first}@example.com>\n\nDe eenheid is per stuk.\n".encode())
+    run_loop(d, stop, poll_seconds=0, max_passes=1)
+    assert [item.reason for item in result_of(case.root).review_items][-1] == "supplier answered: read the reply"
+    now[0] = datetime(2026, 11, 13, 10, 0)
+    decide(case, "RI1", "ask"); decide(case, "RI2", "keep"); decide(case, "RI3", "keep")
+    text, still_open = close_text(case, d, "nl")
+    assert text.startswith("De zaak is nu: wacht op de leverancier.") and not still_open and result_of(case.root).status == "waiting"
+    for moment in (datetime(2026, 11, 17, 17, 0), datetime(2026, 11, 18, 10, 0)):      # the first question's own deadline passed long ago
+        now[0] = moment
+        run_loop(d, stop, poll_seconds=0, max_passes=1)
+        assert result_of(case.root).status == "waiting"
+    now[0] = datetime(2026, 11, 18, 10, 1)
+    run_loop(d, stop, poll_seconds=0, max_passes=1)
+    back = result_of(case.root)
+    assert back.status == "review" and back.review_items[-1].reason == "no answer in 3 working days" and reported(d) == [case.case_id]
+    now[0] = datetime(2026, 11, 18, 17, 0)
+    run_loop(d, stop, poll_seconds=0, max_passes=1)
+    [sent] = [path for path in digests_in(out) if "18-11-2026" in path.read_text(encoding="utf-8")]
+    digest = message_from_bytes(sent.read_bytes(), policy=policy.default).get_content()
+    block = digest[digest.index("Wacht op u"):]
+    assert "PO 250112 (S12)" in block and "Geen antwoord binnen de wachttijd" in block
+    assert "De leverancier heeft geantwoord: lees het antwoord" in block and "supplier answered" not in digest
+    assert "runner.log" not in [path.name for path in d.settings.cases_root.iterdir()]
+
+
+FOLDER = {"ms_tenant_id": TENANT_ID, "ms_client_id": CLIENT_ID, "mail_folder": "AAMkADMadeUpFolder0001="}
+SERVER = {"smtp_host": "smtp.example.com", "smtp_user": "aid@example.com"}
+SECRET = {"AID_MAIL_PASSWORD": "made-up-password"}
+
+
+def shape(mailer) -> tuple:
+    """What a mailer is made of, to compare two of them: its class and what it sends with."""
+    if isinstance(mailer, AutoMailer):
+        return ("auto", shape(mailer.microsoft), shape(mailer.other))
+    if isinstance(mailer, MicrosoftMailer):
+        return ("microsoft", mailer.account, mailer.mailbox, mailer.sender)
+    if isinstance(mailer, SmtpMailer):
+        return ("smtp", mailer.host, mailer.port, mailer.user, mailer.password_env, mailer.sender)
+    return (type(mailer).__name__, mailer.out_dir, mailer.sender)
+
+
+@pytest.mark.parametrize("values, environ", [
+    (FOLDER, {}), (FOLDER | SERVER, SECRET), (FOLDER | {"mail_folder": None}, {}), (FOLDER | {"send_via": "file"}, {}),
+    (FOLDER | SERVER | {"send_via": "smtp"}, SECRET), (FOLDER | {"send_via": "smtp"}, {}),
+    (FOLDER | {"mail_folder": None, "send_via": "microsoft", "mailbox": "orders@example.com"}, {}), (FOLDER | {"send_via": "microsoft"}, {}),
+    (SERVER, SECRET), (SERVER, {}), ({}, {})])
+def test_the_runner_and_the_page_build_the_same_mailer_for_the_same_settings(tmp_path, madeup_out, monkeypatch, values, environ):
+    """The builder of the mailer is one function, which the runner's Deps and the review page's close both call: for the same settings,
+    the same environment and the same sign-in they send in the same way."""
+    assert aid.runner.mailer_of is aid.review.page.mailer_of is aid.messaging.microsoft_mailer.mailer_of and not hasattr(aid.runner, "_mailer")
+    settings, path = settings_file(tmp_path, **values)
+    signed = copilot_account(tmp_path)
+    runner_mailer = build_deps(settings, environ, account=signed).mailer
+    d = deps(tmp_path, madeup_out).model_copy(update={"settings": settings})
+    case = opened(d, madeup_out, "MU01", "250101")
+    seen = []
+    monkeypatch.setattr(aid.review.page, "close_text", lambda case, deps, language: (seen.append(deps.mailer), ("", False))[1])
+    page = build_app(d, settings_file=path, environ=environ, account_factory=lambda tenant, client: signed)
+    [close] = [f.fn for f in page.fns.values() if getattr(f.fn, "__name__", "") == "close"]
+    close(case.case_id, "nl")
+    [page_mailer] = seen
+    assert shape(page_mailer) == shape(runner_mailer)
+
+
+def test_a_case_opened_from_a_scan_that_fails_at_reading_has_its_line_on_the_tab_and_in_the_digest(tmp_path, madeup_out):
+    """With Copilot as the reader, the AI service classes a scan as a confirmation from its file name, a case is opened and fails at
+    reading, since Copilot reads the text layer only. The tab "Bestanden" gets a line of its own for that document, after the line of
+    the case opened, and the digest names the case under "Mislukt" by the same words, not by the error's text."""
+    session = copilot_session(json.dumps({"choice": "confirmation", "confidence": 0.95, "rationale": "made-up answer"}))
+    d = copilot_deps(tmp_path, madeup_out, session, clock=AFTER_DIGEST_TIME)
+    shutil.copy(madeup_out / "MU05_conf.pdf", d.settings.watched_folder / "scan.pdf")
+    run_loop(d, tmp_path / "STOP", poll_seconds=0, max_passes=2)
+    [case] = [path.name for path in cases_of(d, "*")]
+    assert result_of(d.settings.cases_root / case).status == "failed"
+    assert intake_lines(d) == [("scan.pdf", "case", case), ("scan.pdf", "unread", case)]
+    labels = [shown(line, "nl") for line in recent(d.settings.cases_root)]
+    assert labels[0] == "Scan zonder leesbare tekst: de assistent kon dit document niet lezen; bekijk het zelf"
+    digest = (d.settings.cases_root / "digests" / "2026-11-12.txt").read_text(encoding="utf-8")
+    assert "- PO onbekend: Scan zonder leesbare tekst: de assistent kon dit document niet lezen; bekijk het zelf" in digest.splitlines()
+    assert "text layer" not in digest and "ReaderError" not in digest
+
+
+# --- the review round of Task 44 (rulings S21 and S23) ---
+
+def test_the_buyers_own_reply_to_all_is_filed_as_his_own_and_ends_no_wait(tmp_path, madeup_out):
+    """Ruling S21. The buyer is in copy of the question and replies to all: his e-mail names the question, and the runner files it
+    with the case as his own message, with its own line on the tab "Bestanden". The case keeps waiting, nothing is reported, and
+    when the supplier stays silent the case comes back as not answered. So does an e-mail from the signed-in account of the work
+    mailbox, whose address the settings do not hold."""
+    now = [datetime(2026, 11, 12, 9, 0)]
+    d, out, case = waiting_mu11(tmp_path, madeup_out, now)
+    before = reported(d)
+    answer_to_the_question(out, d.settings.watched_folder, name="eigen.eml", sender=f"De inkoper <{d.settings.buyer_email}>")
+    run_loop(d, tmp_path / "STOP", poll_seconds=0, max_passes=1)
+    assert (case / "messages" / "own" / "eigen.eml").exists() and not (case / "messages" / "replies").exists()
+    assert result_of(case).status == "waiting" and reported(d) == before and intake_lines(d)[-1] == ("eigen.eml", "own", case.name)
+    assert shown(recent(d.settings.cases_root)[0], "nl") == "Uw eigen bericht bij de zaak gelegd; dit telt niet als antwoord van de leverancier"
+    store = SecretStore(tmp_path / "secrets")
+    signed = MicrosoftAccount(TENANT_ID, CLIENT_ID, store, app=FakeApp(accounts=["inkoop@example.com"]).bind(store.token_cache()))
+    with_sign_in = d.model_copy(update={"settings": d.settings.model_copy(update={"ms_tenant_id": TENANT_ID, "ms_client_id": CLIENT_ID})})
+    answer_to_the_question(out, d.settings.watched_folder, name="postvak.eml", sender="Inkoop@Example.com")
+    run_loop(with_sign_in, tmp_path / "STOP", poll_seconds=0, max_passes=1, account=signed)
+    assert intake_lines(d)[-1] == ("postvak.eml", "own", case.name) and result_of(case).status == "waiting"
+    now[0] = datetime(2026, 11, 17, 9, 1)                                    # three working days after Thursday 12 November, 9:00
+    run_loop(d, tmp_path / "STOP", poll_seconds=0, max_passes=1)
+    assert [item.reason for item in result_of(case).review_items] == ["no answer in 3 working days"] and case.name in reported(d)
+
+
+def test_a_case_that_waits_without_a_question_comes_back_at_the_next_pass(tmp_path, madeup_out):
+    """Ruling S23. A reply put into the folder of a waiting case by hand answers its question and leaves nothing to wait for: the
+    next pass brings the case back to the buyer with the item of the reply, and the digest names it under "Wacht op u". A case run
+    without a mailer asked nothing, so it comes back in the pass that ran it, with "Er staat geen vraag meer open"."""
+    now = [datetime(2026, 11, 12, 9, 0)]
+    d, out, case = waiting_mu11(tmp_path, madeup_out, now)
+    folder = case / "messages" / "replies"
+    folder.mkdir()
+    (folder / "antwoord.eml").write_bytes(b"From: s11@example.com\nTo: buyer@example.com\nSubject: Uw vraag\n\nDe hoeveelheid klopt.\n")
+    os.utime(folder / "antwoord.eml", (datetime(2026, 11, 12, 15, 0).timestamp(),) * 2)
+    now[0] = AFTER_DIGEST_TIME
+    shutil.copy(madeup_out / "MU17_conf.pdf", d.settings.watched_folder)
+    run_loop(d.model_copy(update={"mailer": None}), tmp_path / "STOP", poll_seconds=0, max_passes=1)
+    assert [(item.item_id, item.reason) for item in result_of(case).review_items] == [("RI1", "supplier answered: read the reply")]
+    [unasked] = cases_of(d, "250117")
+    assert result_of(unasked).status == "review" and [item.reason for item in result_of(unasked).review_items] == ["no question is open"]
+    text = (d.settings.cases_root / "digests" / "2026-11-12.txt").read_text(encoding="utf-8")
+    block = text[text.index("Wacht op u"):]
+    assert "De leverancier heeft geantwoord: lees het antwoord" in block and "Er staat geen vraag meer open: besluit over deze zaak" in block
+    run_loop(d, tmp_path / "STOP", poll_seconds=0, max_passes=1)
+    assert len(result_of(case).review_items) == 1 and len(result_of(unasked).review_items) == 1

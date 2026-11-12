@@ -33,6 +33,9 @@ The address, the token and the shop list are kept in the browser profile's local
 2. Choose "Load unpacked" and select the folder `aid/extension` of the repository.
 3. Open the extension's options ("Extension options" in its details).
 
+After an update of the aid, press the reload button of the extension on that page and reload the open tabs of the
+webshops: a browser keeps the extension's script as it was loaded until then.
+
 ## The options
 
 - **Address of the aid**: where the capture server listens; leave the default `http://127.0.0.1:7870` unless
@@ -63,6 +66,17 @@ The address, the token and the shop list are kept in the browser profile's local
    review page (`python3 -m aid.review --settings testshop/settings.json`) to see the case there.
 4. Open `http://127.0.0.1:7870/testshop/CART01.html`: the green banner, the cart matches its purchase order.
 
+## The try-out cart
+
+In the test mode, and while no authorization limit is set, the settings tab of the review page makes a try-out cart
+of a purchase order the aid knows ("Proefwinkelwagen maken" in the part "Proefdraaien met een inkooporder uit
+Exact"), and the capture server serves it under `/tryout/`, for example
+`http://127.0.0.1:7870/tryout/250201_price_small.html`. The extension is always on for that address. The page says
+"Proefwinkel (verzonnen pagina)" in its heading; the case it opens is a try-out, about which the aid sends nothing
+and whose changes are marked "(proefdocument)" (the manual's section 3.17). The server serves the page to this
+computer's own host only (127.0.0.1 or localhost), and refuses a try-out cart that is sent outside the test mode
+with a sentence for the bar: "Dit is een proefwinkelwagen: de assistent controleert hem alleen in de proefstand."
+
 ## The manual check of the banner
 
 - CART02: amber, "Let op: de winkelwagen wijkt af van de inkooporder (the cart differs from the purchase
@@ -90,8 +104,14 @@ The address, the token and the shop list are kept in the browser profile's local
   "Voorcontrole mislukt (pre-check failed)" with "Herlaad de pagina (reload the page)".
 
 The colours: green for a cart that matches (the lines the aid adjusted on the purchase order are listed under the
-title), amber for differences, grey when no purchase order was found, red when the pre-check failed ("Voorcontrole
+title), amber for differences, and for a cart of whose purchase order the aid is not sure by the cart's items (its
+title, which the aid sends with its answer, is then "Let op: kijk na of dit de goede inkooporder is (check that this
+is the right purchase order)", and its first line says why, until the case is closed on the review page), grey when
+no purchase order was found (its line says to give the export of the order lines from
+Exact and to reload the page; the aid then checks the cart again), red when the pre-check failed ("Voorcontrole
 mislukt", also for an error of the server), when the aid cannot be reached, or when it refuses the page (a wrong
-token, a page without a cart table it can read). The fixed titles are in Dutch with the English in brackets; the
-lines come from the server in the language of its settings. The banner's content lives in a closed shadow root, so
+token, a page without a cart table it can read, a try-out cart outside the test mode). The fixed titles are in Dutch with the English in brackets; the
+lines come from the server in the language of its settings. The last line under a green and under an amber banner
+says what a cart check does not compare: "Niet vergeleken: levertijd, minimale afname of verpakkingseenheid,
+verzendkosten en leveringsvoorwaarden." The banner's content lives in a closed shadow root, so
 that the shop's own scripts cannot read the purchase order values it shows.

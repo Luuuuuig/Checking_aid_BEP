@@ -156,20 +156,40 @@ def test_a_csv_in_utf8_or_windows_1252_is_read(tmp_path, encoding):
 
 
 def test_blank_rows_are_ignored_and_a_short_row_has_blank_cells(tmp_path):
+    """In a file cut at semicolons. In a file cut at commas a short row refuses the file since ruling Z30 of the price list's third
+    review round: a row cut by a decimal comma could not be told from it."""
     path = tmp_path / "list.csv"
-    path.write_text("item_code,price\nKM-1001,12.70\n\n,\nKM-1002\n", encoding="utf-8")
+    path.write_text("item_code;price\nKM-1001;12.70\n\n;\nKM-1002\n", encoding="utf-8")
     r = import_price_list(path, "S1", CURRENT, PreparedWriter(tmp_path), NOW)
     assert [e.op.article_code for e in r.updated] == ["KM-1001"] and r.skipped == [("KM-1002", "unreadable price")]
+    commas = tmp_path / "commas.csv"
+    commas.write_text("item_code,price\nKM-1001,12.70\n\n,\nKM-1002\n", encoding="utf-8")
+    with pytest.raises(ValueError, match=r"^commas\.csv, row 5: another number of cells than the row of column titles$"):
+        import_price_list(commas, "S1", CURRENT, PreparedWriter(tmp_path / "commas"), NOW)
 
 
-def test_a_workbook_is_read_from_its_first_sheet_only(tmp_path):
+def test_a_workbook_is_read_from_the_one_sheet_that_is_seen(tmp_path, capsys):
+    """Ruling Z17 of the second review round: the command reads a workbook as every reader of the aid does, from the one visible
+    sheet that holds data. A hidden sheet is never read, wherever it stands; a workbook with more than one visible sheet with data
+    is refused, the command naming those sheets, and nothing is prepared."""
     workbook = Workbook()
-    for sheet, (code, price) in zip([workbook.active, workbook.create_sheet("Old")], [("KM-1001", "12.70"), ("KM-1002", "9.00")]):
+    for sheet, (code, price) in zip([workbook.active, workbook.create_sheet("Now")], [("KM-1002", "9.00"), ("KM-1001", "12.70")]):
         sheet.append(list(HEADER))
         sheet.append(list(item(code, price)))
+    workbook.active.sheet_state = "hidden"                     # the first sheet, the old prices, is hidden
+    workbook.active = 1
     workbook.save(tmp_path / "list.xlsx")
-    r = import_price_list(tmp_path / "list.xlsx", "S1", CURRENT, PreparedWriter(tmp_path), NOW)
+    r = import_price_list(tmp_path / "list.xlsx", "S1", CURRENT, PreparedWriter(tmp_path / "one"), NOW)
     assert [e.op.article_code for e in r.updated] == ["KM-1001"] and r.skipped == []
+    workbook["Sheet"].sheet_state = "visible"
+    workbook.save(tmp_path / "two.xlsx")
+    with pytest.raises(ValueError):
+        import_price_list(tmp_path / "two.xlsx", "S1", CURRENT, PreparedWriter(tmp_path / "two"), NOW)
+    assert main(command(tmp_path, tmp_path / "two.xlsx"), now=NOW) == 1
+    out, err = capsys.readouterr()
+    assert out == "" and err == ("cannot read: two.xlsx has more than one visible sheet with data (Sheet, Now); the aid reads one sheet: save "
+                                 "the sheet you mean as a file of its own\n")
+    assert not (tmp_path / "two").exists() and not (tmp_path / "prepared").exists()
 
 
 def test_a_workbook_with_dates_and_numbers_in_its_cells_is_read(tmp_path):
@@ -817,3 +837,650 @@ def test_the_command_returns_1_when_the_write_log_cannot_be_written(tmp_path, ca
     out, err = capsys.readouterr()
     assert "cannot write the write log" in err and "log" in err
     assert [row["article_code"] for row in prepared_rows(tmp_path / "prepared")] == ["KM-1001"]
+
+
+# --- the article prices of an Exact export, kept per supplier (Task 42) ---
+
+import json  # noqa: E402
+
+from aid.execution.by_hand import link_put_back, mark, open_changes  # noqa: E402
+from aid.execution.writer import undo_entry  # noqa: E402
+from aid.pricelist import (ARTICLES_FILE, ARTICLES_FOLDER, SUPPLIER_NAME_MAX, NameRefused, NoArticle, also_held,  # noqa: E402
+                           current_prices, is_supplier_name, list_of, read_articles, store_current, stored_prices, supplier_named)
+from aid.schema import normalize_number  # noqa: E402
+from aid.readers.po_export import ExportRefused  # noqa: E402
+from aid.tests.helpers import wrong_dimensions, write_sheet  # noqa: E402
+
+ARTICLE_COLUMNS = {"item_code": "Artikel", "price": "Inkoopprijs"}                    # an export of one supplier's articles
+WITH_SUPPLIER = ARTICLE_COLUMNS | {"supplier": "Leverancier"}                         # an export that names the supplier of each row
+STORED = datetime(2026, 11, 20, 9, 15)                                                # when the made-up export is given
+TITLES = ["Artikel", "Omschrijving", "Inkoopprijs"]
+
+
+def articles(path: Path, rows: list[list], titles: list[str] = TITLES) -> Path:
+    """A made-up export of articles at `path`: a title above the row of column titles, as an overview of the ERP prints one, then the
+    rows. A .csv file is cut at semicolons and every cell is a text; in a workbook a str is a text cell and a number a number cell."""
+    return write_sheet(path, [["Artikelen van een leverancier (verzonnen voorbeeld)"], [], titles, *rows])
+
+
+def held(cases_root: Path) -> dict:
+    """What the file of the stored article prices holds."""
+    return json.loads((cases_root / ARTICLES_FOLDER / ARTICLES_FILE).read_text(encoding="utf-8"))
+
+
+def test_the_article_export_is_stored_and_a_newer_one_replaces_it(tmp_path):
+    """Amendment 1: the article prices are kept per supplier. An export without a supplier column is stored under the name the buyer
+    gives; a newer export replaces, whole, the prices of each supplier it holds and leaves every other supplier's as they are."""
+    root = tmp_path / "cases"
+    first = articles(tmp_path / "artikelen.csv", [["KM-1001", "Slang", "12,50"], ["KM-1002", "Klem", "8,00"], ["KM-1003", "Ring", "1.250,00"]])
+    assert store_current(root, first, ARTICLE_COLUMNS, True, STORED, "S01") == (["S01"], 3, 0)
+    assert held(root) == {"suppliers": {"S01": {"stored_at": "2026-11-20T09:15:00", "file": "artikelen.csv",
+                                                "prices": {"KM-1001": "12.50", "KM-1002": "8.00", "KM-1003": "1250.00"}}}}
+    assert (root / "exact" / "article_prices.json").is_file() and sorted(path.name for path in (root / "exact").iterdir()) == [ARTICLES_FILE]
+    assert current_prices(root, "S01") == ({"KM-1001": "12.50", "KM-1002": "8.00", "KM-1003": "1250.00"}, "2026-11-20T09:15:00")
+    assert current_prices(root, " s 01 ") == current_prices(root, "S01")              # a name that differs in capitals or spaces only
+    assert current_prices(root, "S02") == ({}, None) and current_prices(root, "") == ({}, None)
+    # another supplier's export leaves the first supplier's prices as they are
+    second = articles(tmp_path / "s02.xlsx", [["KM-2001", "Bout", 3.2], ["KM-1001", "Slang", 11.9]])
+    assert store_current(root, second, ARTICLE_COLUMNS, True, STORED + timedelta(minutes=5), "S02") == (["S02"], 2, 0)
+    assert current_prices(root, "S01")[0]["KM-1001"] == "12.50" and list(held(root)["suppliers"]) == ["S01", "S02"]
+    assert current_prices(root, "S02") == ({"KM-2001": "3.2", "KM-1001": "11.9"}, "2026-11-20T09:20:00")
+    # a newer export of the first supplier replaces its prices whole: an article it no longer holds is gone
+    newer = articles(tmp_path / "nieuw.csv", [["KM-1001", "Slang", "12,70"], ["KM-1004", "Dop", "0,45"]])
+    assert store_current(root, newer, ARTICLE_COLUMNS, True, STORED + timedelta(days=1), "s01") == (["S01"], 2, 0)      # the stored name
+    assert held(root)["suppliers"]["S01"] == {"stored_at": "2026-11-21T09:15:00", "file": "nieuw.csv",
+                                             "prices": {"KM-1001": "12.70", "KM-1004": "0.45"}}
+    assert held(root)["suppliers"]["S02"]["stored_at"] == "2026-11-20T09:20:00"
+    assert stored_prices(root)["S02"].prices == {"KM-2001": "3.2", "KM-1001": "11.9"} and stored_prices(root)["S01"].file == "nieuw.csv"
+    # without a supplier column and without a name nothing is stored
+    before = (root / "exact" / ARTICLES_FILE).read_bytes()
+    for name in (None, "", "  "):
+        with pytest.raises(ValueError, match="supplier"):
+            store_current(root, newer, ARTICLE_COLUMNS, True, STORED + timedelta(days=2), name)
+    assert (root / "exact" / ARTICLES_FILE).read_bytes() == before
+
+
+def test_an_export_with_a_supplier_column_is_stored_under_the_suppliers_it_names(tmp_path):
+    """Amendment 1: with a supplier column the supplier of a row is the one its cell names, whatever the buyer named; a row whose
+    supplier cell is empty is left out and counted; the export replaces the prices of the suppliers it holds and no other's."""
+    root = tmp_path / "cases"
+    store_current(root, articles(tmp_path / "s02.csv", [["KM-2001", "Bout", "3,20"]]), ARTICLE_COLUMNS, True, STORED, "S02")
+    store_current(root, articles(tmp_path / "s03.csv", [["KM-3001", "Moer", "0,10"], ["KM-3002", "Pen", "0,20"]]), ARTICLE_COLUMNS, True, STORED, "S03")
+    both = articles(tmp_path / "alle.xlsx", [["KM-1001", "S01", 12.5], ["KM-3001", "s03 ", 0.11], ["KM-1002", "S01", 8], ["KM-9001", None, 1],
+                                             ["KM-9002", "  ", 2]], titles=["Artikel", "Leverancier", "Inkoopprijs"])
+    assert store_current(root, both, WITH_SUPPLIER, False, STORED + timedelta(hours=1), "S02") == (["S01", "S03"], 3, 2)
+    stored = held(root)["suppliers"]
+    assert list(stored) == ["S02", "S03", "S01"] and stored["S02"]["prices"] == {"KM-2001": "3.20"}        # S02 as it was, though named
+    assert stored["S03"] == {"stored_at": "2026-11-20T10:15:00", "file": "alle.xlsx", "prices": {"KM-3001": "0.11"}}      # whole
+    assert stored["S01"]["prices"] == {"KM-1001": "12.5", "KM-1002": "8"}
+    assert read_articles(both, WITH_SUPPLIER, False).left_out == {"no_supplier": [7, 8]}
+    assert [(row.row, row.supplier, row.item_code, row.price) for row in read_articles(both, WITH_SUPPLIER, False).rows] == [
+        (4, "S01", "KM-1001", "12.5"), (5, "s03", "KM-3001", "0.11"), (6, "S01", "KM-1002", "8")]
+    # an export of this form that holds no row is refused: it stores nothing and names no supplier (ruling Z11 of the review round)
+    before = (root / "exact" / ARTICLES_FILE).read_bytes()
+    empty = articles(tmp_path / "leeg.xlsx", [], titles=["Artikel", "Leverancier", "Inkoopprijs"])
+    with pytest.raises(NoArticle):
+        store_current(root, empty, WITH_SUPPLIER, False, STORED + timedelta(hours=2))
+    assert (root / "exact" / ARTICLES_FILE).read_bytes() == before
+
+
+def test_an_article_twice_or_without_a_price_is_left_out_and_counted(tmp_path):
+    """Rule 1: an article listed twice for one supplier, or with a price that is no number, is left out and counted, and so is a row
+    without an item code. The same article of two suppliers is no article twice. A number cell of a workbook is the number it holds,
+    whatever the convention; a text is read with the convention of the settings."""
+    root = tmp_path / "cases"
+    rows = [["KM-1001", "Slang", "12,50"], ["KM-1002", "Klem", "op aanvraag"], ["KM-1003", "Ring", "8,00"], ["KM-1003", "Ring", "8,10"],
+            [None, "Totaal", "28,60"], ["KM-1004", "Dop", None], ["KM-1005", "Kap", "1.000"]]
+    export = articles(tmp_path / "artikelen.csv", rows)
+    read = read_articles(export, ARTICLE_COLUMNS, True)
+    assert [(row.row, row.item_code, row.price, row.text) for row in read.rows] == [(4, "KM-1001", "12.50", "12,50"), (10, "KM-1005", "1000", "1.000")]
+    assert read.left_out == {"no_item_code": [8], "no_price": [5, 9], "twice": [6, 7]}
+    assert store_current(root, export, ARTICLE_COLUMNS, True, STORED, "S01") == (["S01"], 2, 5)
+    assert held(root)["suppliers"]["S01"]["prices"] == {"KM-1001": "12.50", "KM-1005": "1000"}
+    assert read_articles(export, ARTICLE_COLUMNS, False).rows[-1].price == "1.000"            # the other convention: one, to three decimals
+    # per supplier: the same article of two suppliers is kept for both, and twice for one of them is left out for that one
+    named = articles(tmp_path / "alle.csv", [["KM-1001", "S01", "12,50"], ["KM-1001", "S02", "11,90"], ["KM-1001", "s 02", "11,95"]],
+                     titles=["Artikel", "Leverancier", "Inkoopprijs"])
+    assert store_current(root, named, WITH_SUPPLIER, True, STORED, None) == (["S01"], 1, 2)
+    assert read_articles(named, WITH_SUPPLIER, True).left_out == {"twice": [5, 6]}
+    # a number cell is its number under either convention: one with three decimals, which the convention of the texts would read
+    # as twelve thousand with the decimal comma set (ruling Z2 of the review round); a date or an error cell is no price and no
+    # item code
+    book = articles(tmp_path / "artikelen.xlsx", [["KM-1001", "Slang", 12.345], ["KM-1002", "Klem", "1,25"], ["KM-1003", "Ring", date(2026, 11, 20)],
+                                                    [date(2026, 11, 20), "Datum", 2.5], ["KM-1004", "Dop", "#N/A"], ["KM-1005", "Kap", 1.125]])
+    for comma in (True, False):
+        read = read_articles(book, ARTICLE_COLUMNS, comma)
+        assert [(row.item_code, row.price, row.kind) for row in read.rows] == [("KM-1001", "12.345", "number"), ("KM-1002", "1.25", "text"),
+                                                                              ("KM-1005", "1.125", "number")]
+        assert read.left_out == {"no_item_code": [7], "no_price": [6, 8]}
+    assert normalize_number("12.345", decimal_comma=True) == "12345"                          # what a number cell must never be read as
+    # the row of column titles again, lower down, is no row and is counted nowhere
+    again = articles(tmp_path / "twee.csv", [["KM-1001", "Slang", "12,50"], TITLES, ["KM-1002", "Klem", "8,00"]])
+    assert [row.item_code for row in read_articles(again, ARTICLE_COLUMNS, True).rows] == ["KM-1001", "KM-1002"]
+    assert read_articles(again, ARTICLE_COLUMNS, True).left_out == {}
+
+
+def test_an_export_that_cannot_be_read_is_refused_and_nothing_is_stored(tmp_path):
+    """A file of another type, a file without the columns set, a title that stands twice and a map without the item code or the
+    price are refused as the export reader refuses a file (ExportRefused, with its reason), before anything is written."""
+    root = tmp_path / "cases"
+    good = articles(tmp_path / "artikelen.csv", [["KM-1001", "Slang", "12,50"]])
+    old = tmp_path / "artikelen.xls"
+    old.write_bytes(good.read_bytes())
+    other = write_sheet(tmp_path / "anders.csv", [["Code", "Prijs"], ["KM-1001", "12,50"]])
+    double = write_sheet(tmp_path / "dubbel.csv", [["Artikel", "Inkoopprijs", "Inkoopprijs"], ["KM-1001", "12,50", "12,60"]])
+    for path, columns, reason in ((old, ARTICLE_COLUMNS, "file_type"), (other, ARTICLE_COLUMNS, "no_column"), (double, ARTICLE_COLUMNS, "double_column"),
+                                  (good, {"item_code": "Artikel"}, "map"), (good, ARTICLE_COLUMNS | {"basis": "Per"}, "map"),
+                                  (good, {"item_code": "Artikel", "price": " "}, "map")):
+        with pytest.raises(ExportRefused) as refused:
+            store_current(root, path, columns, True, STORED, "S01")
+        assert refused.value.reason == reason and "KM-1001" not in str(refused.value) and "12,50" not in str(refused.value)
+    assert not root.exists()
+    with pytest.raises(OSError):
+        store_current(root, tmp_path / "weg.csv", ARTICLE_COLUMNS, True, STORED, "S01")
+
+
+def test_the_stored_prices_are_written_whole_or_not_at_all(tmp_path, monkeypatch):
+    """Amendment 1: the file is written through a temporary file and a replace, so a write that fails leaves the stored prices as they
+    were and no temporary file; and a stored file that cannot be read is nothing stored, never an error of current_prices."""
+    root = tmp_path / "cases"
+    export = articles(tmp_path / "artikelen.csv", [["KM-1001", "Slang", "12,50"]])
+    store_current(root, export, ARTICLE_COLUMNS, True, STORED, "S01")
+    file = root / ARTICLES_FOLDER / ARTICLES_FILE
+    before = file.read_bytes()
+
+    def refuse(source, target):
+        raise PermissionError("made-up: the file is held")
+
+    with monkeypatch.context() as patched:
+        patched.setattr(os, "replace", refuse)
+        with pytest.raises(PermissionError):
+            store_current(root, export, ARTICLE_COLUMNS, True, STORED + timedelta(days=1), "S02")
+    assert file.read_bytes() == before and [path.name for path in file.parent.iterdir()] == [ARTICLES_FILE]
+    for damaged in (b"{\"suppliers\": {\"S01\": {\"stored_at\": \"2026-11-20T0", b"[]", b"\xff\xfe", b"{\"suppliers\": {\"S01\": {\"prices\": 7}}}",
+                    b"{\"suppliers\": {\"S01\": {\"stored_at\": \"gisteren\", \"file\": \"a.csv\", \"prices\": {}}}}"):
+        file.write_bytes(damaged)
+        with pytest.raises(ValueError) as unreadable:
+            stored_prices(root)
+        assert ARTICLES_FILE in str(unreadable.value) and "gisteren" not in str(unreadable.value)
+        assert current_prices(root, "S01") == ({}, None)
+    # a new export is stored over a file that cannot be read: what it held is gone, as nothing could be read from it
+    assert store_current(root, export, ARTICLE_COLUMNS, True, STORED, "S02") == (["S02"], 1, 0) and list(held(root)["suppliers"]) == ["S02"]
+    file.unlink()
+    assert stored_prices(root) == {} and stored_prices(tmp_path / "nowhere") == {}
+
+
+def prepared_list(root: Path, tmp_path: Path, supplier: str, rows: list[tuple], now: datetime) -> ImportResult:
+    """A made-up price list of the supplier carried out against its current prices, as the page carries one out: prepared in
+    <cases_root>/prepared."""
+    listed = write_csv(tmp_path / f"lijst_{supplier}_{now:%H%M%S}.csv", rows)
+    return import_price_list(listed, supplier, current_prices(root, supplier)[0], PreparedWriter(root / "prepared"), now)
+
+
+def test_an_entered_article_price_counts_until_a_newer_export(tmp_path):
+    """Amendment 2: the current prices of a supplier are its own stored prices with every article price entered or seen on the list
+    after its export was stored laid over them. A change counts for the supplier its case names, one whose case names no supplier for
+    every supplier whose stored prices hold the article; a newer export of the supplier is taken as it is."""
+    root = tmp_path / "cases"
+    prepared = root / "prepared"
+    store_current(root, articles(tmp_path / "s01.csv", [["KM-1001", "Slang", "12,50"], ["KM-1002", "Klem", "8,00"]]), ARTICLE_COLUMNS, True, STORED, "S01")
+    store_current(root, articles(tmp_path / "s02.csv", [["KM-1001", "Slang", "11,90"], ["KM-1002", "Klem", "7,50"]]), ARTICLE_COLUMNS, True, STORED, "S02")
+    store_current(root, articles(tmp_path / "s03.csv", [["KM-3001", "Moer", "0,10"]]), ARTICLE_COLUMNS, True, STORED, "S03")
+    result = prepared_list(root, tmp_path, "S01", [item("KM-1001", "12.70"), item("KM-1002", "8.40")], STORED + timedelta(minutes=10))
+    assert [entry.case_id for entry in result.updated] == ["pricelist_S01_20261120T092500"] * 2
+    assert current_prices(root, "S01")[0] == {"KM-1001": "12.50", "KM-1002": "8.00"}          # prepared and not entered: Exact holds the old price
+    [first, second] = open_changes(prepared)
+    assert mark(prepared, first.ids, "entered", STORED + timedelta(minutes=20)) == 1
+    assert current_prices(root, "S01") == ({"KM-1001": "12.70", "KM-1002": "8.00"}, "2026-11-20T09:15:00")
+    assert current_prices(root, "S02")[0]["KM-1001"] == "11.90"                               # the change's case names S01, not S02
+    assert mark(prepared, second.ids, "dropped", STORED + timedelta(minutes=21)) == 1          # a dropped change was never entered
+    assert current_prices(root, "S01")[0]["KM-1002"] == "8.00"
+    # seen counts as entered
+    seen = prepared_list(root, tmp_path, "S02", [item("KM-1002", "7.80")], STORED + timedelta(minutes=30))
+    assert current_prices(root, "S02")[0]["KM-1002"] == "7.50"
+    assert mark(prepared, [seen.updated[0].entry_id], "seen", STORED + timedelta(minutes=31), by="export") == 1
+    assert current_prices(root, "S02")[0] == {"KM-1001": "11.90", "KM-1002": "7.80"} and current_prices(root, "S01")[0]["KM-1002"] == "8.00"
+    # a change whose case names no supplier counts for every supplier whose stored prices hold the article, and for no other
+    nameless = PreparedWriter(prepared).apply(WriteOp(kind="article_price", po_number="", version=None, article_code="KM-1001", new_value="13.10"),
+                                              "onbekend_20261120T100000", "R04", {}, STORED + timedelta(minutes=45))
+    assert mark(prepared, [nameless.entry_id], "entered", STORED + timedelta(minutes=46)) == 1
+    assert current_prices(root, "S01")[0]["KM-1001"] == "13.10" and current_prices(root, "S02")[0]["KM-1001"] == "13.10"
+    assert current_prices(root, "S03")[0] == {"KM-3001": "0.10"}
+    # a newer export of the supplier is taken as it is: what was entered before it was stored no longer counts
+    newer = articles(tmp_path / "s01_nieuw.csv", [["KM-1001", "Slang", "13,00"], ["KM-1002", "Klem", "8,00"]])
+    store_current(root, newer, ARTICLE_COLUMNS, True, STORED + timedelta(hours=2), "S01")
+    assert current_prices(root, "S01") == ({"KM-1001": "13.00", "KM-1002": "8.00"}, "2026-11-20T11:15:00")
+    assert current_prices(root, "S02")[0]["KM-1001"] == "13.10"                               # S02's own export is older than the mark
+
+
+def test_a_mark_in_the_second_of_the_export_does_not_count_and_a_put_back_gives_the_old_price_again(tmp_path):
+    """Amendment 2, the one judgement of the marks: the value of an article is the new value of its last change that is entered or
+    seen, at the time of that mark. A mark made in the second the export was stored, or before it, does not count: the export is the
+    newer look. A put-back that is entered puts the old price back, and one that is still open leaves the entered price."""
+    root = tmp_path / "cases"
+    prepared = root / "prepared"
+    export = articles(tmp_path / "s01.csv", [["KM-1001", "Slang", "12,50"]])
+    store_current(root, export, ARTICLE_COLUMNS, True, STORED, "S01")
+    result = prepared_list(root, tmp_path, "S01", [item("KM-1001", "12.70")], STORED - timedelta(minutes=5))
+    [entry] = result.updated
+    assert mark(prepared, [entry.entry_id], "entered", STORED) == 1                             # in the second of the export
+    assert current_prices(root, "S01")[0] == {"KM-1001": "12.50"}
+    assert mark(prepared, [entry.entry_id], "reopened", STORED + timedelta(seconds=1)) == 1
+    assert mark(prepared, [entry.entry_id], "entered", STORED + timedelta(seconds=2)) == 1
+    assert current_prices(root, "S01")[0] == {"KM-1001": "12.70"}
+    # the put-back, as "Terugdraaien in Exact" prepares it from the price list's own write log
+    folder = root / "pricelists" / "2026-11-20"
+    folder.mkdir(parents=True)
+    WriteLog(folder).append(entry)
+    undo = undo_entry(folder, entry.entry_id, PreparedWriter(prepared), STORED + timedelta(minutes=1))
+    link_put_back(prepared, undo.entry_id, entry.entry_id, STORED + timedelta(minutes=1))
+    assert current_prices(root, "S01")[0] == {"KM-1001": "12.70"}                               # the put-back is still open
+    assert mark(prepared, [undo.entry_id], "entered", STORED + timedelta(minutes=2)) == 1
+    assert current_prices(root, "S01")[0] == {"KM-1001": "12.50"}
+
+
+def test_a_put_back_to_a_price_the_aid_never_read_gives_the_export_s_price_again(tmp_path):
+    """An article price that a confirmation asked has no price before it that the aid knows. Entered, it is the article's price; its
+    undo, entered in turn, puts back a price the aid never read: the article then has the export's price again, and an article that
+    the export does not hold has none."""
+    root = tmp_path / "cases"
+    prepared = root / "prepared"
+    store_current(root, articles(tmp_path / "s01.csv", [["KM-1001", "Slang", "12,50"]]), ARTICLE_COLUMNS, True, STORED, "S01")
+    writer, case_id = PreparedWriter(prepared), "onbekend_20261120T093000"                 # a case without a folder: it names no supplier
+    for minute, code in enumerate(("KM-1001", "KM-7777")):
+        asked = writer.apply(WriteOp(kind="article_price", po_number="", version=None, article_code=code, new_value="12.70"), case_id, "R04", {},
+                             STORED + timedelta(minutes=10 + minute))
+        assert mark(prepared, [asked.entry_id], "entered", STORED + timedelta(minutes=20 + minute)) == 1
+    assert current_prices(root, "S01")[0] == {"KM-1001": "12.70"}                           # KM-7777 is no article of this supplier's export
+    undo = writer.apply(WriteOp(kind="article_price", po_number="", version=None, article_code="KM-1001", old_value="12.70"), case_id, "undo",
+                        {}, STORED + timedelta(minutes=30))
+    assert current_prices(root, "S01")[0] == {"KM-1001": "12.70"}                           # the undo is still to enter
+    assert mark(prepared, [undo.entry_id], "entered", STORED + timedelta(minutes=31)) == 1
+    assert current_prices(root, "S01")[0] == {"KM-1001": "12.50"}
+    # a change whose case names the supplier counts for an article that its export does not hold; put back, the article has no price
+    own = "pricelist_S01_20261120T100000"
+    asked = writer.apply(WriteOp(kind="article_price", po_number="", version=None, article_code="KM-8888", new_value="5.00"), own, "P01", {},
+                         STORED + timedelta(minutes=45))
+    assert mark(prepared, [asked.entry_id], "entered", STORED + timedelta(minutes=46)) == 1
+    assert current_prices(root, "S01")[0] == {"KM-1001": "12.50", "KM-8888": "5.00"}
+    back = writer.apply(WriteOp(kind="article_price", po_number="", version=None, article_code="KM-8888", old_value="5.00"), own, "undo", {},
+                        STORED + timedelta(minutes=50))
+    assert mark(prepared, [back.entry_id], "entered", STORED + timedelta(minutes=51)) == 1
+    assert current_prices(root, "S01")[0] == {"KM-1001": "12.50"}
+
+
+def test_a_list_is_known_by_its_case_id_and_a_name_by_its_stored_spelling():
+    assert list_of("pricelist_S01_20261120T092500") == ("S01", datetime(2026, 11, 20, 9, 25))
+    assert list_of("pricelist_Voorbeeld B.V._20261120T092500") == ("Voorbeeld B.V.", datetime(2026, 11, 20, 9, 25))
+    assert list_of("pricelist_a_b_20261120T092500")[0] == "a_b"
+    for other in ("250108_20261120T092500", "pricelist_S01", "pricelist_S01_2026", "unknown_20261120T092500", "pricelist__20261120T092500",
+                  "pricelist_S01_20261340T092500"):
+        assert list_of(other) is None, other
+    assert supplier_named(" s 01 ", ["S02", "S 01"]) == "S 01" and supplier_named("  Nieuw  BV ", ["S01"]) == "Nieuw  BV"
+    assert supplier_named("", ["S01"]) == "" and supplier_named(None, ["S01"]) == ""
+
+
+def test_a_row_that_joins_an_entered_change_is_not_ticked_for_its_own_supplier(tmp_path):
+    """Amendment 2: a change counts for the supplier its case names, and the cases that decide are those of the rows that were ticked.
+    The list holds one row per article and value, whichever supplier asked: when a second supplier's list asks the value that is
+    entered already for the first, its row joins that change, and the price is not the second supplier's by it."""
+    root = tmp_path / "cases"
+    prepared = root / "prepared"
+    for supplier, price in (("S01", "12,50"), ("S02", "11,90")):
+        store_current(root, articles(tmp_path / f"{supplier}.csv", [["KM-1001", "Slang", price]]), ARTICLE_COLUMNS, True, STORED, supplier)
+    [first] = prepared_list(root, tmp_path, "S01", [item("KM-1001", "12.70")], STORED + timedelta(minutes=10)).updated
+    assert mark(prepared, [first.entry_id], "entered", STORED + timedelta(minutes=20)) == 1
+    [second] = prepared_list(root, tmp_path, "S02", [item("KM-1001", "12.70")], STORED + timedelta(minutes=30)).updated
+    assert open_changes(prepared) == [] and mark(prepared, [second.entry_id], "entered", STORED + timedelta(minutes=31)) == 0
+    assert current_prices(root, "S01")[0] == {"KM-1001": "12.70"} and current_prices(root, "S02")[0] == {"KM-1001": "11.90"}
+    # another value for the second supplier is a change of its own, and counts for that supplier once it is ticked
+    [third] = prepared_list(root, tmp_path, "S02", [item("KM-1001", "12.10")], STORED + timedelta(minutes=40)).updated
+    assert mark(prepared, [third.entry_id], "entered", STORED + timedelta(minutes=41)) == 1
+    assert current_prices(root, "S02")[0] == {"KM-1001": "12.10"} and current_prices(root, "S01")[0] == {"KM-1001": "12.70"}
+
+
+# --- the review round of the price list on the page (rulings Z1, Z3, Z7 and Z11) ---
+
+def workbook_of(path: Path, sheets: list[tuple[str, list[list], str]]) -> Path:
+    """A made-up workbook with these sheets in this order: (the name of the sheet, its rows, "visible", "hidden" or "veryHidden"),
+    each with a wrong dimension record (ruling Z24: the sheet the buyer sees is read in full whatever that record says)."""
+    book = Workbook()
+    book.remove(book.active)
+    for title, rows, state in sheets:
+        sheet = book.create_sheet(title)
+        sheet.sheet_state = state
+        for row in rows:
+            sheet.append(row)
+    book.save(path)
+    return wrong_dimensions(path)
+
+
+def test_an_export_is_read_from_the_one_sheet_the_buyer_sees(tmp_path):
+    """Ruling Z1: of an export of articles a hidden sheet is never read; the one visible sheet that holds data is read, whatever its
+    place; a workbook with more than one such sheet is refused with their names, which the text of the error does not hold, and
+    nothing is stored."""
+    root = tmp_path / "cases"
+    hidden_first = workbook_of(tmp_path / "artikelen.xlsx", [("2025 (oud)", [TITLES, ["KM-1001", "Slang", 9.99]], "hidden"), ("Blad2", [], "visible"),
+                                                             ("Artikelen", [["Verzonnen"], TITLES, ["KM-1001", "Slang", 12.5]], "visible"),
+                                                             ("Diep", [TITLES, ["KM-1001", "Slang", 1.11]], "veryHidden")])
+    assert [(row.row, row.item_code, row.price) for row in read_articles(hidden_first, ARTICLE_COLUMNS).rows] == [(3, "KM-1001", "12.5")]
+    assert store_current(root, hidden_first, ARTICLE_COLUMNS, False, STORED, "S01") == (["S01"], 1, 0)
+    before = (root / ARTICLES_FOLDER / ARTICLES_FILE).read_bytes()
+    two = workbook_of(tmp_path / "twee.xlsx", [("Slangen", [TITLES, ["KM-1001", "Slang", 12.7]], "visible"),
+                                               ("Klemmen", [TITLES, ["KM-1002", "Klem", 8.4]], "visible")])
+    for read in (lambda: read_articles(two, ARTICLE_COLUMNS), lambda: store_current(root, two, ARTICLE_COLUMNS, False, STORED, "S01")):
+        with pytest.raises(ExportRefused) as several:           # the export reader's refusal, as for the order lines (ruling Z17)
+            read()
+        assert (several.value.reason, several.value.names) == ("several_sheets", ["Slangen", "Klemmen"])
+        assert "Slangen" not in str(several.value) and "Klemmen" not in str(several.value)
+    assert (root / ARTICLES_FOLDER / ARTICLES_FILE).read_bytes() == before
+    only_hidden = workbook_of(tmp_path / "verborgen.xlsx", [("oud", [TITLES, ["KM-1001", "Slang", 9.99]], "hidden"), ("leeg", [], "visible")])
+    with pytest.raises(ExportRefused) as nothing:                                     # only a hidden sheet holds data (ruling Z33)
+        read_articles(only_hidden, ARTICLE_COLUMNS)
+    assert nothing.value.reason == "hidden_sheet"
+
+
+def test_an_export_without_an_article_is_refused_and_leaves_what_was_stored(tmp_path):
+    """Ruling Z11: an export of the articles that gives no article stores nothing and leaves what was stored, with a supplier
+    column and without one: an export read with the wrong columns never empties a supplier's prices."""
+    root = tmp_path / "cases"
+    nothing = articles(tmp_path / "niets.csv", [["KM-1001", "Slang", "op aanvraag"], [None, "Totaal", "12,50"]])
+    with pytest.raises(NoArticle) as refused:
+        store_current(root, nothing, ARTICLE_COLUMNS, True, STORED, "S01")
+    assert not root.exists() and "KM-1001" not in str(refused.value) and "op aanvraag" not in str(refused.value)
+    store_current(root, articles(tmp_path / "s01.csv", [["KM-1001", "Slang", "12,50"]]), ARTICLE_COLUMNS, True, STORED, "S01")
+    before = (root / ARTICLES_FOLDER / ARTICLES_FILE).read_bytes()
+    named = articles(tmp_path / "alle.csv", [["KM-1001", "", "12,50"], ["KM-1002", "S02", "geen"]], titles=["Artikel", "Leverancier", "Inkoopprijs"])
+    for export, columns, supplier in ((nothing, ARTICLE_COLUMNS, "S01"), (nothing, ARTICLE_COLUMNS, "S02"), (named, WITH_SUPPLIER, None),
+                                      (articles(tmp_path / "leeg.csv", []), ARTICLE_COLUMNS, "S01")):
+        with pytest.raises(NoArticle):
+            store_current(root, export, columns, True, STORED + timedelta(days=1), supplier)
+    assert (root / ARTICLES_FOLDER / ARTICLES_FILE).read_bytes() == before and current_prices(root, "S01")[0] == {"KM-1001": "12.50"}
+
+
+def test_a_suppliers_name_that_is_no_name_stores_nothing(tmp_path):
+    """Ruling Z7: a supplier's name longer than a hundred characters, or with a line break or a control character, is no name: an
+    export given for it, or that names it in a row, stores nothing, and the error never holds the name."""
+    root = tmp_path / "cases"
+    export = articles(tmp_path / "artikelen.csv", [["KM-1001", "Slang", "12,50"]])
+    assert SUPPLIER_NAME_MAX == 100
+    assert all(is_supplier_name(name) for name in ("S01", "Hansen A/S", "Jansen\\Zonen", "../../buiten", "L" * 100, f"  {'L' * 100}  ", "", None))
+    for bad in ("L" * 101, "Jansen\nen Zonen", "a\rb", "a\tb", "a\x00b", "a\x7fb", "a\u2028b", "a\u2029b", "a\x85b"):
+        assert not is_supplier_name(bad), repr(bad)
+        with pytest.raises(NameRefused) as refused:
+            store_current(root, export, ARTICLE_COLUMNS, True, STORED, bad)
+        assert bad not in str(refused.value)
+        named = articles(tmp_path / "alle.csv", [["KM-1001", "S01", "12,50"], ["KM-1002", bad, "8,00"]], titles=["Artikel", "Leverancier", "Inkoopprijs"])
+        if "\x00" not in bad:                                                          # a CSV file holds no NUL that the reader takes
+            with pytest.raises(NameRefused):
+                store_current(root, named, WITH_SUPPLIER, True, STORED)
+    assert not root.exists()
+    assert store_current(root, export, ARTICLE_COLUMNS, True, STORED, "L" * 100) == (["L" * 100], 1, 0)
+
+
+def test_the_articles_that_another_supplier_holds_too(tmp_path):
+    """Ruling Z3: also_held gives the articles that the stored prices of another supplier hold, by the stored names without regard
+    to capitals and spaces; a supplier's own articles are never among them. Ruling Z19 (a): each with the names of those suppliers,
+    as they are stored and in the order they were first stored."""
+    root = tmp_path / "cases"
+    for supplier, rows in (("S01", [["KM-1001", "Slang", "12,50"], ["KM-1002", "Klem", "8,00"]]), ("S 02", [["KM-1001", "Slang", "11,90"]]),
+                           ("S03", [["KM-3001", "Moer", "0,10"], ["KM-1002", "Klem", "7,90"]])):
+        store_current(root, articles(tmp_path / f"{supplier}.csv", rows), ARTICLE_COLUMNS, True, STORED, supplier)
+    held = stored_prices(root)
+    assert also_held(held, "S01") == {"KM-1001": ["S 02"], "KM-3001": ["S03"], "KM-1002": ["S03"]}
+    assert also_held(held, " s02 ") == {"KM-1001": ["S01"], "KM-1002": ["S01", "S03"], "KM-3001": ["S03"]}
+    assert also_held(held, "S03") == {"KM-1001": ["S01", "S 02"], "KM-1002": ["S01"]}
+    assert also_held(held, "S04") == {"KM-1001": ["S01", "S 02"], "KM-1002": ["S01", "S03"], "KM-3001": ["S03"]}
+    assert also_held({"S01": held["S01"]}, "s 01") == {} and also_held({}, "S01") == {}
+
+
+def test_the_callers_check_holds_a_row_back_with_its_price(tmp_path):
+    """The import takes a check of its caller for a price that would change (the tab's, rulings Z3 and Z6): a row it holds back is
+    skipped with the check's reason and its list price is kept; the check is asked for no row that is unchanged, a duplicate or not
+    in force, and without a check the import decides as before."""
+    asked = []
+
+    def check(code, old, new):
+        asked.append((code, old, new))
+        return "held back" if code == "KM-1002" else None
+    rows = [item("KM-1001", "12.70"), item("KM-1002", "8.40"), item("KM-1002", "8.60"), item("KM-1003", "5.00"), item("KM-1004", "3.50", basis="100"),
+            item("KM-9999", "1.00")]
+    listed = write_csv(tmp_path / "lijst.csv", rows)
+    result = import_price_list(listed, "S01", CURRENT, PreparedWriter(tmp_path / "prepared"), NOW, check=check)
+    assert asked == [("KM-1001", "12.50", "12.70"), ("KM-1002", "8.00", "8.40")]
+    assert result.skipped == [("KM-1002", "held back"), ("KM-1002", "duplicate row"), ("KM-1003", "unchanged"), ("KM-1004", "unknown price basis"),
+                              ("KM-9999", "unknown article")]
+    assert result.held == {"KM-1002": "8.40"} and [entry.op.article_code for entry in result.updated] == ["KM-1001"]
+    assert len(prepared_rows(tmp_path / "prepared")) == 1
+    plain = import_price_list(listed, "S01", CURRENT, PreparedWriter(tmp_path / "plain"), NOW)
+    assert [entry.op.article_code for entry in plain.updated] == ["KM-1001", "KM-1002"] and plain.held == {}
+    # the rows of the file as the caller read them: the file itself is then not read
+    table = [["item_code", "price"], ["KM-1001", "12,90"]]
+    given = import_price_list(tmp_path / "nergens.csv", "S01", CURRENT, PreparedWriter(tmp_path / "given"), NOW, table=table)
+    assert [(entry.new, entry.evidence["file"]) for entry in given.updated] == [("12.90", "nergens.csv")]
+
+
+# --- the second review round of the price list on the page (rulings Z16, Z17 and Z26) ---
+
+C16 = "KM-1001,Slang,12,70\nKM-1002,Klem,8,40\n"       # the check's case c16: decimal commas without quotation marks in a comma file
+
+
+def test_a_csv_row_with_a_filled_cell_beyond_the_titles_refuses_the_list_and_the_export(tmp_path, capsys):
+    """Ruling Z16, as ruling Z30 amends it for a file cut at commas: a CSV row with more cells than its titles is never read: 12,70
+    was read as 12. The file is refused whole, with the row named and no cell of it, by the command and by the export of articles;
+    nothing is prepared or stored. A quoted comma and trailing separators on every row are read as before."""
+    listed = tmp_path / "c16.csv"
+    listed.write_text("item_code,description,price\n" + C16, encoding="utf-8")
+    with pytest.raises(ValueError, match=r"^c16\.csv, row 2: another number of cells than the row of column titles$") as refused:
+        import_price_list(listed, "S01", CURRENT, PreparedWriter(tmp_path / "prepared"), NOW)
+    assert not (tmp_path / "prepared").exists() and "Slang" not in str(refused.value)
+    assert main(command(tmp_path, listed), now=NOW) == 1
+    out, err = capsys.readouterr()
+    assert out == "" and err == "cannot read: c16.csv, row 2: another number of cells than the row of column titles\n"
+    assert not (tmp_path / "prepared").exists()
+    current = tmp_path / "prijzen.csv"                         # the command's file of current prices is a CSV table too
+    current.write_text("item_code,price\nKM-1001,12,50\n", encoding="utf-8")
+    assert main(command(tmp_path, write_csv(tmp_path / "goed.csv", [item("KM-1001")]), current), now=NOW) == 1
+    assert capsys.readouterr().err == "cannot read: prijzen.csv, row 2: another number of cells than the row of column titles\n"
+    quoted = tmp_path / "quoted.csv"
+    quoted.write_text('item_code,description,price,,\nKM-1001,"Slang, 2 m","12,70",,\nKM-1002,Klem,"8,00", ,\n', encoding="utf-8")
+    result = import_price_list(quoted, "S01", CURRENT, PreparedWriter(tmp_path / "quoted"), NOW)
+    assert [(entry.op.article_code, entry.new) for entry in result.updated] == [("KM-1001", "12.70")] and result.skipped == [("KM-1002", "unchanged")]
+    # the export of articles: the same rows stored 12 and 8 before
+    root = tmp_path / "cases"
+    export = tmp_path / "artikelen.csv"
+    export.write_text("Artikelen (verzonnen voorbeeld),,,,\n\nArtikel,Omschrijving,Inkoopprijs\n" + C16, encoding="utf-8")
+    with pytest.raises(ExportRefused) as surplus:
+        read_articles(export, ARTICLE_COLUMNS, True)
+    assert (surplus.value.reason, surplus.value.row, surplus.value.column) == ("cell_count", 4, None)
+    assert str(surplus.value) == "artikelen.csv, row 4: another number of cells than the row of column titles"
+    with pytest.raises(ExportRefused):
+        store_current(root, export, ARTICLE_COLUMNS, True, STORED, "S02")
+    assert not root.exists()
+    fine = tmp_path / "goed.csv"
+    fine.write_text('Artikel,Omschrijving,Inkoopprijs,,\nKM-1001,"Slang, 2 m","12,70",,\nKM-1002,Klem,8.40, ,\n', encoding="utf-8")
+    assert [(row.item_code, row.price) for row in read_articles(fine, ARTICLE_COLUMNS, True).rows] == [("KM-1001", "12.70"), ("KM-1002", "8.40")]
+
+
+def test_the_row_with_a_filled_cell_beyond_the_last_title():
+    """Ruling Z16, the one helper every CSV table goes through: the number, counted from 1, of the first row below the row of column
+    titles that holds a filled cell beyond the last column title; none when only empty cells stand there (trailing separators).
+    Ruling Z30: in a table cut at commas, the first filled row that has another number of cells than the row of titles, whatever
+    its cells hold; a blank row is no row."""
+    from aid.pricelist import SURPLUS, UNEVEN, odd_row
+    assert odd_row([["a", "b"], ["1", "2"], ["1", "2", ""], ["1", "2", " ", ""]], 0) is None
+    assert odd_row([["a", "b", "", ""], ["1", "2", "", ""], ["1", "2", "x"]], 0) == (3, SURPLUS)        # beyond the last title, not the last cell
+    assert odd_row([["Kop", "van", "drie", "cellen"], [], ["a", "b"], ["1", "2"], ["1", "2", "3"], ["1", "2", "3"]], 2) == (5, SURPLUS)
+    assert odd_row([["a", "b"]], 0) is None and odd_row([["a", "b"], ["1"], []], 0) is None
+    assert odd_row([[("a",), ("b",)], [("1",), ("2",), ("3",)]], 0, text=lambda cell: cell[0]) == (2, SURPLUS)     # cells of another kind
+    assert (SURPLUS, UNEVEN) == ("a filled cell beyond the last column title", "another number of cells than the row of column titles")
+    # cut at commas: every filled row has the titles' number of cells, empty ones counted
+    assert odd_row([["a", "b"], ["1", "2"], ["1", "2", ""], ["1", "2", " ", ""]], 0, commas=True) == (3, UNEVEN)
+    assert odd_row([["a", "b", "c", "d"], ["1", "12", "70", "", ""]], 0, commas=True) == (2, UNEVEN)       # the check's c16b: room at the end
+    assert odd_row([["a", "b", "c", "d"], ["1", "12", "70"], ["2", "8", "40"]], 0, commas=True) == (2, UNEVEN)     # shorter than the titles
+    assert odd_row([["a", "b", "", ""], ["1", "2", "", ""], [], ["", "  "], ["1", "2", "", ""]], 0, commas=True) is None
+    assert odd_row([["a", "b", "", ""], ["1", "2", "x", ""]], 0, commas=True) == (2, SURPLUS)             # the same number, a cell without a title
+    assert odd_row([["Kop"], [], ["a", "b"], ["1", "2"], ["1"]], 2, commas=True) == (5, UNEVEN)            # the rows above the titles are not read
+
+
+def test_a_name_that_is_no_name_in_a_row_of_the_export_is_refused_with_its_row(tmp_path):
+    """Ruling Z26: with a supplier column, a kept row whose supplier cell holds a name that is no name refuses the export with the
+    row of that cell, so that the buyer knows where to look; a name the buyer gave himself has no row. A row that is left out
+    anyway (no price) does not refuse the export."""
+    root = tmp_path / "cases"
+    titles = ["Artikel", "Leverancier", "Inkoopprijs"]
+    export = articles(tmp_path / "alle.xlsx", [["KM-1001", "S01", 12.5], ["KM-2001", "S02", 3.2], ["KM-9001", "L" * 101, None],
+                                               ["KM-3001", "S03 BV\nPostbus 1", 1.5], ["KM-3002", "x" * 300, 2]], titles=titles)
+    with pytest.raises(NameRefused) as refused:
+        store_current(root, export, WITH_SUPPLIER, False, STORED)
+    assert refused.value.row == 7 and "S03" not in str(refused.value) and "Postbus" not in str(refused.value)
+    assert not root.exists()
+    with pytest.raises(NameRefused) as typed:
+        store_current(root, articles(tmp_path / "s01.csv", [["KM-1001", "Slang", "12,50"]]), ARTICLE_COLUMNS, True, STORED, "a\nb")
+    assert typed.value.row is None and not root.exists()
+
+
+
+def test_a_suppliers_stored_prices_and_kept_columns_are_removed_whole_or_not_at_all(tmp_path, monkeypatch):
+    """Ruling Z19 (b): remove_stored takes away the stored prices of one supplier and the columns kept for its price list, by its
+    stored name whatever the capitals and spaces of the name given, and nothing else; a name that is not stored removes nothing; and
+    a write that fails in the middle leaves both files as they were."""
+    import aid.pricelist as module
+    from aid.pricelist import COLUMNS_FILE, keep_columns, kept_columns, remove_stored
+    root = tmp_path / "cases"
+    rows = [["KM-1001", "Slang", "12,50"], ["KM-1002", "Klem", "8,00"]]
+    for supplier in ("S01 B.V.", "S01 BV", "S02"):
+        store_current(root, articles(tmp_path / "artikelen.csv", rows), ARTICLE_COLUMNS, True, STORED, supplier)
+        keep_columns(root, supplier, {"item_code": "Artikel", "price": f"Prijs {supplier}"})
+    files = [root / ARTICLES_FOLDER / ARTICLES_FILE, root / ARTICLES_FOLDER / COLUMNS_FILE]
+    before = [file.read_bytes() for file in files]
+    assert remove_stored(root, "S03") is None and remove_stored(root, "") is None and [file.read_bytes() for file in files] == before
+    for failing in (1, 2):                                  # the first write fails, then the second: nothing is half done
+        calls, replace = [], module.os.replace
+
+        def held(source, target, failing=failing, calls=calls, replace=replace):
+            calls.append(Path(target).name)
+            if len(calls) == failing:
+                raise PermissionError(13, "made-up: the file is held")
+            return replace(source, target)
+        with monkeypatch.context() as patched:
+            patched.setattr(module.os, "replace", held)
+            with pytest.raises(PermissionError):
+                remove_stored(root, "S01 B.V.")
+        assert [file.read_bytes() for file in files] == before, failing
+        assert sorted(path.name for path in (root / ARTICLES_FOLDER).iterdir()) == sorted([ARTICLES_FILE, COLUMNS_FILE])       # no temporary file left
+    assert remove_stored(root, " s01 b.v. ") == "S01 B.V."
+    assert list(stored_prices(root)) == ["S01 BV", "S02"] and list(kept_columns(root)) == ["S01 BV", "S02"]
+    assert stored_prices(root)["S01 BV"].prices == {"KM-1001": "12.50", "KM-1002": "8.00"}
+    assert kept_columns(root)["S02"] == {"item_code": "Artikel", "price": "Prijs S02"}
+    assert remove_stored(root, "S01 B.V.") is None                                 # not held any more: nothing to remove
+    # a supplier without kept columns: its prices are removed and the columns file is not written
+    columns_before = files[1].read_bytes()
+    store_current(root, articles(tmp_path / "artikelen.csv", rows), ARTICLE_COLUMNS, True, STORED, "S04")
+    assert remove_stored(root, "S04") == "S04" and files[1].read_bytes() == columns_before and list(stored_prices(root)) == ["S01 BV", "S02"]
+    # stored prices that cannot be read as such hold no supplier to remove
+    files[0].write_text("geen JSON", encoding="utf-8")
+    assert remove_stored(root, "S02") is None and files[1].read_bytes() == columns_before
+
+
+# --- the third review round (rulings Z30, Z32, Z33 and Z34) ---
+
+def test_in_a_comma_file_a_row_is_read_only_with_the_titles_number_of_cells(tmp_path, capsys):
+    """Ruling Z30, the check's c16b files: a row cut by a decimal comma without quotation marks was still read as 12 when its last
+    cells were empty or the row was shorter than the titles. In a file cut at commas every filled row has exactly the titles'
+    number of cells, or the file is refused whole with the row; for the command's list and the export of articles alike. A comma
+    file whose rows all have that number, with empty last cells, and a semicolon file with short rows are read as before."""
+    root = tmp_path / "cases"
+    for name, rows in (("ruimte.csv", "KM-1001,12,70,,\r\nKM-1002,8,40,,\r\n"), ("kort.csv", "KM-1001,12,70\nKM-1002,8,40\n")):
+        listed = tmp_path / name
+        listed.write_bytes(("item_code,price,min_quantity,valid_to\n" + rows).encode("utf-8"))
+        with pytest.raises(ValueError, match=rf"^{name[:-4]}\.csv, row 2: another number of cells than the row of column titles$"):
+            import_price_list(listed, "S01", CURRENT, PreparedWriter(tmp_path / "prepared"), NOW)
+        assert main(command(tmp_path, listed), now=NOW) == 1
+        assert capsys.readouterr().err == f"cannot read: {name}, row 2: another number of cells than the row of column titles\n"
+        assert not (tmp_path / "prepared").exists()
+    for name, rows in (("ruimte export.csv", "KM-1001,Slang,12,70,\nKM-1002,Klem,8,40,\n"), ("kort export.csv", "KM-1001,Slang,12\nKM-1002,Klem,8,40\n")):
+        export = tmp_path / name
+        export.write_text("Artikel,Omschrijving,Inkoopprijs,Opmerking\n" + rows, encoding="utf-8")
+        with pytest.raises(ExportRefused) as refused:
+            read_articles(export, ARTICLE_COLUMNS, True)
+        assert (refused.value.reason, refused.value.row) == ("cell_count", 2) and "12" not in str(refused.value)
+        with pytest.raises(ExportRefused):
+            store_current(root, export, ARTICLE_COLUMNS, True, STORED, "S01")
+    assert not root.exists()
+    # as before: the titles' number of cells on every row, the last cells empty; and a blank row between
+    even = tmp_path / "even.csv"
+    even.write_text('item_code,price,min_quantity,valid_to\nKM-1001,"12,70",,\n,,,\n\nKM-1002,8.40,,\n', encoding="utf-8")
+    result = import_price_list(even, "S01", CURRENT, PreparedWriter(tmp_path / "even"), NOW)
+    assert [(entry.op.article_code, entry.new) for entry in result.updated] == [("KM-1001", "12.70"), ("KM-1002", "8.40")]
+    export = tmp_path / "even export.csv"
+    export.write_text('Artikel,Omschrijving,Inkoopprijs,Opmerking\nKM-1001,Slang,"12,70",\nKM-1002,Klem,8.40,\n', encoding="utf-8")
+    assert [(row.item_code, row.price) for row in read_articles(export, ARTICLE_COLUMNS, True).rows] == [("KM-1001", "12.70"), ("KM-1002", "8.40")]
+    # as before: a semicolon file with short rows and with trailing separators on some rows (a decimal comma cannot cut such a row)
+    short = tmp_path / "puntkomma.csv"
+    short.write_text("item_code;price;min_quantity;valid_to\nKM-1001;12,70\nKM-1002;8,40;;;;\n", encoding="utf-8")
+    result = import_price_list(short, "S01", CURRENT, PreparedWriter(tmp_path / "short"), NOW)
+    assert [(entry.op.article_code, entry.new) for entry in result.updated] == [("KM-1001", "12.70"), ("KM-1002", "8.40")]
+    export = tmp_path / "puntkomma export.csv"
+    export.write_text("Artikel;Omschrijving;Inkoopprijs;Opmerking\nKM-1001;Slang;12,70\nKM-1002;Klem;8,40;;;\n", encoding="utf-8")
+    assert [(row.item_code, row.price) for row in read_articles(export, ARTICLE_COLUMNS, True).rows] == [("KM-1001", "12.70"), ("KM-1002", "8.40")]
+
+
+def test_the_command_names_a_missing_column_before_it_looks_at_the_rows(tmp_path, capsys):
+    """Ruling Z32: the command looks up its columns first and checks the rows only when the title row holds them, so that a list cut
+    at tabs, or one with a heading above its titles, is refused with the missing column named, as before the second round."""
+    tabs = tmp_path / "l_tab.csv"
+    tabs.write_text("item_code\tprice\tbasis\tunit\nKM-1001\t12,70\t1\tst\n", encoding="utf-8")
+    assert main(command(tmp_path, tabs), now=NOW) == 1
+    assert capsys.readouterr().err == ("cannot read: l_tab.csv has no column 'item_code' for item_code (its columns: "
+                                       "item_code\tprice\tbasis\tunit)\n")
+    heading = tmp_path / "l_kop.csv"
+    heading.write_text("Overzicht (verzonnen);;;\nitem_code;price;basis;unit\nKM-1001;12,70;1;st\n", encoding="utf-8")
+    assert main(command(tmp_path, heading), now=NOW) == 1
+    assert capsys.readouterr().err == "cannot read: l_kop.csv has no column 'item_code' for item_code (its columns: Overzicht (verzonnen))\n"
+    assert not (tmp_path / "prepared").exists()
+
+
+def test_a_workbook_with_data_on_a_hidden_sheet_only_says_so(tmp_path, capsys):
+    """Ruling Z33: a workbook whose only data stands on a hidden sheet is refused in words that say so, by the export of articles
+    (the export reader's reason hidden_sheet) and by the command; it was "no column", or an empty file. A workbook without any
+    data stays what it was."""
+    only_hidden = workbook_of(tmp_path / "verborgen.xlsx", [("oud", [TITLES, ["KM-1001", "Slang", 9.99]], "hidden"), ("leeg", [], "visible"),
+                                                           ("diep", [["x"]], "veryHidden")])
+    with pytest.raises(ExportRefused, match=r"^verborgen\.xlsx holds data on a hidden sheet only$") as refused:
+        read_articles(only_hidden, ARTICLE_COLUMNS)
+    assert refused.value.reason == "hidden_sheet" and "oud" not in str(refused.value)
+    with pytest.raises(ExportRefused):
+        store_current(tmp_path / "cases", only_hidden, ARTICLE_COLUMNS, False, STORED, "S01")
+    assert not (tmp_path / "cases").exists()
+    listed = workbook_of(tmp_path / "lijst.xlsx", [("2025", [["item_code", "price"], ["KM-1001", 12.7]], "hidden"), ("Blad2", [[None, "  "]], "visible")])
+    assert main(command(tmp_path, listed), now=NOW) == 1
+    assert capsys.readouterr().err == "cannot read: lijst.xlsx holds data on a hidden sheet only; the aid reads no hidden sheet\n"
+    empty = workbook_of(tmp_path / "leeg.xlsx", [("Blad1", [], "visible"), ("Blad2", [], "hidden")])
+    with pytest.raises(ExportRefused) as nothing:
+        read_articles(empty, ARTICLE_COLUMNS)
+    assert nothing.value.reason == "no_column"
+
+
+def test_a_workbook_is_read_as_its_one_sheet_whatever_stands_beside_its_table(tmp_path):
+    """Ruling Z34, for the export of articles: a note far to the right of the table and a formula in a column without a title are
+    no surplus cells (a workbook's cells are never cut wrongly), and a second visible sheet that holds only formatted empty cells
+    is no sheet with data: each such workbook is read as its one sheet."""
+    from openpyxl.styles import Font
+    wide = tmp_path / "breed.xlsx"
+    book = Workbook()
+    sheet = book.active
+    for row in (TITLES, ["KM-1001", "Slang", 12.5], ["KM-1002", "Klem", 8]):
+        sheet.append(row)
+    sheet["E2"], sheet["M3"] = "=C2*2", "nagekeken"                       # a formula in an untitled column, a note far to the right
+    book.save(wide)
+    assert [(row.row, row.item_code, row.price) for row in read_articles(wide, ARTICLE_COLUMNS).rows] == [(2, "KM-1001", "12.5"), (3, "KM-1002", "8")]
+    beside = tmp_path / "opgemaakt.xlsx"
+    book = Workbook()
+    for row in (TITLES, ["KM-1001", "Slang", 12.5]):
+        book.active.append(row)
+    second = book.create_sheet("Opmaak")
+    for place in ("A1", "B2", "C3"):
+        second[place].font = Font(bold=True)                              # formatted cells that hold nothing
+    book.save(beside)
+    assert [(row.item_code, row.price) for row in read_articles(wrong_dimensions(beside), ARTICLE_COLUMNS).rows] == [("KM-1001", "12.5")]

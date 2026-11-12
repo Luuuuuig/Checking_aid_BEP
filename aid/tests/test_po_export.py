@@ -21,6 +21,7 @@ from aid.readers.po_export import (EXPORT_FIELDS, EXPORT_SUFFIXES, REFUSALS, Exp
                                    read_export, read_export_table)
 from aid.schema import DocLine, DocValue, Document
 from aid.tests.conftest import REPO_ROOT
+from aid.tests.helpers import wrong_dimensions
 
 SPECS = {spec.case_id: spec for spec in load_specs(REPO_ROOT / "aid" / "madeup" / "spec")}
 TRYOUT = REPO_ROOT / "aid" / "madeup" / "tryout"
@@ -189,18 +190,122 @@ def test_when_two_marks_find_a_header_row_the_semicolon_comes_first(tmp_path):
     assert (reading.rows, reading.passed_over) == (3, 0)
 
 
-def test_a_workbook_is_its_first_sheet(tmp_path):
-    """The first sheet is read, also when the workbook was saved with another sheet in view."""
+def sheets(path: Path, made: list[tuple[str, list[list], str]], active: int | None = None) -> Path:
+    """A workbook at `path` with these sheets in this order: (the name, the rows, "visible", "hidden" or "veryHidden"); `active` is
+    the sheet the workbook was saved with in view. Each sheet has a wrong dimension record: the sheet the buyer sees is read in
+    full whatever that record says."""
     workbook = Workbook()
-    for sheet, row in zip([workbook.active, workbook.create_sheet("Oud")], [ROWS[0], ROWS[2]]):
-        sheet.append(TITLES)
-        sheet.append(row)
-    workbook.active = 1                                                                     # saved with the second sheet in view
-    workbook.save(tmp_path / "export.xlsx")
-    reading = read_export(tmp_path / "export.xlsx", NL)
+    workbook.remove(workbook.active)
+    for title, rows, state in made:
+        sheet = workbook.create_sheet(title)
+        sheet.sheet_state = state
+        for row in rows:
+            sheet.append(row)
+    if active is not None:
+        workbook.active = active
+    path.parent.mkdir(parents=True, exist_ok=True)
+    workbook.save(path)
+    return wrong_dimensions(path)
+
+
+def test_a_workbook_is_read_from_the_one_sheet_the_buyer_sees(tmp_path):
+    """Ruling Z17 of the second review round of the price list (the check's probe hidden_orders.py): of a workbook the one visible
+    sheet that holds data is read, wherever it stands and whichever sheet the workbook was saved with in view. A hidden first sheet
+    was read as the order. A workbook with more than one visible sheet with data is refused with the sheets' names, which the text
+    of the error does not hold; it is an export to the scan when one of its sheets holds the titles, so that the refusal is shown,
+    and the store files nothing."""
+    hidden = sheets(tmp_path / "export.xlsx", [("vorige week", [TITLES, ROWS[2]], "hidden"), ("Leeg", [], "visible"),
+                                               ("Orderregels", [TITLES, ROWS[0]], "visible"), ("Diep", [TITLES, ROWS[1]], "veryHidden")], active=1)
+    reading = read_export(hidden, NL)
     assert orders(reading, "item_code") == [("250301", [("1", "KM-3101")])] and reading.rows == 1
     assert (reading.documents[0].reader, reading.documents[0].source_file) == ("export:export.xlsx", "export.xlsx")
+    assert is_export(hidden, NL)
+    two = sheets(tmp_path / "two" / "export.xlsx", [("Open", [TITLES, ROWS[0]], "visible"), ("Geleverd", [TITLES, ROWS[2]], "visible")])
+    with pytest.raises(ExportRefused, match=r"^export\.xlsx has more than one visible sheet with data$") as refused:
+        read_export(two, NL)
+    assert (refused.value.reason, refused.value.names, refused.value.column, refused.value.row) == ("several_sheets", ["Open", "Geleverd"], None, None)
+    assert is_export(two, NL)
+    with pytest.raises(ExportRefused):
+        PoStore(tmp_path / "store").from_export(two, NL)
+    assert not (tmp_path / "store").exists()
+    other = sheets(tmp_path / "other" / "lijst.xlsx", [("A", [["Artikelnummer", "Nettoprijs"], ["KM-1001", 12.7]], "visible"),
+                                                        ("B", [["Artikelnummer", "Nettoprijs"], ["KM-1002", 8.4]], "visible")])
+    assert not is_export(other, NL)                             # no sheet holds the titles of the map: another spreadsheet
+    unseen = sheets(tmp_path / "unseen" / "export.xlsx", [("oud", [TITLES, ROWS[0]], "hidden"), ("nu", [["Geen export"]], "visible")])
+    assert not is_export(unseen, NL)                            # the titles stand on a sheet nobody sees
 
+
+def test_in_a_comma_file_an_order_line_is_read_only_with_the_titles_number_of_cells(tmp_path):
+    """Ruling Z30, the check's c16b file for the export of order lines: a row cut by a decimal comma without quotation marks was
+    read as a price of 12 when its last cell was empty, or when the row was shorter than the titles. In a file cut at commas every
+    filled row below the titles has exactly their number of cells, or the file is refused whole with the row; it is still an export
+    to the scan, and the store files nothing. A semicolon file with short rows and with rows of trailing separators reads as before."""
+    columns = {"po_number": "Inkooporder", "line_id": "Regel", "item_code": "Artikel", "quantity": "Aantal", "unit_price": "Prijs"}
+    titles = "Inkooporder,Regel,Artikel,Omschrijving,Aantal,Prijs,Opmerking\n"
+    for number, rows in enumerate(("250901,1,KM-1,Bout,10,12,70,\n", "250901,1,KM-1,Bout,10,12\n250901,2,KM-2,Moer,5,0,45\n",
+                                   '250901,1,KM-1,Bout,10,"12,70",\n250901,2,KM-2,Moer,5,0,45,\n')):
+        path = tmp_path / str(number) / "export.csv"
+        path.parent.mkdir()
+        path.write_text("Overzicht (verzonnen)\n\n" + titles + rows, encoding="utf-8")
+        with pytest.raises(ExportRefused) as refused:
+            read_export(path, columns, decimal_comma=True)
+        assert (refused.value.reason, refused.value.row, refused.value.column) == ("cell_count", 5 if number == 2 else 4, None), number
+        assert str(refused.value) == f"export.csv, row {5 if number == 2 else 4}: another number of cells than the row of column titles"
+        assert is_export(path, columns)
+        with pytest.raises(ExportRefused):
+            PoStore(tmp_path / "store").from_export(path, columns, decimal_comma=True)
+    assert not (tmp_path / "store").exists() and "cell_count" in REFUSALS
+    even = tmp_path / "even" / "export.csv"
+    even.parent.mkdir()
+    even.write_text(titles + '250901,1,KM-1,Bout,10,"12,70",\n,,,,,,\n\n250901,2,KM-2,Moer,5,0.45,\n', encoding="utf-8")
+    assert orders(read_export(even, columns, decimal_comma=True), "item_code", "unit_price") == [("250901", [("1", "KM-1", "12.70"), ("2", "KM-2", "0.45")])]
+    short = tmp_path / "short" / "export.csv"
+    short.parent.mkdir()
+    short.write_text(titles.replace(",", ";") + "250901;1;KM-1;Bout;10;12,70\n250901;2;KM-2;Moer;5;0,45;;;;\n", encoding="utf-8")
+    assert orders(read_export(short, columns, decimal_comma=True), "item_code", "unit_price") == [("250901", [("1", "KM-1", "12.70"), ("2", "KM-2", "0.45")])]
+
+
+def test_a_workbook_with_data_on_a_hidden_sheet_only_is_refused_in_words_that_say_so(tmp_path):
+    """Ruling Z33: a workbook whose only data stands on a hidden sheet has the reason hidden_sheet; it is an export to the scan when
+    that sheet holds the titles, so that the tab "Bestanden" says what to do, and the store files nothing."""
+    hidden = sheets(tmp_path / "export.xlsx", [("vorige week", [TITLES, ROWS[0]], "hidden"), ("Blad2", [], "visible")])
+    with pytest.raises(ExportRefused, match=r"^export\.xlsx holds data on a hidden sheet only$") as refused:
+        read_export(hidden, NL)
+    assert (refused.value.reason, refused.value.names, refused.value.row) == ("hidden_sheet", [], None) and "hidden_sheet" in REFUSALS
+    assert is_export(hidden, NL)
+    with pytest.raises(ExportRefused):
+        PoStore(tmp_path / "store").from_export(hidden, NL)
+    assert not (tmp_path / "store").exists()
+    other = sheets(tmp_path / "other" / "lijst.xlsx", [("oud", [["Artikelnummer", "Nettoprijs"], ["KM-1001", 12.7]], "veryHidden"), ("leeg", [], "visible")])
+    assert not is_export(other, NL)                             # the hidden sheet holds no titles of the map: another spreadsheet
+
+
+def test_an_export_workbook_is_read_as_its_one_sheet_whatever_stands_beside_its_table(tmp_path):
+    """Ruling Z34 (the check's mutants M05 and M11): a note far to the right of the table and a formula in a column without a
+    title are no surplus cells, and a second visible sheet of formatted empty cells is no sheet with data: each workbook is read as
+    its one sheet, and is an export to the scan."""
+    from openpyxl.styles import Font
+    wide = tmp_path / "wide" / "export.xlsx"
+    wide.parent.mkdir()
+    book = Workbook()
+    sheet = book.active
+    for row in (TITLES, ROWS[0], ROWS[1]):
+        sheet.append(row)
+    sheet.cell(2, len(TITLES) + 2).value = "=E2*G2"                       # a formula in an untitled column
+    sheet.cell(3, len(TITLES) + 9).value = "nagekeken"                    # a note far to the right
+    book.save(wide)
+    reading = read_export(wide, NL)
+    assert orders(reading, "item_code") == [("250301", [("1", "KM-3101"), ("2", "KM-3102")])] and is_export(wide, NL)
+    beside = tmp_path / "beside" / "export.xlsx"
+    beside.parent.mkdir()
+    book = Workbook()
+    for row in (TITLES, ROWS[0]):
+        book.active.append(row)
+    second = book.create_sheet("Opmaak")
+    for place in ("A1", "B2", "C3"):
+        second[place].font = Font(bold=True)                              # formatted cells that hold nothing
+    book.save(beside)
+    assert orders(read_export(wrong_dimensions(beside), NL), "item_code") == [("250301", [("1", "KM-3101")])] and is_export(beside, NL)
 
 # --- the cells: numbers, texts and dates ---
 
@@ -434,11 +539,19 @@ def test_a_row_with_an_item_code_and_no_quantity_is_passed_over_and_counted(tmp_
 
 
 def test_a_row_shorter_than_the_header_row_has_blank_cells(tmp_path):
-    """A row that ends before the last column, as a CSV file may write it, lacks the values of the columns it does not reach; one that
-    ends before the item code is a row without an item code, and one that ends before the quantity a row without a quantity."""
+    """A row that ends before the last column, as a CSV file cut at semicolons or tabs may write it, lacks the values of the columns
+    it does not reach; one that ends before the item code is a row without an item code, and one that ends before the quantity a row
+    without a quantity. In a file cut at commas such a row refuses the file since ruling Z30 of the price list's third review
+    round, since a row cut by a decimal comma could not be told from it."""
+    rows = "\n250301,1,KM-3101,Slangklem 16-27 mm,1000\n250301,2,KM-3102,,25\n250301,3,KM-3103\nTotaal\n"
+    commas = tmp_path / "commas" / "export.csv"
+    commas.parent.mkdir()
+    commas.write_text(",".join(TITLES) + rows, encoding="utf-8")
+    with pytest.raises(ExportRefused) as refused:
+        read_export(commas, NL)
+    assert (refused.value.reason, refused.value.row) == ("cell_count", 2)
     path = tmp_path / "export.csv"
-    path.write_text(",".join(TITLES) + "\n250301,1,KM-3101,Slangklem 16-27 mm,1000\n250301,2,KM-3102,,25\n250301,3,KM-3103\nTotaal\n",
-                    encoding="utf-8")
+    path.write_text((",".join(TITLES) + rows).replace(",", ";"), encoding="utf-8")
     reading = read_export(path, NL)
     first, second = reading.documents[0].lines
     assert (first.quantity, first.unit, first.delivery_date) == (read("1000"), DocValue(), DocValue())
@@ -750,6 +863,12 @@ REFUSED = {
                                                 f"export.xlsx, row 3: {NO_FOLDER}", ("po_number_no_folder", None, 3)),
     "a title that stands twice": ("export.csv", changed(header=[*TITLES[:5], "Aantal", *TITLES[6:]]), without("unit"), {},
                                   "export.csv, row 1: the column 'Aantal' stands twice", ("double_column", "Aantal", 1)),
+    "a row with another number of cells in a comma file": ("export.csv", [*changed()[:2], [*changed()[2], "70"], *changed()[3:]], NL, {},
+                                                           "export.csv, row 3: another number of cells than the row of column titles",
+                                                           ("cell_count", None, 3)),
+    "a row with a filled cell beyond the last column title": ("export.csv", [[*TITLES, ""], [*ROWS[0], ""], [*ROWS[1], "70"], [*ROWS[2], ""]],
+                                                              NL, {}, "export.csv, row 3: a filled cell beyond the last column title",
+                                                              ("surplus_cells", None, 3)),
     "an old workbook": ("export.xls", changed(), NL, {}, "export.xls is neither a .csv nor an .xlsx file", ("file_type", None, None)),
     "a text file": ("export.txt", changed(), NL, {}, "export.txt is neither a .csv nor an .xlsx file", ("file_type", None, None)),
 }
@@ -794,6 +913,14 @@ def written(content: bytes):
 # hold: the content of a cell, and the text of the error that openpyxl, the decoder or the csv module raised.
 REFUSED_FILES = {
     "a file that is no workbook": ("export.xlsx", written(b"no workbook"), BROKEN, ("unreadable", None), ["zip", "File is not"]),
+    "a workbook with two filled sheets": ("export.xlsx", lambda path: sheets(path, [("Open", [["Overzicht"], ["x", "y"]], "visible"),
+                                                                                    ("Geleverd", [["Overzicht"], ["z"]], "visible")]),
+                                          "export.xlsx has more than one visible sheet with data", ("several_sheets", None),
+                                          ["Open", "Geleverd", "Overzicht"]),
+    "a workbook with data on a hidden sheet only": ("export.xlsx", lambda path: sheets(path, [("Vorig jaar", [["Overzicht"], ["x", "y"]], "hidden"),
+                                                                                              ("Blad2", [], "visible")]),
+                                                    "export.xlsx holds data on a hidden sheet only", ("hidden_sheet", None),
+                                                    ["Vorig jaar", "Overzicht"]),
     "a number cell that holds a text": ("export.xlsx", broken_xlsx((b"<v>12.5</v>", b"<v>12,50</v>")), BROKEN, ("unreadable", None),
                                         ["12,50", "invalid literal"]),
     "a date cell that holds a text": ("export.xlsx", broken_xlsx((b'<c r="I2" s="1" t="n"><v>46350</v>',
@@ -980,7 +1107,7 @@ def test_the_reader_records_the_po_its_last_line_went_to(tmp_path):
     assert (refused.value.reason, refused.value.row) == ("no_po_number", 6)
     assert read_export(write_csv(tmp_path / "plain.csv", [TITLES, *ROWS]), NL).last_line_po == "250302"
     assert read_export(write_csv(tmp_path / "back.csv", [TITLES, ROWS[2], ROWS[0]]), NL).last_line_po == "250301"
-    assert read_export(write_csv(tmp_path / "none.csv", [TITLES, ["Totaal"]]), NL).last_line_po is None   # no order line
+    assert read_export(write_semicolons(tmp_path / "none.csv", [TITLES, ["Totaal"]]), NL).last_line_po is None   # no order line
 
 
 def test_read_export_table_reads_the_file_once_and_gives_its_table(tmp_path, monkeypatch):
@@ -993,3 +1120,28 @@ def test_read_export_table_reads_the_file_once_and_gives_its_table(tmp_path, mon
     reading, table, header = read_export_table(path, NL)
     assert reads == ["export.csv"] and header == 1 and [cell.text for cell in table[header]] == TITLES
     assert [cell.kind for cell in table[header + 1]] == ["text"] * len(TITLES) and reading == read_export(path, NL)
+
+
+# --- the second review round of the price list on the page (rulings Z16 and Z17) ---
+
+def test_a_csv_row_with_more_cells_than_the_titles_is_never_read_as_an_order_line(tmp_path):
+    """Ruling Z16, for the export of order lines wherever it is given: a comma file whose decimal commas stand without quotation
+    marks has rows with more cells than the row of column titles; a price 12,50 per 100 was read as 12 per 50. Such a file is refused
+    whole, with the row named, it is still an export to the scan, so that the refusal is shown and not a skip, and the store files
+    nothing. Empty cells beyond the titles and a quoted comma are read as before."""
+    path = tmp_path / "export.csv"
+    path.write_text("Overzicht (verzonnen),,,,,,,,,,,\n" + ",".join(TITLES) + "\n250301,1,KM-3101,Slangklem,1000,st,12,50,100,2026-11-24\n", encoding="utf-8")
+    with pytest.raises(ExportRefused, match=r"^export\.csv, row 3: another number of cells than the row of column titles$") as refused:
+        read_export(path, NL)
+    assert (refused.value.reason, refused.value.column, refused.value.row) == ("cell_count", None, 3)      # a comma file: ruling Z30
+    assert is_export(path, NL)
+    with pytest.raises(ExportRefused):
+        PoStore(tmp_path / "store").from_export(path, NL)
+    assert not (tmp_path / "store").exists()
+    fine = tmp_path / "fine" / "export.csv"
+    fine.parent.mkdir()
+    fine.write_text(",".join(TITLES) + ",,\n" + '250301,1,KM-3101,"Slangklem, 16-27 mm",1000,st,"12,50",100,2026-11-24,, \n', encoding="utf-8")
+    reading = read_export(fine, NL, decimal_comma=True)
+    assert orders(reading, "item_code", "description", "unit_price", "price_basis") == [
+        ("250301", [("1", "KM-3101", "Slangklem, 16-27 mm", "12.50", "100")])]
+

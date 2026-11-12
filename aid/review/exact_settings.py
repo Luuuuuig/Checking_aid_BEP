@@ -70,7 +70,8 @@ export_decimal_comma and export_fill_down, from one sample export of the company
 sample of part 1 does. table_head gives the first HEAD_ROWS rows of the sample, each with its row number as a spreadsheet numbers it,
 and header_choices the row with the column titles (the one given, else the first row with three filled cells) and its titles, which
 fill one dropdown for each field of EXPORT_FORM beside the choice NO_COLUMN, "(staat niet in het bestand)"; sample_head gives both from
-one read of the file. They read the file with the export reader's own helpers (_sheet): the first sheet of a workbook, or a CSV file in
+one read of the file. They read the file with the export reader's own helpers (_sheet): the one visible sheet of a workbook that holds
+data (a hidden sheet is never read, and a workbook with more than one such sheet is refused with their names), or a CSV file in
 the reader's encodings, cut at the mark under which the whole file holds the most filled cells, since under the file's own mark every
 row is cut into its columns, while commas or semicolons inside some cells add cells on those rows only; on a tie, at the mark under
 which the widest row holds the most filled cells; on a tie again, at the first of the reader's marks. The reader itself, which has the
@@ -93,6 +94,26 @@ total row at the end of the file joins), and the PO the file names last when tha
 date; each order once, each line with its PO number and its number first and each value as reading_shown shows it, a number in plain
 digits with the cell's text in brackets when the two differ. A column is named by its title in quotes.
 
+Part 3, the export of articles. A supplier's price list is compared with the purchase prices of that supplier's articles, which the
+buyer gives as an export from Exact on the tab "Prijslijst" (aid/pricelist.py reads it; aid/review/pricelist_page.py has the tab).
+Part 3 sets the two settings of that export, article_columns and article_decimal_comma, from one sample, as part 2 sets the export of
+order lines, and stores no price: the sample's first rows and titles are shown with table_head and header_choices (sample_head), and
+one dropdown for each field of ARTICLE_FORM, the item code, the purchase price and the supplier, offers the titles beside NO_COLUMN.
+A workbook is read here as everywhere, from the sheet the buyer sees: a hidden sheet is never read, the one visible sheet that
+holds data is read whatever its place, and a workbook with more than one such sheet is refused with their names (sheets_text),
+so that no sheet is read or left out without a word.
+An export without a supplier column holds the articles of one supplier, whom the buyer names when he gives it on the tab.
+articles_from_form makes the two settings of the form, or refuses it with a problem per field: the item code or the price without a
+column, and a column chosen for more than one field. form_from_articles gives the form back for the settings, and saved_articles
+the two settings as the file holds them. articles_trial reads the sample once with the settings (read_articles) and writes nothing;
+a refusal of the reader is its fixed sentence (refusal_text), and otherwise a problem is: a price column one of whose text cells
+shows the other decimal mark than the convention chosen followed by one, two, four or more digits, and a sample that gives no
+article. articles_text gives what the trial says: the count line, the articles read and the rows passed over, a count of one in the
+singular, with, for each reason that occurs, how many rows it passed over (no item code, no supplier, a price that cannot be read,
+an article listed twice for one supplier), then the problems. articles_rows gives the first ARTICLE_ROWS articles as read
+(articles_headers): the row, the item code, the price in plain digits with the cell's text in brackets when the two differ, and
+the supplier when the export names one.
+
 The state. state_lines are the lines of "Stand van de koppeling": whether a layout is set; how many POs the aid knows, by a PDF version
 or a look from an export, with the number and the time of what was filed last and the version of a PDF (known, by the time of its
 po.json; a look is named as coming from an export); whether the columns of the export are set; when the last export was filed
@@ -103,6 +124,7 @@ still to enter in Exact, counted as the tab "In Exact invoeren" counts them (sti
 show no line of a document, no supplier and no amount, so that the owner can report them in words. Later tasks add their lines.
 """
 import re
+from collections.abc import Callable
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from itertools import groupby
@@ -113,6 +135,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from aid.execution.by_hand import FOLDER, open_changes
 from aid.po_store import PoStore, po_total
+from aid.pricelist import ARTICLE_FIELDS, LEFT_OUT, Articles, SeveralSheets, read_articles
 from aid.readers.pdf_text import TextRow, extract_rows
 from aid.readers.po_export import (DELIMITERS, EXPORT_FIELDS, EXPORT_SUFFIXES, ExportReading, ExportRefused, csv_rows, csv_text, is_folder_name,
                                    read_export_table, workbook_rows)
@@ -153,6 +176,9 @@ EXPORT_FORM = EXPORT_FIELDS                      # part 2: one dropdown for each
 NO_COLUMN = "(none)"                             # the value of the choice "(staat niet in het bestand)" of those dropdowns
 HEAD_ROWS = 15                                   # the rows of an export sample that its table shows
 _REQUIRED = ("po_number", "item_code")           # the fields whose column must be chosen
+ARTICLE_FORM = ARTICLE_FIELDS                    # part 3: one dropdown for each field of the export of articles, in the order of the page
+ARTICLE_ROWS = HEAD_ROWS                         # the articles that the trial read of part 3 shows
+_ARTICLE_REQUIRED = {"item_code": "exact_export_problem:item_code", "price": "exact_articles_problem:price"}     # and what each lacks
 
 
 class SampleUnreadable(Exception):
@@ -170,6 +196,12 @@ class Trial(NamedTuple):
     problems: list[str]                          # what keeps the sample from being filed with the layout
     warnings: list[str]                          # what the reader passes by, or reads with the columns of an earlier page
     total: bool                                  # whether the total of the PO can be worked out
+
+
+class ArticlesTrial(NamedTuple):
+    """What a trial read of a sample of the export of articles gave (articles_trial)."""
+    reading: Articles | None                     # what the reader read; None when it refused the file
+    problems: list[str]                          # what keeps the sample from being read with the settings, in the page's language
 
 
 class ExportTrial(NamedTuple):
@@ -561,6 +593,12 @@ def sample_head(path: Path, row: int | None = None, rows: int = HEAD_ROWS) -> tu
     return (_head(sheet, rows), *_titled(sheet, row))
 
 
+def sheets_text(error: SeveralSheets | ExportRefused, language: str, literal: Callable[[str], str] = str) -> str:
+    """The sentence for a workbook with more than one visible sheet with data, of which the aid reads one: the names of those
+    sheets (the names of the error), each as `literal` makes it showable, and what to do."""
+    return STRINGS[language]["exact_export_refused:several_sheets"].format(names=", ".join(literal(name) for name in error.names))
+
+
 def export_from_form(form: dict, language: str) -> tuple[dict | None, dict[str, str]]:
     """The three settings of the form of part 2 (see the module docstring): export_columns, the title chosen for each field of EXPORT_FORM
     that has one, without the spaces around it and in the order of EXPORT_FORM; export_decimal_comma, the convention ("point" or else the
@@ -608,10 +646,11 @@ def field_label(field: str, language: str) -> str:
     return strings["exact_header:supplier" if field == "supplier" else f"exact_meaning:{field}"]
 
 
-def export_trial(path: Path, values: dict, language: str) -> ExportTrial:
+def export_trial(path: Path, values: dict, language: str, literal: Callable[[str], str] = str) -> ExportTrial:
     """The trial read of an export sample with the three settings `values` (export_from_form gives them; a convention or a tick left out
     is False), which reads the file once (read_export_table) and writes nothing: what the export reader reads, and the problems that
-    keep the sample from being read with the settings. A refusal of the reader is its fixed sentence (refusal_text) and nothing is read;
+    keep the sample from being read with the settings. A refusal of the reader is its fixed sentence (refusal_text, the names of the
+    sheets of a workbook refused for its sheets as `literal` makes a name showable) and nothing is read;
     else the problems are the rows whose item code is a date, a time or an error value, which the reader passes over (one problem, with
     how many there are and the first row), each column of numbers whose text shows the other convention than the one chosen
     (_conventions_of), and a sample that gives no order line. A file that cannot be opened raises its OSError."""
@@ -620,7 +659,7 @@ def export_trial(path: Path, values: dict, language: str) -> ExportTrial:
     try:
         reading, table, header = read_export_table(path, columns, decimal_comma, bool(values.get("export_fill_down")))
     except ExportRefused as refused:
-        return ExportTrial(None, [refusal_text(refused, language)])
+        return ExportTrial(None, [refusal_text(refused, language, literal)])
     dated = reading.unread.get("item_code", [])
     problems = [_counted(strings, "exact_export_problem:item_code_date", dated)] if dated else []
     problems += _conventions_of(table, header, columns, decimal_comma, strings)
@@ -629,10 +668,13 @@ def export_trial(path: Path, values: dict, language: str) -> ExportTrial:
     return ExportTrial(reading, problems)
 
 
-def refusal_text(error: ExportRefused, language: str) -> str:
+def refusal_text(error: ExportRefused, language: str, literal: Callable[[str], str] = str) -> str:
     """The fixed sentence by which the page shows a refusal of the export reader: chosen by its reason (one of REFUSALS of
     aid/readers/po_export.py), with the column in quotes and the row where the reader gives them, and never what a cell holds. A cell of
-    a workbook that cannot be read, whose row the reader gives, has a sentence of its own."""
+    a workbook that cannot be read, whose row the reader gives, has a sentence of its own, and a workbook with more than one visible
+    sheet with data is named by its sheets, each as `literal` makes a name showable (sheets_text)."""
+    if error.reason == "several_sheets":
+        return sheets_text(error, language, literal)
     key = f"exact_export_refused:{error.reason}" + ("_row" if error.reason == "unreadable" and error.row is not None else "")
     return STRINGS[language][key].format(column=_quoted(error.column or ""), row=error.row)
 
@@ -696,7 +738,8 @@ def export_shown(path: Path, values: dict, language: str) -> tuple[str, list[lis
 
 def _sheet(path: Path) -> list[list]:
     """Every row of an export sample as its cells, each with its text and its kind, blank rows included, read with the export reader's
-    own helpers: the first sheet of a workbook, or a CSV file in the reader's encodings, cut at the mark of the reader's (DELIMITERS)
+    own helpers: the one visible sheet of a workbook that holds data (workbook_rows of the reader, which refuses a workbook with more
+    than one such sheet), or a CSV file in the reader's encodings, cut at the mark of the reader's (DELIMITERS)
     under which the whole file holds the most filled cells, since under the file's own mark every row is cut into its columns, while
     commas or semicolons inside some cells add cells on those rows only; on a tie, at the mark under which the widest row holds the
     most filled cells; on a tie again, at the first of DELIMITERS. The reader chooses its mark otherwise, since it has the map's
@@ -825,6 +868,107 @@ def _letters(column: int) -> str:
 
 def _quoted(title: str) -> str:
     return f"\"{title}\""
+
+
+# --- part 3: the export of articles ---
+
+def articles_from_form(form: dict, language: str) -> tuple[dict | None, dict[str, str]]:
+    """The two settings of the form of part 3 (see the module docstring): article_columns, the title chosen for each field of
+    ARTICLE_FORM that has one, without the spaces around it; article_decimal_comma, the convention ("point" or else the comma). Or
+    None and the problem of each field at fault, in the page's language: the item code or the purchase price without a column, and a
+    column chosen for more than one field, named once by the field that chose it the second time."""
+    strings, problems = STRINGS[language], {}
+    chosen = {field: _text(form.get(field)) for field in ARTICLE_FORM if _text(form.get(field)) not in ("", NO_COLUMN)}
+    for field, key in _ARTICLE_REQUIRED.items():
+        if field not in chosen:
+            problems[field] = strings[key]
+    first: dict[str, str | None] = {}            # a title as compared -> the title as first chosen; None once it was named
+    for field, title in chosen.items():
+        folded_title = title.casefold()
+        if first.get(folded_title) is not None:
+            problems[field] = strings["exact_export_problem:more_than_once"].format(column=_quoted(first[folded_title]))
+            first[folded_title] = None
+        first.setdefault(folded_title, title)
+    if problems:
+        return None, problems
+    return {"article_columns": chosen, "article_decimal_comma": form.get("numbers") != "point"}, {}
+
+
+def form_from_articles(settings: Settings) -> dict:
+    """The form of part 3 as it shows the settings: the title of each field of ARTICLE_FORM, without the spaces around it (NO_COLUMN for
+    a field the map leaves out), and the number convention ("comma" or "point")."""
+    columns = {field: title.strip() for field, title in settings.article_columns.items()}
+    return {field: columns.get(field) or NO_COLUMN for field in ARTICLE_FORM} | {
+        "numbers": "comma" if settings.article_decimal_comma else "point"}
+
+
+def saved_articles(settings: Settings) -> dict:
+    """The two settings of part 3 as the settings hold them, by which the page tells a form filled from the file as it is now from one
+    that another browser tab, or a change of the file itself, overtook (as saved_export does for part 2)."""
+    return {"article_columns": dict(settings.article_columns), "article_decimal_comma": settings.article_decimal_comma}
+
+
+def article_label(field: str, language: str) -> str:
+    """The label of the dropdown of a field of ARTICLE_FORM."""
+    return STRINGS[language][f"exact_articles_field:{field}"]
+
+
+def articles_trial(path: Path, values: dict, language: str, literal: Callable[[str], str] = str) -> ArticlesTrial:
+    """The trial read of a sample of the export of articles with the two settings `values` (articles_from_form gives them), which
+    reads the file once (read_articles of aid/pricelist.py) and writes nothing: what the reader reads, and the problems that keep the
+    sample from being read with the settings. A refusal of the reader is its fixed sentence (refusal_text) and nothing is read, a
+    workbook with more than one visible sheet with data among them (its sheets named as `literal` makes a name showable); else the
+    problems are a price column one of whose text cells shows the other convention than the one chosen (as _conventions_of
+    judges a column of part 2), and a sample that gives no article. A file that cannot be opened raises its OSError."""
+    strings = STRINGS[language]
+    columns, decimal_comma = dict(values.get("article_columns") or {}), bool(values.get("article_decimal_comma"))
+    try:
+        reading = read_articles(Path(path), columns, decimal_comma)
+    except ExportRefused as refused:
+        return ArticlesTrial(None, [refusal_text(refused, language, literal)])
+    mark, key = (".", "exact_problem:convention_point") if decimal_comma else (",", "exact_problem:convention_comma")
+    problems = []
+    if any(article.kind == "text" and _DECIMAL_MARK[mark].search(article.text) for article in reading.rows):
+        problems.append(strings[key].format(column=_quoted(columns["price"].strip())))
+    if not reading.rows:
+        problems.append(strings["exact_articles_problem:none"])
+    return ArticlesTrial(reading, problems)
+
+
+def articles_text(tried: ArticlesTrial, language: str) -> str:
+    """What a trial read of part 3 says, one paragraph each: the count line when the reader read the file (the articles read and the
+    rows passed over, a count of one in the singular, and in brackets how many rows each reason that occurs passed over), then the
+    problems."""
+    strings, lines = STRINGS[language], []
+    if tried.reading is not None:
+        read, left = len(tried.reading.rows), tried.reading.left_out
+        passed = sum(len(rows) for rows in left.values())
+        parts = {"articles": strings["pricelist_articles_one"] if read == 1 else strings["pricelist_articles_many"].format(n=read),
+                 "passed": strings["pricelist_passed_one"] if passed == 1 else strings["pricelist_passed_many"].format(k=passed)}
+        reasons = ", ".join(f"{strings[f'exact_articles_left:{reason}']}: {len(left[reason])}" for reason in LEFT_OUT if reason in left)
+        lines.append(strings["exact_articles_read_reasons"].format(reasons=reasons, **parts) if reasons else
+                     strings["exact_articles_read"].format(**parts))
+    return "\n\n".join(lines + tried.problems)
+
+
+def articles_rows(tried: ArticlesTrial, values: dict | None, language: str, rows: int = ARTICLE_ROWS) -> list[list[str]]:
+    """The first `rows` articles a trial read of part 3 read, as its table shows them (articles_headers): the row of the file, the item
+    code, the price as reading_shown shows a number (in plain digits, the cell's text in brackets when the two differ) and, for
+    settings with a supplier column, the supplier; [] when nothing was read."""
+    if tried.reading is None:
+        return []
+    named = "supplier" in ((values or {}).get("article_columns") or {})
+    return [[str(article.row), article.item_code, _shown(DocValue(value=article.price, text=article.text), number=True),
+             *([article.supplier or ""] if named else [])] for article in tried.reading.rows[:rows]]
+
+
+def articles_headers(values: dict | None, language: str) -> list[str]:
+    """The column titles of the table of the articles read (articles_rows) for the two settings `values`: the row, the item code and
+    the purchase price, and the supplier for settings with a supplier column and for None, as the empty table shows them."""
+    strings = STRINGS[language]
+    named = values is None or "supplier" in (values.get("article_columns") or {})
+    return [strings["exact_export_row"], strings["exact_meaning:item_code"], strings["exact_articles_price"],
+            *([strings["exact_header:supplier"]] if named else [])]
 
 
 # --- the state of the connection ---

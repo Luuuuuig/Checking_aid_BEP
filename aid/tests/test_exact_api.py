@@ -23,7 +23,8 @@ import requests
 
 from aid.execution.exact_api import ExactApiWriter
 from aid.execution.ops import WriteOp
-from aid.execution.writer import PreparedWriter, RetryingWriter, WriteLog, WriteLogEntry, WriterError, inverse, undo_case
+from aid.execution.writer import (PreparedWriter, RetryingWriter, UnknownWrite, UnverifiedWrite, WriteLog, WriteLogEntry, WriterError, inverse,
+                                  outcome_not_known, undo_case)
 
 
 def multipart_parts(headers: dict, body: bytes) -> list[tuple[str | None, str | None, bytes, str]]:
@@ -313,7 +314,7 @@ def test_a_retried_article_write_logs_the_price_read_before_the_first_attempt(fa
     unchecked_first_attempt(fake_exact, 2)                                      # the first attempt writes 12.70 and cannot read it back
     w = writer(fake_exact)
     entry = RetryingWriter(w, PreparedWriter(tmp_path / "prepared"), retries=2).apply(article_op(old=None), "c1", "R04", {}, NOW)
-    assert fake_exact.requests == [("GET", ARTICLE), ("PUT", ARTICLE), ("GET", ARTICLE)] * 2
+    assert fake_exact.requests == [("GET", ARTICLE), ("PUT", ARTICLE), ("GET", ARTICLE), ("GET", ARTICLE)]     # the repeat only reads
     assert (entry.status, entry.error, entry.previous, entry.new) == ("done", None, "11.00", "12.70")
     assert entry.op.old_value == "11.00"                                        # the real price, not the one the first attempt wrote
     assert entry.evidence == {"read_before": "12.70"}                           # and the entry says what the repeat found
@@ -329,17 +330,26 @@ def test_a_retried_write_with_an_old_value_logs_the_value_read_before_the_first_
     retrying = RetryingWriter(writer(fake_exact), PreparedWriter(tmp_path), retries=2)
     entry = retrying.apply(OP, "c1", "R04", {}, NOW)
     assert retrying.name == "exact_api+prepared"
-    assert fake_exact.requests == [("GET", LINE), ("PUT", LINE), ("GET", LINE)] * 2
+    assert fake_exact.requests == [("GET", LINE), ("PUT", LINE), ("GET", LINE), ("GET", LINE)]
     assert (entry.status, entry.error, entry.previous, entry.evidence) == ("done", None, "12.50", {"read_before": "12.70"})
     assert entry.op == OP
 
 
-def test_the_first_read_is_kept_over_several_attempts_that_wrote_and_could_not_check(fake_exact, tmp_path):
+def test_the_first_read_is_kept_over_several_attempts_that_could_not_check(fake_exact, tmp_path):
     fake_exact.state[ARTICLE] = {"price": "11.00"}
-    unchecked_first_attempt(fake_exact, 2, 5)                                   # two attempts write 12.70 and cannot read it back
+    unchecked_first_attempt(fake_exact, 2, 3)                                   # the first attempt writes 12.70; no read for two attempts
     entry = RetryingWriter(writer(fake_exact), PreparedWriter(tmp_path), retries=3).apply(article_op(old=None), "c1", "R04", {}, NOW)
-    assert len(fake_exact.requests) == 9
+    assert fake_exact.requests == [("GET", ARTICLE), ("PUT", ARTICLE)] + [("GET", ARTICLE)] * 3
     assert (entry.status, entry.previous, entry.op.old_value, entry.evidence) == ("done", "11.00", "11.00", {"read_before": "12.70"})
+    assert entry.error is None and not (tmp_path / "prepared_changes.csv").exists()
+
+
+def test_the_first_read_is_kept_when_a_repeat_reads_the_old_value_and_writes_again(fake_exact, tmp_path):
+    fake_exact.state[ARTICLE] = {"price": "11.00"}                              # the reads after a write lag: 503, then the old price once
+    fake_exact.override = lambda method, path, index: {2: (503, {}), 3: (200, {"price": "11.00"}), 5: (503, {})}.get(index)
+    entry = RetryingWriter(writer(fake_exact), PreparedWriter(tmp_path), retries=3).apply(article_op(old=None), "c1", "R04", {}, NOW)
+    assert fake_exact.requests == [("GET", ARTICLE), ("PUT", ARTICLE), ("GET", ARTICLE)] * 2 + [("GET", ARTICLE)]
+    assert (entry.status, entry.error, entry.previous, entry.op.old_value) == ("done", None, "11.00", "11.00")
 
 
 def test_a_write_that_was_checked_leaves_nothing_to_remember(fake_exact, tmp_path):
@@ -386,6 +396,513 @@ def test_what_is_remembered_belongs_to_its_target(fake_exact, first, first_path,
     fake_exact.state.setdefault(other_path, {"price": "12.70", "quantity": "12.70"})     # the other target holds 12.70 on its own
     entry = w.apply(other, "c1", "R04", {}, NOW)
     assert (entry.previous, entry.op.old_value) == ("12.70", "12.70")           # what it read: the first write is not its history
+
+
+# --- a write the system accepted whose check failed, and what the repeat makes of it ---
+
+def reads_fail_after_the_write(fake_exact):
+    """Every read after the first write answers 503: the write goes through and no attempt can check it."""
+    fake_exact.override = lambda method, path, index: (503, {}) if method == "GET" and index > 1 else None
+
+
+@pytest.mark.parametrize("answer, failed", [
+    pytest.param((503, {}), "verify GET /article/KM-1001: HTTP 503", id="the read fails"),
+    pytest.param((200, b"<html>maintenance</html>"), "verify GET /article/KM-1001: HTTP 200, the body is not JSON", id="no JSON"),
+    pytest.param((200, {"price": "11.50"}), "verify GET /article/KM-1001: HTTP 200, read back '11.50' after writing '11'", id="another value"),
+])
+def test_the_api_writer_alone_raises_the_unverified_write_with_its_entry(fake_exact, answer, failed):
+    """The system accepted the write and the check failed, or read a value that is neither the new one nor the one from before:
+    the error carries the entry of the attempt, made, with the price read before the write and the failed check."""
+    fake_exact.state[ARTICLE] = {"price": "12"}
+    fake_exact.override = lambda method, path, index: answer if index == 2 else None
+    with pytest.raises(UnverifiedWrite) as caught:
+        writer(fake_exact).apply(article_op(old=None, new="11"), "c1", "R04", {"flag_id": "F1"}, NOW)
+    assert isinstance(caught.value, WriterError) and str(caught.value) == failed
+    assert caught.value.__cause__ is None and caught.value.__context__ is None       # nothing of the failed call to quote from
+    entry = caught.value.entry
+    assert (entry.status, entry.previous, entry.op.old_value, entry.new, entry.error) == ("done", "12", "12", "11", failed)
+    assert (entry.case_id, entry.rule_id, entry.evidence, entry.timestamp) == ("c1", "R04", {"flag_id": "F1"}, NOW.isoformat())
+    assert WriteLogEntry.model_validate_json(entry.model_dump_json()) == entry        # it can be logged
+    assert fake_exact.requests == [("GET", ARTICLE), ("PUT", ARTICLE), ("GET", ARTICLE)] and fake_exact.state[ARTICLE] == {"price": "11"}
+
+
+def test_a_check_that_reads_the_value_from_before_the_write_is_a_plain_writer_error(fake_exact):
+    fake_exact.state[LINE] = {"price": "12.50"}
+    fake_exact.override = lambda method, path, index: (200, {"price": "12.50"}) if method == "PUT" else None     # the write is ignored
+    with pytest.raises(WriterError, match="verify GET .*read back '12.50' after writing '12.70'") as caught:
+        writer(fake_exact).apply(OP, "c1", "R04", {}, NOW)
+    assert type(caught.value) is WriterError                                    # not an unverified write: the system holds the old value
+
+
+def test_the_value_from_before_is_told_by_its_value_not_by_its_text(fake_exact):
+    fake_exact.state[LINE] = {"price": 12.5}                                    # read as "12.5" before the write
+    fake_exact.override = lambda method, path, index: (200, {"price": "12.50"}) if index > 0 else None       # ignored; read back as "12.50"
+    with pytest.raises(WriterError, match="verify GET .*read back '12.50' after writing '12.70'") as caught:
+        writer(fake_exact).apply(OP, "c1", "R04", {}, NOW)
+    assert type(caught.value) is WriterError
+
+
+def test_an_empty_field_read_back_is_the_value_from_before_only_when_the_field_was_empty(fake_exact):
+    fake_exact.state[LINE] = {"price": "12.50"}
+    fake_exact.override = lambda method, path, index: (200, {"price": None}) if index == 2 else None         # the check reads a null
+    with pytest.raises(UnverifiedWrite, match="verify GET .*read back None after writing '12.70'") as caught:
+        writer(fake_exact).apply(OP, "c1", "R04", {}, NOW)                      # neither the new value nor the one from before
+    assert (caught.value.entry.status, caught.value.entry.previous) == ("done", "12.50")
+    fake_exact.state[LINE] = {"price": None}
+    fake_exact.override = lambda method, path, index: (200, {"price": None}) if method == "PUT" else None      # empty before, ignored
+    with pytest.raises(WriterError, match="read back None after writing '12.70'") as ignored:
+        writer(fake_exact).apply(OP, "c1", "R04", {}, NOW)
+    assert type(ignored.value) is WriterError
+
+
+def test_an_accepted_article_price_whose_checks_fail_is_logged_as_made_with_the_price_read(fake_exact, tmp_path):
+    """The outside review's example: an article price from 12 to 11, the rule knowing no old value, and no read after the write
+    succeeds. The change is in the system, so it is logged as made, with the 12 read before the first attempt, and nothing is
+    prepared; its undo puts the 12 back."""
+    fake_exact.state[ARTICLE] = {"price": "12"}
+    reads_fail_after_the_write(fake_exact)
+    w = writer(fake_exact)
+    retrying = RetryingWriter(w, PreparedWriter(tmp_path / "prepared"), retries=2)
+    entry = retrying.apply(article_op(old=None, new="11"), "c1", "R04", {}, NOW)
+    assert fake_exact.requests == [("GET", ARTICLE), ("PUT", ARTICLE), ("GET", ARTICLE), ("GET", ARTICLE)]
+    assert fake_exact.state[ARTICLE] == {"price": "11"}
+    assert (entry.status, entry.previous, entry.op.old_value, entry.new) == ("done", "12", "12", "11")
+    assert entry.error == "verify GET /article/KM-1001: HTTP 503"                # the check of the write the system accepted
+    assert not (tmp_path / "prepared").exists()                                 # nothing is prepared for a change the system holds
+    WriteLog(tmp_path).append(entry)
+    fake_exact.override = None                                                  # the reads work again
+    [undone] = undo_case(tmp_path, retrying, NOW + timedelta(hours=1))
+    assert fake_exact.state[ARTICLE] == {"price": "12"} and fake_exact.bodies[5] == b'{"price": "12"}'
+    assert (undone.status, undone.previous, undone.new, undone.error) == ("done", "11", "12", None)
+
+
+def test_a_repeat_that_finds_the_value_it_sent_counts_the_read_as_the_check(fake_exact, tmp_path):
+    """The review's example with its own requests: the reads at 2 and 5 answer 503. The repeat reads the 11 the first attempt sent,
+    which checks that write: the entry is made and verified with the 12 as its previous, and nothing is written again."""
+    fake_exact.state[ARTICLE] = {"price": "12"}
+    unchecked_first_attempt(fake_exact, 2, 5)
+    entry = RetryingWriter(writer(fake_exact), PreparedWriter(tmp_path / "prepared"), retries=2).apply(article_op(old=None, new="11"), "c1", "R04", {}, NOW)
+    assert fake_exact.requests == [("GET", ARTICLE), ("PUT", ARTICLE), ("GET", ARTICLE), ("GET", ARTICLE)]
+    assert [json.loads(body) for body in fake_exact.bodies if body] == [{"price": "11"}]                # one write
+    assert (entry.status, entry.error, entry.previous, entry.op.old_value, entry.new) == ("done", None, "12", "12", "11")
+    assert entry.evidence == {"read_before": "11"} and not (tmp_path / "prepared").exists()
+
+
+@pytest.mark.parametrize("lost", [502, 504], ids=["bad gateway", "gateway timeout"])
+def test_a_write_whose_answer_was_lost_is_found_by_the_repeat_and_not_prepared(fake_exact, tmp_path, lost):
+    """The system makes the change and the answer to the write is an error of something in between. The repeat finds the value the
+    first attempt sent and counts that read as the check."""
+    def answer_lost(method, path, index):
+        if method == "PUT":
+            fake_exact.state[path].update({"price": "11"})
+            return lost, {}
+        return None
+
+    fake_exact.state[ARTICLE] = {"price": "12"}
+    fake_exact.override = answer_lost
+    w = writer(fake_exact)
+    with pytest.raises(UnknownWrite) as caught:
+        w.apply(article_op(old=None, new="11"), "c1", "R04", {}, NOW)
+    assert str(caught.value) == f"write PUT /article/KM-1001: HTTP {lost}"                # made or not: this answer does not say
+    entry = RetryingWriter(w, PreparedWriter(tmp_path / "prepared"), retries=2).apply(article_op(old=None, new="11"), "c1", "R04", {}, NOW)
+    assert fake_exact.requests == [("GET", ARTICLE), ("PUT", ARTICLE), ("GET", ARTICLE)]              # the repeat read, and wrote nothing
+    assert (entry.status, entry.error, entry.previous, entry.op.old_value) == ("done", None, "12", "12")
+    assert not (tmp_path / "prepared").exists()
+
+
+def test_a_po_line_changed_while_the_system_held_another_value_than_the_document_is_undone_to_the_value_read(fake_exact, tmp_path):
+    """The outside review's second example: the document says 10, the system holds 12, the change to 11 is made. The undo writes
+    the 12 back, the value read before the write, not the document's 10."""
+    fake_exact.state[LINE] = {"price": "12"}
+    w = writer(fake_exact)
+    entry = w.apply(op(old="10", new="11"), "c1", "R04", {}, NOW)
+    assert (entry.status, entry.previous, entry.op.old_value, entry.evidence) == ("done", "12", "10", {"read_before": "12"})
+    WriteLog(tmp_path).append(entry)
+    [undone] = undo_case(tmp_path, w, NOW + timedelta(hours=1))
+    assert fake_exact.requests[3:] == [("GET", LINE), ("PUT", LINE), ("GET", LINE)] and fake_exact.bodies[4] == b'{"price": "12"}'
+    assert fake_exact.state[LINE] == {"price": "12"}
+    assert (undone.status, undone.previous, undone.new, undone.op.old_value, undone.op.new_value) == ("done", "11", "12", "11", "12")
+    assert undone.evidence == {"undo_of": entry.entry_id}                       # the undo found the 11 it takes away: nothing to note
+
+
+def test_both_at_once_the_unverified_change_of_a_line_is_undone_to_the_value_read(fake_exact, tmp_path):
+    fake_exact.state[LINE] = {"price": "12"}
+    reads_fail_after_the_write(fake_exact)
+    retrying = RetryingWriter(writer(fake_exact), PreparedWriter(tmp_path / "prepared"), retries=2)
+    entry = retrying.apply(op(old="10", new="11"), "c1", "R04", {}, NOW)
+    assert (entry.status, entry.previous, entry.op.old_value, entry.error) == ("done", "12", "10", "verify GET /po/250101/v1/line/1: HTTP 503")
+    assert entry.evidence == {"read_before": "12"} and not (tmp_path / "prepared").exists()
+    WriteLog(tmp_path).append(entry)
+    fake_exact.override = None
+    undo_case(tmp_path, retrying, NOW + timedelta(hours=1))
+    assert fake_exact.state[LINE] == {"price": "12"}
+
+
+def test_a_check_that_keeps_reading_another_value_is_made_and_not_verified(fake_exact, tmp_path):
+    """A system that stores another value than the one sent (here 11.50 for 11). The first check reads neither the new value nor
+    the one from before; the repeat reads that value, writes again and reads it once more, which by itself would say that the
+    write was ignored. One accepted write that no attempt verified is enough: logged as made, with the 12 read first."""
+    def stores_another_value(method, path, index):
+        if method == "PUT":
+            fake_exact.state[path].update({"price": "11.50"})
+            return 200, {}
+        return None
+
+    fake_exact.state[ARTICLE] = {"price": "12"}
+    fake_exact.override = stores_another_value
+    entry = RetryingWriter(writer(fake_exact), PreparedWriter(tmp_path / "prepared"), retries=2).apply(article_op(old=None, new="11"), "c1", "R04", {}, NOW)
+    assert fake_exact.requests == [("GET", ARTICLE), ("PUT", ARTICLE), ("GET", ARTICLE)] * 2
+    assert (entry.status, entry.previous, entry.op.old_value) == ("done", "12", "12")
+    assert entry.error == "verify GET /article/KM-1001: HTTP 200, read back '11.50' after writing '11'"
+    assert not (tmp_path / "prepared").exists()
+
+
+@pytest.mark.parametrize("put, error", [
+    pytest.param(200, "verify GET /po/250101/v1/line/1: HTTP 200, read back '12.50' after writing '12.70'", id="ignored"),
+    pytest.param(409, "write PUT /po/250101/v1/line/1: HTTP 409", id="refused"),
+    pytest.param(400, "write PUT /po/250101/v1/line/1: HTTP 400", id="refused as a bad request"),
+])
+def test_a_write_the_system_ignored_or_refused_is_still_prepared(fake_exact, tmp_path, put, error):
+    """A write answered with success that left the value from before in place, on every attempt, was ignored; one answered with
+    a refusal (4xx) was not made. Either way the system holds the old value and the change is prepared, as before."""
+    fake_exact.state[LINE] = {"price": "12.50"}
+    fake_exact.override = lambda method, path, index: (put, {"price": "12.50"}) if method == "PUT" else None
+    entry = RetryingWriter(writer(fake_exact), PreparedWriter(tmp_path / "prepared"), retries=2).apply(OP, "c1", "R04", {}, NOW)
+    assert fake_exact.requests == ([("GET", LINE), ("PUT", LINE), ("GET", LINE)] if put == 200 else [("GET", LINE), ("PUT", LINE)]) * 2
+    assert (entry.status, entry.previous, entry.new, entry.error) == ("prepared", "12.50", "12.70", error)
+    assert fake_exact.state[LINE] == {"price": "12.50"} and "12.70" in (tmp_path / "prepared" / "prepared_changes.csv").read_text()
+
+
+# --- a write whose outcome is not known: no answer, or an answer that says neither made nor refused ---
+
+class Dropping(requests.Session):
+    """A session that gets no answer to its first `times` requests of one method: it raises `fault` for them, after handing the
+    request to the server when `deliver` is true (the system then makes the change and the client never learns it)."""
+
+    def __init__(self, method: str, fault: Exception, deliver: bool, times: int = 1):
+        super().__init__()
+        self.method, self.fault, self.deliver, self.left = method, fault, deliver, times
+
+    def request(self, method, url, **kwargs):
+        if method == self.method and self.left > 0:
+            self.left -= 1
+            if self.deliver:
+                super().request(method, url, **kwargs)
+            raise self.fault
+        return super().request(method, url, **kwargs)
+
+
+def answers(fake_exact, *script):
+    """Answer the requests in turn by the script, one word per request; the requests after it are answered as they are. A read:
+    "ok" (the value the system holds) or "503". A write: "ok" (made), "lost" (made, answered 502), "busy" (not made, answered
+    503), "ignored" (not made, answered 200) or a status such as "409" (not made, refused)."""
+    def answer(method, path, index):
+        word = script[index] if index < len(script) else "ok"
+        if word == "ok":
+            return None
+        if method == "GET":
+            return int(word), {}
+        if word == "lost":
+            fake_exact.state[path].update(json.loads(fake_exact.bodies[index]))
+            return 502, {}
+        return (200, fake_exact.state[path]) if word == "ignored" else (503 if word == "busy" else int(word), {})
+    fake_exact.override = answer
+
+
+@pytest.mark.parametrize("status", [500, 502, 503, 504, 302])
+def test_a_write_answered_with_neither_success_nor_a_refusal_is_an_unknown_write_with_its_entry(fake_exact, status):
+    """A gateway's 502 can follow a write that was made, and a 503 one that was not: the answer does not say. The error carries
+    the entry of the attempt, with the value read before the write and what happened to the write."""
+    fake_exact.state[LINE] = {"price": "12.60"}
+    fake_exact.fail_next, fake_exact.fail_method = status, "PUT"
+    with pytest.raises(UnknownWrite) as caught:
+        writer(fake_exact).apply(OP, "c1", "R04", {"flag_id": "F1"}, NOW)
+    happened = f"write PUT /po/250101/v1/line/1: HTTP {status}"
+    assert isinstance(caught.value, WriterError) and not isinstance(caught.value, UnverifiedWrite) and str(caught.value) == happened
+    assert caught.value.__cause__ is None and caught.value.__context__ is None
+    entry = caught.value.entry
+    assert (entry.status, entry.previous, entry.op, entry.new, entry.error) == ("done", "12.60", OP, "12.70", happened)
+    assert entry.evidence == {"flag_id": "F1", "read_before": "12.60"} and WriteLogEntry.model_validate_json(entry.model_dump_json()) == entry
+    assert fake_exact.requests == [("GET", LINE), ("PUT", LINE)]
+
+
+@pytest.mark.parametrize("fault, deliver, happened", [
+    pytest.param(requests.ReadTimeout("no answer"), True, "no answer within 20 s", id="timeout, the system made the write"),
+    pytest.param(requests.ReadTimeout("no answer"), False, "no answer within 20 s", id="timeout, the write never arrived"),
+    pytest.param(requests.ConnectionError("lost"), True, "ConnectionError", id="connection lost"),
+])
+def test_a_write_that_got_no_answer_is_an_unknown_write(fake_exact, fault, deliver, happened):
+    fake_exact.state[LINE] = {"price": "12.60"}
+    with pytest.raises(UnknownWrite) as caught:
+        writer(fake_exact, session=Dropping("PUT", fault, deliver)).apply(OP, "c1", "R04", {}, NOW)
+    assert str(caught.value) == f"write PUT /po/250101/v1/line/1: {happened}" == caught.value.entry.error
+    assert caught.value.__cause__ is None and caught.value.__context__ is None       # nothing of the fault to quote from
+    assert (caught.value.entry.status, caught.value.entry.previous) == ("done", "12.60")
+    assert fake_exact.state[LINE] == {"price": "12.70" if deliver else "12.60"}
+
+
+@pytest.mark.parametrize("fault", [requests.ConnectTimeout("connect timed out"), requests.exceptions.SSLError("handshake failed"),
+                                   requests.exceptions.ProxyError("no tunnel")], ids=["connect time-out", "TLS failure", "proxy failure"])
+def test_a_write_over_a_connection_that_was_never_made_is_a_plain_failure(fake_exact, tmp_path, fault):
+    """Nothing was sent, so the outcome is known: not made. The change is prepared, a value and an attachment alike."""
+    document = tmp_path / "conf.pdf"
+    document.write_bytes(b"x")
+    fake_exact.state[LINE] = {"price": "12.60"}
+    for method, operation in (("PUT", OP), ("POST", file_op("attach_document", document))):
+        w = writer(fake_exact, session=Dropping(method, fault, deliver=False, times=2))
+        with pytest.raises(WriterError) as caught:
+            w.apply(operation, "c1", "R04", {}, NOW)
+        assert type(caught.value) is WriterError and caught.value.__context__ is None
+        entry = RetryingWriter(writer(fake_exact, session=Dropping(method, fault, deliver=False, times=2)),
+                               PreparedWriter(tmp_path / method)).apply(operation, "c1", "R04", {}, NOW)
+        assert entry.status == "prepared" and not outcome_not_known(entry)
+    assert fake_exact.state[LINE] == {"price": "12.60"} and fake_exact.uploads == {}
+
+
+def test_an_attach_to_an_address_where_nothing_listens_is_prepared(tmp_path):
+    """The check's proof: the connection is refused, so no request is sent. Before, the attachment was logged as made and not
+    sure, and the writer never sent that file again."""
+    with socket.socket() as probe:                                              # a port that was free a moment ago and has no listener
+        probe.bind(("127.0.0.1", 0))
+        url = f"http://127.0.0.1:{probe.getsockname()[1]}"
+    document = tmp_path / "conf.pdf"
+    document.write_bytes(b"x")
+    route = RetryingWriter(ExactApiWriter(url, ENDPOINTS, token=lambda: "t", timeout=2.0), PreparedWriter(tmp_path / "prepared"))
+    entry = route.apply(file_op("attach_document", document), "c1", "R01", {}, NOW)
+    assert (entry.status, entry.error) == ("prepared", "attach POST /po/250101/attach: ConnectionError") and not outcome_not_known(entry)
+    assert len((tmp_path / "prepared" / "prepared_changes.csv").read_text().splitlines()) == 2
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 409, 422, 429])
+def test_a_write_the_system_refused_is_a_plain_failure(fake_exact, status):
+    fake_exact.state[LINE] = {"price": "12.60"}
+    fake_exact.fail_next, fake_exact.fail_method = status, "PUT"
+    with pytest.raises(WriterError) as caught:
+        writer(fake_exact).apply(OP, "c1", "R04", {}, NOW)
+    assert type(caught.value) is WriterError and str(caught.value) == f"write PUT /po/250101/v1/line/1: HTTP {status}"
+
+
+@pytest.mark.parametrize("token, happened", [("", "the token is empty"), (f"{SECRET}\nsecond line", "InvalidHeader"), (f"{SECRET}\u20ac", "UnicodeEncodeError")],
+                         ids=["no token", "a header requests refuses", "a header that cannot be encoded"])
+def test_a_write_that_was_never_sent_is_a_plain_failure_and_is_prepared(fake_exact, tmp_path, token, happened):
+    """The token of the write is one that cannot be sent, on both attempts: nothing left the client, so the outcome is known."""
+    fake_exact.state[LINE] = {"price": "12.60"}
+    tokens = iter(["t", token, "t", token])
+    entry = RetryingWriter(writer(fake_exact, token=lambda: next(tokens)), PreparedWriter(tmp_path / "prepared")).apply(OP, "c1", "R04", {}, NOW)
+    assert (entry.status, entry.error) == ("prepared", f"write PUT /po/250101/v1/line/1: {happened}") and not outcome_not_known(entry)
+    assert fake_exact.requests == [("GET", LINE)] * 2 and fake_exact.state[LINE] == {"price": "12.60"}
+
+
+@pytest.mark.parametrize("script, retries, held", [
+    pytest.param(("ok", "lost"), 1, "11", id="ok lost"),
+    pytest.param(("ok", "lost", "503"), 2, "11", id="ok lost 503"),
+    pytest.param(("503", "ok", "lost"), 2, "11", id="503 ok lost"),
+    pytest.param(("ok", "busy", "ok", "lost"), 2, "11", id="ok busy ok lost"),
+    pytest.param(("ok", "ignored", "ok", "ok", "lost"), 2, "11", id="ok ignored ok ok lost"),
+    pytest.param(("ok", "409", "ok", "lost"), 2, "11", id="ok refused ok lost"),
+    pytest.param(("ok", "busy"), 1, "12", id="ok busy"),
+    pytest.param(("ok", "busy", "ok", "busy"), 2, "12", id="ok busy ok busy"),
+    pytest.param(("ok", "busy", "503"), 2, "12", id="ok busy 503"),
+])
+def test_a_write_whose_last_outcome_is_not_known_is_logged_as_not_sure_and_never_prepared(fake_exact, tmp_path, script, retries, held):
+    """The sequences the review found ending "prepared" while the system held the new value, and their kin: the last write of the
+    operation got an answer that does not say whether it was made, and no read after it settled it. The entry is made as far as
+    the log goes, with the 12 read before the first attempt and what happened to the write, and carries the note that its
+    outcome is not known; nothing is prepared; the undo puts the 12 back."""
+    fake_exact.state[ARTICLE] = {"price": "12"}
+    answers(fake_exact, *script)
+    retrying = RetryingWriter(writer(fake_exact), PreparedWriter(tmp_path / "prepared"), retries=retries)
+    entry = retrying.apply(article_op(old=None, new="11"), "c1", "R04", {}, NOW)
+    assert len(fake_exact.requests) == len(script) and fake_exact.state[ARTICLE] == {"price": held}
+    assert (entry.status, entry.previous, entry.op.old_value, entry.new) == ("done", "12", "12", "11") and outcome_not_known(entry)
+    assert entry.error == f"write PUT /article/KM-1001: HTTP {502 if held == '11' else 503}"
+    assert not (tmp_path / "prepared").exists()
+    WriteLog(tmp_path).append(entry)
+    fake_exact.override = None
+    undo_case(tmp_path, retrying, NOW + timedelta(hours=1))
+    assert fake_exact.state[ARTICLE] == {"price": "12"}
+
+
+@pytest.mark.parametrize("script, error", [
+    pytest.param(("ok", "busy", "ok", "409"), "write PUT /article/KM-1001: HTTP 409", id="a 5xx, the old value read, a refusal"),
+    pytest.param(("ok", "busy", "ok", "ignored", "ok"), "verify GET /article/KM-1001: HTTP 200, read back '12' after writing '11'",
+                 id="a 5xx, the old value read, an ignored write"),
+    pytest.param(("ok", "409", "ok", "409"), "write PUT /article/KM-1001: HTTP 409", id="refused twice"),
+    pytest.param(("ok", "409", "503"), "read GET /article/KM-1001: HTTP 503", id="refused, then no read"),
+])
+def test_a_write_the_system_did_not_make_is_prepared(fake_exact, tmp_path, script, error):
+    """A read of the value from before settles a write that was answered with neither success nor a refusal: it was not made. When
+    the write after it is refused or ignored too, every outcome is known and the change is prepared, as after any failed attempt."""
+    fake_exact.state[ARTICLE] = {"price": "12"}
+    answers(fake_exact, *script)
+    entry = RetryingWriter(writer(fake_exact), PreparedWriter(tmp_path / "prepared"), retries=2).apply(article_op(old=None, new="11"), "c1", "R04", {}, NOW)
+    assert len(fake_exact.requests) == len(script) and fake_exact.state[ARTICLE] == {"price": "12"}
+    assert (entry.status, entry.error) == ("prepared", error) and not outcome_not_known(entry)
+    assert len((tmp_path / "prepared" / "prepared_changes.csv").read_text().splitlines()) == 2
+
+
+@pytest.mark.parametrize("deliver, script, held", [
+    pytest.param(False, ("ok", "ok", "409"), "12", id="the old value read, then a refusal"),
+    pytest.param(False, ("ok", "ok", "ignored", "ok"), "12", id="the old value read, then an ignored write"),
+    pytest.param(False, ("ok", "503"), "12", id="no read after it"),
+    pytest.param(True, ("ok", "ok", "503"), "11", id="made, no read after it"),
+])
+def test_a_write_that_got_no_answer_is_not_settled_by_a_read_of_the_old_value(fake_exact, tmp_path, deliver, script, held):
+    """No answer came to the first write (a timeout), so it can still land: reading the old value afterwards settles nothing, and
+    neither does a refusal of the repeat's own write. The operation ends not sure, with the 12 read first. (A write that was not
+    delivered is none of the requests the stand-in counts.)"""
+    fake_exact.state[ARTICLE] = {"price": "12"}
+    answers(fake_exact, *script)
+    session = Dropping("PUT", requests.ReadTimeout("no answer"), deliver)
+    retrying = RetryingWriter(writer(fake_exact, session=session), PreparedWriter(tmp_path / "prepared"), retries=2)
+    entry = retrying.apply(article_op(old=None, new="11"), "c1", "R04", {}, NOW)
+    assert (entry.status, entry.previous, entry.error) == ("done", "12", "write PUT /article/KM-1001: no answer within 20 s")
+    assert outcome_not_known(entry) and not (tmp_path / "prepared").exists() and fake_exact.state[ARTICLE] == {"price": held}
+
+
+def test_a_write_that_got_no_answer_and_landed_is_found_by_the_repeat(fake_exact, tmp_path):
+    fake_exact.state[ARTICLE] = {"price": "12"}
+    session = Dropping("PUT", requests.ReadTimeout("no answer"), deliver=True)
+    entry = RetryingWriter(writer(fake_exact, session=session), PreparedWriter(tmp_path / "prepared")).apply(article_op(old=None, new="11"), "c1", "R04", {}, NOW)
+    assert (entry.status, entry.error, entry.previous, entry.evidence) == ("done", None, "12", {"read_before": "11"})
+    assert fake_exact.requests == [("GET", ARTICLE), ("PUT", ARTICLE), ("GET", ARTICLE)] and not (tmp_path / "prepared").exists()
+
+
+def test_a_later_call_that_cannot_read_gets_an_entry_of_its_own_for_the_write_still_in_doubt(fake_exact, tmp_path):
+    """The writer remembers the write in doubt, not the entry: a later call for the same change, here of another case, whose read
+    fails raises with an entry of that call, with the value read before the first write as its previous."""
+    fake_exact.state[ARTICLE] = {"price": "12"}
+    answers(fake_exact, "ok", "lost", "503")
+    w = writer(fake_exact)
+    with pytest.raises(UnknownWrite) as first:
+        w.apply(article_op(old=None, new="11"), "c1", "R04", {}, NOW)
+    with pytest.raises(UnknownWrite) as second:
+        w.apply(article_op(old=None, new="11"), "c2", "R05", {"flag_id": "F2"}, NOW + timedelta(minutes=5))
+    assert str(second.value) == "read GET /article/KM-1001: HTTP 503" and second.value.__context__ is None
+    one, other = first.value.entry, second.value.entry
+    assert other.entry_id != one.entry_id and (other.case_id, other.rule_id, other.evidence) == ("c2", "R05", {"flag_id": "F2"})
+    assert (other.status, other.previous, other.op.old_value, other.error) == ("done", "12", "12", "write PUT /article/KM-1001: HTTP 502")
+    assert other.timestamp == (NOW + timedelta(minutes=5)).isoformat()
+
+
+# --- an attachment or a detachment whose outcome is not known ---
+
+def test_an_attach_whose_answer_is_lost_is_not_sent_again_and_is_logged_as_not_sure(fake_exact, tmp_path):
+    """The file is attached and the answer is a gateway's error. A second POST would attach it twice, and nothing can be read to
+    show that it is not there, so the repeat sends nothing: the attachment is logged as not sure, and nothing is prepared."""
+    document = tmp_path / "conf.pdf"
+    document.write_bytes(b"%PDF made up")
+
+    def answer_lost(method, path, index):
+        if method == "POST":
+            fake_exact.uploads.setdefault(path, []).append(("conf.pdf", b"%PDF made up"))
+            return 504, {}
+        return None
+
+    fake_exact.override = answer_lost
+    attach = file_op("attach_document", document)
+    entry = RetryingWriter(writer(fake_exact), PreparedWriter(tmp_path / "prepared")).apply(attach, "c1", "R01", {}, NOW)
+    assert fake_exact.requests == [("POST", ATTACH)] and fake_exact.uploads[ATTACH] == [("conf.pdf", b"%PDF made up")]
+    assert (entry.status, entry.op, entry.previous, entry.error) == ("done", attach, None, "attach POST /po/250101/attach: HTTP 504")
+    assert outcome_not_known(entry) and not (tmp_path / "prepared").exists()
+
+
+def test_an_attach_that_got_no_answer_is_not_sent_again_and_one_that_was_refused_is(fake_exact, tmp_path):
+    document = tmp_path / "conf.pdf"
+    document.write_bytes(b"x")
+    attach = file_op("attach_document", document)
+    silent = RetryingWriter(writer(fake_exact, session=Dropping("POST", requests.ReadTimeout("no answer"), deliver=False)),
+                            PreparedWriter(tmp_path / "prepared"))
+    entry = silent.apply(attach, "c1", "R01", {}, NOW)
+    assert (entry.status, entry.error) == ("done", "attach POST /po/250101/attach: no answer within 20 s") and outcome_not_known(entry)
+    assert fake_exact.requests == [] and not (tmp_path / "prepared").exists()
+    fake_exact.override = lambda method, path, index: (413, {}) if method == "POST" else None       # refused: not made, so it is tried again
+    refused = RetryingWriter(writer(fake_exact), PreparedWriter(tmp_path / "prepared")).apply(attach, "c1", "R01", {}, NOW)
+    assert (refused.status, refused.error) == ("prepared", "attach POST /po/250101/attach: HTTP 413") and not outcome_not_known(refused)
+    assert fake_exact.requests == [("POST", ATTACH)] * 2 and fake_exact.uploads == {}
+
+
+def test_an_attach_in_doubt_whose_document_cannot_be_read_at_the_repeat_is_not_prepared(fake_exact, tmp_path, monkeypatch):
+    """The check's proof: the POST arrives and its answer does not; at the repeat another program holds the document for a
+    moment. The doubt is looked at before the document is read, so the attachment ends not sure, not prepared."""
+    import pathlib
+
+    document = tmp_path / "confirmation.pdf"
+    document.write_bytes(b"%PDF-1.4 made up")
+    real, reads = pathlib.Path.read_bytes, []
+
+    def read_bytes(self):
+        if self.name == "confirmation.pdf":
+            reads.append(self)
+            if len(reads) == 2:
+                raise PermissionError(13, "held by another process", str(self))
+        return real(self)
+
+    monkeypatch.setattr(pathlib.Path, "read_bytes", read_bytes)
+    session = Dropping("POST", requests.ReadTimeout("no answer"), deliver=True)
+    entry = RetryingWriter(writer(fake_exact, session=session), PreparedWriter(tmp_path / "prepared")).apply(
+        file_op("attach_document", document), "c1", "R01", {}, NOW)
+    assert (entry.status, entry.error) == ("done", "attach POST /po/250101/attach: no answer within 20 s") and outcome_not_known(entry)
+    assert not (tmp_path / "prepared").exists() and [name for name, _ in fake_exact.uploads[ATTACH]] == ["confirmation.pdf"]
+
+
+def test_a_write_in_doubt_whose_repeat_reads_an_empty_field_is_not_prepared(fake_exact, tmp_path):
+    """The check's proof: an article price without an old value, no answer to its write, and the repeat reads an empty field.
+    The refusal of an empty field is no plain failure while a write is in doubt: not sure, with the 12 read first."""
+    fake_exact.state[ARTICLE] = {"price": "12"}
+    fake_exact.override = lambda method, path, index: (200, {"price": None}) if index == 1 else None       # the repeat's read
+    session = Dropping("PUT", requests.ReadTimeout("no answer"), deliver=False)
+    entry = RetryingWriter(writer(fake_exact, session=session), PreparedWriter(tmp_path / "prepared")).apply(article_op(old=None, new="11"), "c1", "R04", {}, NOW)
+    assert (entry.status, entry.previous, entry.op.old_value) == ("done", "12", "12") and outcome_not_known(entry)
+    assert entry.error == "write PUT /article/KM-1001: no answer within 20 s" and not (tmp_path / "prepared").exists()
+
+
+def test_a_file_that_was_detached_is_no_longer_in_doubt(fake_exact, tmp_path):
+    """The undo of an attachment that is not sure detaches the file. After that success nothing of the file is in doubt: the
+    same writer attaches it again when asked."""
+    document = tmp_path / "conf.pdf"
+    document.write_bytes(b"x")
+
+    def answer_lost_once(method, path, index):
+        if method == "POST" and index == 0:
+            fake_exact.uploads.setdefault(path, []).append(("conf.pdf", b"x"))
+            return 502, {}
+        return None
+
+    fake_exact.override = answer_lost_once
+    w = writer(fake_exact)
+    retrying = RetryingWriter(w, PreparedWriter(tmp_path / "prepared"))
+    entry = retrying.apply(file_op("attach_document", document), "c1", "R01", {}, NOW)
+    assert outcome_not_known(entry) and fake_exact.requests == [("POST", ATTACH)]
+    WriteLog(tmp_path).append(entry)
+    [undone] = undo_case(tmp_path, retrying, NOW + timedelta(hours=1))
+    assert (undone.op.kind, undone.status, undone.error) == ("detach_document", "done", None) and fake_exact.uploads[ATTACH] == []
+    again = retrying.apply(file_op("attach_document", document), "c2", "R01", {}, NOW + timedelta(hours=2))
+    assert (again.status, again.error) == ("done", None) and fake_exact.uploads[ATTACH] == [("conf.pdf", b"x")]
+    assert fake_exact.requests == [("POST", ATTACH), ("DELETE", ATTACH), ("POST", ATTACH)]
+
+
+def test_a_detach_in_doubt_is_sent_again_and_only_a_success_settles_it(fake_exact, tmp_path):
+    """A DELETE can be sent twice without harm. When the first one was made and its answer lost, the repeat is answered that
+    there is no such file: that does not say the file was kept, so the detachment is not sure, not prepared. When the first one
+    was not made, the repeat makes it."""
+    detach = file_op("detach_document", tmp_path / "conf.pdf")
+
+    def answer_lost(method, path, index):
+        if method == "DELETE" and index == 0:
+            fake_exact.uploads[path] = []
+            return 502, {}
+        return None
+
+    fake_exact.uploads[ATTACH] = [("conf.pdf", b"x")]
+    fake_exact.override = answer_lost
+    lost = RetryingWriter(writer(fake_exact), PreparedWriter(tmp_path / "prepared")).apply(detach, "c1", "undo", {}, NOW)
+    assert (lost.status, lost.error) == ("done", "detach DELETE /po/250101/attach: HTTP 502") and outcome_not_known(lost)
+    assert fake_exact.requests == [("DELETE", ATTACH)] * 2 and not (tmp_path / "prepared").exists()
+    fake_exact.uploads[ATTACH] = [("conf.pdf", b"x")]
+    fake_exact.override = lambda method, path, index: (503, {}) if index == 2 else None           # not made, then made
+    made = RetryingWriter(writer(fake_exact), PreparedWriter(tmp_path / "prepared")).apply(detach, "c1", "undo", {}, NOW)
+    assert (made.status, made.error) == ("done", None) and fake_exact.uploads[ATTACH] == [] and len(fake_exact.requests) == 4
 
 
 # --- numbers read back ---
@@ -613,6 +1130,18 @@ def test_no_error_message_holds_the_token_and_no_error_keeps_the_error_it_came_f
     assert SECRET not in str(caught.value) and SECRET not in "".join(traceback.format_exception(caught.value))
     # raised outside the except block of the error that came before it: no cause, no context, and so nothing to quote from
     assert caught.value.__cause__ is None and caught.value.__context__ is None and not caught.value.__suppress_context__
+
+
+def test_a_check_that_fails_on_the_token_leaks_nothing_through_the_unverified_write(fake_exact):
+    # the token of the third request, the check, is one that requests refuses and quotes in its own error
+    fake_exact.state[LINE] = {"price": "12.50"}
+    tokens = iter([SECRET, SECRET, f"{SECRET}\nsecond line"])
+    with pytest.raises(UnverifiedWrite) as caught:
+        writer(fake_exact, token=lambda: next(tokens)).apply(OP, "c1", "R04", {}, NOW)
+    assert str(caught.value) == "verify GET /po/250101/v1/line/1: InvalidHeader" == caught.value.entry.error
+    assert SECRET not in "".join(traceback.format_exception(caught.value)) and SECRET not in caught.value.entry.model_dump_json()
+    assert caught.value.__cause__ is None and caught.value.__context__ is None and not caught.value.__suppress_context__
+    assert fake_exact.requests == [("GET", LINE), ("PUT", LINE)] and fake_exact.state[LINE] == {"price": "12.70"}
 
 
 def test_a_token_that_requests_refuses_does_not_leak_through_the_error(fake_exact):
@@ -971,3 +1500,387 @@ def test_the_entries_of_the_api_writer_go_into_the_write_log(fake_exact, tmp_pat
     for entry in entries:
         log.append(entry)
     assert log.entries() == entries
+
+
+# --- through the pipeline ---
+
+def test_the_pipeline_stops_at_an_article_price_the_exact_writer_could_not_check(fake_exact, tmp_path, madeup_out):
+    """MU08 through RetryingWriter(the Exact writer, the prepared writer). The document says 12.50 for the line and the system
+    holds 12.60; the line's price is written and checked. The article's price is written and no read after it succeeds: its entry
+    is made, with the 12.40 read, and the case stops there for the buyer, the confirmation not attached and the status not set.
+    Nothing is prepared. The undo of the case puts back what the system held: 12.40 and 12.60, not the document's 12.50."""
+    from aid.pipeline import run_case
+    from aid.sources.upload import open_upload_case
+    from aid.tests.conftest import deps
+
+    line, article, status = "/po/250108/v1/line/1", "/article/KM-0801", "/po/250108/status"
+    fake_exact.state.update({line: {"price": "12.60"}, article: {"price": "12.40"}, status: {"status": "Besteld"}})
+    written = []
+
+    def article_reads_fail_after_its_write(method, path, index):
+        if path == article and method == "PUT":
+            written.append(index)
+        return (503, {}) if path == article and method == "GET" and written else None
+
+    fake_exact.override = article_reads_fail_after_its_write
+    retrying = RetryingWriter(ExactApiWriter(fake_exact.url, ENDPOINTS, token=lambda: "t"), PreparedWriter(tmp_path / "cases" / "prepared"))
+    d = deps(tmp_path, madeup_out, writer=retrying)
+    c = open_upload_case(d.settings.cases_root, [madeup_out / "MU08_conf.pdf"], "250108", "confirmation", d.clock())
+    r = run_case(c, d)
+    assert fake_exact.requests == [("GET", line), ("PUT", line), ("GET", line), ("GET", article), ("PUT", article), ("GET", article), ("GET", article)]
+    assert [(e.op.kind, e.status, e.previous, e.new, e.error) for e in r.write_entries] == [
+        ("po_line_price", "done", "12.60", "12.70", None), ("article_price", "done", "12.40", "12.70", "verify GET /article/KM-0801: HTTP 503")]
+    assert [(i.reason, i.entry_id) for i in r.review_items] == [
+        ("write made, not verified: check in Exact", r.write_entries[1].entry_id),
+        ("not applied: an earlier change waits for a look in Exact (rule R01, attach_document)", None),
+        ("not applied: an earlier change waits for a look in Exact (rule R01, set_status)", None)]
+    assert r.status == "review" and r.digest_line == "PO 250108 (S08): ter beoordeling, 2 schrijfacties"
+    assert fake_exact.state == {line: {"price": "12.70"}, article: {"price": "12.70"}, status: {"status": "Besteld"}} and fake_exact.uploads == {}
+    assert WriteLog(c.root).entries() == r.write_entries and not (tmp_path / "cases" / "prepared").exists()
+    fake_exact.override = None
+    undone = undo_case(c.root, retrying, NOW)
+    assert [(u.op.kind, u.status, u.new) for u in undone] == [("article_price", "done", "12.40"), ("po_line_price", "done", "12.60")]
+    assert fake_exact.state == {line: {"price": "12.60"}, article: {"price": "12.40"}, status: {"status": "Besteld"}}
+
+
+def mu08(fake_exact, tmp_path, madeup_out, **options):
+    """MU08 through RetryingWriter(the Exact writer, the prepared writer into cases/prepared), run; the document says 12.50 for
+    the line, and the system holds 12.60 for the line and 12.40 for the article. Returns the case, its result and the route."""
+    from aid.pipeline import run_case
+    from aid.sources.upload import open_upload_case
+    from aid.tests.conftest import deps
+
+    fake_exact.state.update({MU_LINE: {"price": "12.60"}, MU_ARTICLE: {"price": "12.40"}, MU_STATUS: {"status": "Besteld"}})
+    route = RetryingWriter(ExactApiWriter(fake_exact.url, ENDPOINTS, token=lambda: "t", **options), PreparedWriter(tmp_path / "cases" / "prepared"))
+    d = deps(tmp_path, madeup_out, writer=route)
+    c = open_upload_case(d.settings.cases_root, [madeup_out / "MU08_conf.pdf"], "250108", "confirmation", d.clock())
+    return c, run_case(c, d), route
+
+
+MU_LINE, MU_ARTICLE, MU_STATUS = "/po/250108/v1/line/1", "/article/KM-0801", "/po/250108/status"
+NOT_SURE_ITEMS = ["write outcome not known: check in Exact",
+                  "not applied: an earlier change waits for a look in Exact (rule R04, article_price, article KM-0801)",
+                  "not applied: an earlier change waits for a look in Exact (rule R01, attach_document)",
+                  "not applied: an earlier change waits for a look in Exact (rule R01, set_status)"]
+
+
+def test_a_lost_answer_that_the_repeat_cannot_read_is_not_prepared_in_the_pipeline(fake_exact, tmp_path, madeup_out):
+    """The review's proof: the system makes the write of the line's price and answers 502, and the read of the repeat answers 503.
+    Before, the change was "prepared" with the document's 12.50 while the system held 12.70, and the undo wrote 12.50 into a
+    line that had held 12.60. Now it is logged as made and not sure, with the 12.60 read; the case stops for the buyer's look;
+    nothing is on the list; the undo through the route puts the 12.60 back."""
+    def lost_then_no_read(method, path, index):
+        if path == MU_LINE and method == "PUT":
+            fake_exact.state[path].update(json.loads(fake_exact.bodies[index]))
+            return 502, {}
+        return (503, {}) if path == MU_LINE and method == "GET" and index > 0 else None
+
+    fake_exact.override = lost_then_no_read
+    c, r, route = mu08(fake_exact, tmp_path, madeup_out)
+    [entry] = r.write_entries
+    assert fake_exact.requests == [("GET", MU_LINE), ("PUT", MU_LINE), ("GET", MU_LINE)] and fake_exact.state[MU_LINE] == {"price": "12.70"}
+    assert (entry.status, entry.previous, entry.op.old_value, entry.new, entry.error) == (
+        "done", "12.60", "12.50", "12.70", "write PUT /po/250108/v1/line/1: HTTP 502")
+    assert outcome_not_known(entry) and entry.evidence["read_before"] == "12.60"
+    assert [i.reason for i in r.review_items] == NOT_SURE_ITEMS and r.review_items[0].entry_id == entry.entry_id
+    assert r.status == "review" and not (tmp_path / "cases" / "prepared").exists()
+    fake_exact.override = None
+    [undone] = undo_case(c.root, route, NOW)
+    assert (undone.status, undone.new) == ("done", "12.60") and fake_exact.state[MU_LINE] == {"price": "12.60"}
+
+
+def test_writes_that_a_slow_system_makes_after_the_client_stopped_waiting_are_not_prepared(fake_exact, tmp_path, madeup_out):
+    """The review's proof: the system takes longer over a write than the client waits, so each write times out and is made a
+    little later; the read of the repeat still shows the old value. No answer settles nothing: the change is logged as made
+    and not sure, with the 12.60 read, and nothing is prepared; the system then holds the new value."""
+    fake_exact.delay, fake_exact.delay_method = 0.6, "PUT"
+    c, r, route = mu08(fake_exact, tmp_path, madeup_out, timeout=0.2)
+    [entry] = r.write_entries
+    assert fake_exact.requests == [("GET", MU_LINE), ("PUT", MU_LINE)] * 2
+    assert (entry.status, entry.previous, entry.new, entry.error) == ("done", "12.60", "12.70", "write PUT /po/250108/v1/line/1: no answer within 0.2 s")
+    assert outcome_not_known(entry) and [i.reason for i in r.review_items] == NOT_SURE_ITEMS
+    assert not (tmp_path / "cases" / "prepared").exists()
+    deadline = time.monotonic() + 10                                             # the system finishes the writes it was sent
+    while fake_exact.state[MU_LINE] != {"price": "12.70"} and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert fake_exact.state[MU_LINE] == {"price": "12.70"}
+
+
+# --- what the buyer's decision does on the item of a write that asks for a look in Exact ---
+
+def line_not_verified(fake_exact, tmp_path, madeup_out, through: str):
+    """MU08 run through the route with the reads of the line failing after its write, so that the line's price is made and not
+    verified (the system held 12.60, the document says 12.50). Returns the case, the result, the entry and the Deps of the page:
+    one whose writer only prepares into cases/prepared ("the list"), or one whose writer is the route ("the route")."""
+    from aid.tests.conftest import deps
+
+    written = []
+
+    def reads_of_the_line_fail_after_its_write(method, path, index):
+        if path == MU_LINE and method == "PUT":
+            written.append(index)
+        return (503, {}) if path == MU_LINE and method == "GET" and written else None
+
+    fake_exact.override = reads_of_the_line_fail_after_its_write
+    c, r, route = mu08(fake_exact, tmp_path, madeup_out)
+    fake_exact.override = None
+    [entry] = r.write_entries
+    assert (entry.status, entry.previous, entry.error) == ("done", "12.60", "verify GET /po/250108/v1/line/1: HTTP 503")
+    assert [i.reason for i in r.review_items] == ["write made, not verified: check in Exact", *NOT_SURE_ITEMS[1:]]
+    page = deps(tmp_path, madeup_out, writer=PreparedWriter(tmp_path / "cases" / "prepared") if through == "the list" else route)
+    return c, r, entry, page
+
+
+@pytest.mark.parametrize("through", ["the list", "the route"])
+def test_bevestigen_on_a_write_made_and_not_verified_counts_it_as_made(fake_exact, tmp_path, madeup_out, through):
+    """The buyer looked in Exact and the change stays. The close writes and prepares nothing for that operation (no second entry,
+    no row on the list), and then does what waited behind it as after any settled item: the case closes, with the confirmation
+    attached and the status set, prepared by a page that only prepares and made by a page whose writer is the route."""
+    from aid.review.app import close_case, decide
+    from aid.review.page import _undoable
+    from aid.tests.conftest import read_csv
+    from aid.tests.test_hand_list import listed_rows
+
+    c, r, entry, page = line_not_verified(fake_exact, tmp_path, madeup_out, through)
+    for item in r.review_items:
+        decide(c, item.item_id, "confirm")
+    before = len(fake_exact.requests)
+    closed = close_case(c, page)
+    status = "prepared" if through == "the list" else "done"
+    assert closed.status == "closed" and closed.error is None
+    assert [(e.rule_id, e.op.kind, e.status) for e in WriteLog(c.root).entries()] == [
+        ("R04", "po_line_price", "done"), ("B01", "attach_document", status), ("B01", "set_status", status)]
+    assert listed_rows(page) == [] and [e.entry_id for e in _undoable(c)][0] == entry.entry_id       # still there to undo
+    if through == "the list":
+        assert [row["kind"] for row in read_csv(tmp_path / "cases" / "prepared" / "prepared_changes.csv")] == ["attach_document", "set_status"]
+        assert len(fake_exact.requests) == before
+    else:
+        assert fake_exact.requests[before:] == [("POST", "/po/250108/attach"), ("GET", MU_STATUS), ("PUT", MU_STATUS), ("GET", MU_STATUS)]
+        assert not (tmp_path / "cases" / "prepared").exists()
+    assert fake_exact.state == {MU_LINE: {"price": "12.70"}, MU_ARTICLE: {"price": "12.40"},
+                                MU_STATUS: {"status": "Besteld" if through == "the list" else "Bevestigd"}}
+
+
+@pytest.mark.parametrize("through", ["the list", "the route"])
+def test_houden_on_a_write_made_and_not_verified_puts_the_value_read_back(fake_exact, tmp_path, madeup_out, through):
+    """The buyer keeps the old value. The close undoes the entry as the tab's undo does: a page that only prepares puts the
+    put-back on the list, naming the 12,60 the system held, and a page whose writer is the route writes the 12.60 back. What
+    waited behind the change is not carried out: no article price, no attachment, no status."""
+    from aid.review.app import close_case, decide
+    from aid.review.page import _undoable
+    from aid.tests.conftest import read_csv
+    from aid.tests.test_hand_list import listed_rows
+
+    c, r, entry, page = line_not_verified(fake_exact, tmp_path, madeup_out, through)
+    for item in r.review_items:
+        decide(c, item.item_id, "keep")
+    before = len(fake_exact.requests)
+    closed = close_case(c, page)
+    assert closed.status == "closed" and closed.error is None and _undoable(c) == []
+    [made, undo] = WriteLog(c.root).entries()
+    assert (undo.rule_id, undo.undo_of, undo.op.kind, undo.op.old_value, undo.op.new_value) == ("undo", entry.entry_id, "po_line_price", "12.70", "12.60")
+    assert [record["action"] for record in c.read_step("close")["records"]] == ["undo", "close"]
+    if through == "the list":
+        assert undo.status == "prepared" and len(fake_exact.requests) == before and fake_exact.state[MU_LINE] == {"price": "12.70"}
+        assert listed_rows(page) == ["Inkooporder 250108 (S08), Terugzetten: regel 1 (KM-0801): prijs 12,70 → 12,60"]
+        assert [row["rule_id"] for row in read_csv(tmp_path / "cases" / "prepared" / "prepared_changes.csv")] == ["undo"]
+    else:
+        assert undo.status == "done" and fake_exact.requests[before:] == [("GET", MU_LINE), ("PUT", MU_LINE), ("GET", MU_LINE)]
+        assert fake_exact.bodies[before + 1] == b'{"price": "12.60"}' and fake_exact.state[MU_LINE] == {"price": "12.60"}
+        assert not (tmp_path / "cases" / "prepared").exists()
+    assert fake_exact.state[MU_ARTICLE] == {"price": "12.40"} and fake_exact.state[MU_STATUS] == {"status": "Besteld"} and fake_exact.uploads == {}
+
+
+def test_after_houden_nothing_that_waited_behind_the_change_is_written_whatever_is_chosen_there(fake_exact, tmp_path, madeup_out):
+    """"Houden" on the item of the line's price, and "Bevestigen" with the article box ticked on every item that waited behind
+    it: the price is put back, and neither the line's price nor the article's is prepared again, nor the attachment or the
+    status."""
+    from aid.review.app import close_case, decide
+    from aid.tests.test_hand_list import listed_rows
+
+    c, r, entry, page = line_not_verified(fake_exact, tmp_path, madeup_out, "the list")
+    decide(c, "RI1", "keep")
+    for item in r.review_items[1:]:
+        decide(c, item.item_id, "confirm", article_update=True)
+    closed = close_case(c, page)
+    assert closed.status == "closed" and [(e.rule_id, e.op.kind) for e in WriteLog(c.root).entries()] == [("R04", "po_line_price"), ("undo", "po_line_price")]
+    assert listed_rows(page) == ["Inkooporder 250108 (S08), Terugzetten: regel 1 (KM-0801): prijs 12,70 → 12,60"]
+
+
+def test_houden_through_a_route_that_is_down_stops_the_close(fake_exact, tmp_path, madeup_out):
+    """The undo cannot be made: the close stops there, as at any write that does not go through, and the case stays in review."""
+    from aid.review.app import close_case, decide
+
+    c, r, entry, _ = line_not_verified(fake_exact, tmp_path, madeup_out, "the list")
+    for item in r.review_items:
+        decide(c, item.item_id, "keep")
+
+    class Down:
+        name = "down"
+
+        def apply(self, *args):
+            raise WriterError("503 service unavailable")
+
+    from aid.tests.conftest import deps
+    closed = close_case(c, deps(tmp_path, madeup_out, writer=Down()))
+    assert closed.status == "review" and closed.error == "WriterError: 503 service unavailable (write: rule B01, po_line_price, line 1)"
+    assert WriteLog(c.root).entries() == [entry]
+
+
+# --- the tab's undo of a write made in the system, on a place the buyer ticked before ---
+
+@pytest.mark.parametrize("checked", [True, False], ids=["verified", "not verified"])
+def test_the_put_back_of_a_write_made_in_the_system_is_asked_whatever_was_ticked_before_it(fake_exact, tmp_path, madeup_out, checked):
+    """The review's proof. The buyer entered 12,50 to 12,60 for an earlier confirmation and ticked that row; then MU08 went through
+    the route, which read the 12.60 and wrote 12.70. The tab's undo of that write, through a page that only prepares, used to
+    answer "Deze wijziging is al teruggedraaid." and list nothing, because the marks said that Exact holds 12,60. The put-back is
+    judged against the write it puts back: it is on the list, and ticking it ends it."""
+    from aid.execution.by_hand import changes, mark
+    from aid.review.i18n import STRINGS
+    from aid.review.page import _undo_choices, _undoable, undo_text
+    from aid.tests.conftest import deps
+    from aid.tests.test_hand_list import listed_rows
+
+    prepared = tmp_path / "cases" / "prepared"
+    clock = datetime(2026, 11, 12, 9, 0)
+    earlier = PreparedWriter(prepared).apply(WriteOp(kind="po_line_price", po_number="250108", version=1, line_id="1", old_value="12.50", new_value="12.60"),
+                                             "250108_20261111T090000", "B01", {}, clock - timedelta(days=1))
+    # Ticked after the order was filed, whatever day the suite runs: a tick from before the print the store holds would be ended
+    # by that print, which shows 12,50 (Task 43: a newer print ends a tick that it contradicts).
+    assert mark(prepared, [earlier.entry_id], "entered", datetime.now() + timedelta(minutes=1)) == 1
+    if checked:
+        c, r, _ = mu08(fake_exact, tmp_path, madeup_out)
+    else:
+        c, r, _, _ = line_not_verified(fake_exact, tmp_path, madeup_out, "the list")
+    page = deps(tmp_path, madeup_out, writer=PreparedWriter(prepared))
+    entry = next(e for e in _undoable(c) if e.op.kind == "po_line_price")
+    # Since Task 43 the case is compared with the ticked 12,60, laid over the printed 12,50, so the change starts from it; the
+    # route read the same 12.60 in the system.
+    assert (entry.previous, entry.op.old_value, entry.new) == ("12.60", "12.60", "12.70") and listed_rows(page) == []
+    row = "Inkooporder 250108 (S08), Terugzetten: regel 1 (KM-0801): prijs 12,70 → 12,60"
+    assert undo_text(c, entry.entry_id, page, "nl") == STRINGS["nl"]["hand_put_back_listed"].format(row=row)
+    assert listed_rows(page) == [row]
+    [first, put] = changes(prepared)[0]
+    assert (first.state, put.state, put.old_value, put.new_value, put.puts_back) == ("entered", "open", "12.70", "12.60", entry.entry_id)
+    assert entry.entry_id not in [value for _, value in _undo_choices(c, STRINGS["nl"])]            # undone once in the log
+    assert mark(prepared, put.ids, "entered", clock + timedelta(hours=1)) == 1 and listed_rows(page) == []     # a tick after it ends it
+
+
+# --- the undo of a change whose field was empty before the write ---
+
+@pytest.mark.parametrize("held", [None, ""], ids=["null", "empty text"])
+def test_the_undo_of_a_change_to_an_empty_field_writes_nothing_and_the_page_asks_to_empty_it(fake_exact, tmp_path, madeup_out, held):
+    """The line's price was empty in the system when MU08's 12.70 was written. No value was held, so none is written back: not
+    the document's 12.50, and not a blank. Through the route the undo is refused with a WriterError that says the field was
+    empty, and nothing is sent; through the page, whose writer prepares, the put-back goes on the list and asks the buyer to
+    empty the field."""
+    from aid.review.i18n import STRINGS
+    from aid.review.page import _undoable, undo_text
+    from aid.tests.conftest import deps
+    from aid.tests.test_hand_list import listed_rows
+
+    c, r, route = mu08(fake_exact, tmp_path, madeup_out)
+    assert r.status == "closed"
+    fake_exact.state[MU_LINE] = {"price": held}                      # as if the field had been empty: write the line once more
+    case_root = tmp_path / "again"
+    case_root.mkdir()
+    op_ = WriteOp(kind="po_line_price", po_number="250108", version=1, line_id="1", old_value="12.50", new_value="12.70")
+    entry = route.apply(op_, c.case_id, "R04", {}, NOW)
+    assert (entry.status, entry.previous, entry.evidence, entry.error) == ("done", held, {"read_before": held}, None)
+    WriteLog(case_root).append(entry)
+    before = len(fake_exact.requests)
+    with pytest.raises(WriterError) as caught:
+        undo_case(case_root, route, NOW + timedelta(hours=1))
+    assert str(caught.value) == "cannot undo po_line_price on PO 250108, line 1: the field was empty before the write, so there is no value to write back"
+    assert len(fake_exact.requests) == before and fake_exact.state[MU_LINE] == {"price": "12.70"} and WriteLog(case_root).entries() == [entry]
+    assert not (tmp_path / "cases" / "prepared").exists()
+    # the same entry in the case's own log, undone from the review tab
+    WriteLog(c.root).append(entry)
+    page = deps(tmp_path, madeup_out, writer=PreparedWriter(tmp_path / "cases" / "prepared"))
+    assert entry.entry_id in [e.entry_id for e in _undoable(c)]
+    row_nl = "Inkooporder 250108 (S08), Terugzetten: regel 1 (KM-0801): prijs 12,70 → leeg"
+    # The note ends there: the sentence of another old value (Task 43, W10) is for a put-back that names the order's value. This
+    # one names none, so nothing is added although the order as the aid last saw it shows 12,50 for the line.
+    assert undo_text(c, entry.entry_id, page, "nl") == f"Nog niet teruggedraaid in Exact. Op de lijst staat nu: {row_nl}. Maak het veld in Exact leeg en vink de regel af."
+    assert listed_rows(page) == [row_nl]
+    assert listed_rows(page, "en") == ["Purchase order 250108 (S08), Put back: line 1 (KM-0801): price 12.70 → empty"]
+    assert STRINGS["en"]["hand_put_back_listed_empty"] == "Not put back in Exact yet. The list now holds: {row}. Empty the field in Exact and tick the row."
+    assert len(fake_exact.requests) == before
+
+
+# --- "Houden" where the page cannot put the old value on the list ---
+
+@pytest.mark.parametrize("kind", ["set_status", "attach_document"])
+def test_houden_on_a_look_of_a_status_or_an_attachment_tells_the_buyer_to_put_it_back_himself(fake_exact, tmp_path, madeup_out, kind):
+    """The check's proof: MU01, a clean confirmation, through the route; the answer to the status (or to the attachment) is
+    lost and nothing settles it. "Houden" through a page that only prepares: the put-back of a status or a file is a row of
+    no list, so the close says, with the sentence of the tab's own undo, that the buyer puts it back in Exact himself, and the
+    case stays in review; the next close, with nothing left to say, closes it."""
+    from aid.pipeline import run_case
+    from aid.review.app import decide
+    from aid.review.i18n import STRINGS
+    from aid.review.page import _undoable, close_text
+    from aid.sources.upload import open_upload_case
+    from aid.tests.conftest import deps
+    from aid.tests.test_hand_list import listed_rows
+
+    status, attach = "/po/250101/status", "/po/250101/attach"
+    fake_exact.state[status] = {"status": "Besteld"}
+
+    def answer_lost(method, path, index):
+        if kind == "set_status" and path == status:
+            if method == "PUT":
+                fake_exact.state[path].update(json.loads(fake_exact.bodies[index]))
+                return 502, {}
+            return (503, {}) if any(m == "PUT" for m, _ in fake_exact.requests[:index]) else None
+        if kind == "attach_document" and method == "POST":
+            fake_exact.uploads.setdefault(path, []).append(("MU01_conf.pdf", b"x"))
+            return 502, {}
+        return None
+
+    fake_exact.override = answer_lost
+    prepared = tmp_path / "cases" / "prepared"
+    route = RetryingWriter(ExactApiWriter(fake_exact.url, ENDPOINTS, token=lambda: "t"), PreparedWriter(prepared))
+    d = deps(tmp_path, madeup_out, writer=route)
+    c = open_upload_case(d.settings.cases_root, [madeup_out / "MU01_conf.pdf"], "250101", "confirmation", d.clock())
+    r = run_case(c, d)
+    fake_exact.override = None
+    look = r.write_entries[-1]
+    assert (look.op.kind, look.status) == (kind, "done") and outcome_not_known(look) and r.review_items[0].entry_id == look.entry_id
+    page = d.model_copy(update={"writer": PreparedWriter(prepared)})
+    for item in r.review_items:
+        decide(c, item.item_id, "keep")
+    text, still_open = close_text(c, page, "nl")
+    assert still_open and text == f"De zaak is nu: ter beoordeling. {STRINGS['nl']['hand_put_back_cannot']}"
+    [undo] = [e for e in WriteLog(c.root).entries() if e.undo_of == look.entry_id]
+    assert (undo.status, undo.op.kind) == ("prepared", "set_status" if kind == "set_status" else "detach_document")
+    assert listed_rows(page) == [] and _undoable(c) == [e for e in _undoable(c) if e.entry_id != look.entry_id]
+    assert c.read_step("close")["records"][-1]["put_back_by_hand"] == [kind]
+    assert close_text(c, page, "nl") == ("De zaak is nu: afgesloten.", False)           # said once; nothing more is written
+    assert len([e for e in WriteLog(c.root).entries() if e.undo_of is not None]) == 1
+    assert fake_exact.state[status] == {"status": "Bevestigd" if kind == "set_status" else "Besteld"}
+
+
+def test_houden_whose_undo_comes_back_failed_stops_the_close(fake_exact, tmp_path, madeup_out):
+    """The writer of the page answers the undo with an entry that says it changed nothing (status "failed"): the close stops
+    there, as at any write that failed, and the case stays in review with the write still to undo."""
+    from aid.review.app import close_case, decide
+    from aid.review.page import _undoable
+    from aid.tests.conftest import deps
+
+    c, r, entry, _ = line_not_verified(fake_exact, tmp_path, madeup_out, "the list")
+    for item in r.review_items:
+        decide(c, item.item_id, "keep")
+
+    class Locked:
+        name = "locked"
+
+        def apply(self, op, case_id, rule_id, evidence, now):
+            return WriteLogEntry(entry_id="failed-undo", case_id=case_id, op=op, status="failed", previous=None, new=None, rule_id=rule_id,
+                                 evidence=evidence, timestamp=now.isoformat(), error="the line is locked")
+
+    closed = close_case(c, deps(tmp_path, madeup_out, writer=Locked()))
+    assert closed.status == "review" and closed.error == "write failed: the line is locked (write: rule B01, po_line_price, line 1)"
+    assert [(e.entry_id, e.status) for e in WriteLog(c.root).entries()][-1] == ("failed-undo", "failed")
+    assert [e.entry_id for e in _undoable(c)] == [entry.entry_id]                      # a failed undo undid nothing
+    assert c.read_step("close")["records"][-1]["carried_out"] == {}

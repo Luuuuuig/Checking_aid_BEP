@@ -6,7 +6,8 @@ decide, which records a decision; aid/review/close.py carries the decisions out 
 page (build_app, page_rows). close_case, undo, build_app, import_gradio and page_rows are imported here as well, so that the review
 page has one module to import from.
 
-    list_open_cases   the cases whose saved result (steps/08_result.json) is in review, in the order they were opened
+    list_open_cases   the cases whose saved result (steps/08_result.json) is in review, in the order they were opened, but a case
+                      of the capture server that is marked as replaced (marked_replaced)
     load_case_view    one case as the page shows it (CaseView)
     decide            a decision of the buyer on a review item, appended to <case root>/decisions.jsonl
 
@@ -19,12 +20,16 @@ review item that no row carries (an item without a finding, such as "new supplie
 one finding). A row's
 item_id is that of the first review item that names its finding (RI1, RI2, ...), else the finding's id (F1, ...; U1, ... as the
 routing numbers the uncompared items; M1, M2, ... for the matches, which have no id), and the page offers the four decisions on
-every row whose item_id is a review item. A row shows its values in normal form (else as printed; a match its value on both
+every row whose item_id is a review item ("ask" only where decide takes it). A row shows its values in normal form (else as printed; a match its value on both
 sides, an uncompared item none), its sources as "p<page> r<line>: <text>", and its reason: the review item's, else the flag's
 detail or the uncompared item's reason. thumbnail is None, kept for a later crop of the cited line. reapproval_banner is true when
 the PO is above the buyer's authorization, by the routing context of step 06, or by the selected version of step 01 without it.
+entered names the values entered in Exact that the case was compared with in place of the selected version's own, as step
+03_entered of the case holds them (aid/pipeline.py), and entered_unread says that the list of them could not be read when the case
+ran; the page says either above the lists. A case without that step has neither.
 """
 import json
+import os
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -35,7 +40,7 @@ from pydantic import BaseModel
 from aid.case import Case
 from aid.comparison import Findings, Flag, Match, Uncompared
 from aid.messaging import _append_line           # the lines of a file of records, appended as the messaging module appends them
-from aid.pipeline import RESULT_FILE, CaseResult, ReviewItem
+from aid.pipeline import LOOKS, RESULT_FILE, CaseResult, ReviewItem
 from aid.po_store import PoStore, PoVersion
 from aid.readers.pdf_text import page_count, render_page
 from aid.routing import CaseContext, findings_by_id
@@ -44,6 +49,7 @@ from aid.schema import DocValue
 from aid.tryout_mark import case_is_tryout, tryout_case
 
 DECISIONS_FILE = "decisions.jsonl"
+CAPTURE_FILE = "capture.json"                    # what the capture server keeps of its case, in the case folder (aid/capture_server.py)
 DPI = 100
 Decision = Literal["confirm", "keep", "ask", "unresolved"]
 
@@ -72,6 +78,13 @@ class FlagRow(BaseModel):
     reason: str = ""
 
 
+class EnteredValue(BaseModel):
+    """A value entered in Exact that the case was compared with in place of the selected version's own (step 03_entered)."""
+    line: str                                    # the line id in the selected version
+    field: str                                   # "price", "delivery_date" or "quantity"
+    value: str                                   # the entered value, in normal form
+
+
 class CaseView(BaseModel, arbitrary_types_allowed=True):
     """One case as the page shows it (see the module docstring)."""
     summary: CaseSummary
@@ -82,6 +95,8 @@ class CaseView(BaseModel, arbitrary_types_allowed=True):
     uncompared: list[FlagRow]
     decisions: dict[str, str]                    # item_id -> its last decision
     reapproval_banner: bool
+    entered: list[EnteredValue] = []             # the values entered in Exact that took the place of the selected version's own
+    entered_unread: bool = False                 # the list of them could not be read when the case ran
 
 
 # --- the open cases and the view ---
@@ -89,13 +104,27 @@ class CaseView(BaseModel, arbitrary_types_allowed=True):
 def list_open_cases(cases_root: Path) -> list[CaseSummary]:
     """The cases under cases_root whose saved result is in review, in the order they were opened (then by id). A folder without a
     case.json or a result is not listed, and neither is a result that cannot be read, which the pipeline's count of closed cases
-    skips as well."""
+    skips as well, nor a case of the capture server that is marked as replaced (marked_replaced)."""
     return _list_cases(cases_root, lambda root, result: result.status == "review")
+
+
+def marked_replaced(root: Path) -> bool:
+    """Whether the case of the folder is a case of the capture server that is marked as replaced by another: its capture.json holds
+    replaced_by, which the server writes before it finishes the case as replaced (aid/capture_server.py, _replace). From the mark
+    on the page offers the case no more, and a decision, a close and an undo on it are refused, as on a case finished as replaced
+    (aid/review/close.py), also while that finish is still missing: a decision saved then would never be carried out. A folder
+    without the file, or whose file cannot be read as an object, is not marked."""
+    try:
+        meta = json.loads((Path(root) / CAPTURE_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(meta, dict) and meta.get("replaced_by") is not None
 
 
 def _list_cases(cases_root: Path, listed: Callable[[Path, CaseResult], bool]) -> list[CaseSummary]:
     """The cases under cases_root for which listed(case root, saved result) is true, as list_open_cases gives them, each with whether
-    it is made from a try-out (case_is_tryout of aid/tryout_mark.py), which is asked of these cases only."""
+    it is made from a try-out (case_is_tryout of aid/tryout_mark.py), which is asked of these cases only. A capture case marked as
+    replaced (marked_replaced) is never among them."""
     summaries = []
     for path in Path(cases_root).glob(f"*/steps/{RESULT_FILE}"):
         root = path.parents[1]
@@ -105,7 +134,7 @@ def _list_cases(cases_root: Path, listed: Callable[[Path, CaseResult], bool]) ->
             summary = _summary(root.name, meta, result)
         except (OSError, ValueError, KeyError):
             continue
-        if listed(root, result):
+        if listed(root, result) and not marked_replaced(root):
             summaries.append(summary.model_copy(update={"tryout": case_is_tryout(cases_root, root.name)}))
     return sorted(summaries, key=lambda summary: (summary.opened_at, summary.case_id))
 
@@ -123,10 +152,22 @@ def load_case_view(case: Case, store: PoStore | None = None) -> CaseView:
     if version is not None and store is not None and Path(pdf).name == "po.pdf" and not Path(pdf).is_file():
         pdf = next((stored.pdf_path for stored in store.versions(version.po_number) if stored.version == version.version), pdf)
     summary = _summary(case.case_id, meta, result).model_copy(update={"tryout": tryout_case(case)})
+    entered, unread = _entered(case)
     return CaseView(summary=summary, doc_pages=_pages(case.input_files[0] if case.input_files else None),
                     po_pages=_pages(pdf), flags=flags, matches=matches, uncompared=uncompared,
                     decisions={item_id: record["decision"] for item_id, record in _decisions(case).items()},
-                    reapproval_banner=bool(_context(case, result).po_above_authorization))
+                    reapproval_banner=bool(_context(case, result).po_above_authorization), entered=entered, entered_unread=unread)
+
+
+def _entered(case: Case) -> tuple[list[EnteredValue], bool]:
+    """The values of the case's step 03_entered, and whether that step says that the list could not be read; none and False for a
+    case without the step, or whose step cannot be read."""
+    try:
+        step = case.read_step("entered")
+        values = [EnteredValue(line=one["line_id"], field=one["field"], value=one["entered"]) for one in step["replaced"]]
+        return values, step.get("unread") is True
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return [], False
 
 
 def _summary(case_id: str, meta: dict, result: CaseResult) -> CaseSummary:
@@ -223,10 +264,17 @@ def _context(case: Case, result: CaseResult) -> CaseContext:
 def _decisions(case: Case) -> dict[str, dict]:
     """The last decision of each item in decisions.jsonl, by item id; {} without the file. A line that is not a decision raises
     ValueError naming the file and the line: a damaged record is not read around."""
+    return _decision_log(case)[0]
+
+
+def _decision_log(case: Case) -> tuple[dict[str, dict], dict[str, int], int]:
+    """The last decision of each item in decisions.jsonl by item id (_decisions), the number of the line each stands on, and the
+    number of the last line that holds a decision (0 without one). The file is only ever added to, so a line number tells a
+    decision made after a close from the one that close carried out, also when both were made within one second."""
     path = case.root / DECISIONS_FILE
     if not path.exists():
-        return {}
-    latest = {}
+        return {}, {}, 0
+    latest, lines, last = {}, {}, 0
     for number, line in enumerate(path.read_bytes().split(b"\n"), start=1):
         if line.strip():
             try:
@@ -234,7 +282,8 @@ def _decisions(case: Case) -> dict[str, dict]:
                 latest[record["item_id"]] = record
             except (ValueError, KeyError, TypeError) as error:
                 raise ValueError(f"{path}, line {number}: not a decision") from error
-    return latest
+            lines[record["item_id"]], last = number, number
+    return latest, lines, last
 
 
 # --- the decisions ---
@@ -250,11 +299,20 @@ def decide(case: Case, item_id: str, decision: Decision, article_update: bool = 
     "confirm" takes the supplier's value into the system, "keep" keeps the PO's value, "ask" asks the supplier, "unresolved" leaves
     the item open. On an item without a finding, "confirm" and "keep" both acknowledge it. article_update, on a price, also updates
     the article's price. Refused with ValueError, recording nothing: a decision that is not one of the four, an item that is not a
-    review item of the case, and "ask" on an item without a finding (there is no value to ask about) or on a cart (the buyer
-    corrects a cart or its PO before ordering). "ask" on any item of a case made from a try-out document is refused with
-    NothingAsked, a ValueError of its own, since the aid sends nothing about a try-out (aid/tryout_mark.py)."""
+    review item of the case, and "ask" on an item without a finding (there is no value to ask about), on a cart (the buyer
+    corrects a cart or its PO before ordering) or on an item that asks him to look in Exact, because a write was made and not
+    verified or its outcome is not known (it is no question for the supplier: "confirm" lets the change stand and "keep" has the
+    close put the old value back, see close_case). "ask" on any item of a case made from a try-out document is refused with
+    NothingAsked, a ValueError of its own, since the aid sends nothing about a try-out (aid/tryout_mark.py). Any decision on a
+    capture case that is marked as replaced (marked_replaced) is refused too: another case took its place. The capture server is
+    another process and marks without a lock, so the mark is looked at twice: before anything else, and again after the line was
+    appended. When the case was marked meanwhile, the line is taken out again (_take_back) and the decision refused in the same
+    way, so that no decision is saved in a case that is finished as replaced; the server, for its part, reads a case again after
+    its mark and takes the mark back when it then finds a decision (aid/capture_server.py, _replace)."""
     if decision not in get_args(Decision):
         raise ValueError(f"unknown decision {decision!r}: expected one of {', '.join(get_args(Decision))}")
+    if marked_replaced(case.root):
+        raise ValueError(f"case {case.case_id} was replaced by another case, so no decision is taken on it")
     item = next((item for item in _saved_result(case).review_items if item.item_id == item_id), None)
     if item is None:
         raise ValueError(f"case {case.case_id} has no review item {item_id!r}")
@@ -264,8 +322,26 @@ def decide(case: Case, item_id: str, decision: Decision, article_update: bool = 
         raise ValueError(f"{item_id} is about the whole case and names no value, so there is no question to ask the supplier")
     if decision == "ask" and case.kind == "cart":
         raise ValueError("a cart is not asked about: the buyer corrects the cart or the PO before ordering")
+    if decision == "ask" and item.reason in LOOKS:
+        raise ValueError(f"{item_id} asks for a look in Exact after a write of the aid, which is no question for the supplier")
     record = {"item_id": item_id, "decision": decision, "article_update": bool(article_update), "at": datetime.now().isoformat(timespec="seconds")}
-    _append_line(case.root / DECISIONS_FILE, json.dumps(record, ensure_ascii=False))
+    path = case.root / DECISIONS_FILE
+    before = path.stat().st_size if path.exists() else None
+    _append_line(path, json.dumps(record, ensure_ascii=False))
+    if marked_replaced(case.root):               # marked between the first look and the append: the line is not left in the case
+        _take_back(path, before)
+        raise ValueError(f"case {case.case_id} was replaced by another case, so no decision is taken on it")
+
+
+def _take_back(path: Path, before: int | None) -> None:
+    """Take the line that was just appended out of the file again: the file is cut back to the `before` bytes it held, and
+    removed when it did not exist. A file that is no longer than that is left as it is."""
+    if before is None:
+        path.unlink(missing_ok=True)
+        return
+    with open(path, "rb+") as f:
+        if f.seek(0, os.SEEK_END) > before:
+            f.truncate(before)
 
 
 # The close and the page, imported here after the view they build on (see the module docstring).

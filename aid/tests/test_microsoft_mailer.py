@@ -13,8 +13,8 @@ import aid.runner
 from aid.case import open_case
 from aid.connections.microsoft import SHARED_SCOPES, MicrosoftAccount
 from aid.connections.secrets import LazySecretStore, SecretStore
-from aid.messaging import FileMailer, MailerError, Message, SmtpMailer
-from aid.messaging.microsoft_mailer import AutoMailer, MicrosoftMailer, SignInLapsed
+from aid.messaging import FileMailer, HandOverUnconfirmed, MailerError, Message, SmtpMailer
+from aid.messaging.microsoft_mailer import AutoMailer, MicrosoftMailer, SignInLapsed, mailer_of
 from aid.pipeline import run_case
 from aid.runner import build_deps
 from aid.settings import load_settings
@@ -121,19 +121,64 @@ class Unreachable(FakeSession):
         raise requests.ConnectionError(f"made-up failure for {url}")
 
 
-@pytest.mark.parametrize("session, shown", [
-    (FakeSession({("POST", f"{GRAPH}/me/messages"): FakeResponse(403, json_data={"error": {"code": "ErrorAccessDenied", "message": "made-up detail"}})}),
-     "HTTP 403"),
-    (graph(sent=500), "HTTP 500"),
-    (FakeSession({("POST", f"{GRAPH}/me/messages"): FakeResponse(201, json_data={"isDraft": True})}), "no id"),
-    (Unreachable(), "ConnectionError"),
+def draft_only(status: int) -> FakeSession:
+    """Graph that answers the making of the draft with this status and nothing else."""
+    return FakeSession({("POST", f"{GRAPH}/me/messages"): FakeResponse(status, json_data={"error": {"code": "ErrorAccessDenied", "message": "made-up detail"}})})
+
+
+@pytest.mark.parametrize("session, shown, kind", [
+    (draft_only(403), "HTTP 403", "refused"),
+    (draft_only(429), "HTTP 429", "unreachable"),                                    # asked too often: another try may pass
+    (draft_only(503), "HTTP 503", "unreachable"),
+    (graph(sent=500), "HTTP 500", "unconfirmed"),
+    (graph(sent=403), "HTTP 403", "refused"),                                        # Graph says no to the send: the draft did not leave
+    (graph(sent=429), "HTTP 429", "unreachable"),
+    (FakeSession({("POST", f"{GRAPH}/me/messages"): FakeResponse(201, json_data={"isDraft": True})}), "no id", "refused"),
+    (Unreachable(), "ConnectionError", "unreachable"),
 ])
-def test_an_error_is_a_mailer_error_with_the_status_code_or_the_class_only(tmp_path, session, shown):
+def test_an_error_is_a_mailer_error_with_the_status_code_or_the_class_only(tmp_path, session, shown, kind):
+    """Its kind is what the review page tells the buyer to do by: "unreachable" for what another try may get past, "refused" for
+    what it will not, and "unconfirmed" for a failure at the send of the draft (HandOverUnconfirmed)."""
     with pytest.raises(MailerError) as raised:
         mailer(tmp_path, session).send(MESSAGE)
     text = str(raised.value)
     assert shown in text and "made-up" not in text and ACCESS_TOKEN not in text and GRAPH not in text and "s11@example.com" not in text
     assert raised.value.__cause__ is None and (raised.value.__context__ is None or raised.value.__suppress_context__)
+    assert raised.value.kind == kind and isinstance(raised.value, HandOverUnconfirmed) == (kind == "unconfirmed")
+
+
+@pytest.mark.parametrize("internet_id", [None, EXCHANGE_ID], ids=["the aid's Message-ID kept", "an id of Exchange's own"])
+@pytest.mark.parametrize("failure", [requests.ReadTimeout("made-up: no answer in time"), requests.ConnectionError("made-up: reset"), 500, 504])
+def test_a_failure_at_the_send_of_the_draft_leaves_the_hand_over_unconfirmed(tmp_path, failure, internet_id):
+    """Ruling S5 of the review round of Task 44. The draft is made, and its send fails without an answer, or with an answer of a
+    server that failed: the message may have left. That is HandOverUnconfirmed, with the record of the message under the id the
+    supplier would have received (the draft's internetMessageId), marked as not confirmed; a failure at the making of the draft is
+    a message not sent, as before."""
+    session = graph(internet_id=internet_id)
+
+    def fails(request):
+        if isinstance(failure, int):
+            return FakeResponse(failure, json_data={"error": {"code": "made-up", "message": "made-up detail"}})
+        raise failure
+    session.answers[("POST", f"{GRAPH}/me/messages/{DRAFT}/send")] = [fails]
+    with pytest.raises(HandOverUnconfirmed) as raised:
+        mailer(tmp_path, session).send(MESSAGE)
+    record, text = raised.value.record, str(raised.value)
+    assert text.endswith(": no confirmation that the draft was sent") and "made-up" not in text and ACCESS_TOKEN not in text
+    assert raised.value.kind == "unconfirmed" and isinstance(raised.value, MailerError) and not isinstance(raised.value, SignInLapsed)
+    mime = message_from_bytes(base64.b64decode(session.calls[0]["data"]), policy=policy.default)
+    expected = internet_id or mime["Message-ID"]
+    assert (record.internet_message_id, record.message_id) == (expected, expected.strip("<>").partition("@")[0])
+    assert (record.unconfirmed, record.to, record.template) == (True, MESSAGE.to, "quantity_unit")
+
+
+def test_a_lapsed_sign_in_has_the_kind_of_a_sign_in(tmp_path):
+    with pytest.raises(SignInLapsed) as lapsed:
+        mailer(tmp_path, graph(), app=FakeApp()).send(MESSAGE)
+    assert lapsed.value.kind == "sign_in"
+    with pytest.raises(SignInLapsed) as lapsed:
+        mailer(tmp_path, graph(sent=401)).send(MESSAGE)                              # a 401 at the send: the token was not taken
+    assert lapsed.value.kind == "sign_in" and not isinstance(lapsed.value, HandOverUnconfirmed)
 
 
 def test_a_lapsed_sign_in_is_a_mailer_error_of_its_own_and_asks_graph_nothing(tmp_path):
@@ -240,6 +285,27 @@ def test_the_runner_chooses_its_mailer_by_send_via(tmp_path, values, environ, ch
     microsoft = mailer_built.microsoft if chosen is AutoMailer else mailer_built
     if isinstance(microsoft, MicrosoftMailer):
         assert (microsoft.mailbox, microsoft.sender) == (values.get("mailbox"), "")          # the From is asked at each send
+
+
+@pytest.mark.parametrize("values, environ, unrouted", [
+    ({"send_via": "file"}, {}, None),                                           # the owner's choice: nothing may leave
+    (MAIL | SMTP | {"send_via": "file"}, PASSWORD, None),
+    ({}, {}, "no_mailbox"),                                                     # auto with nothing connected
+    (MAIL | {"mail_folder": None}, {}, "no_mailbox"),                           # auto with a sign-in and no folder chosen
+    (MAIL, {}, "no_mailbox"),                                                   # auto with a folder: the other way of the AutoMailer
+    ({"send_via": "smtp"}, {}, "no_mailbox"),                                   # SMTP chosen and no server set
+    (SMTP, {}, "no_password"), (SMTP | {"send_via": "smtp"}, {}, "no_password"), (MAIL | SMTP, {}, "no_password"),
+])
+def test_the_file_mailer_given_for_want_of_a_route_is_marked(tmp_path, values, environ, unrouted):
+    """Ruling S4 of the review round of Task 44: mailer_of marks the file mailer it gives when the settings name a way to send
+    that is not there (no mailbox connected, or the mail server's password not set), and leaves the one of send_via "file"
+    unmarked: written as a file by choice. The runner and the page get the same mailer, mark included."""
+    settings = settings_file(tmp_path, **values)
+    built = mailer_of(settings, environ, lambda: account(tmp_path))
+    files = built.other if isinstance(built, AutoMailer) else built
+    assert type(files) is FileMailer and files.unrouted == unrouted and files.out_dir == settings.cases_root / "outbox"
+    runner = build_deps(settings, environ, account=account(tmp_path)).mailer
+    assert (runner.other if isinstance(runner, AutoMailer) else runner).unrouted == unrouted
 
 
 def test_the_choice_of_auto_needs_no_network_and_follows_the_token_cache(tmp_path):
