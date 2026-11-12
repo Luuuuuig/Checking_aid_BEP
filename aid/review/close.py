@@ -20,22 +20,24 @@ from aid.comparison import Flag, Uncompared
 from aid.execution.by_hand import FOLDER, KINDS, link_put_back
 from aid.execution.ops import WriteOp
 from aid.execution.writer import LOG_FILE, WriteLog, WriteLogEntry, WriterError, undo_entry
-from aid.messaging import (MESSAGES, QUESTIONS, REAPPROVAL, SENT_FILE, HandOverUnconfirmed, outstanding_questions, record_sent, render,
+from aid.messaging import (MESSAGES, QUESTIONS, REAPPROVAL, SENT_FILE, HandOverUnconfirmed, SentRecord, question_ends, record_sent, render,
                            render_reapproval)
-from aid.pipeline import (DISPOSITION_COLUMNS, DISPOSITION_FILE, LOOKS, NOT_APPLIED_LOOK, NOT_SENT, RESULT_FILE, SENT, UNADDRESSED, UNSENT,
-                          CaseResult, Deps, ReviewItem, Status, record_dispositions, waits_for_po)
+# BUYER_RULE: the rule id of the buyer's decisions, in the write log and the disposition log
+from aid.pipeline import (BUYER_RULE, DISPOSITION_COLUMNS, DISPOSITION_FILE, LOOKS, NOT_APPLIED_LOOK, NOT_SENT, RESULT_FILE, SENT, UNADDRESSED,
+                          UNROUTED_WORDS, UNSENT, CaseResult, Deps, ReviewItem, Status, asked_by_the_run, record_dispositions, waits_for_po)
 from aid.review.app import CAPTURE_FILE, DECISIONS_FILE, _context, _decision_log, _line, _saved_result, _selected_version, marked_replaced
 from aid.routing import CONFIRMED, ORDERED, MessageSpec, findings_by_id
 from aid.schema import DocLine
 from aid.tryout_mark import TRYOUT_NOT_SENT, mark_for_sending, tryout_case, tryout_writer
 # Private helpers of other modules, so that the close writes what they write in the same form: the case folder's JSON, a value as a
 # question shows it, and the pipeline's names of a write, its waits, its re-approval items, its digest line and the source and note
-# of a disposition row.
+# of a disposition row; and the reading of a messages/ folder, so that the questions of a case and those still out come from one
+# read of it.
 from aid.case import _write_json
+from aid.messaging import _wait
 from aid.pipeline import _change, _digest_line, _note, _source, _waits_for_the_buyer, _write_name
 from aid.routing import _shown
 
-BUYER_RULE = "B01"                               # the rule id of the buyer's decisions, in the write log and the disposition log
 CLOSE_STEP, CLOSE_NAME = 9, "close"              # steps/09_close.json: the records of the closes, the undos and a replacement
 REPLACED = "replaced"                            # the action of the record of a case finished as replaced (finish_replaced)
 _WRITES = {"price": "po_line_price", "delivery_date": "po_line_date", "quantity": "po_line_quantity"}     # what "confirm" writes
@@ -48,8 +50,8 @@ _ACKNOWLEDGED = "accept"                         # "confirm" or "keep" on an ite
 # be read, so that nobody can say whether it is a try-out. The record of the message keeps the kind as its "cause", by which the
 # page says what to do (aid/review/page.py); its status reads "not sent (<the words of the cause>)".
 NO_DOCUMENT = "document"
-_NOT_SENT_WORDS = {"no_mailbox": "no mailbox connected", "no_password": "mail server password not set",
-                   "settings": "settings cannot be read", NO_DOCUMENT: "document cannot be read"}
+NO_ADDRESS = "no_address"                        # the cause of a question to a supplier without an address in the settings
+_NOT_SENT_WORDS = UNROUTED_WORDS | {NO_DOCUMENT: "document cannot be read"}
 
 
 def close_case(case: Case, deps: Deps) -> CaseResult:
@@ -72,6 +74,8 @@ def close_case(case: Case, deps: Deps) -> CaseResult:
     - "ask" is a question to the supplier with the template of the field (quantity and unit quantity_unit, a line
       line_missing_extra, anything else missing_info), one message per template, rendered as the pipeline renders a question and sent
       through deps.mailer to the address the settings give the supplier; without a mailer it is recorded as "not sent (no mailer)".
+      "ask" on the item of a bounce or a silence of a question the run asked itself (asked_by_the_run of aid/pipeline.py) sends that
+      question again, its template and its items, gathered with the others of its template (ruling C4 of the clean-up of Task 44).
       A question can be asked again (below). "ask" on a cart is not sent, as decide refuses it.
     - An item that asks the buyer to look in Exact, because the write of a change was made and not verified or its outcome is not
       known (the reasons LOOKS of aid/pipeline.py; the item names the entry), is decided by what he saw there. "confirm": the
@@ -102,31 +106,41 @@ def close_case(case: Case, deps: Deps) -> CaseResult:
     settings file that cannot be read: "not sent (no mailbox connected)" and the like), and nothing is sent about a case whose
     document cannot be read at that moment, since nobody can say then whether it is a try-out ("not sent (document cannot be
     read)"); neither is written as a file. A supplier without an address in the settings gives "not sent (no address for the
-    supplier)". In each case nothing is recorded as asked, the case stays in review, and it gets a review item without a finding,
-    once: "message not sent", or "no address for the supplier". Step 09 keeps which item belongs to which message (the changes of a
-    request under "reapproval_pending", the template of a question under "unsent_questions"), the next close sends the message
-    again (a request with the changes it makes itself), and once it is sent that review item is settled without a decision of its
-    own. A mailer that could not confirm the hand-over (HandOverUnconfirmed) leaves the message recorded as sent, with
+    supplier)", with the cause "no_address". In each case nothing is recorded as asked, the case stays in review, and it gets a
+    review item without a finding, once: "message not sent", or "no address for the supplier"; a later failure of the same
+    question gives that item the reason of the latest one (ruling C7 of the clean-up of Task 44). Step 09 keeps which item belongs
+    to which message (the changes of a request under "reapproval_pending", the template of a question under "unsent_questions"),
+    and the next close sends the message again (a request with the changes it makes itself). Once it is sent, that review item is
+    settled without a decision of its own, and so is the item of a question when no item asks it any more (the buyer decided the
+    item otherwise): the saved result marks it "settled", and the review page and the digest leave it out. A mailer that could not
+    confirm the hand-over (HandOverUnconfirmed) leaves the message recorded as sent, with
     "unconfirmed" true and the id it carries, and in sent.jsonl: it counts as asked, the case waits, and nothing is sent a second
     time. Nothing about a case made from a try-out is sent (aid/tryout_mark.py): a question or a request of such a case is
     recorded "not sent (try-out document: nothing is sent)" without asking the mailer; the request counts as settled, and a
     question keeps the case in review, its item on "ask" not carried out (decide refuses "ask" on such a case, so only a decision
     written before that refusal comes here).
 
-    A question and its item. The question about an item is the latest one sent that names the item. It is out while it waits for
-    a reply of its own and no escalation covers it, or bounced and was not shown to the buyer yet (outstanding_questions of
-    aid/messaging: a reply belongs to the question it names, so the reply to one question does not answer another). While its
-    question is out, the item's "ask" stands: a later close leaves it, and "ask" chosen once more on it sends nothing new. Once the
-    question has ended (answered, bounced and shown, or without an answer in time) the "ask" is over and the item is undecided
-    again, as the page shows it (standing_decisions). A decision made after that is a new one, also "ask" again: the close sends
-    the question again, as a new question with a wait of its own. Which decision is new is told by its line in decisions.jsonl:
-    each close keeps the number of the last line it read ("decisions_read").
+    A question and its item. The question about an item is the latest one sent that names the item: messages/sent.jsonl keeps
+    the items a close's question is about ("item_ids"), so that this is known also after a close that was cut off before its
+    record was saved (ruling C2 of the clean-up of Task 44), and the result's message records name them too. It is out while it
+    waits for a reply of its own and no escalation covers it, or bounced and was not shown to the buyer yet (outstanding_questions
+    of aid/messaging: a reply belongs to the question it names, so the reply to one question does not answer another). While its
+    question is out, the item's "ask" stands: a later close leaves it, and "ask" chosen once more on it sends nothing new, also when
+    no record of a close shows that it was asked. Once the question has ended (answered, bounced and shown, or without an answer
+    in time) the "ask" is over and the item is undecided again, as the page shows it (standing_decisions). A decision made after
+    that is a new one, also "ask" again: the close sends the question again, as a new question with a wait of its own. Which
+    decision is new is told by its line in decisions.jsonl: each close keeps the number of the last line it read
+    ("decisions_read"), and the end of a question keeps the number of the last line at that moment (question_ends of
+    aid/messaging: a reply's entry in the audit record, an escalation's line). An "ask" recorded before the item's question ended
+    is over with it, also one written while the question was out (a tick on the row, another choice and back; ruling C1 of the
+    clean-up of Task 44).
 
     When every review item is decided "confirm" or "keep", nothing stopped or held the close and no question is open, the case
     closes: on a confirmation with a PO number the document is attached and the status set from Besteld to Bevestigd, as R01 makes
-    them (each unless it was made already). A question is open when a question to the supplier in the result's messages (a template
-    of messaging.QUESTIONS, status "sent", whether the run or an earlier close sent it) is still out: the supplier may still answer,
-    so the PO is not confirmed, and none of the operations that the answer was to allow is made. The status is review when the
+    them (each unless it was made already). A question is open when a question of messages/sent.jsonl that this close did not send
+    itself (the run's, or an earlier close's) is still out, whether or not the result's messages hold its record (ruling C2 of the
+    clean-up of Task 44: a run cut off behind its question): the supplier may still answer, so the PO is not confirmed, and none
+    of the operations that the answer was to allow is made. The status is review when the
     close stopped, a message could not be sent, or an item is undecided (an "ask" that is over among them) or unresolved; else
     waiting when an item is on "ask" or a question is open (escalate_pending then ends its wait as it ends any other, and puts the
     case back in review); else closed. So a case waits only while a question of it is out. When a reply or a bounce filed with the
@@ -299,8 +313,10 @@ class _Close:
         self.unread = False                       # a reply filed with the case cannot be read now: the close does nothing
         self.mark: bool | None = None             # the try-out mark of the document, judged when the first message is sent
         self.judged = False
-        self.out: set[str] = set()                # the message ids of the questions of the case that are still out
-        self.open_question: str | None = None     # the message id of a question still out that the result's messages hold, else None
+        self.sent: list[SentRecord] = []         # the questions of the case (messages/sent.jsonl), in the order sent
+        self.out: set[str] = set()                # the message ids of those that are still out
+        self.ends: dict[str, int] = {}            # question -> the last line of decisions.jsonl when it ended (question_ends)
+        self.open_question: str | None = None     # the message id of the latest question still out that this close did not send
         self.look()
         self.evaluation_id = _evaluation_id(case)    # the case id of the disposition log's first row, else None
 
@@ -324,16 +340,17 @@ class _Close:
         return self.save()
 
     def look(self) -> None:
-        """Read which questions of the case are still out (_outstanding). A reply or a bounce filed with the case that cannot be
-        read at this moment leaves that unknown: the close then does nothing (unread), since it can neither confirm the order
-        nor say that a question is open."""
+        """Read the questions of the case and which of them are still out, from messages/sent.jsonl and what is filed with them
+        (_questions), and when each that ended did. A reply or a bounce filed with the case that cannot be read at this moment
+        leaves that unknown: the close then does nothing (unread), since it can neither confirm the order nor say that a question
+        is open. The question that is open is the latest one out that this close did not send itself."""
         try:
-            self.out = _outstanding(self.case, self.settings.ask_wait_working_days)
+            self.sent, self.out, self.ends = _questions(self.case, self.settings.ask_wait_working_days)
         except OSError:
             self.out, self.unread, self.held = set(), True, True
-        sent = [message.get("message_id") for message in [*self.result.messages, *self.added_messages]      # not this close's own
-                if message.get("template") in QUESTIONS and message.get("status") == SENT]
-        self.open_question = next((message_id for message_id in reversed(sent) if message_id in self.out), None)
+        own = {message.get("message_id") for message in self.messages}
+        self.open_question = next((question.message_id for question in reversed(self.sent)
+                                   if question.message_id in self.out and question.message_id not in own), None)
 
     def refresh(self) -> None:
         """Read the saved result again and take what another process added to it since the close began: the review items (a reply
@@ -375,12 +392,14 @@ class _Close:
             if decision["decision"] == "ask":
                 if self.dealt_with(item.item_id):
                     continue                      # an earlier close asked: the choice stands while its question is out, and is over after
-                if finding is None or self.case.kind == "cart":
+                asked = self.question_of(item, finding)
+                if asked is None or self.case.kind == "cart":
                     self.held = True              # decide() refuses these; a hand-made line cannot be carried out either
                 elif self.own_question(item.item_id) in self.out:
                     self.carried[item.item_id] = decision     # chosen once more while the question about the item is out: nothing new to ask
                 else:
-                    self.asks.setdefault(_QUESTIONS.get(finding.field, _ASKED_OTHERWISE), []).append((item, finding))
+                    template, question_items, finding_ids = asked
+                    self.asks.setdefault(template, []).append((item, finding, question_items, finding_ids))
                 continue
             if _same(self.done.get(item.item_id), decision):
                 continue
@@ -399,13 +418,26 @@ class _Close:
                 self.rows[item.item_id] = self.row(item, finding, decision["decision"])
             self.carried[item.item_id] = decision
 
+    def question_of(self, item: ReviewItem, finding: Flag | Uncompared | None) -> tuple[str, list[dict], list[str]] | None:
+        """What "ask" on the item asks: the template, the items and the finding ids of its question. For an item with a finding, the
+        question about that finding; for the item of a bounce or a silence of a question the run asked itself, that question again
+        (asked_by_the_run); None for any other item, about which nothing can be asked."""
+        if finding is not None:
+            return _QUESTIONS.get(finding.field, _ASKED_OTHERWISE), [_question_item(finding)], [item.finding_id]
+        record = asked_by_the_run(self.result, item)
+        return (record["template"], list(record["items"]), list(record["finding_ids"])) if record is not None else None
+
     def dealt_with(self, item_id: str) -> bool:
-        """Whether the item's last decision is an "ask" that an earlier close dealt with (_dealt_with)."""
-        return _dealt_with(self.decisions.get(item_id), self.lines.get(item_id), self.asked.get(item_id))
+        """Whether the item's last decision is an "ask" that an earlier close dealt with, or that is over with the item's
+        question (_dealt_with)."""
+        own = self.own_question(item_id)
+        ended = self.ends.get(own) if own is not None and own not in self.out else None
+        return _dealt_with(self.decisions.get(item_id), self.lines.get(item_id), self.asked.get(item_id), ended)
 
     def own_question(self, item_id: str) -> str | None:
-        """The message id of the latest question sent about the item, by the run's messages, those of the closes and this close's."""
-        return _own_question([*self.result.messages, *self.added_messages, *self.messages], item_id)
+        """The message id of the latest question sent about the item, by sent.jsonl and by the message records of the result, of
+        the closes and of this close (_own_question)."""
+        return _own_question(self.sent, [*self.result.messages, *self.added_messages, *self.messages], item_id)
 
     def ops(self, finding: Flag | Uncompared | None, decision: dict) -> list[WriteOp]:
         """What "confirm" writes (see close_case)."""
@@ -488,20 +520,35 @@ class _Close:
         return item_id
 
     def questions(self) -> None:
-        """The questions gathered, one message per template; the items of a question sent, or recorded without a mailer, are
-        carried out. A question that could not be sent leaves the review item of the run for it, once ("message not sent", or "no
-        address for the supplier"); when a later close sends a question of that template, the item is settled."""
+        """The questions gathered, one message per template, its items each once; the items of a question sent, or recorded without
+        a mailer, are carried out. A question that could not be sent leaves the review item of the run for it, once, with the
+        reason of the latest failure ("message not sent", or "no address for the supplier"); when a later close sends a question of
+        that template, or no item asks one any more (the buyer decided the item otherwise), the item is settled."""
+        for template in [template for template in self.unsent if template not in self.asks]:
+            self.settled.add(self.unsent.pop(template))
         for template, asked in self.asks.items():
-            items = [_question_item(finding) for _, finding in asked]
-            status = self.send(template, items, [item.finding_id for item, _ in asked], [item.item_id for item, _ in asked])
+            items = list({json.dumps(item, sort_keys=True): item for _, _, question_items, _ in asked for item in question_items}.values())
+            finding_ids = list(dict.fromkeys(finding_id for *_, ids in asked for finding_id in ids))
+            status = self.send(template, items, finding_ids, [item.item_id for item, *_ in asked])
             if status in (SENT, NOT_SENT):
-                for item, finding in asked:
+                for item, finding, *_ in asked:
                     self.carried[item.item_id] = self.decisions[item.item_id]
                     self.rows[item.item_id] = self.row(item, finding, "ask")
                 if template in self.unsent:
                     self.settled.add(self.unsent.pop(template))
-            elif status != TRYOUT_NOT_SENT and template not in self.unsent:
-                self.unsent[template] = self.add_item(UNADDRESSED if status == f"not sent ({UNADDRESSED})" else UNSENT)
+            elif status != TRYOUT_NOT_SENT:
+                reason = UNADDRESSED if status == f"not sent ({UNADDRESSED})" else UNSENT
+                if template in self.unsent:
+                    self.relabel(self.unsent[template], reason)
+                else:
+                    self.unsent[template] = self.add_item(reason)
+
+    def relabel(self, item_id: str, reason: str) -> None:
+        """Give the review item of a question not sent the reason of its latest failure."""
+        def relabelled(items: list[ReviewItem]) -> list[ReviewItem]:
+            return [item.model_copy(update={"reason": reason}) if item.item_id == item_id else item for item in items]
+        self.result = self.result.model_copy(update={"review_items": relabelled(self.result.review_items)})
+        self.added_items, self.new_items = relabelled(self.added_items), relabelled(self.new_items)
 
     def send(self, template: str, items: list[dict], finding_ids: list[str], item_ids: list[str], made: list[WriteOp] | None = None) -> str:
         """Send a message through the mailer and record it, as the pipeline does: a question to the supplier, or with the changes
@@ -519,7 +566,7 @@ class _Close:
         if self.deps.mailer is None:
             return self.record(template, items, finding_ids, item_ids, NOT_SENT)
         mailer = self.deps.mailer
-        route = mailer.current() if hasattr(mailer, "current") else mailer     # the mailer of send_via "auto" decides at each message
+        route = mailer.current() if hasattr(mailer, "current") else mailer     # the mailer of send_via "auto" judges once per message
         if (cause := NO_DOCUMENT if self.mark is None else getattr(route, "unrouted", None)) is not None:
             return self.unsent_for(template, items, finding_ids, item_ids, cause)
         if made is not None:
@@ -529,10 +576,10 @@ class _Close:
             message = render(spec, self.case, self.ctx, self.settings, address)
         else:
             self.held = True
-            return self.record(template, items, finding_ids, item_ids, f"not sent ({UNADDRESSED})")
+            return self.record(template, items, finding_ids, item_ids, f"not sent ({UNADDRESSED})", cause=NO_ADDRESS)
         unconfirmed = {}
         try:
-            sent = mailer.send(message)
+            sent = route.send(message)            # through the route judged: a second look might give the file mailer of no route
         except HandOverUnconfirmed as doubt:      # it may have left: recorded as sent, so that a reply finds its case, and not sent again
             sent, unconfirmed = doubt.record, {"unconfirmed": True}
         except Exception as error:                # whatever stops the mailer: not sent, the case stays in review, the next close sends it
@@ -541,7 +588,7 @@ class _Close:
                                error=f"{type(error).__name__}: {error}", cause=getattr(error, "kind", "refused"))
         status = self.record(template, items, finding_ids, item_ids, SENT, message_id=sent.message_id, to=sent.to, subject=sent.subject,
                              sent_at=sent.sent_at, refused_cc=sent.refused_cc, **unconfirmed)
-        record_sent(self.case, sent)
+        record_sent(self.case, sent if made is not None else sent.model_copy(update={"item_ids": item_ids}))     # a question: its items
         return status
 
     def unsent_for(self, template: str, items: list[dict], finding_ids: list[str], item_ids: list[str], cause: str) -> str:
@@ -570,12 +617,15 @@ class _Close:
 
     def latest(self, item: ReviewItem) -> str | None:
         """The decision that stands on the item: its last decision, unless that is an "ask" that is over (an earlier close dealt
-        with it, and the question about the item is no longer out: the item is undecided again); a review item of a message sent
-        since counts as acknowledged."""
+        with it, or it was recorded before the question about the item ended, and that question is no longer out: the item is
+        undecided again). A settled item (the item of a message sent since, or of a question no item asks any more) counts as
+        acknowledged whatever was chosen on it, since the page no longer shows it."""
+        if item.item_id in self.settled:
+            return "confirm"
         decision = self.decisions.get(item.item_id, {}).get("decision")
         if decision == "ask" and item.item_id not in self.carried and self.dealt_with(item.item_id) and self.own_question(item.item_id) not in self.out:
             decision = None
-        return decision or ("confirm" if item.item_id in self.settled else None)
+        return decision
 
     def closes(self) -> bool:
         return not self.held and self.open_question is None and all(self.latest(item) in ("confirm", "keep") for item in self.items())
@@ -605,8 +655,9 @@ class _Close:
             raise ValueError(f"case {self.case.case_id} is not in review: another case replaced it")
         status = self.status()
         entries = [*self.result.write_entries, *self.entries]
+        items = [item.model_copy(update={"settled": True}) if item.item_id in self.settled and not item.settled else item for item in self.items()]
         result = self.result.model_copy(update={
-            "review_items": self.items(), "status": status, "write_entries": entries,
+            "review_items": items, "status": status, "write_entries": entries,
             "messages": [*self.result.messages, *self.added_messages, *self.messages], "error": self.error,
             "digest_line": _digest_line(self.case.po_number, self.result.supplier, status, entries, self.settings.language,
                                        self.case.kind)})
@@ -627,19 +678,25 @@ class _Close:
 def standing_decisions(case: Case, working_days: int) -> dict[str, dict]:
     """The decisions that stand on the review items of a case, by item id, as the page shows them: the last decision of each
     item (decisions.jsonl), without an "ask" that is over. An "ask" is over when a close dealt with it (it sent the question, or
-    found one out already) and the question about the item is no longer out, with the wait of `working_days`: answered, bounced
-    and shown to the buyer, or without an answer in time. The item then has no choice, and what the buyer chooses next is a new
+    found one out already), or it was recorded before the item's question ended (ruling C1 of the clean-up of Task 44), and the
+    question about the item is no longer out, with the wait of `working_days`: answered, bounced and shown to the buyer, or
+    without an answer in time. The item then has no choice, and what the buyer chooses next is a new
     decision, also "ask" once more, which the next close sends as a new question. While the question is out the "ask" stands. A
     case whose records or messages cannot be read at this moment shows its last decisions as they are; a decisions file that
     cannot be read raises ValueError (_decisions of aid/review/app.py)."""
     decisions, lines, _ = _decision_log(case)
     try:
         asked, messages = _asked_before(_records(case)), _saved_result(case).messages
-        out = _outstanding(case, working_days)
+        sent, out, ends = _questions(case, working_days)
     except (OSError, ValueError, KeyError, TypeError):
         return decisions
-    return {item_id: decision for item_id, decision in decisions.items()
-            if not (_dealt_with(decision, lines.get(item_id), asked.get(item_id)) and _own_question(messages, item_id) not in out)}
+    standing = {}
+    for item_id, decision in decisions.items():
+        own = _own_question(sent, messages, item_id)
+        ended = ends.get(own) if own is not None and own not in out else None
+        if not (_dealt_with(decision, lines.get(item_id), asked.get(item_id), ended) and own not in out):
+            standing[item_id] = decision
+    return standing
 
 
 def _asked_before(records: list[dict]) -> dict[str, tuple[dict, int | None]]:
@@ -655,22 +712,34 @@ def _asked_before(records: list[dict]) -> dict[str, tuple[dict, int | None]]:
     return asked
 
 
-def _dealt_with(decision: dict | None, line: int | None, asked: tuple[dict, int | None] | None) -> bool:
-    """Whether the last decision of an item, which stands on this line of decisions.jsonl, is an "ask" that a close dealt with
-    already (_asked_before): the decision was among the lines that close had read. A decision made after that close is a new
-    one, also when it is "ask" again. For a close that kept no line number, the decision is the one it carried out when the two
-    are the same record."""
-    if decision is None or decision["decision"] != "ask" or asked is None:
+def _dealt_with(decision: dict | None, line: int | None, asked: tuple[dict, int | None] | None, ended: int | None = None) -> bool:
+    """Whether the last decision of an item, which stands on this line of decisions.jsonl, is an "ask" that is over with the
+    item's question or that a close dealt with already. Over: the item's question has ended, and the decision was recorded before
+    it did (`ended`, the number of the last line of decisions.jsonl when it ended; None while it is out, or when its end was not
+    noted), also when it was written while that question was out (ruling C1 of the clean-up of Task 44). Dealt with
+    (_asked_before): the decision was among the lines that close had read. A decision made after both is a new one, also when it
+    is "ask" again. For a close that kept no line number, the decision is the one it carried out when the two are the same
+    record."""
+    if decision is None or decision["decision"] != "ask":
+        return False
+    if ended is not None and line is not None and line <= ended:
+        return True
+    if asked is None:
         return False
     carried, read = asked
     return line is not None and line <= read if read is not None else decision == carried
 
 
-def _own_question(messages: list[dict], item_id: str) -> str | None:
-    """The message id of the latest question sent about the item, by the message records of a result ("item_ids", which a close
-    writes; the questions of the run are about no review item); None when none was sent."""
-    asked = [message.get("message_id") for message in messages
+def _own_question(questions: list[SentRecord], messages: list[dict], item_id: str) -> str | None:
+    """The message id of the latest question sent about the item, in the order of sent.jsonl: by the lines of sent.jsonl, whose
+    lines of a close's question name the items it is about, and by the message records of a result ("item_ids", which a close
+    writes too; the questions of the run are about no review item), a record whose question sent.jsonl does not hold coming after
+    the others. None when none was sent."""
+    named = [message.get("message_id") for message in messages
              if message.get("status") == SENT and message.get("template") in QUESTIONS and item_id in message.get("item_ids", [])]
+    order = [question.message_id for question in questions]
+    about = {question.message_id for question in questions if item_id in question.item_ids} | set(named)
+    asked = [message_id for message_id in [*order, *(name for name in named if name not in set(order))] if message_id in about]
     return asked[-1] if asked else None
 
 
@@ -695,15 +764,17 @@ def _made(entries: list[WriteLogEntry]) -> set[tuple]:
             if entry.undo_of is None and entry.entry_id not in undone and _waits_for_the_buyer(entry) in (None, *LOOKS)}
 
 
-def _outstanding(case: Case, working_days: int) -> set[str]:
-    """The message ids of the questions of the case that are still out, with the wait of `working_days`: those that wait for a
-    reply of their own and that no escalation covers, and those that bounced and were not shown to the buyer yet, since the next
-    pass still brings them to him (outstanding_questions of aid/messaging). None for a case that sent nothing. A reply or a
+def _questions(case: Case, working_days: int) -> tuple[list[SentRecord], set[str], dict[str, int]]:
+    """The questions of the case (messages/sent.jsonl, in the order sent), the message ids of those still out with the wait of
+    `working_days` (those that wait for a reply of their own and that no escalation covers, and those that bounced and were not
+    shown to the buyer yet, since the next pass still brings them to him: outstanding_questions of aid/messaging), and for each
+    that ended the last line of decisions.jsonl at its end (question_ends). Nothing for a case that sent nothing. A reply or a
     bounce filed with the case that cannot be read at this moment raises OSError."""
     folder = case.root / MESSAGES
     if not (folder / SENT_FILE).exists():
-        return set()
-    return {question.message_id for question in outstanding_questions(folder, working_days)}
+        return [], set(), {}
+    wait = _wait(folder, working_days)
+    return wait.questions, {question.message_id for question in (*wait.open(), *wait.bounced())}, question_ends(folder)
 
 
 def _evaluation_id(case: Case) -> str | None:

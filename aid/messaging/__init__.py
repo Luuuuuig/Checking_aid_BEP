@@ -91,9 +91,9 @@ REAPPROVAL = "reapproval"                        # the template of the request t
 QUESTIONS = get_args(Template)                   # the templates of the questions to a supplier (the ASK actions of the routing)
 MESSAGES = "messages"                            # the folder of the messages in the case folder, and what it holds
 SENT_FILE, ESCALATED_FILE, REPLIES, BOUNCES, AUTO, OWN = "sent.jsonl", "escalated.jsonl", "replies", "bounces", "auto", "own"
+DECISIONS = "decisions.jsonl"                    # the buyer's decisions in the case folder (aid/review/app.py, DECISIONS_FILE)
 _PREFIX = r"(?:re|fwd?|fw|aw|antw|wg|tr|doorst)\s*:"                            # a reply or forward prefix, as mail programs write it
-_PREFIXES = rf"\s*(?:{_PREFIX}\s*)*"                                           # the prefixes a subject begins with
-# What may stand before the words of a bounce: the prefixes, tags in square brackets ("[EXTERN]") and tags between asterisks
+# What may stand before the words of a bounce or of an automatic reply: the prefixes, tags in square brackets ("[EXTERN]") and tags between asterisks
 # ("***SPAM***"), as a mail gateway that marks outside mail puts them there, and one word in capitals with a colon ("EXTERN:").
 _TAGS = rf"\s*(?:(?:\[[^\]]*\]|\*+[^*]+\*+|{_PREFIX})\s*)*"
 _LEAD = rf"{_TAGS}(?:(?-i:[A-Z]{{2,}}):\s*)?{_TAGS}"
@@ -109,7 +109,7 @@ BOUNCE_SUBJECT = re.compile(_LEAD + r"(?:(?:uw |het )?bericht (?:is |werd )?|(?:
                             rf"(?:{_BOUNCE_WORDS})", re.IGNORECASE)
 DELIVERY_NOTICE = re.compile(_LEAD + _NOTICE, re.IGNORECASE)                      # no bounce, whatever its sender: an automatic message
 NO_FAILURE = ("delayed", "delivered", "relayed", "expanded")                      # the Actions of a delivery report that is no bounce
-AUTO_REPLY = re.compile(_PREFIXES +                                               # at the start, after reply and forward prefixes
+AUTO_REPLY = re.compile(_LEAD +                                                   # at the start, after what may stand before a bounce
                         r"(?:automatic reply|automatisch antwoord|automatische antwort|out of office|afwezig|abwesenheit)", re.IGNORECASE)
 MESSAGE_ID = re.compile(r"<([^<>@\s]+)@[^<>\s]*>")    # a Message-ID, "<local part@domain>", whose local part is the aid's message id
 NO_DOMAIN = "aid.invalid"                        # the domain of a Message-ID whose sender has no address
@@ -140,6 +140,10 @@ class SentRecord(BaseModel):
     # True for a message whose hand-over was not confirmed (HandOverUnconfirmed): it counts as sent, so that a reply or a bounce
     # that names it belongs to it; left out of a record's JSON otherwise.
     unconfirmed: bool = Field(default=False, exclude_if=lambda value: not value)
+    # The review items a question of a close on the review page is about (aid/review/close.py), so that which question about an
+    # item is out is read from sent.jsonl alone, also when the close was cut off before its record was saved (ruling C2 of the
+    # clean-up of Task 44); empty for the questions of the run, which are about no review item, and then left out of the JSON.
+    item_ids: list[str] = Field(default_factory=list, exclude_if=lambda value: not value)
 
 
 class Mailer(Protocol):
@@ -179,11 +183,17 @@ class EndedWait(NamedTuple):
 
 
 class _Escalation(BaseModel):
-    """A line of escalated.jsonl."""
+    """A line of escalated.jsonl (record_escalation)."""
     case_id: str
     message_id: str
     reason: str
     at: str
+    # The questions it covers, named when it was made (ruling C3 of the clean-up of Task 44); None in a line of older data, whose
+    # cover is worked out with the wait of the day (_settled).
+    covers: list[str] | None = Field(default=None, exclude_if=lambda value: value is None)
+    # The number of the last line of the buyer's decisions file (DECISIONS) when it was made: a decision on a later line was made
+    # after the questions it covers had ended (question_ends). None when that file could not be read, and in older data.
+    decisions: int | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 # --- the messages ---
@@ -323,7 +333,7 @@ class SmtpMailer:
                 raise MailerError(f"{type(error).__name__}: could not {step} {self.host}:{self.port}"
                                   + (f" (SMTP code {code})" if code is not None else ""), _smtp_kind(error)) from None
         if refused_to := _refused(msg.to, refused):
-            raise MailerError(f"SMTPRecipientsRefused: {refused_to} of {len(msg.to)} To recipients refused",
+            raise MailerError(f"SMTPRecipientsRefused: {refused_to} of {len(getaddresses(msg.to))} To recipients refused",
                               _smtp_kind(smtplib.SMTPRecipientsRefused(refused)))
         return _sent(message_id, msg, sent_at, refused_cc=_refused(msg.cc, refused))
 
@@ -409,9 +419,10 @@ def _email(msg: Message, sender: str, sent_at: datetime, message_id: str) -> Ema
 
 def _refused(addresses: list[str], refused: dict) -> int:
     """How many of the addresses are among the recipients the server refused, compared in lower case (refused maps each refused
-    address to the server's answer, which is not kept)."""
+    address to the server's answer, which is not kept). Every address of an entry counts, as _offer names each to the server: a
+    supplier's setting may hold two in one entry."""
     refused_addresses = {address.lower() for address in refused}
-    return sum(parseaddr(address)[1].lower() in refused_addresses for address in addresses)
+    return sum(address.lower() in refused_addresses for _, address in getaddresses(addresses))
 
 
 def _sent(message_id: str, msg: Message, sent_at: datetime, refused_cc: int = 0) -> SentRecord:
@@ -462,8 +473,9 @@ def kind_of(eml: Path, own: Iterable[str | None] = ()) -> str:
       system's own address does. A notice of a delay or a success by its subject ("Delivery Status Notification (Delay)",
       DELIVERY_NOTICE) is no bounce, whatever its sender, but an automatic message.
     - An automatic message: its subject begins with the words of AUTO_REPLY ("automatic reply", "automatisch antwoord",
-      "automatische Antwort", "out of office", "afwezig", "Abwesenheit"), in upper or lower case, after any reply or forward
-      prefixes ("Re:", "Fwd:", "FW:", "AW:", "Antw:", "WG:", "TR:", "Doorst:"), so that a reply that only mentions them is a reply;
+      "automatische Antwort", "out of office", "afwezig", "Abwesenheit"), in upper or lower case, after what may stand before the
+      words of a bounce (the reply and forward prefixes "Re:", "Fwd:", "FW:", "AW:", "Antw:", "WG:", "TR:", "Doorst:", tags in
+      square brackets or between asterisks, one word in capitals with a colon), so that a reply that only mentions them is a reply;
       or it has an Auto-Submitted header other than "no". It ends no wait and answers nothing.
     - Any other e-mail is a reply, whoever sent it: a supplier may answer from another address, and the buyer reads the reply."""
     with open(eml, "rb") as f:
@@ -667,17 +679,25 @@ def _wait(folder: Path, working_days: int) -> _Wait:
 
 
 def _settled(questions: list[SentRecord], escalations: list[_Escalation], working_days: int) -> set[str]:
-    """The ids of the questions that the escalations cover (_wait)."""
-    order = {question.message_id: number for number, question in enumerate(questions)}
+    """The ids of the questions that the escalations cover (_wait): those a line names as covered, or, for a line of older data
+    that names none, the cover worked out with the wait of `working_days` (_covered)."""
     settled: set[str] = set()
     for escalation in escalations:
-        if (number := order.get(escalation.message_id)) is None:
-            continue
-        at = datetime.fromisoformat(escalation.at)
-        settled.add(escalation.message_id)
-        settled.update(earlier.message_id for earlier in questions[:number]
-                       if _past(at, _deadline(datetime.fromisoformat(earlier.sent_at), working_days)))
+        if escalation.covers is not None:
+            settled.update(escalation.covers)
+        elif escalation.message_id in {question.message_id for question in questions}:
+            settled.update(_covered(questions, escalation.message_id, datetime.fromisoformat(escalation.at), working_days))
     return settled
+
+
+def _covered(questions: list[SentRecord], message_id: str, at: datetime, working_days: int) -> list[str]:
+    """The ids of the questions an escalation of the question message_id at `at` covers, in the order sent: the questions sent
+    before it whose own wait, of `working_days`, had ended at that time, then the question itself."""
+    number = next((number for number, question in enumerate(questions) if question.message_id == message_id), None)
+    if number is None:
+        return [message_id] if message_id else []
+    return [earlier.message_id for earlier in questions[:number]
+            if _past(at, _deadline(datetime.fromisoformat(earlier.sent_at), working_days))] + [message_id]
 
 
 def _belonging(folder: Path, kind: str, questions: list[SentRecord]) -> set[str]:
@@ -751,15 +771,71 @@ def pending_asks(cases_root: Path, now: datetime, working_days: int) -> list[str
     return list(dict.fromkeys(wait.case_id for wait in ended_waits(cases_root, now, working_days)[0]))
 
 
-def record_escalation(case: Case, reason: str, at: datetime, message_id: str | None = None) -> None:
+def record_escalation(case: Case, reason: str, at: datetime, message_id: str | None = None, working_days: int | None = None,
+                      line: dict | None = None) -> dict:
     """Note in messages/escalated.jsonl that the wait for a question ended in review, and why: ended_waits does not give that question
-    again. The question is message_id, else the case's latest question."""
+    again. The line is `line` when given (as escalation_line made it), else escalation_line's of the other arguments. Returns the
+    line as written."""
+    made = _Escalation.model_validate(line if line is not None else escalation_line(case, reason, at, message_id, working_days))
+    _append_line(case.root / MESSAGES / ESCALATED_FILE, made.model_dump_json())
+    return made.model_dump(mode="json")
+
+
+def escalation_line(case: Case, reason: str, at: datetime, message_id: str | None = None, working_days: int | None = None) -> dict:
+    """The line of escalated.jsonl of an escalation of a question at `at`, for this reason: {"case_id", "message_id", "reason",
+    "at", "covers", "decisions"}. The question is message_id, else the case's latest question. Given the wait of the moment
+    (`working_days`), the line names the questions the escalation covers (ruling C3 of the clean-up of Task 44: the question and
+    the earlier ones whose own wait had ended by then), so that a later change of the wait changes no cover; without it the line
+    names none ("covers" left out), as a line of older data, and its cover is worked out when it is read. "decisions" is the
+    number of the last line of the buyer's decisions file at that moment (decision_lines; left out when it cannot be read). A
+    damaged line of sent.jsonl on the way to the latest question raises ValueError, as for _sent_questions."""
+    sent = case.root / MESSAGES / SENT_FILE
+    questions = _sent_questions(sent) if sent.exists() else []
     if message_id is None:
-        sent = case.root / MESSAGES / SENT_FILE
-        latest = _latest_question(sent) if sent.exists() else None
-        message_id = latest.message_id if latest is not None else ""
-    _append_line(case.root / MESSAGES / ESCALATED_FILE,
-                 _Escalation(case_id=case.case_id, message_id=message_id, reason=reason, at=at.isoformat()).model_dump_json())
+        message_id = questions[-1].message_id if questions else ""
+    covers = _covered(questions, message_id, at, working_days) if working_days is not None else None
+    return _Escalation(case_id=case.case_id, message_id=message_id, reason=reason, at=at.isoformat(), covers=covers,
+                       decisions=decision_lines(case.root)).model_dump(mode="json")
+
+
+def decision_lines(root: Path) -> int | None:
+    """The number of the last line of the case folder's decisions file (DECISIONS) that holds anything, counted as the review page
+    counts them (aid/review/app.py, _decision_log): 0 for a file that is missing or holds nothing, None for one that cannot be
+    read. The file is only ever added to, so a decision on a later line was made after this moment."""
+    try:
+        lines = (Path(root) / DECISIONS).read_bytes().split(b"\n")
+    except FileNotFoundError:
+        return 0
+    except OSError:
+        return None
+    return next((number for number in range(len(lines), 0, -1) if lines[number - 1].strip()), 0)
+
+
+def question_ends(folder: Path) -> dict[str, int]:
+    """For each question of a case's messages/ folder whose end was noted with the number of lines the buyer's decisions file
+    held then (decision_lines): that number, of its earliest such end. A question ends with an escalation that covers it (a line of
+    escalated.jsonl with "decisions"; one that names no cover ends only the question it names) and with a reply filed for it (an
+    entry of the list "answers" of the case's audit record with "filed_under" replies and "decisions", file_answer of
+    aid/pipeline.py). A decision on a later line was made after the question ended (aid/review/close.py, ruling C1 of the
+    clean-up of Task 44). An escalations file that cannot be read raises as for _wait; an audit record that cannot be read gives
+    no answers."""
+    ends: dict[str, int] = {}
+
+    def noted(message_id, number) -> None:
+        if isinstance(message_id, str) and isinstance(number, int) and not isinstance(number, bool):
+            ends[message_id] = min(number, ends.get(message_id, number))
+    for escalation in _escalations(folder / ESCALATED_FILE):
+        for message_id in escalation.covers if escalation.covers is not None else [escalation.message_id]:
+            noted(message_id, escalation.decisions)
+    try:
+        record = json.loads((folder.parent / AUDIT_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        record = None
+    answers = record.get("answers") if isinstance(record, dict) else None
+    for answer in answers if isinstance(answers, list) else []:
+        if isinstance(answer, dict) and answer.get("filed_under") == REPLIES:
+            noted(answer.get("message_id"), answer.get("decisions"))
+    return ends
 
 
 def _deadline(sent_at: datetime, working_days: int) -> datetime:
@@ -778,17 +854,6 @@ def _past(now: datetime, deadline: datetime) -> bool:
     if (now.utcoffset() is None) != (deadline.utcoffset() is None):
         now, deadline = now.astimezone(), deadline.astimezone()
     return now > deadline
-
-
-def _latest_question(path: Path) -> SentRecord | None:
-    """The latest question of a sent.jsonl, read from the end of the file back to it; None when it holds no question. A damaged line
-    on the way raises ValueError (a pydantic ValidationError)."""
-    for line in reversed(path.read_bytes().split(b"\n")):
-        if line.strip():
-            record = SentRecord.model_validate_json(line)
-            if record.template in QUESTIONS:
-                return record
-    return None
 
 
 def _escalations(path: Path) -> list[_Escalation]:

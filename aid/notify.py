@@ -14,9 +14,11 @@ the settings, as plain text and as simple HTML with the same content. Its blocks
   them on their own, in the language of the settings: "PO 250101 (S01): afgesloten, 2 voorbereide wijzigingen, 2 in Exact zelf te
   doen" ("closed, 2 prepared changes, 2 to do in Exact yourself").
 - Wacht op u (Waiting for you): the cases in review, each with its link to the review page and a line per review item: its reason
-  by the review page's label (see below), then its field and its line when they are known.
+  by the review page's label (see below), then its field and its line when they are known. A settled item (the item of a message
+  not sent that was sent since, ReviewItem.settled) has no line.
 - Vraag gesteld aan de leverancier (Question sent to the supplier): the cases that wait for the supplier, each with the supplier and
-  the template of each question in words. A request to the approver to approve a PO again is no question.
+  the template of each question sent in words, each template once, whatever the number of attempts. A request to the approver to
+  approve a PO again is no question.
 - Mislukt (Failed): the failed cases, each with the first line of its error. A case that failed at reading a scan, a document or a
   page of it without a text layer, which Copilot does not read (unread_scan), is named by the label of the tab "Bestanden" for it,
   in the language: "Scan zonder leesbare tekst: de assistent kon dit document niet lezen; bekijk het zelf".
@@ -77,7 +79,7 @@ from aid.comparison import Flag, Uncompared
 from aid.execution.ops import WriteOp
 from aid.execution.writer import WriteLogEntry, read_before
 from aid.messaging import QUESTIONS, Mailer, Message, SentRecord
-from aid.pipeline import CaseResult, ReviewItem
+from aid.pipeline import SENT, CaseResult, ReviewItem
 from aid.pipeline import _WORDS as _CASE_WORDS, _digest_line
 from aid.readers.copilot_client import NO_TEXT_LAYER
 from aid.review.hand_list import TAB
@@ -309,7 +311,7 @@ def _in_review(result: CaseResult, settings: Settings, words: dict, tryout: bool
     """A case in review: the case and its review link, and a line per review item under it."""
     findings = findings_by_id(result.findings) if result.findings is not None else {}
     return _Item([f"{_case(result, words, tryout)}: ", _Link(words["open"], review_link(settings, result.case_id))],
-                 [[_review_item(item, findings, words, settings.language)] for item in result.review_items])
+                 [[_review_item(item, findings, words, settings.language)] for item in result.review_items if not item.settled])
 
 
 def _review_item(item: ReviewItem, findings: dict[str, Flag | Uncompared], words: dict, language: str) -> str:
@@ -326,8 +328,9 @@ def _review_item(item: ReviewItem, findings: dict[str, Flag | Uncompared], words
 
 
 def _waiting(result: CaseResult, words: dict, tryout: bool = False) -> _Item:
-    """A case that waits for the supplier: the case, with the template of each of its questions in words."""
-    templates = [message.get("template") for message in result.messages]
+    """A case that waits for the supplier: the case, with the template of each of its questions that was sent, in words, each
+    template once whatever the number of attempts (a close that could not send records a message not sent)."""
+    templates = dict.fromkeys(message.get("template") for message in result.messages if message.get("status") == SENT)
     asked = [words["questions"].get(template, template) for template in templates if template in QUESTIONS]
     return _Item([_case(result, words, tryout) + (f": {', '.join(asked)}" if asked else "")], [])
 

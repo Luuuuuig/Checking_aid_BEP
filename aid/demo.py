@@ -7,8 +7,8 @@ document or any connection:
     <out>/cases.csv       the 22 made-up cases (20 confirmations, 2 saved cart pages) for the batch
     <out>/cases/          one folder per case after the run (steps/, audit.json, write_log.jsonl, dispositions.csv)
     <out>/cases/prepared/prepared_changes.csv   the changes the aid would make in Exact, prepared for the buyer
-    <out>/cases/outbox/   the messages written as .eml files instead of sent: the runner's, and on a prepared folder (whose
-                          settings say send_via "file") the questions of the review page too
+    <out>/cases/outbox/   the messages written as .eml files instead of sent: the runner's digest, and on a prepared folder
+                          (whose settings say send_via "file") every question and request of the runner and the review page
     <out>/po_store/       the PO versions of the made-up PO PDFs and the looks that the two ERP exports gave
     <out>/inbox/          the watched folder of the runner, empty; drop a made-up confirmation in it and start the runner
     <out>/summary.csv     one row per case: the status, the flags, the writes, the messages, the review items
@@ -23,12 +23,13 @@ this demo only; company documents go to Microsoft 365 Copilot (aid/readers/copil
 --prepare-only writes the folder and files the purchase orders but runs no case: the folder to watch the runner loop work by
 itself, because a document a folder has seen once counts as a duplicate afterwards and opens no second case. Its settings say
 send_via "file": the runner and the review page write every message of this folder as a file, whatever is connected. The folder
-of a run keeps the default, "auto", with nothing connected: its runner writes files too, and its review page asks no question,
-since it has no way to send one, and says so (give the folder a prepared one's send_via "file" to see the question as a file).
+of a run keeps the default, "auto", with nothing connected: its runner and its review page ask no question, since they have no way
+to send one, and give it to the buyer as "Bericht niet verzonden" (the page says so after a close); only the runner's digest is
+written as a file (give the folder a prepared one's send_via "file" to see the questions as files).
 
 After the run: python3 -m aid.review --settings <out>/settings.json opens the review page on 127.0.0.1:7860, and
 python3 -m aid.runner --settings <out>/settings.json --poll-seconds 5 --max-passes 3 runs the loop over <out>/inbox. Nothing is
-sent and nothing is written to any system: the writer prepares changes and the mailer writes files. The settings hold a made-up
+sent and nothing is written to any system: the writer prepares changes, and no mailer sends anything. The settings hold a made-up
 capture token, so python3 -m aid.capture_server --settings <out>/settings.json --testshop serves the pre-check in the browser with
 the made-up cart pages as a test shop (aid/extension/README.md).
 """

@@ -17,7 +17,8 @@ po_pages are the pages of the PDF of the selected PO version, none for a look fr
 of a PDF that is no longer there (the folder of the aid was moved), the page looks the version up in the store as it is now. The
 three lists are built from the result's findings: a row per flag, per match and per uncompared item; then `flags` gets a row for each
 review item that no row carries (an item without a finding, such as "new supplier" on a case without findings, or a second item on
-one finding). A row's
+one finding), but a settled one (the item of a message not sent that was sent since: ReviewItem.settled), which the count of a
+case's items leaves out as well. A row's
 item_id is that of the first review item that names its finding (RI1, RI2, ...), else the finding's id (F1, ...; U1, ... as the
 routing numbers the uncompared items; M1, M2, ... for the matches, which have no id), and the page offers the four decisions on
 every row whose item_id is a review item ("ask" only where decide takes it). A row shows its values in normal form (else as printed; a match its value on both
@@ -29,7 +30,6 @@ entered names the values entered in Exact that the case was compared with in pla
 ran; the page says either above the lists. A case without that step has neither.
 """
 import json
-import os
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -40,7 +40,7 @@ from pydantic import BaseModel
 from aid.case import Case
 from aid.comparison import Findings, Flag, Match, Uncompared
 from aid.messaging import _append_line           # the lines of a file of records, appended as the messaging module appends them
-from aid.pipeline import LOOKS, RESULT_FILE, CaseResult, ReviewItem
+from aid.pipeline import LOOKS, RESULT_FILE, CaseResult, ReviewItem, asked_by_the_run
 from aid.po_store import PoStore, PoVersion
 from aid.readers.pdf_text import page_count, render_page
 from aid.routing import CaseContext, findings_by_id
@@ -61,7 +61,7 @@ class CaseSummary(BaseModel):
     supplier: str | None
     status: str
     opened_at: str                               # from case.json
-    items: int                                   # the number of review items
+    items: int                                   # the number of review items, a settled one left out (ReviewItem.settled)
     tryout: bool = False                         # whether the case is made from a try-out (aid/tryout_mark.py)
 
 
@@ -172,7 +172,7 @@ def _entered(case: Case) -> tuple[list[EnteredValue], bool]:
 
 def _summary(case_id: str, meta: dict, result: CaseResult) -> CaseSummary:
     return CaseSummary(case_id=case_id, po_number=meta.get("po_number"), supplier=result.supplier, status=result.status,
-                       opened_at=meta["opened_at"], items=len(result.review_items))
+                       opened_at=meta["opened_at"], items=sum(not item.settled for item in result.review_items))
 
 
 def _rows(result: CaseResult) -> tuple[list[FlagRow], list[FlagRow], list[FlagRow]]:
@@ -189,7 +189,7 @@ def _rows(result: CaseResult) -> tuple[list[FlagRow], list[FlagRow], list[FlagRo
         (flags if isinstance(finding, Flag) else uncompared).append(_row(item.item_id if item else finding_id, finding, item))
     matches = [_row(f"M{n}", match) for n, match in enumerate(findings.matches, 1)]
     shown = {row.item_id for row in flags + uncompared}
-    flags += [_row(item.item_id, by_id.get(item.finding_id), item) for item in result.review_items if item.item_id not in shown]
+    flags += [_row(item.item_id, by_id.get(item.finding_id), item) for item in result.review_items if item.item_id not in shown and not item.settled]
     return flags, matches, uncompared
 
 
@@ -299,7 +299,9 @@ def decide(case: Case, item_id: str, decision: Decision, article_update: bool = 
     "confirm" takes the supplier's value into the system, "keep" keeps the PO's value, "ask" asks the supplier, "unresolved" leaves
     the item open. On an item without a finding, "confirm" and "keep" both acknowledge it. article_update, on a price, also updates
     the article's price. Refused with ValueError, recording nothing: a decision that is not one of the four, an item that is not a
-    review item of the case, and "ask" on an item without a finding (there is no value to ask about), on a cart (the buyer
+    review item of the case, and "ask" on an item without a finding (there is no value to ask about; but the item of a bounce or
+    a silence of a question the run asked itself takes it, and the close asks that question again: asked_by_the_run of
+    aid/pipeline.py, ruling C4 of the clean-up of Task 44), on a cart (the buyer
     corrects a cart or its PO before ordering) or on an item that asks him to look in Exact, because a write was made and not
     verified or its outcome is not known (it is no question for the supplier: "confirm" lets the change stand and "keep" has the
     close put the old value back, see close_case). "ask" on any item of a case made from a try-out document is refused with
@@ -313,35 +315,39 @@ def decide(case: Case, item_id: str, decision: Decision, article_update: bool = 
         raise ValueError(f"unknown decision {decision!r}: expected one of {', '.join(get_args(Decision))}")
     if marked_replaced(case.root):
         raise ValueError(f"case {case.case_id} was replaced by another case, so no decision is taken on it")
-    item = next((item for item in _saved_result(case).review_items if item.item_id == item_id), None)
+    result = _saved_result(case)
+    item = next((item for item in result.review_items if item.item_id == item_id), None)
     if item is None:
         raise ValueError(f"case {case.case_id} has no review item {item_id!r}")
     if decision == "ask" and tryout_case(case):
         raise NothingAsked(f"case {case.case_id} is made from a try-out document, so nothing about it is sent to a supplier")
-    if decision == "ask" and item.finding_id is None:
+    if decision == "ask" and item.finding_id is None and asked_by_the_run(result, item) is None:
         raise ValueError(f"{item_id} is about the whole case and names no value, so there is no question to ask the supplier")
     if decision == "ask" and case.kind == "cart":
         raise ValueError("a cart is not asked about: the buyer corrects the cart or the PO before ordering")
     if decision == "ask" and item.reason in LOOKS:
         raise ValueError(f"{item_id} asks for a look in Exact after a write of the aid, which is no question for the supplier")
     record = {"item_id": item_id, "decision": decision, "article_update": bool(article_update), "at": datetime.now().isoformat(timespec="seconds")}
-    path = case.root / DECISIONS_FILE
-    before = path.stat().st_size if path.exists() else None
-    _append_line(path, json.dumps(record, ensure_ascii=False))
+    path, line = case.root / DECISIONS_FILE, json.dumps(record, ensure_ascii=False)
+    _append_line(path, line)
     if marked_replaced(case.root):               # marked between the first look and the append: the line is not left in the case
-        _take_back(path, before)
+        _take_back(path, line)
         raise ValueError(f"case {case.case_id} was replaced by another case, so no decision is taken on it")
 
 
-def _take_back(path: Path, before: int | None) -> None:
-    """Take the line that was just appended out of the file again: the file is cut back to the `before` bytes it held, and
-    removed when it did not exist. A file that is no longer than that is left as it is."""
-    if before is None:
-        path.unlink(missing_ok=True)
-        return
+def _take_back(path: Path, line: str) -> None:
+    """Take the line that this decision just appended out of the file again, and no other: the file's tail is compared with the
+    line, and only when the tail is that line is it cut off. A file that holds nothing after that is removed. When another line
+    was appended behind it in the same instant, the file is left as it is. (On a file that did not end with a newline the
+    append put one before its line; that newline stays.)"""
+    own = line.encode("utf-8") + b"\n"
     with open(path, "rb+") as f:
-        if f.seek(0, os.SEEK_END) > before:
-            f.truncate(before)
+        data = f.read()
+        if not data.endswith(own):
+            return
+        f.truncate(len(data) - len(own))
+    if len(data) == len(own):
+        path.unlink(missing_ok=True)
 
 
 # The close and the page, imported here after the view they build on (see the module docstring).

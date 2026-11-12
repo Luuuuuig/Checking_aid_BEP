@@ -8,8 +8,8 @@ never the texts themselves, so that no rule code and no setting value reaches it
 the page and for the digest (aid/notify.py), which imports these strings and not gradio. "message_not_sent" is what the page says
 after a close whose message could not be sent, followed by "not_sent:<cause>", the kind of its cause and what to do about it
 (the causes of aid/review/close.py: the sign-in, a mailbox or server not reached or refusing, no mailbox connected, the mail
-server's password, the settings file, the case's document); "message_filed" after one whose message was written as a file because
-the settings say so, into {folder}; "message_unconfirmed" after one whose hand-over was not confirmed; and "reply_unread" after a
+server's password, the settings file, the case's document, no address for the supplier); "message_filed" after one whose
+message was written as a file because the settings say so, into {folder}; "message_unconfirmed" after one whose hand-over was not confirmed; and "reply_unread" after a
 close that did nothing because a reply filed with the case could not be read at that moment. The keys that begin with "settings"
 are the
 strings of the settings tab, "settings_via:<value>" labelling a value of the setting send_via and "settings_reader:<value>" a value of
@@ -135,6 +135,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "not_sent:no_password": "Het wachtwoord van de mailserver is niet ingesteld: geef dit door aan de onderzoeker.",
         "not_sent:settings": "De instellingen kunnen nu niet worden gelezen: er is niets verstuurd. Geef dit door aan de onderzoeker.",
         "not_sent:document": "Het document van de zaak kan nu niet worden gelezen: er is niets verstuurd.",
+        "not_sent:no_address": ("Er is geen e-mailadres van de leverancier: vul het in onder Instellingen, Leveranciers, en sluit de zaak "
+                                "opnieuw af."),
         "message_unconfirmed": ("Niet zeker of het bericht is verstuurd: het postvak gaf geen bevestiging. Kijk bij Verzonden items. Staat het "
                                 "er niet, dan komt de zaak na de wachttijd bij u terug en stelt u de vraag opnieuw."),
         "reply_unread": "Een antwoord bij deze zaak kan nu niet worden gelezen: sluit de zaak zo opnieuw af.",
@@ -419,7 +421,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "settings_failed": "Dit is niet gelukt ({code}).",
         "settings_send_via": "Verzenden via",
         "settings_via:auto": ("Automatisch: het postvak als u bent aangemeld en een map is gekozen (is de aanmelding verlopen, dan "
-                              "wordt niets verzonden), anders de SMTP-server of bestanden"),
+                              "wordt niets verzonden), anders de SMTP-server als die is ingesteld; anders wordt niets verzonden"),
         "settings_via:file": "Bestanden: niets verzenden",
         "settings_via:smtp": "De SMTP-server van de instellingen",
         "settings_via:microsoft": "Het postvak van de aanmelding",
@@ -972,6 +974,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "not_sent:no_password": "The mail server's password is not set: pass this on to the researcher.",
         "not_sent:settings": "The settings cannot be read now: nothing was sent. Pass this on to the researcher.",
         "not_sent:document": "The case's document cannot be read now: nothing was sent.",
+        "not_sent:no_address": "There is no e-mail address for the supplier: fill it in under Settings, Suppliers, and close the case again.",
         "message_unconfirmed": ("Not sure whether the message was sent: the mailbox gave no confirmation. Look in Sent items. If it is not "
                                 "there, the case comes back to you after the wait and you ask the question again."),
         "reply_unread": "A reply filed with this case cannot be read now: close the case again in a moment.",
@@ -1245,7 +1248,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "settings_failed": "This did not work ({code}).",
         "settings_send_via": "Send through",
         "settings_via:auto": ("Automatic: the mailbox when you are signed in and a folder is chosen (while the sign-in has lapsed, "
-                              "nothing is sent), else the SMTP server or files"),
+                              "nothing is sent), else the SMTP server when it is set up; else nothing is sent"),
         "settings_via:file": "Files: send nothing",
         "settings_via:smtp": "The SMTP server of the settings",
         "settings_via:microsoft": "The mailbox of the sign-in",

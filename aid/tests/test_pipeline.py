@@ -644,6 +644,73 @@ def above_authorization(d):
     return d.model_copy(update={"settings": d.settings.model_copy(update={"authorization_limit": limit}), "store": PoStore(d.store.root, limit)}), limit
 
 
+def mailer_of_the_settings(d, environ: dict | None = None):
+    """d with the mailer that the runner builds of d's settings (mailer_of, as build_deps calls it), at the clock of deps()."""
+    from aid.messaging.microsoft_mailer import mailer_of
+    return d.model_copy(update={"mailer": mailer_of(d.settings, environ or {}, lambda: None, clock=lambda: NOW)})
+
+
+@pytest.mark.parametrize("values, cause, words", [
+    ({}, "no_mailbox", "no mailbox connected"),
+    ({"smtp_host": "smtp.example.com", "smtp_user": "aid@example.com"}, "no_password", "mail server password not set"),
+    ({"send_via": "smtp"}, "no_mailbox", "no mailbox connected"),
+], ids=["nothing connected", "no password", "smtp without a server"])
+def test_a_question_of_the_run_that_nothing_can_send_is_not_asked(tmp_path, madeup_out, values, cause, words):
+    """Ruling C12. The settings as a new installation has them (send_via "auto", nothing connected), a mail server without its
+    password, or "smtp" without a server: the runner's mailer is the file mailer given for want of a route. The run writes no
+    file and counts nothing as asked: its question is recorded "not sent", with the cause, and the case gets the review item
+    "message not sent", as for a message a mailer could not send, and goes to the buyer, who connects the mailbox and chooses
+    "Leverancier vragen" on that item. The digest lists the case under "Wacht op u" with the label, not under "Vraag gesteld"."""
+    from datetime import date
+
+    from aid.notify import build_digest
+    d = mailer_of_the_settings(with_settings(deps(tmp_path, madeup_out), supplier_emails=ADDRESSES, **values))
+    c, r = run(d, madeup_out, "MU17", "250117")
+    assert r.status == "review" and [(m["status"], m["cause"]) for m in r.messages] == [(f"not sent ({words})", cause)]
+    assert [(i.finding_id, i.reason) for i in r.review_items] == [("F1", "message not sent")]
+    assert not (d.settings.cases_root / "outbox").exists() and not list(tmp_path.rglob("*.eml")) and not (c.root / "messages" / "sent.jsonl").exists()
+    assert audit(c)["messages"][0]["cause"] == cause and "error" not in audit(c)["messages"][0]
+    digest = [line.strip() for line in build_digest([r], [], d.settings, date(2026, 11, 12)).text.splitlines()]
+    assert digest[digest.index("Wacht op u") + 2] == "- Bericht niet verzonden (ontbrekende of extra regel, regel 3)"
+    assert not any(line.startswith("Vraag gesteld") for line in digest)
+
+
+def test_a_question_of_the_run_is_written_as_a_file_by_choice_and_counts(tmp_path, madeup_out):
+    """Ruling C12: with send_via "file" the run's question is written as a file into cases/outbox and counts as asked, as before:
+    the case waits on it."""
+    d = mailer_of_the_settings(with_settings(deps(tmp_path, madeup_out), supplier_emails=ADDRESSES, send_via="file"))
+    c, r = run(d, madeup_out, "MU17", "250117")
+    [eml] = (d.settings.cases_root / "outbox").glob("*.eml")
+    assert r.status == "waiting" and [m["status"] for m in r.messages] == ["sent"] and r.review_items == []
+    assert [json.loads(line)["message_id"] for line in (c.root / "messages" / "sent.jsonl").read_text(encoding="utf-8").splitlines()] == [eml.stem]
+
+
+def test_with_send_via_auto_the_run_judges_the_route_once_per_message(tmp_path, madeup_out):
+    """Ruling C8, the run's side. send_via "auto": the run looks once at who is signed in, and the mailer that look gives sends
+    the message. When the store of the sign-in cannot be read at a second look, nothing goes through the file mailer that such a
+    look would give for want of a route: the question goes out through the mailbox, and no file is written."""
+    from types import SimpleNamespace
+
+    from aid.messaging.microsoft_mailer import AutoMailer
+    looks, taken = [], []
+
+    def account():
+        looks.append(1)
+        if len(looks) > 1:
+            raise OSError("made-up: the store of the sign-in is held by another process")
+        return object()
+
+    def send(msg):
+        taken.append(msg)
+        return SentRecord(message_id="1" * 32, to=msg.to, subject=msg.subject, sent_at=NOW.isoformat(), template=msg.template)
+    mailbox = SimpleNamespace(account=SimpleNamespace(account=account), send=send)
+    other = FileMailer(tmp_path / "cases" / "outbox", sender="aid@example.com", clock=lambda: NOW, unrouted="no_mailbox")
+    d = with_settings(deps(tmp_path, madeup_out), supplier_emails=ADDRESSES).model_copy(update={"mailer": AutoMailer(mailbox, other)})
+    c, r = run(d, madeup_out, "MU17", "250117")
+    assert r.status == "waiting" and [m["status"] for m in r.messages] == ["sent"] and len(taken) == 1 and len(looks) == 1
+    assert not list(tmp_path.rglob("*.eml"))
+
+
 class CopyRefused:
     """A mailer that sends each message and reports the buyer's copy refused, as a server that refuses the Cc address does."""
     name = "copy-refused"
@@ -779,10 +846,12 @@ def test_a_question_without_an_answer_goes_to_review_once_its_wait_is_over(tmp_p
     assert escalate_pending(d.settings.cases_root, later, d.settings) == [(c.case_id, "no answer in 3 working days")]
     result = CaseResult.model_validate(c.read_step("result"))
     assert result.review_items == [ReviewItem(item_id="RI1", finding_id=None, reason="no answer in 3 working days", field=None, po_value=None,
-                                              doc_value=None)]
+                                              doc_value=None, question=r.messages[0]["message_id"])]      # the item names its question
     assert result.status == "review" and result.digest_line == "PO 250117 (S17): ter beoordeling, geen schrijfacties"
     assert result.model_copy(update={"status": r.status, "review_items": r.review_items, "digest_line": r.digest_line}) == r
-    escalation = {"case_id": c.case_id, "message_id": r.messages[0]["message_id"], "reason": "no answer in 3 working days", "at": later.isoformat()}
+    question = r.messages[0]["message_id"]                    # the line names the question it covers (ruling C3) and the decisions' lines
+    escalation = {"case_id": c.case_id, "message_id": question, "reason": "no answer in 3 working days", "at": later.isoformat(),
+                  "covers": [question], "decisions": 0}
     escalated = (c.root / "messages" / "escalated.jsonl").read_text(encoding="utf-8").splitlines()
     assert [json.loads(line) for line in escalated] == [escalation] and audit(c) == recorded | {"escalations": [escalation]}
     assert escalate_pending(d.settings.cases_root, later + timedelta(days=7), d.settings) == []
@@ -908,7 +977,8 @@ def test_a_question_asked_after_a_reply_to_another_comes_back_when_its_own_wait_
     assert r.status == "review" and [i.item_id for i in r.review_items] == ["RI1", "RI2"]
     reply = a_reply(tmp_path / "reply.eml", "Re: Vraag over orderbevestiging PO 250112", "sales@s12.example.com", in_reply_to=f"<{first}@example.com>")
     assert file_answer(d.settings.cases_root, reply, NOW + timedelta(hours=2)) == c.case_id
-    assert audit(c)["answers"] == [{"file": "reply.eml", "filed_under": "replies", "at": (NOW + timedelta(hours=2)).isoformat(), "message_id": first}]
+    assert audit(c)["answers"] == [{"file": "reply.eml", "filed_under": "replies", "at": (NOW + timedelta(hours=2)).isoformat(), "message_id": first,
+                                    "decisions": 0}]          # no decision made yet when it came (ruling C1)
     friday = datetime(2026, 11, 13, 10, 0)
     decide(c, "RI1", "ask"); decide(c, "RI2", "keep"); decide(c, "RI3", "keep")
     closed = close_case(c, d.model_copy(update={"clock": lambda: friday, "mailer": FileMailer(out, sender="aid@example.com", clock=lambda: friday)}))

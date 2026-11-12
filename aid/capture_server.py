@@ -53,10 +53,13 @@ cases of the page and of the cart together, the one opened last decides, by the 
   nothing out is no act. A case without a PO that the buyer closed is left exactly as it is.
 - When a new case with a PO is opened, the cases of the same lines go with them (_same_lines): capture.json also keeps the lines
   digest, the cart digest without the PO reference the page states, and every capture case of any day that holds the same lines
-  digest, may still be replaced, did not fail and was not opened after the new case is finished as replaced too. So the guess of
-  a cart before the buyer typed the order's number into it, the case without a PO of that cart, and yesterday's untouched guess
-  of the same cart leave no stale case behind. A capture.json written before the lines digest was kept is matched by its cart
-  digest. The search is one pass over the capture.json files of the cases root, made only when a new case with a PO is opened.
+  digest and the same host, the webshop of the page, may still be replaced, did not fail and was not opened after the new case is
+  finished as replaced too. So the guess of a cart before the buyer typed the order's number into it, the case without a PO of
+  that cart, and yesterday's untouched guess of the same cart leave no stale case behind. A cart of the same lines at another
+  webshop is another cart, and a cart table without a line is matched by no lines digest, since every empty table has the same
+  one. A capture.json without a host is matched by its lines digest alone, and one written before the lines digest was kept by
+  its cart digest. The search is one pass over the capture.json files of the cases root, made only when a new case with a PO is
+  opened.
 - A replacement has two steps. First the mark: the earlier case's capture.json gets replaced_by with the new case's id. From the
   mark on the case answers no capture, the runner names it in no digest (aid/runner.py), and the review page does not offer it and
   refuses a decision, a close and an undo on it (marked_replaced of aid/review/app.py). Then the case is read again: when the
@@ -67,12 +70,12 @@ cases of the page and of the cart together, the one opened last decides, by the 
   nothing, and an earlier case whose capture.json cannot be read is left as it is. A replacement cut off before the mark is made
   when a capture meets the earlier case again. One that was cut off at any point after the mark is finished, never undone: the
   case stays marked, off the review page and out of the digests, until the next reading finishes it (_was_replaced), read again
-  first in the same way: when a capture meets it (the same cart in a page of other bytes that day, or the earlier case's own
-  page), and at the latest when the server starts (finish_marked). That reading also finishes a case whose closed result was
-  written while its record was not (a case without a PO whose result is closed while no close of the buyer closed it), and
-  finishes again a case whose result a close of the review page wrote over in the instant of the mark. The page of the capture
-  that was cut off does not finish it when that page came in other bytes than the earlier case's own page: the new case holds
-  those bytes and answers at once.
+  first in the same way: when a capture meets it (the same cart in a page of other bytes that day, the earlier case's own page, or
+  a new case with a PO of the same lines, _same_lines), and at the latest when the server starts (finish_marked). That reading
+  also finishes a case whose closed result was written while its record was not (a case without a PO whose result is closed while
+  no close of the buyer closed it), and finishes again a case whose result a close of the review page wrote over in the instant of
+  the mark. The page of the capture that was cut off does not finish it when that page came in other bytes than the earlier case's
+  own page: the new case holds those bytes and answers at once.
 The PO of a cart (find_po; cart_order of aid/sources/capture.py holds the rule and its words): the PO number the page states, when
 the store knows that PO as it stands (from a PO PDF or from an export), whatever items it shares with the cart; a number the store
 does not know decides nothing. Otherwise the items decide. The server is sure of an order by the items when exactly one stored PO
@@ -321,7 +324,8 @@ def precheck(html: str, url: str, deps: Deps, settings: Settings) -> CaptureAnsw
         held = {old.case_id for old, _ in earlier} | {case.case_id}
         older = [old for old, _ in earlier if _opened(old) < _opened(case)]
         if opened:                               # and, when it is new, the cases of the same lines of any day, not opened after it
-            older += [old for old in _same_lines(cases_root, lines, content, held, now, settings.language)
+            same = lines if cart.lines else None  # a cart table without a line is matched by no lines digest
+            older += [old for old in _same_lines(cases_root, same, content, page_host(url), held, now, settings.language)
                       if _opened(old)[0] <= _opened(case)[0]]
         for old in older:
             if _replaceable(old):                # read again: what the buyer did meanwhile stands
@@ -493,20 +497,26 @@ def _replaceable(case: Case) -> bool:
     return isinstance(result, dict) and result.get("status") == "review"
 
 
-def _same_lines(cases_root: Path, lines: str, content: str, held: set[str], now: datetime, language: str) -> list[Case]:
-    """The capture cases of any day that hold the same lines as the cart, whatever number their page states: their capture.json
-    holds the lines digest `lines`, or, written before that digest was kept, none and the cart digest `content`. But those of the
-    ids `held`, those that were replaced (_was_replaced), and those that could not answer a capture: a case whose saved result is
-    failed, which is never reused and keeps its result, and one that has no result that can be read. One pass over the
-    capture.json files of the cases root, made only when a new case with a PO is opened for the cart (precheck), which then
-    replaces those of them that may still be replaced."""
+def _same_lines(cases_root: Path, lines: str | None, content: str, host: str, held: set[str], now: datetime,
+                language: str) -> list[Case]:
+    """The capture cases of any day that hold the same lines as the cart at the same webshop, whatever number their page states:
+    their capture.json holds the lines digest `lines` and the host `host` (one that holds no host is matched by the digest alone),
+    or, written before that digest was kept, no lines digest and the cart digest `content`. `lines` is None for a cart without a
+    line: an empty cart table is never matched by its lines digest. But those of the ids `held`, those that were replaced
+    (_was_replaced), and those that could not answer a capture: a case whose saved result is failed, which is never reused and
+    keeps its result, and one that has no result that can be read. One pass over the capture.json files of the cases root, made
+    only when a new case with a PO is opened for the cart (precheck), which then replaces those of them that may still be
+    replaced."""
     cases = []
     for meta_path in sorted(cases_root.glob(f"*/{CAPTURE_FILE}")):
         if meta_path.parent.name in held:
             continue
         try:
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
-            if (meta["lines_digest"] != lines) if "lines_digest" in meta else (meta.get("cart_digest") != content):
+            if "lines_digest" not in meta:
+                if meta.get("cart_digest") != content:
+                    continue
+            elif lines is None or meta["lines_digest"] != lines or meta.get("host", host) != host:
                 continue
             case = load_case(cases_root, meta_path.parent.name)
         except (OSError, ValueError, AttributeError, TypeError):

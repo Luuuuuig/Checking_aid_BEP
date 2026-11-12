@@ -3311,6 +3311,152 @@ def test_a_failed_case_of_the_same_lines_is_never_replaced(capture_server, tmp_p
     assert not (r.settings.cases_root / no_result["case_id"] / "steps" / "08_result.json").exists()
 
 
+SHOP_A, SHOP_B = "http://shop-a.example.com/cart", "http://shop-b.example.org/cart"
+
+
+def test_the_cases_of_the_same_lines_are_matched_within_one_webshop(tmp_path, madeup_out):
+    """The clean-up's ruling D1 on what "one cart" is in Q13: a new case with a PO replaces a case of the same lines digest only
+    when that case's capture.json holds the host of the new case's page. The guess of a cart at one webshop stays when a cart of
+    the same lines at another webshop, which states its number, opens its case (the check's d2_basis: the two carts differ in the
+    price basis alone, which the digest leaves out); the cart with its number at the first webshop does replace it. A
+    capture.json without a host is matched as before. An empty cart table has no line, so it is never matched by its lines
+    digest: the case of an empty table stays, at another webshop and at its own."""
+    clock = [NINE]
+    with running(tmp_path, madeup_out) as r:
+        r.server.deps = r.deps.model_copy(update={"clock": lambda: clock[0]})
+        root = r.settings.cases_root
+        exported(r, tmp_path, "two.csv", {"260001": OWN, "260002": OWN})                    # two orders of today with the cart's items: a guess
+        per_one, per_hundred = cart_page(), cart_page(reference="260001").replace("<td>1</td></tr>", "<td>100</td></tr>", 1)
+        guess = post(r, per_one, url=SHOP_A)[1]
+        assert (guess["po_number"], texts_of(guess)[0]) == ("260002", NOT_SURE_NL.format(po="260002"))
+        assert capture_meta(r, guess["case_id"])["host"] == "shop-a.example.com"
+        clock[0] = NINE + timedelta(minutes=2)
+        other = post(r, per_hundred, url=SHOP_B)[1]                                         # the same four values per line, at another webshop
+        assert (other["po_number"], other["case_id"]) == ("260001", "260001_20261112T090200")
+        assert capture_meta(r, other["case_id"])["lines_digest"] == capture_meta(r, guess["case_id"])["lines_digest"]
+        assert "replaced_by" not in capture_meta(r, guess["case_id"]) and result_of(r, guess["case_id"])["status"] == "review"
+        assert guess["case_id"] in open_cases(r) and close_records(r, guess["case_id"]) == []
+        # a capture.json without a host: matched as before, by its lines digest alone
+        old = post(r, cart_page(("KM-9003", "KM-9004")), url=SHOP_A)[1]
+        meta = capture_meta(r, old["case_id"])
+        (root / old["case_id"] / "capture.json").write_text(json.dumps({k: v for k, v in meta.items() if k != "host"}), encoding="utf-8")
+        exported(r, tmp_path, "pair.csv", {"260003": ("KM-9003", "KM-9004")}, at=EIGHT - DAY)
+        typed = post(r, cart_page(("KM-9003", "KM-9004"), reference="260003"), url=SHOP_B)[1]
+        assert typed["po_number"] == "260003" and capture_meta(r, old["case_id"])["replaced_by"] == typed["case_id"]
+        # the cart with its number at the first webshop: the guess of that webshop is replaced
+        clock[0] = NINE + timedelta(minutes=4)
+        same_shop = post(r, cart_page(reference="260002"), url=SHOP_A)[1]
+        assert same_shop["po_number"] == "260002" and capture_meta(r, guess["case_id"])["replaced_by"] == same_shop["case_id"]
+        # two empty cart tables: the case of an empty table is never matched by its lines digest
+        empty = cart_page(())
+        assert read(tmp_path, empty).lines == []
+        nothing = post(r, empty, url=SHOP_A)[1]
+        assert nothing["verdict"] == "no_po" and nothing["case_id"] in open_cases(r)
+        for days, url in ((1, SHOP_A), (2, SHOP_B)):        # an empty table that states a known order's number, each on a day of its own
+            clock[0] = NINE + timedelta(days=days)          # (on one day the second would be answered by the first as the same cart)
+            stated = post(r, cart_page((), reference="260001", note=f"<!-- {url} -->"), url=url)[1]
+            assert (stated["po_number"], stated["case_id"][-15:-6]) == ("260001", f"202611{12 + days}T"), url
+            assert capture_meta(r, stated["case_id"])["lines_digest"] == capture_meta(r, nothing["case_id"])["lines_digest"]
+            assert capture_meta(r, stated["case_id"])["host"] == capture_meta(r, nothing["case_id"])["host"] or url == SHOP_B
+            assert "replaced_by" not in capture_meta(r, nothing["case_id"]) and result_of(r, nothing["case_id"])["status"] == "review"
+
+
+def test_a_case_of_the_same_lines_with_a_later_id_is_left_alone(capture_server, tmp_path):
+    """Q13 (b), the check's mutant A5: the cases of the same lines that a new case replaces are those not opened after it, by the
+    times in their ids. With a clock that stands still an untouched guess of the same lines can hold an id one second later than
+    the new case (its page was checked a second time after a run that failed): that guess is left alone."""
+    r = capture_server
+    exported(r, tmp_path, "earlier.csv", {"260001": OWN, "260002": ("KM-9003", "KM-9004")}, at=EIGHT - DAY)
+    healthy = r.server.deps
+
+    def failing(path, kind):
+        raise ReaderError("made-up reader failure")
+    r.server.deps = healthy.model_copy(update={"reader": failing})
+    failed = post(r, cart_page())[1]
+    r.server.deps = healthy
+    later = post(r, cart_page())[1]                                             # the same page after the failed run: a second later
+    assert (failed["verdict"], failed["case_id"], later["case_id"]) == ("failed", "260001_20261112T090000", "260001_20261112T090001")
+    assert texts_of(later)[0] == NOT_SURE_NL.format(po="260001")
+    left = folder_bytes(r, later["case_id"])
+    typed = post(r, cart_page(reference="260002"))[1]                           # the same lines with another order's number: opened at 9:00:00
+    assert (typed["po_number"], typed["case_id"]) == ("260002", "260002_20261112T090000")
+    assert folder_bytes(r, later["case_id"]) == left and "replaced_by" not in capture_meta(r, later["case_id"])
+    assert later["case_id"] in open_cases(r)
+
+
+def test_a_replaced_case_whose_result_says_review_is_finished_again(capture_server, tmp_path):
+    """Q11 (b), the check's mutant A17: a marked case that holds the record of its replacement is finished only when its result
+    is closed as well. When a close of the review page wrote its stale result between the finish's two writes, the result says
+    review while the replacement is the last record: the next capture that meets the case, and the server's start, close it
+    again."""
+    r = capture_server
+    html = cart_page()
+    grey = post(r, html)[1]
+    exported(r, tmp_path, "order.csv", {"250998": OWN})
+    found = post(r, html)[1]
+    case = load_case(r.settings.cases_root, grey["case_id"])
+    assert capture_meta(r, grey["case_id"])["replaced_by"] == found["case_id"] and result_of(r, grey["case_id"])["status"] == "closed"
+
+    def stale():
+        case.write_step(8, "result", result_of(r, grey["case_id"]) | {"status": "review"})
+        assert [record["action"] for record in close_records(r, grey["case_id"])][-1] == "replaced"
+    stale()
+    assert post(r, html.replace("<h1>", "<!-- other bytes --><h1>"))[1] == found          # a capture meets it
+    assert result_of(r, grey["case_id"])["status"] == "closed" and open_cases(r) == []
+    assert [(record["action"], record["by"]) for record in close_records(r, grey["case_id"])] == [("replaced", found["case_id"])] * 2
+    stale()
+    serve(r.settings, r.deps, "127.0.0.1", 0, False).server_close()                        # and the server's start
+    assert result_of(r, grey["case_id"])["status"] == "closed"
+    assert [record["action"] for record in close_records(r, grey["case_id"])] == ["replaced"] * 3
+
+
+def test_a_refused_decision_takes_only_its_own_line_out(capture_server, tmp_path, monkeypatch):
+    """The clean-up's ruling D3: a decision that is refused after its append, because the case was marked meanwhile, takes its own
+    line out of decisions.jsonl and no other. A line that another decision appended in the same instant, after this decision
+    measured the file and before it appended, stays: the file's tail is compared with the line that was appended."""
+    r = capture_server
+    html = cart_page()
+    grey = post(r, html)[1]
+    case, [item] = _items(r, grey["case_id"])
+    exported(r, tmp_path, "order.csv", {"250998": OWN})
+    append = app_module._append_line
+    path = case.root / "decisions.jsonl"
+
+    def with_another_in_between(target, line):                                  # between this decision's measuring and its append
+        monkeypatch.setattr(app_module, "_append_line", append)
+        decide(case, item["item_id"], "keep")                                   # another decision, taken
+        assert post(r, html)[0] == 200                                          # and the pre-check's mark
+        append(target, line)
+    monkeypatch.setattr(app_module, "_append_line", with_another_in_between)
+    with pytest.raises(ValueError, match="was replaced by another case, so no decision is taken on it"):
+        decide(case, item["item_id"], "unresolved")
+    [kept] = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    assert (kept["item_id"], kept["decision"]) == (item["item_id"], "keep") and path.read_bytes().endswith(b"}\n")
+    assert capture_meta(r, grey["case_id"])["replaced_by"].startswith("250998_")
+    # a mark that falls after the first look, on a file with a line in it and on a file cut off without a newline: the other
+    # line stays in both, and on the second the newline that the append put before its own line
+    held = path.read_bytes()
+    for before in (held, held.rstrip(b"\n")):
+        path.write_bytes(before)
+        monkeypatch.setattr(app_module, "marked_replaced", lambda root, looks=[]: looks.append(1) or len(looks) > 1)
+        with pytest.raises(ValueError, match="was replaced by another case"):
+            decide(case, item["item_id"], "confirm")
+        monkeypatch.undo()
+        assert path.read_bytes() == held
+    # a line that another decision appended behind this one's: nothing is cut off
+
+    def with_another_behind(target, line):
+        append(target, line)
+        append(target, '{"item_id": "RI9", "decision": "keep"}')
+    monkeypatch.setattr(app_module, "_append_line", with_another_behind)
+    monkeypatch.setattr(app_module, "marked_replaced", lambda root, looks=[]: looks.append(1) or len(looks) > 1)
+    with pytest.raises(ValueError, match="was replaced by another case"):
+        decide(case, item["item_id"], "confirm")
+    monkeypatch.undo()
+    assert path.read_bytes().startswith(held) and path.read_bytes().endswith(b'{"item_id": "RI9", "decision": "keep"}\n')
+    assert len(path.read_bytes().splitlines()) == 3
+
+
 def test_yesterdays_untouched_guess_is_replaced_when_the_same_cart_opens_a_case_today(tmp_path, madeup_out):
     """Ruling Q13 (b): when a new case with a PO is opened, every capture case of any day that holds the same lines and may still
     be replaced goes with the earlier cases of the page and the cart: yesterday's guess on which the buyer did nothing is finished
@@ -4333,7 +4479,10 @@ def test_the_documents_say_what_the_pre_check_does_with_the_order_of_a_cart():
                 "also when the cart equals the order and nothing differs: the case then has one item, this reason itself",
                 'a case in which you decided an item, also "Onopgelost", stays here as you left it, beside the new one'),
         "2.5": ('give it to the aid, on the tab "Bestanden" (section 2.7)', "Exactly one order whose export was given today",
-                '"250301-01", "250301A", "250301/2", "250301.1", "250301_01", "250301,5" and "250301:2"',
+                '"250301-01", "250301A", "250301/2", "250301.1", "250301_01", "250301,5", "250301:2", "250301;5" and "250301+01"',
+                "a number that goes on behind a letter, or behind any sign that a letter or a digit follows",
+                "earlier cases of the same cart lines at the same webshop that still wait untouched",
+                "The cases of a cart with the same lines at another webshop stay, and so does the case of an empty cart table.",
                 "A number the aid does not know as an order counts for nothing",
                 "or when a supplier's order confirmation of it came in", "make the export of the order right before you fill the cart",
                 "Until you closed the case the banner repeats the first line, in the words that fit at that moment",
@@ -4352,7 +4501,10 @@ def test_the_documents_say_what_the_pre_check_does_with_the_order_of_a_cart():
                  "whatever the buyer did on it, the rule of the paragraph above is asked again",
                  "A guess that answers so gives the first line of the kind found now",
                  "A guess on which something was done is never replaced and never changed",
-                 "`lines_digest`, that of the lines alone", "finishes as replaced the cases of any day that hold the same lines digest",
+                 "`lines_digest`, that of the lines alone", "finishes as replaced the cases of any day that hold the same lines digest and the same host",
+                 "A cart with the same lines at another webshop is another cart, whose cases stay",
+                 "a cart table without a line is matched by no lines digest, since every empty table has the same one",
+                 "or a capture that opens a new case with a PO of the same lines at the same webshop (on any day and with any stated number)",
                  "A `capture.json` written before the lines digest was kept is matched by its cart digest",
                  "each side looks twice", "A replacement that was cut off at any point after the mark is finished, never undone",
                  "whose result is closed while no close of the buyer closed it is such a cut-off, not a case the buyer closed",
@@ -4381,7 +4533,9 @@ def test_the_documents_say_what_the_pre_check_does_with_the_order_of_a_cart():
                 "A replaced case stays in its folder.",
                 "the page of the capture that was cut off does not finish it when that page came in other bytes than the earlier case's own page",
                 "A cart check compares the lines of the cart and nothing else of the page.",
-                '"250301_01", "250301,5", "250301:2"', "a hyphen, an en dash, a slash, a full stop, an underscore, a comma or a colon",
+                '"250301_01", "250301,5", "250301:2", "250301;5", "250301+01"',
+                "a sign being anything that is no letter, no digit and no space",
+                "when a new case with a PO of the same lines is opened at the same webshop",
                 "A guess on which the buyer decided an item is never replaced",
                 "has no supplier either, so with `first_cases_review` above 0 it always comes to the buyer"),
         "5": ("**The banner is grey, or amber with a guess.**", "for an order the aid holds already another export changes nothing",
@@ -4404,6 +4558,7 @@ def test_the_documents_say_what_the_pre_check_does_with_the_order_of_a_cart():
         assert she not in sections["7"], she
     docstring = " ".join(server_module.__doc__.split())
     for sentence in ("does not finish it when that page came in other bytes than the earlier case's own page", "(_same_lines)",
+                     "digest and the same host, the webshop of the page", "or a new case with a PO of the same lines, _same_lines)",
                      "One that was cut off at any point after the mark is finished, never undone", "each side looks twice"):
         assert sentence in docstring, sentence
     readme = " ".join(Path("aid/README.md").read_text(encoding="utf-8").split())

@@ -3138,7 +3138,7 @@ def shape(mailer) -> tuple:
         return ("microsoft", mailer.account, mailer.mailbox, mailer.sender)
     if isinstance(mailer, SmtpMailer):
         return ("smtp", mailer.host, mailer.port, mailer.user, mailer.password_env, mailer.sender)
-    return (type(mailer).__name__, mailer.out_dir, mailer.sender)
+    return (type(mailer).__name__, mailer.out_dir, mailer.sender, mailer.unrouted)      # with what it misses of a way to send (C12)
 
 
 @pytest.mark.parametrize("values, environ", [

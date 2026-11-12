@@ -403,6 +403,23 @@ def test_a_refused_to_recipient_fails_the_send_and_a_refused_copy_is_counted(smt
     with pytest.raises(MailerError, match=r"^SMTPRecipientsRefused: 1 of 1 To recipients refused$") as raised:
         mailer.send(MESSAGE)
     assert "example.com" not in str(raised.value) and "relaying" not in str(raised.value)
+
+
+def test_a_to_entry_that_holds_two_addresses_is_sent_only_when_the_server_takes_both(smtp, monkeypatch):
+    """Ruling C9: a supplier's setting may hold two addresses in one entry ("a@..., b@..."). Every address of it is named to the
+    server, and a refusal of any of them fails the send before the message is given, as for a To recipient of its own; a refused
+    address of a Cc entry that holds two counts as a refused copy."""
+    monkeypatch.setenv("AID_MAIL_PASSWORD", SECRET)
+    mailer = SmtpMailer("smtp.example.com", 587, "aid@example.com")
+    two = MESSAGE.model_copy(update={"to": ["sales@s07.example.com, Second <second@s07.example.com>"]})
+    smtp.refused = {"second@s07.example.com": (550, b"5.1.1 no such user")}
+    with pytest.raises(MailerError, match=r"^SMTPRecipientsRefused: 1 of 2 To recipients refused$") as raised:
+        mailer.send(two)
+    assert raised.value.kind == "refused" and [call[0] for call in smtp.calls].count("body") == 0
+    assert [call[1] for call in smtp.calls if call[0] == "rcpt"] == ["sales@s07.example.com", "second@s07.example.com", "buyer@example.com"]
+    copies = MESSAGE.model_copy(update={"cc": ["buyer@example.com, other@example.com"]})
+    smtp.refused = {"other@example.com": (550, b"5.1.1 no such user")}
+    assert mailer.send(copies).refused_cc == 1
     smtp.refused = {"sales@supplier.example.com": (450, b"4.2.1 mailbox busy")}             # a refusal for now: another try may pass
     with pytest.raises(MailerError, match=r"^SMTPRecipientsRefused: 1 of 1 To recipients refused$") as raised:
         mailer.send(MESSAGE)
@@ -578,6 +595,23 @@ def test_the_subject_of_an_automatic_reply_begins_with_its_words(tmp_path, subje
     assert is_auto_reply(write_eml(tmp_path / "m.eml", subject=subject)) is expected
 
 
+@pytest.mark.parametrize("subject, expected", [
+    ("[EXTERN] Automatisch antwoord: Vraag over orderbevestiging PO 250117", True),
+    ("EXTERN: Out of Office: Vraag over orderbevestiging PO 250117", True),
+    ("***SPAM*** Automatic reply: Vraag over orderbevestiging PO 250117", True),
+    ("[EXTERNAL] RE: Afwezig tot maandag 30 november", True),
+    ("[EXTERN] Re: Vraag over orderbevestiging PO 250117 - afwezig tot maandag", False),
+    ("EXTERN: Re: PO 250117: out of office furniture line 2", False),
+])
+def test_the_words_of_an_automatic_reply_stand_after_what_mail_programs_put_before_them(tmp_path, subject, expected):
+    """Ruling C1 to C12, C5: what may stand before the words of a bounce (the prefixes, tags in square brackets or between
+    asterisks, one word in capitals with a colon) may stand before the words of an automatic reply too, so that an out-of-office
+    notice behind a mail gateway that marks outside mail is filed as automatic and ends no wait; a reply that mentions the words
+    further on stays a reply."""
+    eml = write_eml(tmp_path / "m.eml", subject=subject, sender="sales@s17.example.com")
+    assert is_auto_reply(eml) is expected and kind_of(eml) == ("auto" if expected else "reply")
+
+
 def test_an_automatic_reply_is_filed_apart_and_ends_no_wait(tmp_path):
     """An out-of-office notice is neither a reply nor a bounce: file_reply puts it in messages/auto/, and the case waits until its
     deadline as if nothing had come."""
@@ -623,7 +657,7 @@ def test_pending_cases_are_in_folder_order_and_an_escalated_case_is_not_pending_
     record_escalation(earlier, "no answer in 3 working days", now)                           # the latest question: m1
     assert pending_asks(tmp_path / "cases", now, 3) == [later.case_id]
     assert [json.loads(line) for line in (earlier.root / "messages" / "escalated.jsonl").read_text(encoding="utf-8").splitlines()] == [
-        {"case_id": earlier.case_id, "message_id": "m1", "reason": "no answer in 3 working days", "at": now.isoformat()}]
+        {"case_id": earlier.case_id, "message_id": "m1", "reason": "no answer in 3 working days", "at": now.isoformat(), "decisions": 0}]
     assert pending_asks(tmp_path / "nothing", now, 3) == []
     record_sent(earlier, SentRecord(message_id="m2", to=["s@example.com"], subject="s", sent_at=now.isoformat(), template="quantity_unit"))
     assert pending_asks(tmp_path / "cases", datetime(2026, 12, 4, 9, 0), 3) == [later.case_id]       # Tuesday 1 December plus three
@@ -757,6 +791,35 @@ def test_a_reply_that_names_an_escalated_question_ends_no_wait(tmp_path):
     silent = sent_case(tmp_path, "250103", (SENT, "quantity_unit"), (MONDAY, "missing_info"))        # two silent questions: one escalation
     record_escalation(silent, "no answer in 3 working days", datetime(2026, 11, 26, 16, 1), "m2")   # of the latest covers both
     assert waiting(silent) == [] and silent.case_id not in pending_asks(tmp_path / "cases", datetime(2026, 12, 14, 9, 0), 3)
+
+
+def escalated_lines(case: Case) -> list[dict]:
+    return [json.loads(line) for line in (case.root / "messages" / "escalated.jsonl").read_text(encoding="utf-8").splitlines()]
+
+
+def test_an_escalation_names_the_questions_it_covers_and_a_later_change_of_the_wait_changes_no_cover(tmp_path):
+    """Ruling C3. What an escalation covers is recorded when it is made: its line names the questions it covers (the one it
+    names, and the earlier ones whose own wait had ended by then with the wait of that moment), and the number of lines the
+    buyer's decisions file held then. A later change of the wait changes no cover: made longer, a covered question does not come
+    back open; made shorter, an earlier question that was open when a later one bounced is not covered after the fact. A line
+    without the names (older data) is worked out as before, with the wait of the day."""
+    thursday = datetime(2026, 11, 12, 9, 0)                      # with three working days the waits end on Tuesday at 9:00 and 10:00
+    longer = sent_case(tmp_path, "250101", (thursday, "missing_info"), (thursday + timedelta(hours=1), "missing_info"))
+    at = datetime(2026, 11, 17, 10, 1)
+    record_escalation(longer, "no answer in 3 working days", at, "m2", working_days=3)
+    assert escalated_lines(longer) == [{"case_id": longer.case_id, "message_id": "m2", "reason": "no answer in 3 working days",
+                                        "at": at.isoformat(), "covers": ["m1", "m2"], "decisions": 0}]
+    assert waiting(longer) == [] and open_questions(longer.root / "messages", 5) == []
+    assert [wait for wait in ended_waits(tmp_path / "cases", datetime(2026, 11, 19, 9, 1), 5)[0] if wait.case_id == longer.case_id] == []
+    shorter = sent_case(tmp_path, "250102", (thursday, "missing_info"), (datetime(2026, 11, 16, 10, 0), "missing_info"))
+    (shorter.root / "decisions.jsonl").write_text('{"item_id": "RI1"}\n\n{"item_id": "RI2"}\n', encoding="utf-8")
+    record_escalation(shorter, "message bounced", datetime(2026, 11, 16, 10, 5), "m2", working_days=3)
+    assert [(line["covers"], line["decisions"]) for line in escalated_lines(shorter)] == [(["m2"], 3)]
+    assert [question.message_id for question in open_questions(shorter.root / "messages", 1)] == ["m1"]
+    older = sent_case(tmp_path, "250103", (thursday, "missing_info"), (thursday + timedelta(hours=1), "missing_info"))
+    record_escalation(older, "no answer in 3 working days", at, "m2")            # without the wait: the line names no cover
+    assert "covers" not in escalated_lines(older)[0]
+    assert waiting(older) == [] and [question.message_id for question in open_questions(older.root / "messages", 5)] == ["m1"]
 
 
 def test_a_bounce_of_an_earlier_question_does_not_bounce_the_next(tmp_path):

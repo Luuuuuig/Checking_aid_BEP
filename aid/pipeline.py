@@ -103,10 +103,16 @@ Execution carries out the actions in their order, so that R01, the routing's las
 A message goes through deps.mailer and is recorded in the result and the audit: the rule, the template, the items as the routing
 gives them, the finding ids, the status and the time. A message sent has the status "sent" and the message id, addressees, subject,
 time and refused copies (refused_cc, the buyer's copy that the server refused, which needs no review item) of the mailer's record,
-which then goes to the case's messages/sent.jsonl. Without a mailer each message is "not sent (no mailer)". A question to a supplier
-the settings give no address is "not sent (no address for the supplier)", and a message the mailer cannot send, whatever it raises,
-is "not sent (<the error's class>)", the audit keeping the error's text: each finding of the message is then a review item, "no
-address for the supplier" or "message not sent", and the run goes on. A mailer that could not confirm the hand-over of a message
+which then goes to the case's messages/sent.jsonl. Without a mailer each message is "not sent (no mailer)". A message that nothing
+can send is not asked (ruling C12 of the clean-up of Task 44): when the mailer, or for send_via "auto" the mailer it gives for this
+message, is the file mailer given for want of a way to send (its `unrouted`, mailer_of of aid/messaging/microsoft_mailer.py: no
+mailbox connected, or the mail server's password not set), nothing is written as a file and nothing counts as asked; the message
+is "not sent (no mailbox connected)" or "not sent (mail server password not set)", with that "cause" (UNROUTED_WORDS). With
+send_via "file" the file mailer writes by choice, and its message counts as sent. A question to a supplier the settings give no
+address is "not sent (no address for the supplier)", and a message the mailer cannot send, whatever it raises, is "not sent (<the
+error's class>)", the audit keeping the error's text: each finding of the message is then a review item, "no address for the
+supplier" or "message not sent" (also for a message nothing can send), and the run goes on, so that the case comes to the buyer,
+who chooses "Leverancier vragen" on the item once a way to send is there. A mailer that could not confirm the hand-over of a message
 (HandOverUnconfirmed of aid/messaging: the failure came at or after it) leaves it unknown whether the message left: the message is
 recorded as sent, with "unconfirmed" true and the id it would carry, and its record goes to sent.jsonl, so that a reply or a bounce
 that names it is filed with the case and belongs to its question, the case waits, and nothing is sent a second time under another
@@ -167,6 +173,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
+import pydantic
 from pydantic import BaseModel, SkipValidation
 
 from aid.audit import AUDIT_FILE, Audit
@@ -179,8 +186,9 @@ from aid.execution.by_hand import as_entered, filed_of, reconcile, withdraw
 from aid.execution.ops import WriteOp
 from aid.execution.writer import LOG_FILE, WriteLog, WriteLogEntry, Writer, WriterError, outcome_not_known
 from aid.matching import match_lines
-from aid.messaging import (MESSAGES, REAPPROVAL, REPLIES, SENT_FILE, EndedWait, HandOverUnconfirmed, Mailer, ended_waits, file_reply,
-                           kind_of, named_ids, outstanding_questions, record_escalation, record_sent, render, render_reapproval)
+from aid.messaging import (MESSAGES, QUESTIONS, REAPPROVAL, REPLIES, SENT_FILE, EndedWait, HandOverUnconfirmed, Mailer, decision_lines,
+                           ended_waits, escalation_line, file_reply, kind_of, named_ids, outstanding_questions, record_escalation, record_sent,
+                           render, render_reapproval)
 from aid.po_store import PoStore, PoVersion
 from aid.readers.cart import is_cart_page, read_cart_html
 from aid.readers.llm_client import LlmResponse, ReaderError
@@ -197,6 +205,9 @@ from aid.versioning import VersionChoice, select_version
 Status = Literal["closed", "review", "waiting", "failed"]
 RESULT_FILE = "08_result.json"                   # the result in steps/, which a case that was run holds
 NOT_SENT = "not sent (no mailer)"                # the status of a message recorded without a mailer
+# What a message is "not sent (...)" for when no mailer can send it, by the `unrouted` of the mailer given for want of a way to send
+# (aid/messaging) or the review page's mailer of a settings file it cannot read: the words of its status, its "cause" the key.
+UNROUTED_WORDS = {"no_mailbox": "no mailbox connected", "no_password": "mail server password not set", "settings": "settings cannot be read"}
 SENT = "sent"                                    # the status of a message the mailer sent
 UNADDRESSED = "no address for the supplier"      # why a question was not sent; with UNSENT, the reasons of their review items
 UNSENT = "message not sent"
@@ -211,6 +222,7 @@ NOT_APPLIED_LOOK = "not applied: an earlier change waits for a look in Exact"   
 CUT_OFF = "run cut off after writes: check the write log"     # the review item of a case whose run was cut off after a write or a message
 ANSWERED = "supplier answered: read the reply"   # the review item of a case whose supplier replied
 NO_QUESTION = "no question is open"              # the review item of a case that waited while no question of it was out (end_empty_waits)
+BUYER_RULE = "B01"                               # the rule id of the buyer's decisions on the review page (aid/review/close.py)
 # The reasons of version selection (aid/versioning.py) when it had no candidate: no version of the PO stored, and a quoted version
 # that is not stored ("quotes version 2, which is not stored").
 NO_STORED_VERSION, QUOTES_VERSION = "no stored version", "quotes version "
@@ -248,6 +260,13 @@ class ReviewItem(BaseModel):
     po_value: DocValue | None                    # the values of a flag; None for an uncompared item or the whole case
     doc_value: DocValue | None
     entry_id: str | None = None                  # the write-log entry of a write that waits for the buyer
+    # The question whose bounce or silence the item reports (escalate_pending), by its message id: on the item of a question the
+    # run asked itself the buyer can ask again (asked_by_the_run). None otherwise, and then left out of the JSON.
+    question: str | None = pydantic.Field(default=None, exclude_if=lambda value: value is None)
+    # True once the message the item reports as not sent was sent after all, or no item asks it any more (aid/review/close.py,
+    # ruling C7 of the clean-up of Task 44): the item is done, and the review page and the digest leave it out. Left out of the
+    # JSON while false.
+    settled: bool = pydantic.Field(default=False, exclude_if=lambda value: not value)
 
 
 class CaseResult(BaseModel):
@@ -572,6 +591,12 @@ class _Run:
         if self.deps.mailer is None:
             self.record(action, template, items, NOT_SENT)
             return
+        mailer = self.deps.mailer
+        route = mailer.current() if hasattr(mailer, "current") else mailer     # the mailer of send_via "auto" judges once per message
+        if (cause := getattr(route, "unrouted", None)) is not None:              # nothing can send it: no file, nothing counts as asked
+            self.record(action, template, items, f"not sent ({UNROUTED_WORDS.get(cause, cause)})", cause=cause)
+            self.review_findings(UNSENT, action.finding_ids)
+            return
         if made is not None:
             message = render_reapproval(made, self.ctx, self.settings).model_copy(update={"case_id": self.case.case_id})
         elif address := self.settings.supplier_emails.get(self.ctx.supplier):
@@ -583,7 +608,7 @@ class _Run:
             return
         unconfirmed = {}
         try:
-            sent = self.deps.mailer.send(message)
+            sent = route.send(message)
         except HandOverUnconfirmed as doubt:         # it may have left: recorded as sent, so that a reply finds its case, and not sent again
             sent, unconfirmed = doubt.record, {"unconfirmed": True}
         except Exception as error:                   # whatever stops the mailer, the run goes on and the buyer sends the message
@@ -774,8 +799,10 @@ def escalate_pending(cases_root: Path, now: datetime, settings: Settings) -> lis
     Only a case whose saved result (steps/08_result.json) is waiting is escalated, and only of such a case are the messages read
     (_may_wait): the result gets a review item without a finding for each of its questions whose wait ended, "message bounced" or
     "no answer in <n> working days" ("1 working day"), the status review and the digest line to match; the case's audit.json gets
-    {"case_id", "message_id", "reason", "at"} for each in its list "escalations", rewritten whole; and messages/escalated.jsonl
-    notes each question, so that it is escalated once while any other question waits on its own. A result that is closed, in
+    the line of each (escalation_line of aid/messaging: {"case_id", "message_id", "reason", "at", "covers", "decisions"}, the
+    questions it covers named with the wait of the settings) in its list "escalations", rewritten whole; and
+    messages/escalated.jsonl notes the same line, so that each question is escalated once while any other question waits on its
+    own, and a later change of the wait changes no cover. A result that is closed, in
     review or failed is left alone, and a case whose run was cut off before its result is left until it has one. A waiting case
     whose files cannot be read (its messages, a filed reply at that moment, its case.json, its result or its audit record) is
     returned as (case id, "unreadable: <the class of the error>"), and the others go on."""
@@ -802,12 +829,15 @@ def escalate_pending(cases_root: Path, now: datetime, settings: Settings) -> lis
             outcome.append((case_id, f"{UNREADABLE}: {type(error).__name__}"))
             continue
         reasons = [BOUNCED if wait.bounced else silent for wait in waits]
-        escalations = [{"case_id": case_id, "message_id": wait.message_id, "reason": reason, "at": now.isoformat()}
-                       for wait, reason in zip(waits, reasons)]
-        _back_to_the_buyer(case, result, reasons, settings.language)
+        try:
+            escalations = [escalation_line(case, reason, now, wait.message_id, days) for wait, reason in zip(waits, reasons)]
+        except (OSError, ValueError) as error:
+            outcome.append((case_id, f"{UNREADABLE}: {type(error).__name__}"))
+            continue
+        _back_to_the_buyer(case, result, reasons, settings.language, [wait.message_id for wait in waits])
         _write_json(audit_path, record | {"escalations": [*record.get("escalations", []), *escalations]})
-        for wait, reason in zip(waits, reasons):         # last: a case whose result is in review is not escalated again anyway
-            record_escalation(case, reason, now, wait.message_id)
+        for line in escalations:                         # last: a case whose result is in review is not escalated again anyway
+            record_escalation(case, line["reason"], now, line=line)
         outcome += [(case_id, reason) for reason in reasons]
     return sorted(outcome, key=lambda pair: pair[0])
 
@@ -851,16 +881,30 @@ def end_empty_waits(cases_root: Path, now: datetime, settings: Settings) -> list
     return outcome
 
 
-def _back_to_the_buyer(case: Case, result: CaseResult, reasons: list[str], language: str) -> None:
-    """Write the saved result of a waiting case back as one in review, with a review item without a finding for each reason."""
+def _back_to_the_buyer(case: Case, result: CaseResult, reasons: list[str], language: str, questions: list[str] | None = None) -> None:
+    """Write the saved result of a waiting case back as one in review, with a review item without a finding for each reason, which
+    names the question it reports when `questions` gives one for it."""
+    named = questions or [None] * len(reasons)
     items = [ReviewItem(item_id=f"RI{len(result.review_items) + number}", finding_id=None, reason=reason, field=None, po_value=None,
-                        doc_value=None) for number, reason in enumerate(reasons, 1)]
+                        doc_value=None, question=question) for number, (reason, question) in enumerate(zip(reasons, named), 1)]
     case.write_step(8, "result", result.model_copy(update={
         "review_items": [*result.review_items, *items], "status": "review",
         "digest_line": _digest_line(case.po_number, result.supplier, "review", result.write_entries, language, case.kind)}))
 
 
 _STATUS = re.compile(rb'"status":\s*"(\w+)"')    # the status of a saved result, which is its second field
+
+
+def asked_by_the_run(result: CaseResult, item: ReviewItem) -> dict | None:
+    """The message record of the question that the run asked itself and whose bounce or silence the review item reports (the
+    item's question, escalate_pending), when it is one: a question of the result's messages that was sent and that no close of the
+    review page sent (its rule is the routing's, not the buyer's B01). On such an item the buyer can ask again: the close sends that
+    question again, with its template and items, as a new question (ruling C4 of the clean-up of Task 44). None for any other
+    item, the item of a question asked on the page among them: there the buyer asks again on the item the question was about."""
+    if item.question is None:
+        return None
+    return next((message for message in result.messages if message.get("message_id") == item.question and message.get("status") == SENT
+                 and message.get("template") in QUESTIONS and message.get("rule_id") != BUYER_RULE), None)
 
 
 def _may_wait(result: Path) -> bool:
@@ -901,8 +945,10 @@ def file_answer(cases_root: Path, eml: Path, now: datetime, language: str = "nl"
     and the mailbox's, kind_of of aid/messaging) leave the result as it is. The saved result is read and the new one built before
     the e-mail is copied, and the copy is removed when the result cannot be written, so that an e-mail tried again leaves one copy:
     a result that cannot be read raises ValueError with nothing filed. A case whose sent.jsonl cannot be read is passed over, line
-    by line. The case's audit.json, when it has one, gets {"file", "filed_under", "at", "message_id"} in its list "answers", at
-    now: the message id is the question that the e-mail names first, the one it belongs to."""
+    by line. The case's audit.json, when it has one, gets {"file", "filed_under", "at", "message_id", "decisions"} in its list
+    "answers", at now: the message id is the question that the e-mail names first, the one it belongs to, and "decisions" the
+    number of the last line of the buyer's decisions file at that moment (decision_lines of aid/messaging; left out when that
+    file cannot be read), so that a choice recorded while the question was out is over with it (aid/review/close.py)."""
     own = tuple(own)
     named = named_ids(eml)
     found = _case_of(Path(cases_root), named) if named else None
@@ -945,6 +991,8 @@ def _note_answer(case: Case, filed: Path, now: datetime, question: str) -> None:
         return
     if isinstance(record, dict):
         answer = {"file": filed.name, "filed_under": filed.parent.name, "at": now.isoformat(), "message_id": question}
+        if (decisions := decision_lines(case.root)) is not None:     # how far the buyer's decisions went when it came (ruling C1)
+            answer["decisions"] = decisions
         _write_json(path, record | {"answers": [*record.get("answers", []), answer]})
 
 

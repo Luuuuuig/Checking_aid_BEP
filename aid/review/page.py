@@ -199,7 +199,10 @@ that change runs the function that shows the chosen case (show): with no case ch
 
 The choices shown. The radios of a case show the decisions that stand on its items (standing_decisions of aid/review/close.py):
 the last decision of each item, without a "Leverancier vragen" whose question has ended (answered, bounced, or without an answer
-in time). Such an item shows no choice, and what the buyer chooses then is a new decision, also "Leverancier vragen" again.
+in time), also one chosen again while that question was out. Such an item shows no choice, and what the buyer chooses then is a new
+decision, also "Leverancier vragen" again. "Leverancier vragen" is offered on an item with a finding, and on the item of a bounce
+or a silence of a question the run asked itself ("Bericht kwam terug", "Geen antwoord binnen de wachttijd"), where it asks that
+question again (the state's "again", ruling C4 of the clean-up of Task 44).
 
 Below the buyer's part, folded away under "Koppeling met Exact (bij de installatie)" above the connections, the block of the
 connection to Exact (aid/review/exact_settings.py has what it shows and writes; _exact_section builds it). It shows the state of the
@@ -349,7 +352,7 @@ from aid.execution.ops import WriteOp
 from aid.execution.writer import WriteLog, WriteLogEntry, WriterError, read_before
 from aid.messaging import FileMailer, Mailer, NoRoute
 from aid.messaging.microsoft_mailer import mailer_of
-from aid.pipeline import LOOKS, NOT_SENT, SENT, Deps
+from aid.pipeline import LOOKS, NOT_SENT, SENT, Deps, asked_by_the_run
 from aid.po_store import PoStore
 from aid.pricelist import (NameRefused, NoArticle, also_held, current_prices, is_supplier_name, keep_columns, kept_columns, others_asking,
                            remove_stored, store_current, stored_prices, supplier_named, with_others)
@@ -491,10 +494,11 @@ def _describe(row: FlagRow, strings: dict[str, str]) -> str:
     return " | ".join(parts)
 
 
-def _decision_choices(row: FlagRow, kind: str, strings: dict[str, str]) -> list[tuple[str, str]]:
-    """The decisions offered on a row: "ask" only on an item with a finding, not on a cart, and not on an item that asks for a
-    look in Exact after a write of the aid (see decide)."""
-    asked = bool(row.field) and kind != "cart" and row.reason not in LOOKS
+def _decision_choices(row: FlagRow, kind: str, strings: dict[str, str], again: bool = False) -> list[tuple[str, str]]:
+    """The decisions offered on a row: "ask" only on an item with a finding, or on the item of a bounce or a silence of a question
+    the run asked itself (`again`: asked_by_the_run of aid/pipeline.py, the question is asked again), not on a cart, and not on an
+    item that asks for a look in Exact after a write of the aid (see decide)."""
+    asked = (bool(row.field) or again) and kind != "cart" and row.reason not in LOOKS
     return [(strings[decision], decision) for decision in get_args(Decision) if decision != "ask" or asked]
 
 
@@ -558,8 +562,8 @@ def close_text(case: Case, deps: Deps, language: str) -> tuple[str, bool]:
     """Close the case and say how it went, in the language, and whether the case is still open (in review). A write that did not go
     through and a message not sent are named by fixed labels: the error's own text, which may name an endpoint or a folder of the
     settings, stays in the result, step 09 and the audit record. After a message not sent comes the kind of its cause with what to
-    do ("not_sent:<cause>", for each cause among the close's messages once, in the order they arose; a cause without a sentence,
-    as a supplier without an address, has its review item). A message of the close that the mailer wrote as a file, by the
+    do ("not_sent:<cause>", for each cause among the close's messages once, in the order they arose: a supplier without an address
+    among them, "no_address"; a cause without a sentence has its review item). A message of the close that the mailer wrote as a file, by the
     settings' choice (_files_folder), is said too, with the folder it lies in, and so is one whose hand-over was not confirmed.
     A close that did nothing because a reply filed with the case could not be read says to close again."""
     strings = STRINGS[language]
@@ -634,6 +638,13 @@ def undo_text(case: Case, entry_id: str, deps: Deps, language: str) -> str:
     return strings["undone"].format(write=_write_words(entry.op, strings))
 
 
+def _asked_again(case: Case) -> list[str]:
+    """The review items of the case on which "ask" asks a question of the run again: those of a bounce or a silence of a question
+    the run asked itself (asked_by_the_run of aid/pipeline.py)."""
+    result = _saved_result(case)
+    return [item.item_id for item in result.review_items if asked_by_the_run(result, item) is not None]
+
+
 def _article_items(case: Case) -> set[str]:
     """The review items whose waiting write is an article price, whose article box the page ticks."""
     kinds = {entry.entry_id: entry.op.kind for entry in WriteLog(case.root).entries()}
@@ -655,15 +666,16 @@ def import_gradio():
 class _Live:
     """The Deps the page's own actions use: those the page was built with, carrying the settings of its settings file once that file
     changed. now() looks at the file's modification time and reads a changed file again. A file that cannot be read keeps the
-    settings in use: one that does not validate is not read again until it changes once more, and one that cannot be opened (missing,
-    or held by another program for a moment) is tried again at the next look. take() puts the settings a save of the settings tab
-    wrote into the Deps at once, and settings() gives the settings in use, which the settings tab shows when its file cannot be
-    read. The Deps the page was given are never changed: a new copy carries the new settings. sending() gives the Deps of a close:
-    those of now(), with the mailer that `mailer` makes of their settings at that moment, when the page builds its own (see "The
-    mailer of a close" in the module docstring); without `mailer` the Deps keep the mailer they were given. While the settings
-    file cannot be read (unread: its last look failed), the Deps of a close carry a mailer that sends nothing and writes nothing
-    (NoRoute of aid/messaging), so that no message goes out by settings the owner has since changed: the route and the
-    supplier's address of the settings read before may be the very thing the edit was to correct."""
+    settings in use, and is read again at every look until it reads (unread): one that does not validate, and one that cannot be
+    opened or looked at (missing, or held by another program for a moment), also when it comes back with the time it had. take()
+    puts the settings a save of the settings tab wrote into the Deps at once, and settings() gives the settings in use, which the
+    settings tab shows when its file cannot be read. The Deps the page was given are never changed: a new copy carries the new
+    settings. sending() gives the Deps of a close: those of now(), with the mailer that `mailer` makes of their settings at that
+    moment, when the page builds its own (see "The mailer of a close" in the module docstring); without `mailer` the Deps keep
+    the mailer they were given. While the settings file cannot be read (unread: its last look failed), the Deps of a close carry
+    a mailer that sends nothing and writes nothing (NoRoute of aid/messaging), so that no message goes out by settings the owner
+    has since changed: the route and the supplier's address of the settings read before may be the very thing the edit was to
+    correct."""
 
     def __init__(self, deps: Deps, file: Path | None, mailer: Callable[[Deps], Mailer] | None = None):
         self.deps, self.file, self.modified, self.mailer = deps, file, _modified(file), mailer
@@ -673,10 +685,10 @@ class _Live:
     def now(self) -> Deps:
         with self.lock:
             modified = _modified(self.file)
-            if self.file is not None and (modified != self.modified or modified is None):
+            if self.file is not None and (modified != self.modified or modified is None or self.unread):
                 try:
                     self.deps = self.deps.model_copy(update={"settings": load_settings(self.file)})
-                except OSError:                  # not opened at this look: the settings in use are kept, and the next look tries again
+                except OSError:                  # not opened at this look: the settings in use are kept, and every look tries again
                     self.unread = True
                     return self.deps
                 except ValueError:               # a file that does not validate: the settings in use are kept
@@ -848,7 +860,7 @@ def _page(gr, deps: Deps, tab: _Tab):
             return (*nothing, STRINGS[language]["decisions_damaged"].format(file=DECISIONS_FILE))
         lists = {"flags": view.flags, "matches": view.matches, "uncompared": view.uncompared}
         state = {"case_id": case_id, "kind": case.kind, "lists": lists, "decisions": standing, "articles": _article_items(case),
-                 "entered": (view.entered, view.entered_unread)}
+                 "entered": (view.entered, view.entered_unread), "again": _asked_again(case)}
         images = [[Image.open(io.BytesIO(page)) for page in pages] for pages in (view.doc_pages, view.po_pages)]
         undo_choices = _undo_choices(case, STRINGS[language])
         selected = wanted if wanted in [entry_id for _, entry_id in undo_choices] else None
@@ -943,10 +955,13 @@ def _page(gr, deps: Deps, tab: _Tab):
                         chosen = current["decisions"].get(row.item_id, {})
                         with gr.Row():
                             gr.Markdown(_describe(row, strings))
-                            radio = gr.Radio(choices=_decision_choices(row, current["kind"], strings), value=chosen.get("decision"),
-                                             label=strings["decision"], key=f"decision-{current['case_id']}-{row.item_id}")
+                            again = row.item_id in current.get("again", ())
+                            # interactive given: the browser takes a rendered component that holds a value, and whose listener
+                            # it does not know yet, for a display only, and greys out a row on which a choice stands
+                            radio = gr.Radio(choices=_decision_choices(row, current["kind"], strings, again), value=chosen.get("decision"),
+                                             label=strings["decision"], key=f"decision-{current['case_id']}-{row.item_id}", interactive=True)
                             tick = gr.Checkbox(value=chosen.get("article_update", row.item_id in current["articles"]), label=strings["article_update"], visible=row.field == "price",
-                                               key=f"article-{current['case_id']}-{row.item_id}")
+                                               key=f"article-{current['case_id']}-{row.item_id}", interactive=True)
                         save = saver(current["case_id"], row.item_id)
                         radio.input(save, inputs=[radio, tick, language, state], outputs=[status, hint])
                         tick.input(save, inputs=[radio, tick, language, state], outputs=[status, hint])

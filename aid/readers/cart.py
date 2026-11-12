@@ -37,8 +37,9 @@ marked uncertain, never a guess; an empty cell is no value. The header values:
   else the title of the page, which has no source;
 - po_reference: the PO number of the first line that holds one (PO_NUMBER: a label that is a word of its own, as in "Uw referentie:
   250201", and a number of 6 to 8 digits that ends there, so that "Repo 250201" and "Order 1234567890" hold none, and nor does a
-  number that goes on, as "250301-01", "250301A", "250301/2", "250301.1", "250301_01", "250301,5" and "250301:2" do; "250301.",
-  "250301," and "250301:" at the end of a text or before a space are read);
+  number that goes on behind a letter or behind any sign with a letter or a digit after it, as "250301-01", "250301A",
+  "250301/2", "250301.1", "250301_01", "250301,5", "250301:2", "250301;5" and "250301+01" do; "250301.", "250301," and "250301:"
+  at the end of a text or before a space are read);
 - currency: the first currency code or word on the page (EUR, euro, USD, GBP), else the first currency sign (€, $, £);
 - capture_date: the date of <meta name="capture-date" content="...">, which has no source: its content read as a date, or the
   date part of a date and time ("2026-11-03T14:05:00+01:00": the text before the "T" or the space, when the rest is a time). When the
@@ -65,12 +66,13 @@ from aid.schema import (DocLine, DocValue, Document, SourceRef, normalize_basis,
 
 # A PO number on the page. The pattern of the settings (po_number_pattern) is not available to a reader, so it is written here, with
 # the words for a reference that a cart page uses. The label is a word of its own and the number takes every digit that follows it.
-# A number that goes on is another number, of which no part is read: one followed directly by a letter, or by a separator (a
-# hyphen, an en dash, a slash, a full stop, an underscore, a comma, a colon) with a letter or a digit right behind it ("250301A",
-# "250301-01", "250301/2", "250301.1", "250301_01", "250301,5", "250301:2"). A separator at the end of the text or before a space,
-# as the full stop that ends a sentence, ends the number.
+# A number that goes on is another number, of which no part is read: one followed directly by a letter, or by a sign of any kind
+# with a letter or a digit right behind it ("250301A", "250301-01", "250301/2", "250301.1", "250301_01", "250301,5", "250301:2",
+# "250301;5", "250301+01", "250301(2)", and so with a non-breaking hyphen, a minus sign or a dash). A sign is anything that is no
+# letter, no digit and no space. A sign at the end of the text or before a space, as the full stop that ends a sentence, ends the
+# number, and so does a space.
 PO_NUMBER = re.compile(r"(?<![^\W\d_])(?i:PO|Inkooporder|Bestelling|Bestellung|Order|Referentie|Reference)[\s:#-]*(\d{6,8})"
-                       r"(?!\d|[^\W\d_]|[-\u2013/._,:][^\W_])")
+                       r"(?!\d|[^\W\d_]|(?:[^\w\s]|_)[^\W_])")
 # The folded header texts of the columns the reader knows, by the field each column holds; a cart table has the first three.
 COLUMN_NAMES = {"item_code": ("artikel", "item", "product", "artikelnummer"), "quantity": ("aantal", "qty", "quantity", "menge"),
                 "unit_price": ("prijs", "price", "preis"), "description": ("omschrijving", "description", "beschreibung"),

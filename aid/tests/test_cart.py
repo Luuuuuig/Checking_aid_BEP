@@ -12,7 +12,7 @@ import pytest
 from aid.evalscripts.score_reading import expected_fields, score_reading
 from aid.pipeline import GUESSED_CART, GUESSED_PO, GUESSED_RULE, read_with_parser, run_case
 from aid.pricelist import RULE_ID as PRICE_LIST_RULE
-from aid.readers.cart import first_heading, is_cart_page, read_cart_html, read_cart_image
+from aid.readers.cart import PO_NUMBER, first_heading, is_cart_page, read_cart_html, read_cart_image
 from aid.readers.llm_client import ReaderError, RecordedClient
 from aid.schema import DocLine, DocValue, Document, SourceRef
 from aid.review.i18n import STRINGS, reason_label
@@ -219,6 +219,36 @@ def test_a_number_that_goes_on_is_no_po_number(tmp_path):
                  "Uw referentie: 250301\u2013", "Uw referentie: 250301 \u2013 2 regels", "Uw referentie: 250301, 5 regels"):
         assert cart_page(tmp_path, ROW, before=f"<p>{text}</p>").po_reference.value == "250301", text
     assert cart_page(tmp_path, ROW, before="<p>Uw referentie: 250301-01</p><p>Inkooporder 250302</p>").po_reference.value == "250302"
+
+
+def test_a_number_ends_at_no_sign_that_a_letter_or_a_digit_follows(tmp_path):
+    """The clean-up's ruling D2: the stated number ends only where what follows is no digit and no letter, and no sign of any kind
+    with a letter or a digit right after it: not only the seven separators of Q22, also a non-breaking hyphen, a minus sign, an em
+    dash, a semicolon, a plus, a backslash, a bracket or a star. A sign with a space or the end behind it ends the number, and so
+    does a space: the 34 strings of the check read as before."""
+    for text in ("Uw referentie: 250301\u201101", "Uw referentie: 250301\u221201", "Uw referentie: 250301\u201401", "Uw referentie: 250301;5",
+                 "Uw referentie: 250301+01", "Uw referentie: 250301\\01", "Uw referentie: 250301(2)", "Uw referentie: 250301*2",
+                 "Uw referentie: 250301\u2010x", "Uw referentie: 250301=7", "Uw referentie: 250301#a", "Uw referentie: 250301&1"):
+        assert PO_NUMBER.search(text) is None, text
+        assert cart_page(tmp_path, ROW, before=f"<p>{text.replace('&', '&amp;')}</p>").po_reference == DocValue(), text
+    as_before = [
+        ("Uw referentie: 250301_01", None), ("Uw referentie: 250301,5", None), ("Uw referentie: 250301:2", None),
+        ("Uw referentie: 250301\u20132", None), ("Uw referentie: 250301.", "250301"), ("Uw referentie: 250301,", "250301"),
+        ("Uw referentie: 250301:", "250301"), ("Uw referentie: 250301. Dank u", "250301"), ("Uw referentie: 250301, zie onder", "250301"),
+        ("Uw referentie: 250301: spoed", "250301"), ("Uw referentie: 250301-01", None), ("Uw referentie: 250301A", None),
+        ("Uw referentie: 250301/2", None), ("Uw referentie: 250301.1", None), ("Uw referentie: 250301- vandaag", "250301"),
+        ("Uw referentie: 250301 - 01", "250301"), ("Uw referentie: 250301_ x", "250301"), ("Uw referentie: 250301_", "250301"),
+        ("Uw referentie: 250301\u2013 morgen", "250301"), ("Uw referentie: 250301/", "250301"), ("Order 2503011234", None),
+        ("Order 25030112", "25030112"), ("Order 25030", None), ("PO-250301", "250301"), ("PO#250301;", "250301"), ("Repo 250301", None),
+        ("Uw referentie: 250301_A", None), ("Uw referentie: 250301:b", None), ("Uw referentie: 250301,x", None),
+        ("Uw referentie: 250301\u2013A", None), ("Uw referentie: 250301.-01", "250301"), ("Uw referentie: 250301__01", "250301"),
+        ("Inkooporder 250301)", "250301"), ("Bestelling: 250301\n250302", "250301")]
+    assert len(as_before) == 34
+    for text, number in as_before + [("Uw referentie: 250301;", "250301"), ("Uw referentie: 250301+ meer", "250301"),
+                                     ("Uw referentie: 250301\u2014 morgen", "250301"), ("Uw referentie: 250301 01", "250301")]:
+        found = PO_NUMBER.search(text)
+        assert (found[1] if found else None) == number, text
+        assert cart_page(tmp_path, ROW, before=f"<p>{text}</p>").po_reference.value == number, text
 
 
 def test_form_controls_give_the_text_they_show(tmp_path):
