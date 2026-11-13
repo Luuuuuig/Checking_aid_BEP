@@ -1472,8 +1472,10 @@ WAITING = {"nl": "De zaak is nu: wacht op de leverancier.", "en": "The case is n
 NOT_SENT = "De zaak is nu: ter beoordeling. Een bericht is niet verzonden; de zaak blijft ter beoordeling."
 # What the page says after a message that was not sent, by the kind of its cause, and after one written as a file by the settings'
 # choice (the review round of Task 44; the tests of that round, further on, spell every sentence out).
-LAPSED = f"{NOT_SENT} De aanmelding bij Microsoft is verlopen: meld u opnieuw aan onder Instellingen, Koppelingen, en sluit de zaak opnieuw af."
-NO_MAILBOX = f"{NOT_SENT} Er is geen postvak verbonden: verbind een postvak onder Instellingen, Koppelingen, en sluit de zaak opnieuw af."
+LAPSED = f"{NOT_SENT} De aanmelding bij Microsoft is verlopen: meld u opnieuw aan onder Instellingen, Postvak en AI, en sluit de zaak opnieuw af."
+NO_MAILBOX = f"{NOT_SENT} Er is geen postvak verbonden: verbind een postvak onder Instellingen, Postvak en AI, en sluit de zaak opnieuw af."
+STORE = (f"{NOT_SENT} De beveiligde opslag van de aanmelding op deze pc is geweigerd: er is niets verzonden. Onder Instellingen, Postvak "
+         "en AI, staat waarom en wat u kunt doen; sluit de zaak daarna opnieuw af.")
 
 
 def filed(language: str, folder: str = "cases/outbox") -> str:
@@ -1669,8 +1671,10 @@ def test_a_question_the_mailbox_cannot_take_keeps_the_case_in_review(tmp_path, m
 
 def test_a_store_of_the_sign_in_that_the_pc_refuses_leaves_the_question_unsent(tmp_path, madeup_out):
     """The page cannot make the account of the sign-in, because its store lies inside a git work tree, and the store the runner
-    would take is one this process may not use either: the question is not sent, as while a sign-in has lapsed, the case stays in
-    review with the page's sentence, and the record names neither the folder of the store nor its kind."""
+    would take is one this process may not use either: the question is not sent, as while a sign-in has lapsed, and the case stays
+    in review. The page says that the store of this PC was refused and where the settings tab says why (finding 2 of the owner's
+    test), not that the sign-in lapsed, which no sign-in puts right; the record names neither the folder of the store nor its kind,
+    and keeps the cause "store"."""
     path, d, _, _ = sending_page(tmp_path, madeup_out, send_via="microsoft", **MAILBOX)
     work_tree = tmp_path / "work-tree"
     (work_tree / ".git").mkdir(parents=True)
@@ -1681,9 +1685,10 @@ def test_a_store_of_the_sign_in_that_the_pc_refuses_leaves_the_question_unsent(t
     page = build_app(d, settings_file=path, environ={}, session=mailbox,
                      account_factory=lambda tenant, client: MicrosoftAccount(tenant, client, SecretStore(work_tree / "secrets")))
     c = asked_on_the_page(d, madeup_out)
-    assert pressed_close(page, c) == (LAPSED, c.case_id)
+    assert pressed_close(page, c) == (STORE, c.case_id) and STRINGS["nl"]["not_sent:store"] in STORE
     [message] = c.read_step("close")["records"][-1]["messages"]
     assert message["status"] == "not sent (SignInLapsed)" and message["error"].startswith("SignInLapsed: StoreRefused: ")
+    assert message["cause"] == "store"
     assert str(tmp_path) not in message["error"] and "made-up-kind" not in message["error"]
     assert mailbox.calls == [] and sent_lines(c) == [] and not (tmp_path / "cases" / "outbox").exists() and not (work_tree / "secrets").exists()
 
@@ -1908,14 +1913,14 @@ CLOSED = {"nl": "De zaak is nu: afgesloten.", "en": "The case is now: closed."}
 UNSENT = {"nl": f"{REVIEW['nl']} Een bericht is niet verzonden; de zaak blijft ter beoordeling.",
           "en": f"{REVIEW['en']} A message was not sent; the case stays for review."}
 CAUSES = {      # the kind of cause the page names after a message that was not sent, as the rulings give them
-    "sign_in": ("De aanmelding bij Microsoft is verlopen: meld u opnieuw aan onder Instellingen, Koppelingen, en sluit de zaak opnieuw af.",
-                "The Microsoft sign-in has lapsed: sign in again under Settings, Connections, and close the case again."),
+    "sign_in": ("De aanmelding bij Microsoft is verlopen: meld u opnieuw aan onder Instellingen, Postvak en AI, en sluit de zaak opnieuw af.",
+                "The Microsoft sign-in has lapsed: sign in again under Settings, Mailbox and AI, and close the case again."),
     "unreachable": ("Het postvak of de mailserver was niet bereikbaar: sluit de zaak later opnieuw af.",
                     "The mailbox or the mail server could not be reached: close the case again later."),
     "refused": ("Het postvak of de mailserver weigerde het bericht: geef dit door aan de onderzoeker.",
                 "The mailbox or the mail server refused the message: pass this on to the researcher."),
-    "no_mailbox": ("Er is geen postvak verbonden: verbind een postvak onder Instellingen, Koppelingen, en sluit de zaak opnieuw af.",
-                   "No mailbox is connected: connect a mailbox under Settings, Connections, and close the case again."),
+    "no_mailbox": ("Er is geen postvak verbonden: verbind een postvak onder Instellingen, Postvak en AI, en sluit de zaak opnieuw af.",
+                   "No mailbox is connected: connect a mailbox under Settings, Mailbox and AI, and close the case again."),
     "no_password": ("Het wachtwoord van de mailserver is niet ingesteld: geef dit door aan de onderzoeker.",
                     "The mail server's password is not set: pass this on to the researcher."),
     "settings": ("De instellingen kunnen nu niet worden gelezen: er is niets verstuurd. Geef dit door aan de onderzoeker.",
@@ -3410,3 +3415,762 @@ def test_a_look_kept_and_a_question_that_cannot_be_sent_in_one_close(tmp_path, m
     assert record["settled"] == [unsent] and record["unsent_questions"] == {} and record["carried_out"].keys() == {behind.item_id}
     assert [e.op.kind for e in WriteLog(c.root).entries()] == ["po_line_price", "po_line_price"]      # put back once, nothing attached
     assert len(sent_lines(c)) == 1 and len(list(outbox.glob("*.eml"))) == 1 and c.read_step("result")["status"] == "waiting"
+
+
+# --- the strip, the fold, the case list and the timer of the tab "Beoordelen" (findings 3, 4, 5 and 8 of the owner's test) ---
+
+from html import unescape  # noqa: E402
+
+from aid.case import open_case  # noqa: E402
+from aid.review.page import SETTINGS_TAB  # noqa: E402
+from aid.tests.test_status import launcher_state  # noqa: E402
+
+
+def name_of(block) -> str:
+    """A component of the page by its elem_id, else its label, else its value, else its class ("State", "Timer", the page's "Tabs",
+    and the status line, which starts empty, as "Markdown")."""
+    if isinstance(block, (gradio.State, gradio.Timer, gradio.Tabs)):
+        return getattr(block, "elem_id", None) or type(block).__name__
+    value = getattr(block, "value", None)
+    return block.elem_id or getattr(block, "label", None) or (str(value) if value not in (None, "") else type(block).__name__)
+
+
+def handler_of(page, name: str):
+    [found] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == name]
+    return found
+
+
+def called(page, name: str, *args) -> dict:
+    """What the page's handler of that name gives for the inputs, by the name of each output (name_of)."""
+    f = handler_of(page, name)
+    given = f.fn(*args)
+    return dict(zip([name_of(block) for block in f.outputs], given if len(f.outputs) > 1 else (given,), strict=True))
+
+
+def bound(page, name: str) -> tuple:
+    """The triggers of the page's handler of that name, sorted, with the names of its inputs and of its outputs."""
+    f = handler_of(page, name)
+    return (sorted((name_of(page.blocks[block]) if block != page._id else "page", event) for block, event in f.targets),
+            [name_of(block) for block in f.inputs], [name_of(block) for block in f.outputs])
+
+
+def table_rows(html: str) -> list[list[str]]:
+    """The rows of the fold's table, the head first, each as the texts of its cells."""
+    return [[unescape(re.sub(r"<[^>]+>", "", cell)) for cell in re.findall(r"<t[hd][^>]*>(.*?)</t[hd]>", row)]
+            for row in re.findall(r"<tr>(.*?)</tr>", html)]
+
+
+def digest_state(d, minutes_ago: int, **notes):
+    """The runner's digest state in the cases root with these notes, written `minutes_ago` minutes before the clock of deps(): the
+    time of the runner's last pass."""
+    path = d.settings.cases_root / "digest_state.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"last_sent": None, "reported": [], "skipped": []} | notes), encoding="utf-8")
+    os.utime(path, ((NOW - timedelta(minutes=minutes_ago)).timestamp(),) * 2)
+    return path
+
+
+def test_the_strip_counts_the_cases_by_state_and_names_the_problems(tmp_path, madeup_out):
+    """Findings 3, 4 and 8. The strip at the top of "Beoordelen" counts the cases by their state, names what is wrong with the
+    assistant and ends with its last pass, its mailbox, its reader and the time it was read, all from the aid's own files; the fold
+    under it lists every case with the time it came in, its order, its state and what the buyer does, a case closed by itself apart
+    from one the buyer closed. Copilot shows as failing by the runner's own note in its digest state ("copilot"), never by another
+    key and never by its error's text. No name in the strip reads as a rule code, and on a public share link it holds the chips only."""
+    nl = STRINGS["nl"]
+    path, d, page, _ = sending_page(tmp_path, madeup_out, reader="llm", **MAILBOX)
+    review, _ = run(d, madeup_out, "MU07", "250107")
+    failed = [run(d, madeup_out, "MU05", "250105", now=NOW + timedelta(minutes=minute))[0] for minute in (1, 2)]
+    itself, result = run(d, madeup_out, "MU02", "250102", now=NOW + timedelta(minutes=3))       # closed by the aid itself
+    by_you, _ = run(d, madeup_out, "MU07", "250107", now=NOW + timedelta(minutes=4))
+    decide(by_you, "RI1", "confirm")                                                             # its price change goes on the list
+    waiting, kept = run(d, madeup_out, "MU01", "250101", now=NOW + timedelta(minutes=5))
+    waiting.write_step(8, "result", kept.model_copy(update={"status": "waiting"}))
+    open_case(d.settings.cases_root, "confirmation", [madeup_out / "MU03_conf.pdf"], "250103", NOW + timedelta(minutes=6))   # read next pass
+    on_the_list = d.model_copy(update={"writer": PreparedWriter(d.settings.cases_root / "prepared")})       # as the page's own close
+    assert result.status == "closed" and close_case(by_you, on_the_list).status == "closed"
+    assert not (itself.root / "steps" / "09_close.json").exists()
+    shown = called(page, "strip_ticked", "nl")
+    strip = shown["review-strip"]
+    for words in (nl["chip:review"].format(n=1), nl["chip:failed"].format(n=2), nl["chip:waiting"].format(n=1),
+                  nl["chip:closed_itself"].format(n=1), nl["problem:no_pass_ever"], nl["strip_mailbox:off"], nl["strip_reader:llm"],
+                  nl["strip_updated"].format(time="09:00")):
+        assert words in strip, words
+    assert "Laatste ronde" not in strip and "Copilot werkt niet" not in strip and "Wacht op Copilot" not in strip
+    assert shown["review-all"] == {"__type__": "update", "label": nl["review_all"].format(n=7)}
+    assert table_rows(shown["review-all-table"]) == [
+        [nl["all_column:time"], nl["all_column:case"], nl["all_column:state"], nl["all_column:todo"]],
+        ["12-11-2026 09:02", "Inkooporder 250105 (S05)", nl["state:failed"], nl["todo:failed"]],
+        ["12-11-2026 09:01", "Inkooporder 250105 (S05)", nl["state:failed"], nl["todo:failed"]],
+        ["12-11-2026 09:00", "Inkooporder 250107 (S07)", nl["state:review"], nl["todo:review"]],
+        ["12-11-2026 09:06", "Inkooporder 250103", nl["state:reading"], nl["todo:reading"]],
+        ["12-11-2026 09:05", "Inkooporder 250101 (S01)", nl["state:waiting"], nl["todo:waiting"]],
+        ["12-11-2026 09:04", "Inkooporder 250107 (S07)", nl["state:closed_by_you"], nl["todo:closed_changes"]],
+        ["12-11-2026 09:03", "Inkooporder 250102 (S02)", nl["state:closed_itself"], nl["todo:nothing"]]]
+    for key in ("copilot_down", "copilot"):              # the runner writes the second only; the first is a key it never writes
+        digest_state(d, 1, **{key: {"since": "2026-11-12T08:15:00", "error": "Copilot refused: 400 BadRequest", "waiting": 1}})
+        shown = called(page, "strip_ticked", "nl")
+        strip = shown["review-strip"]
+        assert nl["strip_pass"].format(time="08:59") in strip and nl["problem:no_pass_ever"] not in strip
+        assert ("Copilot werkt niet" in strip) is ("Wacht op Copilot" in strip) is (key == "copilot"), key
+    assert nl["problem:copilot_down_one"].format(since="12-11-2026 08:15") in strip and nl["chip:copilot_wait"].format(n=1) in strip
+    assert "BadRequest" not in strip and "400" not in strip
+    assert not CODE.search(strip) and not CODE.search(shown["review-all-table"])
+    _, _, shared, _ = sending_page(tmp_path, madeup_out, share=True, reader="llm", **MAILBOX)
+    chips = called(shared, "strip_ticked", "nl")
+    assert set(chips) == {"review-strip", "review-all", "review-all-table"}                     # no button on a share link
+    assert nl["chip:failed"].format(n=2) in chips["review-strip"] and nl["chip:copilot_wait"].format(n=1) in chips["review-strip"]
+    for words in ("Laatste ronde", "Copilot werkt niet", "Bijgewerkt", nl["strip_reader:llm"]):
+        assert words not in chips["review-strip"], words
+    assert table_rows(chips["review-all-table"]) == table_rows(shown["review-all-table"])
+
+
+def test_the_timer_refreshes_beoordelen_without_touching_the_chosen_case(tmp_path, madeup_out):
+    """Finding 5. One timer at the top level of the page reads the strip and the case list again every 30 seconds, as the page's load,
+    "Lijst vernieuwen" and the language switch do, through two handlers of its own, which reach no part of the view of the case and
+    never set the case chosen; the list of the tab "In Exact invoeren", whose read empties the buyer's ticks, is not on the timer. A
+    new case is listed and counted in the tab's label; the case list is sent only when it changed; and a case on screen that left the
+    list (closed in another browser tab) keeps its place in it, with a line that says so, until another case is chosen."""
+    nl = STRINGS["nl"]
+    path, d, page, _ = sending_page(tmp_path, madeup_out)
+    [timer] = [block for block in page.blocks.values() if isinstance(block, gradio.Timer)]
+    assert timer.value == 30 and timer in page.children
+    every = [("Lijst vernieuwen", "click"), ("Taal", "change"), ("Timer", "tick"), ("page", "load")]
+    assert bound(page, "strip_ticked") == (every, ["Taal"], ["review-strip", "review-strip-action", "review-all", "review-all-table"])
+    assert bound(page, "queue_ticked") == (every, ["Taal", "Zaak", "State"],
+                                           ["Beoordelen", "Zaak", "review-pick-row", "review-pick", "review-oldest", "review-gone", "State"])
+    queue = handler_of(page, "queue_ticked")
+    assert queue.inputs[2] is queue.outputs[-1] and {target[0] for target in handler_of(page, "refreshed").targets} < {target[0] for target in queue.targets}
+    view = {id(block) for block in handler_of(page, "show").outputs}
+    for name in ("strip_ticked", "queue_ticked"):
+        assert handler_of(page, name).show_progress == "hidden" and not view & {id(block) for block in handler_of(page, name).outputs}, name
+    for name in ("list_opened", "show", "refreshed"):
+        assert len([f for f in page.fns.values() if getattr(f.fn, "__name__", "") == name]) == 1, name
+    assert ("Timer", "tick") not in bound(page, "list_opened")[0]
+    first, _ = run(d, madeup_out, "MU07", "250107")                               # the case the buyer has open
+    label = "PO 250107 (S07), 2026-11-12 09:00, 1 punt"
+    ticked = called(page, "queue_ticked", "nl", first.case_id, None)
+    assert ticked["Beoordelen"] == {"__type__": "update", "label": "Beoordelen (1)"}
+    assert ticked["Zaak"] == {"__type__": "update", "choices": [(label, first.case_id)]}
+    assert ticked["review-pick-row"] == {"__type__": "update"}                   # case_framed alone shows and hides it
+    assert ticked["review-gone"] == {"__type__": "update", "value": "", "visible": False}
+    second, _ = run(d, madeup_out, "MU07", "250107", now=LATER)                   # a new case comes in meanwhile
+    ticked = called(page, "queue_ticked", "nl", first.case_id, ticked["State"])
+    assert ticked["Beoordelen"] == {"__type__": "update", "label": "Beoordelen (2)"}
+    assert ticked["Zaak"] == {"__type__": "update", "choices": [(label, first.case_id), (label.replace("09:00", "09:01"), second.case_id)]}
+    again = called(page, "queue_ticked", "nl", first.case_id, ticked["State"])
+    assert again["Zaak"] == {"__type__": "update"} and again["State"] == ticked["State"]          # nothing changed: nothing is sent
+    decide(first, "RI1", "keep")
+    assert close_case(first, d).status == "closed"                               # closed in another browser tab
+    gone = called(page, "queue_ticked", "nl", first.case_id, again["State"])
+    assert gone["Zaak"] == {"__type__": "update", "choices": [(label.replace("09:00", "09:01"), second.case_id), (f"{label}, afgesloten", first.case_id)]}
+    assert gone["review-gone"] == {"__type__": "update", "value": nl["review_gone"].format(po="250107"), "visible": True}
+    assert gone["Beoordelen"] == {"__type__": "update", "label": "Beoordelen (1)"} and gone["review-pick-row"] == {"__type__": "update"}
+    assert called(page, "refreshed", "nl", first.case_id)["Zaak"] == {"__type__": "update", "choices": gone["Zaak"]["choices"]}   # kept there too
+    chosen = called(page, "queue_ticked", "nl", second.case_id, gone["State"])    # another case chosen: the closed one leaves the list
+    assert chosen["Zaak"] == {"__type__": "update", "choices": [(label.replace("09:00", "09:01"), second.case_id)]}
+    assert chosen["review-gone"] == {"__type__": "update", "value": "", "visible": False}
+
+
+def test_a_tick_reads_no_unchanged_case_again(tmp_path, madeup_out, monkeypatch):
+    """B1.4 and section 8 of the redesign: a tick of the page reads only what changed. The case list of each tick is read through a
+    cache of the cases offered, as the strip is read through the status's own: with nothing changed between two ticks, the second
+    opens no result and no write log of any case, neither for the list nor for the strip; a case whose result a close wrote again
+    is read again, alone, and the list follows it."""
+    import builtins
+    import io
+    path, d, page, _ = sending_page(tmp_path, madeup_out)
+    review = [run(d, madeup_out, "MU07", "250107", now=NOW + timedelta(minutes=minute))[0] for minute in range(3)]
+    run(d, madeup_out, "MU05", "250105", now=NOW + timedelta(minutes=3))                       # a failed case
+    opened: list[Path] = []
+    real = io.open
+
+    def counting(file, mode="r", *args, **kwargs):
+        if isinstance(file, (str, os.PathLike)) and Path(file).name in ("08_result.json", "write_log.jsonl") and "r" in mode:
+            opened.append(Path(file))
+        return real(file, mode, *args, **kwargs)
+
+    first = called(page, "queue_ticked", "nl", None, None)
+    called(page, "strip_ticked", "nl")
+    monkeypatch.setattr(io, "open", counting)
+    monkeypatch.setattr(builtins, "open", counting)
+    again = called(page, "queue_ticked", "nl", None, first["State"])
+    called(page, "strip_ticked", "nl")
+    assert again["Zaak"] == {"__type__": "update"} and opened == []          # nothing changed: nothing read, nothing sent
+    decide(review[0], "RI1", "keep")
+    assert close_case(review[0], d).status == "closed"                     # closed in another browser tab
+    opened.clear()
+    closed = called(page, "queue_ticked", "nl", None, again["State"])
+    assert opened and {(path.parents[1] if path.name == "08_result.json" else path.parent).name for path in opened} == {review[0].case_id}
+    assert [value for _, value in closed["Zaak"]["choices"]][:2] == [case.case_id for case in review[1:]]
+
+
+def test_the_review_label_is_the_same_from_the_timer_and_the_language_switch(tmp_path, madeup_out):
+    """Two handlers write the label of the tab "Beoordelen" at a language switch: the page's anonymous relabel of the tabs and the
+    timer's queue_ticked. Both give the same label, the number of cases that wait for the buyer (in review, or failed and not noted
+    as handled) behind the tab's name and no number when none waits, so that the label is right whichever runs last. A case that
+    waits for its purchase order is not counted."""
+    path, d, page, _ = sending_page(tmp_path, madeup_out)
+    [review_tab] = [block for block in page.blocks.values() if isinstance(block, gradio.Tab) and block.label == STRINGS["nl"]["review_tab"]]
+    [relabel] = [f.fn for f in page.fns.values() if f.outputs[:1] == [review_tab] and getattr(f.fn, "__name__", "") == "<lambda>"]
+    for language, label in (("nl", "Beoordelen"), ("en", "Review")):
+        assert relabel(language)[0] == called(page, "queue_ticked", language, None, None)["Beoordelen"] == {"__type__": "update", "label": label}
+    run(d, madeup_out, "MU07", "250107")
+    run(d, madeup_out, "MU05", "250105", now=LATER)
+    run(without_po(d, tmp_path), madeup_out, "MU01", "250101", now=LATER + timedelta(minutes=1))
+    for language, label in (("nl", "Beoordelen (2)"), ("en", "Review (2)")):
+        assert relabel(language)[0] == called(page, "queue_ticked", language, None, None)["Beoordelen"] == {"__type__": "update", "label": label}
+    assert relabel("en")[1] == {"__type__": "update", "label": STRINGS["en"]["settings_tab"]}
+    assert (STRINGS["nl"]["review_tab_count"], STRINGS["en"]["review_tab_count"]) == ("Beoordelen ({n})", "Review ({n})")
+
+
+def test_the_pick_line_and_the_oldest_case(tmp_path, madeup_out):
+    """Finding 5. With no case chosen, a line under "Zaak" says to choose one, or that none waits, and "Oudste zaak openen" chooses the
+    oldest case in review, else the oldest failed one, sending the case list with it so that the case is among its choices; the line
+    and the button go once a case is chosen (case_framed, on the change of "Zaak" beside show)."""
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    path, d, page, _ = sending_page(tmp_path, madeup_out)
+    assert bound(page, "oldest_opened") == ([("review-oldest", "click")], ["Taal"], ["Zaak"])
+    assert bound(page, "case_framed") == ([("Zaak", "change")], ["Zaak", "Taal"], ["review-pick-row", "review-pick", "review-oldest", "review-gone",
+                                                                                 "review-failed", "Zaak afsluiten", "review-handled", "### Besluiten"])
+    assert bound(page, "show")[0] == [("Zaak", "change")] and handler_of(page, "case_framed").show_progress == "hidden"
+    none = called(page, "case_framed", None, "nl")
+    assert none["review-pick-row"] == {"__type__": "update", "visible": True} and none["review-pick"] == nl["review_pick_none"]
+    assert none["review-oldest"] == {"__type__": "update", "value": nl["review_open_oldest"], "visible": False}
+    assert called(page, "oldest_opened", "nl")["Zaak"] == {"__type__": "update"}                 # none waits: nothing is chosen
+    failed, _ = run(d, madeup_out, "MU05", "250105")                                            # the oldest, but failed
+    older, _ = run(d, madeup_out, "MU07", "250107", now=LATER)
+    newer, _ = run(d, madeup_out, "MU07", "250107", now=LATER + timedelta(minutes=1))
+    opened = called(page, "oldest_opened", "nl")["Zaak"]
+    assert opened["value"] == older.case_id and [value for _, value in opened["choices"]] == [older.case_id, newer.case_id, failed.case_id]
+    waits = called(page, "case_framed", None, "en")
+    assert waits["review-pick"] == en["review_pick"] and waits["review-oldest"] == {"__type__": "update", "value": en["review_open_oldest"], "visible": True}
+    chosen = called(page, "case_framed", older.case_id, "nl")
+    assert chosen["review-pick-row"] == {"__type__": "update", "visible": False} and chosen["review-gone"] == {"__type__": "update", "value": "", "visible": False}
+    for case in (older, newer):
+        decide(case, "RI1", "keep")
+        assert close_case(case, d).status == "closed"
+    assert called(page, "oldest_opened", "nl")["Zaak"] == {"__type__": "update", "choices": [(f"PO 250105 (S05), 2026-11-12 09:00, {nl['case_failed_look']}",
+                                                                                             failed.case_id)], "value": failed.case_id}
+    assert (nl["review_pick"], nl["review_pick_none"], nl["review_open_oldest"]) == (
+        "Kies een zaak bij Zaak, of open de oudste.", "Er wachten geen zaken op uw besluit. Een nieuwe zaak verschijnt hier vanzelf.", "Oudste zaak openen")
+
+
+def test_the_strip_action_names_where_it_leads_and_opens_the_settings_tab(tmp_path, madeup_out):
+    """While the assistant has a problem, one button beside the strip names the place that handles the most urgent one ("Stand van de
+    assistent openen" for a runner that made no pass, "Postvak en AI openen" for the store of the sign-in, the mailbox or Copilot)
+    and opens the tab Instellingen (strip_acted). It is not there on a public share link or without a settings file."""
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    path, d, page, _ = sending_page(tmp_path, madeup_out)
+    (tmp_path / "share").mkdir()
+    _, _, shared, _ = sending_page(tmp_path / "share", madeup_out, share=True)
+    for other in (shared, build_app(d)):
+        assert not [block for block in other.blocks.values() if getattr(block, "elem_id", None) == "review-strip-action"]
+        assert "strip_acted" not in {getattr(f.fn, "__name__", "") for f in other.fns.values()}
+    assert bound(page, "strip_acted") == ([("review-strip-action", "click")], ["Taal"], ["Tabs", "settings-sections"])
+    assert called(page, "strip_acted", "nl")["Tabs"] == {"__type__": "update", "selected": SETTINGS_TAB} and SETTINGS_TAB == "instellingen"
+    shown = called(page, "strip_ticked", "nl")
+    assert shown["review-strip-action"] == {"__type__": "update", "value": nl["act:assistant"], "visible": True}      # no pass yet
+    digest_state(d, 11)
+    shown = called(page, "strip_ticked", "en")
+    assert en["problem:no_pass"].format(time="12-11-2026 08:49") in shown["review-strip"]
+    assert shown["review-strip-action"] == {"__type__": "update", "value": en["act:assistant"], "visible": True}
+    digest_state(d, 1)
+    assert called(page, "strip_ticked", "nl")["review-strip-action"] == {"__type__": "update", "visible": False}    # nothing wrong
+    (tmp_path / ".git").mkdir()          # the store of the sign-in (tmp_path/default-secrets in the tests) lies in a git work tree
+    shown = called(page, "strip_ticked", "nl")
+    assert nl["problem:store"] in shown["review-strip"]
+    assert shown["review-strip-action"] == {"__type__": "update", "value": nl["act:connections"], "visible": True}
+    assert (nl["act:assistant"], nl["act:connections"]) == ("Stand van de assistent openen", "Postvak en AI openen")
+
+
+def test_the_strip_action_opens_the_section_that_handles_the_problem(tmp_path, madeup_out, monkeypatch):
+    """Findings 2, 6 and 8. The strip's button opens the tab Instellingen on the section of it that handles the most urgent problem,
+    the one the button names, as the aid's files tell it at the press (strip_acted): "Stand van de assistent" for a runner that made
+    no pass, a STOP file or a runner the launcher gave up, "Postvak en AI" for a refused store of the sign-in, a lapsed sign-in of
+    the mailbox and Copilot, failing or refusing documents. A press after the problem went opens "Stand van de assistent", which
+    says what the assistant is doing now. That section is read again after every press (assistant_shown, chained after it), and
+    nothing asks Microsoft."""
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    path, d, page, _ = sending_page(tmp_path, madeup_out, reader="llm", mail_folder="AAMkADMadeUpFolder0001=",
+                                    mail_folder_name="Orderbevestigingen", **MAILBOX)
+    [tabs] = [block for block in page.blocks.values() if isinstance(block, gradio.Tabs) and block.elem_classes == ["page-tabs"]]
+    [sections] = [block for block in page.blocks.values() if isinstance(block, gradio.Tabs) and block.elem_id == "settings-sections"]
+    assert {"koppelingen", "assistent"} <= {section.id for section in sections.children}
+    acted = handler_of(page, "strip_acted")
+    assert [(page.blocks[block].elem_id, event) for block, event in acted.targets] == [("review-strip-action", "click")]
+    assert [name_of(block) for block in acted.inputs] == ["Taal"] and acted.outputs == [tabs, sections] and acted.show_progress == "hidden"
+    [after] = [f for f in page.fns.values() if f.trigger_after == acted._id]
+    assert getattr(after.fn, "__name__", "") == "assistant_shown" and after.inputs == acted.inputs and after.show_progress == "hidden"
+    assert [block.elem_id for block in after.outputs] == ["assistant-lines", "assistant-log", "assistant-log-help"]
+
+    def no_network(*args, **kwargs):
+        raise OSError("no network in the tests")
+
+    def made_one(*args, **kwargs):
+        raise AssertionError("the strip's button made a Microsoft account")
+
+    monkeypatch.setattr(socket.socket, "connect", no_network)
+    monkeypatch.setattr(socket, "create_connection", no_network)
+    monkeypatch.setattr(MicrosoftAccount, "__init__", made_one)
+
+    def pressed(language: str = "nl") -> tuple[str, str | None]:
+        """The section a press opens now, with the tab Instellingen, and the label of the button as the strip shows it now (None
+        while it is hidden)."""
+        page_tab, section = acted.fn(language)
+        assert page_tab == {"__type__": "update", "selected": SETTINGS_TAB}
+        return section["selected"], called(page, "strip_ticked", language)["review-strip-action"].get("value")
+
+    assistant, connections = ("assistent", nl["act:assistant"]), ("koppelingen", nl["act:connections"])
+    assert pressed() == assistant                                          # no pass yet
+    digest_state(d, 11)
+    assert pressed() == assistant                                          # no pass for 11 minutes
+    digest_state(d, 1)
+    (path.parent / "STOP").write_text("", encoding="utf-8")
+    assert pressed() == assistant                                          # a STOP file next to the settings file
+    (path.parent / "STOP").unlink()
+    launcher_state(path, NOW.timestamp() - 1, starts=6, given_up=True)
+    assert pressed() == assistant                                          # the launcher gave the runner up
+    launcher_state(path, NOW.timestamp() - 1)
+    assert pressed() == ("assistent", None)                               # nothing wrong: no button, and the state of the assistant
+    (tmp_path / ".git").mkdir()                                            # the store of the sign-in lies inside a git work tree
+    assert pressed() == connections
+    digest_state(d, 11)
+    assert pressed() == assistant                                          # the most urgent first, as the button names it
+    (tmp_path / ".git").rmdir()
+    digest_state(d, 1, mailbox_lapsed={"since": "2026-11-12T08:40:00", "logged": "2026-11-12T08:40:00"})
+    assert pressed() == connections                                        # the sign-in of the mailbox lapsed
+    digest_state(d, 1, copilot_cases={"250105_20261112T080000": {"refused": True}})
+    assert pressed("en") == ("koppelingen", en["act:connections"])        # Copilot refuses documents
+    digest_state(d, 1, copilot={"since": "2026-11-12T08:15:00", "error": "Copilot refused: 400 BadRequest", "waiting": 0})
+    assert pressed() == connections                                        # Copilot fails as a whole
+    lines, log, help_line = after.fn("nl")                                 # the section read again after the press
+    assert f"**{nl['reader_state:down'].format(since='12-11-2026 08:15', cause='code 400', n=0)}**" in lines.split("\n\n")
+    assert (log, help_line) == (nl["assistant_log_none"], nl["assistant_log_help"]) and "BadRequest" not in lines
+
+
+def test_a_failed_case_marked_handled_in_another_tab_leaves_no_notice_in_the_old_language(tmp_path, madeup_out):
+    """A failed case on screen that another browser tab notes as handled: the language switch hides its notice, as choosing it now
+    would (case_framed), rather than leave it in the language it was shown in, and the line under the list says that it was noted as
+    handled, not that it was closed or replaced. A document left to the buyer, noted as handled meanwhile, goes the same way."""
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    path, d, page, _ = sending_page(tmp_path, madeup_out)
+    ids = left_to_the_buyer(d, madeup_out, tmp_path)
+    failed, _ = run(d, madeup_out, "MU05", "250105")
+    assert called(page, "case_framed", failed.case_id, "nl")["review-failed"]["visible"] is True
+    called(page, "handled_marked", failed.case_id, "nl")                                     # another browser tab
+    hidden = {"__type__": "update", "value": "", "visible": False}
+    assert called(page, "failed_relabel", "en", failed.case_id) == {"review-failed": hidden,
+                                                                     "review-handled": {"__type__": "update", "value": en["handled_go"]}}
+    for strings, language in ((nl, "nl"), (en, "en")):
+        gone = called(page, "queue_ticked", language, failed.case_id, None)["review-gone"]
+        assert gone == {"__type__": "update", "value": strings["review_gone_handled"].format(po="250105"), "visible": True}, language
+    assert (nl["review_gone_handled"], en["review_gone_handled"]) == (
+        "Inkooporder {po} staat niet meer op de lijst: de zaak is intussen als afgehandeld genoteerd. Kies een andere zaak.",
+        "Purchase order {po} is no longer on the list: it was noted as handled meanwhile. Choose another case.")
+    called(page, "handled_marked", ids[SCAN], "nl")
+    assert called(page, "failed_relabel", "en", ids[SCAN])["review-failed"] == hidden
+
+
+def test_only_the_choice_of_a_case_shows_or_hides_the_pick_row(tmp_path, madeup_out):
+    """The row with the line under "Zaak" and "Oudste zaak openen" stands while no case is chosen, and follows the value of "Zaak"
+    alone: case_framed, bound to its change, shows and hides it, and a tick never does, since the case the tick was sent with may
+    have been chosen meanwhile (a page opened from the digest's link, which chooses its case once the page has loaded, or a choice
+    made while a tick was on its way), so that the row never stands above an open case until the next tick."""
+    path, d, page, _ = sending_page(tmp_path, madeup_out)
+    case, _ = run(d, madeup_out, "MU07", "250107")
+    for chosen in (None, case.case_id):
+        assert called(page, "queue_ticked", "nl", chosen, None)["review-pick-row"] == {"__type__": "update"}, chosen
+    assert called(page, "case_framed", None, "nl")["review-pick-row"] == {"__type__": "update", "visible": True}
+    assert called(page, "case_framed", case.case_id, "nl")["review-pick-row"] == {"__type__": "update", "visible": False}
+
+
+class RefusedMailbox:
+    """The work mailbox of the runner's Deps, which sends nothing: the store of the sign-in refused (the mailer's SignInLapsed of the
+    kind "store", with its fixed text), or the sign-in lapsed (of the kind "sign_in")."""
+
+    def __init__(self, kind: str):
+        self.kind = kind
+
+    def send(self, message):
+        from aid.messaging.microsoft_mailer import STORE_REFUSED, SignInLapsed
+        raise SignInLapsed(STORE_REFUSED if self.kind == "store" else "SignInNeeded: made-up", kind=self.kind)
+
+
+def test_a_refused_store_is_no_lapsed_sign_in_on_the_strip_after_a_digest(tmp_path, madeup_out):
+    """Finding 2. A digest that the work mailbox cannot send because this PC refuses the store of the sign-in goes to the outbox, as
+    for a lapsed sign-in, but it is no lapse of the mailbox: the runner notes no lapse in its digest state and logs one line in a run
+    of the loop, so that neither the strip nor "Stand van de assistent" tells the buyer that the sign-in lapsed and to sign in again,
+    which cannot help; they tell the refused store (here one inside a git work tree, which the page tells by itself). A digest that a
+    lapsed sign-in cannot send still notes the lapse."""
+    from aid import runner
+    from aid.messaging.microsoft_mailer import STORE_REFUSED
+    nl = STRINGS["nl"]
+    path, d, page, _ = sending_page(tmp_path, madeup_out, send_via="microsoft", digest="per_case", mail_folder="AAMkADMadeUpFolder0001=",
+                                    mail_folder_name="Orderbevestigingen", **MAILBOX)
+    review, _ = run(d, madeup_out, "MU07", "250107")
+    (tmp_path / ".git").mkdir()                          # the owner's case: .git above the store of the sign-in
+    root = d.settings.cases_root
+    loop = runner._Loop(d.model_copy(update={"mailer": RefusedMailbox("store")}))
+    for minute in (0, 1):                                # two digests in one run of the loop
+        runner._digest(loop, root, {"last_sent": None, "reported": [review.case_id], "skipped": []}, NOW + timedelta(minutes=minute))
+    saved = json.loads((root / "digest_state.json").read_text(encoding="utf-8"))
+    assert "mailbox_lapsed" not in saved and saved["last_sent"] == (NOW + timedelta(minutes=1)).isoformat()
+    assert len(list((root / "outbox").glob("*.eml"))) == 2
+    [line] = (root / "runner.log").read_text(encoding="utf-8").splitlines()
+    assert line == f"{NOW.isoformat()} mailbox: the digest is written to outbox/, as the work mailbox cannot send it: {STORE_REFUSED}"
+    strip = called(page, "strip_ticked", "nl")["review-strip"]
+    assert nl["problem:store"] in strip and nl["problem:lapsed"] not in strip
+    lines = called(page, "sections_relabelled", "nl")["assistant-lines"].split("\n\n")
+    assert f"**{nl['assistant_store']}**" in lines and not [text for text in lines if "verlopen" in text]
+    lapsed = runner._Loop(d.model_copy(update={"mailer": RefusedMailbox("sign_in")}))
+    runner._digest(lapsed, root, {"last_sent": None, "reported": [review.case_id], "skipped": []}, NOW + timedelta(minutes=2))
+    assert "mailbox_lapsed" in json.loads((root / "digest_state.json").read_text(encoding="utf-8"))
+    assert nl["problem:lapsed"] in called(page, "strip_ticked", "nl")["review-strip"]
+
+
+def test_a_failed_case_is_offered_with_why_and_can_be_marked_handled(tmp_path, madeup_out):
+    """Finding 3. A case the assistant could not finish is offered after the cases offered_cases gives, as "mislukt: zelf bekijken";
+    chosen, it shows its supplier's document and why it failed in words, never by its error, and "Als afgehandeld noteren" in place
+    of "Zaak afsluiten". The press writes handled_by_hand.json into the case's folder with the time of the page's clock, and no other
+    file, and the case leaves the list and the counts. offered_cases and selection_from_query stay as they are, so that the digest's
+    links do not change."""
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    path, d, page, _ = sending_page(tmp_path, madeup_out)
+    failed, result = run(d, madeup_out, "MU05", "250105")                  # the parser has no template for the made-up scan
+    review, _ = run(d, madeup_out, "MU07", "250107", now=LATER)
+    assert result.status == "failed" and result.error.startswith("ReaderError: no template for ")
+    root = d.settings.cases_root
+    listed = [("PO 250107 (S07), 2026-11-12 09:01, 1 punt", review.case_id), ("PO 250105 (S05), 2026-11-12 09:00, mislukt: zelf bekijken", failed.case_id)]
+    assert called(page, "refreshed", "nl", None)["Zaak"]["choices"] == listed == called(page, "queue_ticked", "nl", None, None)["Zaak"]["choices"]
+    assert handler_of(page, "opened").fn("nl", SimpleNamespace(query_params={}))[0]["choices"] == listed
+    assert called(page, "refreshed", "en", None)["Zaak"]["choices"][-1] == ("PO 250105 (S05), 2026-11-12 09:00, failed: look yourself", failed.case_id)
+    assert [summary.case_id for summary in offered_cases(root)] == [review.case_id]
+    assert selection_from_query(root, {"case": failed.case_id}) == (None, None)
+    framed = called(page, "case_framed", failed.case_id, "nl")
+    notice = nl["failed_notice"].format(reason=nl["fail:parser"])
+    assert notice.startswith("**De assistent kon deze zaak niet afmaken:** de assistent herkent de opmaak van dit document niet. Bekijk")
+    assert framed["review-failed"] == {"__type__": "update", "value": notice, "visible": True}
+    assert framed["Zaak afsluiten"] == framed["### Besluiten"] == {"__type__": "update", "visible": False}
+    assert framed["review-handled"] == {"__type__": "update", "visible": True}
+    other = called(page, "case_framed", review.case_id, "nl")
+    assert other["review-failed"] == {"__type__": "update", "value": "", "visible": False} and other["review-handled"] == {"__type__": "update", "visible": False}
+    assert other["Zaak afsluiten"] == other["### Besluiten"] == {"__type__": "update", "visible": True}
+    english = called(page, "failed_relabel", "en", failed.case_id)
+    assert english == {"review-failed": {"__type__": "update", "value": en["failed_notice"].format(reason=en["fail:parser"])},
+                       "review-handled": {"__type__": "update", "value": en["handled_go"]}}
+    assert called(page, "failed_relabel", "nl", review.case_id)["review-failed"] == {"__type__": "update", "value": "", "visible": False}
+    assert bound(page, "failed_relabel") == ([("Taal", "change")], ["Taal", "Zaak"], ["review-failed", "review-handled"])
+    shown = handler_of(page, "show").fn(failed.case_id, "nl")
+    assert shown[-1] == "" and len(shown[1]) == 1 and shown[2] == [] and shown[3]["data"] == []       # the supplier's document, no rows
+    assert bound(page, "handled_marked") == ([("review-handled", "click")], ["Zaak", "Taal"], ["Markdown", "Zaak"])
+    before = {path: path.read_bytes() for path in root.rglob("*") if path.is_file()}
+    marked = called(page, "handled_marked", failed.case_id, "nl")
+    after = {path: path.read_bytes() for path in root.rglob("*") if path.is_file()}
+    mark = failed.root / "handled_by_hand.json"
+    assert set(after) == {*before, mark} and all(after[path] == before[path] for path in before)
+    assert json.loads(after[mark]) == {"at": "2026-11-12T09:00:00"}
+    assert marked["Markdown"] == nl["handled_done"].format(po="250105") == ("Inkooporder 250105 staat als door u afgehandeld genoteerd en staat "
+                                                                            "niet meer op de lijst.")
+    assert marked["Zaak"] == {"__type__": "update", "choices": listed[:1], "value": None}
+    assert called(page, "handled_marked", failed.case_id, "en")["Markdown"] == en["handled_done"].format(po="250105")     # another browser tab
+    assert mark.read_bytes() == after[mark]                                                        # the first mark counts
+    assert called(page, "queue_ticked", "nl", None, None)["Beoordelen"] == {"__type__": "update", "label": "Beoordelen (1)"}
+    strip = called(page, "strip_ticked", "nl")
+    assert "Mislukt" not in strip["review-strip"]
+    assert [row[2:] for row in table_rows(strip["review-all-table"])[1:] if row[1] == "Inkooporder 250105 (S05)"] == [[nl["state:handled"], nl["todo:nothing"]]]
+    assert [summary.case_id for summary in offered_cases(root)] == [review.case_id] and selection_from_query(root, {"case": failed.case_id}) == (None, None)
+
+
+# --- the documents the intake left to the buyer, on the tab "Beoordelen" (finding 9 of the owner's test) ---
+
+import io  # noqa: E402
+
+from PIL import Image  # noqa: E402
+
+from aid.readers.pdf_text import page_count  # noqa: E402
+from aid.review import page as page_module  # noqa: E402
+from aid.review import status as aid_status  # noqa: E402
+from aid.sources.mailbox import REVIEW_ITEMS_FILE, scan_folder  # noqa: E402
+from aid.tests.test_status import email  # noqa: E402
+
+RAW = ("text layer", "class unknown", "PO number")      # of the scan's own reasons, which the page never shows
+SCAN, MANY, PHOTO = "MU05_conf.pdf", "twee.eml/MU01_conf.pdf", "foto.eml/CART02.png"     # as the list of skipped items names them
+
+
+def left_to_the_buyer(d, madeup_out, tmp_path) -> dict[str, str]:
+    """Three documents that open no case, scanned as the runner scans the watched folder of the page's settings, with a PO store that
+    holds no order: the made-up scan MU05, which has no text layer, and an e-mail that names two purchase orders, at NOW, and an
+    e-mail with a photo of a page a minute later. The scan leaves each to the buyer in review_items.jsonl and moves each file to
+    processed/ in the watched folder. Returns the id of each document by its file as the list of skipped items names it."""
+    inbox, root = d.settings.watched_folder, d.settings.cases_root
+    inbox.mkdir(parents=True, exist_ok=True)
+    shutil.copy(madeup_out / "MU05_conf.pdf", inbox)
+    email(inbox / "twee.eml", "Bevestiging PO 250101 en PO 250102", madeup_out / "MU01_conf.pdf")
+    none = PoStore(tmp_path / "no-orders")
+    first = scan_folder(inbox, none, root, d.settings, NOW)
+    email(inbox / "foto.eml", "Bevestiging", madeup_out / "CART02.png")
+    second = scan_folder(inbox, none, root, d.settings, LATER)
+    assert first.skipped + second.skipped == [(SCAN, "no text layer; class unknown"), (MANY, "more than one PO number"),
+                                              (PHOTO, "no text layer; class unknown")]
+    assert sorted(path.name for path in (inbox / "processed").iterdir()) == ["MU05_conf.pdf", "foto.eml", "twee.eml"]
+    return {item.file: item.item_id for item in aid_status.review_items(root, NOW)}
+
+
+def images_of(path) -> list[bytes]:
+    """The pixels of each page of the document as the page renders it, at 100 dpi."""
+    pages = [render_page(path, number, dpi=100) for number in range(1, page_count(path) + 1)] if path.suffix == ".pdf" else [path.read_bytes()]
+    return [Image.open(io.BytesIO(page)).tobytes() for page in pages]
+
+
+def test_a_document_left_to_the_buyer_is_offered_after_the_failed_cases_and_named_in_words(tmp_path, madeup_out):
+    """Finding 9. A document the intake left to the buyer to look at himself, which opens no case (a scan that nobody could class, a
+    confirmation that names more than one purchase order), is offered in the case list after the failed cases, oldest first, as
+    "Document MU05_conf.pdf, 2026-11-12 09:00, zelf bekijken". The strip counts it ("Zelf bekijken: 3"), the tab's label counts it
+    with the cases that wait for the buyer, and the fold lists it with its state and what the buyer does, among the cases by its
+    time: all in words, never by the scan's own reason. "Oudste zaak openen" takes the oldest case in review, else the oldest failed
+    case, else the oldest document."""
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    path, d, page, _ = sending_page(tmp_path, madeup_out)
+    ids = left_to_the_buyer(d, madeup_out, tmp_path)
+    failed, _ = run(d, madeup_out, "MU05", "250105")
+    review, _ = run(d, madeup_out, "MU07", "250107", now=LATER)
+    documents = [(f"Document {SCAN}, 2026-11-12 09:00, zelf bekijken", ids[SCAN]), (f"Document {MANY}, 2026-11-12 09:00, zelf bekijken", ids[MANY]),
+                 (f"Document {PHOTO}, 2026-11-12 09:01, zelf bekijken", ids[PHOTO])]
+    listed = [("PO 250107 (S07), 2026-11-12 09:01, 1 punt", review.case_id),
+              ("PO 250105 (S05), 2026-11-12 09:00, mislukt: zelf bekijken", failed.case_id), *documents]
+    ticked = called(page, "queue_ticked", "nl", None, None)
+    assert ticked["Zaak"]["choices"] == listed == called(page, "refreshed", "nl", None)["Zaak"]["choices"]
+    assert handler_of(page, "opened").fn("nl", SimpleNamespace(query_params={}))[0]["choices"] == listed
+    assert called(page, "refreshed", "en", None)["Zaak"]["choices"][2:3] == [(f"Document {SCAN}, 2026-11-12 09:00, look yourself", ids[SCAN])]
+    assert all(aid_status.is_item(value) for _, value in documents)
+    root = d.settings.cases_root                                  # offered_cases and the digest's links stay as they are
+    assert [summary.case_id for summary in offered_cases(root)] == [review.case_id] and selection_from_query(root, {"case": ids[SCAN]}) == (None, None)
+    assert ticked["Beoordelen"] == {"__type__": "update", "label": "Beoordelen (5)"}
+    [review_tab] = [block for block in page.blocks.values() if isinstance(block, gradio.Tab) and block.label == nl["review_tab"]]
+    [relabel] = [f.fn for f in page.fns.values() if f.outputs[:1] == [review_tab] and getattr(f.fn, "__name__", "") == "<lambda>"]
+    assert relabel("en")[0] == called(page, "queue_ticked", "en", None, None)["Beoordelen"] == {"__type__": "update", "label": "Review (5)"}
+    strip = called(page, "strip_ticked", "nl")
+    assert (nl["chip:look"], en["chip:look"]) == ("Zelf bekijken: {n}", "To look at: {n}") and "Zelf bekijken: 3" in strip["review-strip"]
+    assert "To look at: 3" in called(page, "strip_ticked", "en")["review-strip"]
+    assert strip["review-all"] == {"__type__": "update", "label": nl["review_all"].format(n=5)}
+    todo = "Kies het document bij Zaak, bekijk het en handel het zelf af."
+    assert (nl["todo:look"], en["todo:look"]) == (todo, "Choose the document under Case, look at it and handle it yourself.")
+    assert table_rows(strip["review-all-table"])[1:] == [
+        ["12-11-2026 09:01", "Inkooporder 250107 (S07)", nl["state:review"], nl["todo:review"]],
+        ["12-11-2026 09:01", f"Document {PHOTO}", "Zelf bekijken", todo],
+        ["12-11-2026 09:00", "Inkooporder 250105 (S05)", nl["state:failed"], nl["todo:failed"]],
+        ["12-11-2026 09:00", f"Document {SCAN}", "Zelf bekijken", todo],
+        ["12-11-2026 09:00", f"Document {MANY}", "Zelf bekijken", todo]]
+    for shown in (ticked, strip, called(page, "strip_ticked", "en"), called(page, "queue_ticked", "en", None, None)):
+        assert not [words for words in RAW if words in str(shown)]
+    assert called(page, "oldest_opened", "nl")["Zaak"]["value"] == review.case_id
+    decide(review, "RI1", "keep")
+    assert close_case(review, d).status == "closed"
+    assert called(page, "oldest_opened", "nl")["Zaak"]["value"] == failed.case_id
+    called(page, "handled_marked", failed.case_id, "nl")
+    assert called(page, "oldest_opened", "nl")["Zaak"] == {"__type__": "update", "choices": documents, "value": ids[SCAN]}
+    none = called(page, "case_framed", None, "nl")
+    assert none["review-pick"] == nl["review_pick"] and none["review-oldest"] == {"__type__": "update", "value": nl["review_open_oldest"], "visible": True}
+    assert called(page, "queue_ticked", "nl", None, None)["Beoordelen"] == {"__type__": "update", "label": "Beoordelen (3)"}
+
+
+def test_a_document_left_to_the_buyer_shows_why_and_its_pages_where_the_scan_put_it(tmp_path, madeup_out):
+    """Finding 9. A document chosen in the case list shows why the assistant could not place it, in words, with what to do, in the
+    place and the look of the notice of a failed case, and "Als afgehandeld noteren" in place of "Zaak afsluiten" and of the title of
+    the decisions; its pages show in the supplier's gallery, rendered as a case's document is, from where the scan put it: the file in
+    processed/ of the watched folder, or the attachment inside its e-mail there, of two files of the same name the one whose bytes the
+    scan noted. A document that is no longer there shows no page, and the notice says where to look for it."""
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    path, d, page, _ = sending_page(tmp_path, madeup_out)
+    ids = left_to_the_buyer(d, madeup_out, tmp_path)
+    processed = d.settings.watched_folder / "processed"
+    framed = called(page, "case_framed", ids[SCAN], "nl")
+    notice = ("**De assistent kon dit document niet plaatsen:** het is een scan zonder leesbare tekst, en de assistent kon niet zien wat voor "
+              "document het is. Bekijk het document en handel het zelf af in Exact. Druk daarna op Als afgehandeld noteren; het document "
+              "gaat dan van de lijst.")
+    assert nl["item_notice"].format(reason=nl["look:scan"]) == notice
+    assert framed["review-failed"] == {"__type__": "update", "value": notice, "visible": True}
+    assert framed["Zaak afsluiten"] == framed["### Besluiten"] == {"__type__": "update", "visible": False}
+    assert framed["review-handled"] == {"__type__": "update", "visible": True}
+    assert framed["review-pick-row"] == {"__type__": "update", "visible": False} and framed["review-gone"] == {"__type__": "update", "value": "", "visible": False}
+    many = called(page, "case_framed", ids[MANY], "nl")["review-failed"]["value"]
+    assert many == nl["item_notice"].format(reason="het noemt meer dan één inkooporder, en de assistent kon niet kiezen bij welke het hoort")
+    assert called(page, "failed_relabel", "en", ids[MANY]) == {"review-failed": {"__type__": "update", "value": en["item_notice"].format(reason=en["look:many"])},
+                                                                "review-handled": {"__type__": "update", "value": en["handled_go"]}}
+    assert en["item_notice"].startswith("**The assistant could not place this document:** {reason}. Look at the document and handle it yourself")
+    show = handler_of(page, "show").fn
+    for file, document in ((SCAN, madeup_out / "MU05_conf.pdf"), (MANY, madeup_out / "MU01_conf.pdf"), (PHOTO, madeup_out / "CART02.png")):
+        shown = show(ids[file], "nl")
+        assert [image.tobytes() for image in shown[1]] == images_of(document), file
+        assert shown[0] == {"__type__": "update", "visible": False} and shown[2] == [] and [table["data"] for table in shown[3:6]] == [[], [], []]
+        assert shown[6] == {"__type__": "update", "choices": [], "value": None} and shown[7] is None and shown[-1] == ""
+        assert shown[8] == {"__type__": "update", "value": "", "visible": False} == shown[9]
+    assert not (d.settings.cases_root / "tmp").exists()                       # an attachment's copy for its pages went again
+    later = processed / "MU05_conf_2.pdf"                                     # a later document of the same name, filed by a later scan
+    shutil.copy(madeup_out / "MU01_conf.pdf", later)
+    os.utime(processed / SCAN, ((NOW - timedelta(minutes=1)).timestamp(),) * 2)
+    os.utime(later, ((NOW + timedelta(hours=1)).timestamp(),) * 2)
+    assert [image.tobytes() for image in show(ids[SCAN], "nl")[1]] == images_of(madeup_out / "MU05_conf.pdf")
+    (processed / "foto.eml").unlink()
+    gone = called(page, "case_framed", ids[PHOTO], "nl")["review-failed"]
+    missing = "Het document staat niet meer op deze pc: zoek het in uw postvak, in de e-mail van 12-11-2026 09:01."
+    assert gone == {"__type__": "update", "value": f"{nl['item_notice'].format(reason=nl['look:scan'])} {missing}", "visible": True}
+    assert called(page, "failed_relabel", "en", ids[PHOTO])["review-failed"]["value"].endswith(
+        " The document is no longer on this PC: look for it in your mailbox, in the e-mail of 12-11-2026 09:01.")
+    assert show(ids[PHOTO], "nl")[1] == []
+    assert not [words for words in RAW if words in str(framed) + many + gone["value"]]
+
+
+def scanned_as(d, tmp_path, document: Path, name: str, at: datetime, modified: datetime) -> None:
+    """The document put into the watched folder of the page's settings under `name`, with this modification time, and scanned at `at`
+    as the runner scans the folder, with a PO store that holds no order."""
+    inbox = d.settings.watched_folder
+    inbox.mkdir(parents=True, exist_ok=True)
+    shutil.copy(document, inbox / name)
+    os.utime(inbox / name, (modified.timestamp(),) * 2)
+    scan_folder(inbox, PoStore(tmp_path / "no-orders"), d.settings.cases_root, d.settings, at)
+
+
+def test_a_document_left_to_the_buyer_shows_its_own_file_of_several_of_the_same_name(tmp_path, madeup_out):
+    """Finding 9. Of several documents of the same name that the scan left to the buyer, each shows its own pages, which the page tells
+    from the others by the sha256 of its bytes that the scan noted in its line, whatever the times of the files say: a scan that came
+    into the watched folder while the runner read the mailbox, after the time of its pass, and a copy that kept the older time of its
+    own file, as a copy in Windows Explorer does. Each of two attachments of the same name, in two e-mails of the same name, shows its
+    own pages too."""
+    nl = STRINGS["nl"]
+    path, d, page, _ = sending_page(tmp_path, madeup_out)
+    root, processed = d.settings.cases_root, d.settings.watched_folder / "processed"
+    photo, turned = tmp_path / "photo.pdf", tmp_path / "turned.pdf"          # two more scans without text, as PDFs of an image
+    Image.open(madeup_out / "CART02.png").convert("RGB").save(photo)
+    Image.open(madeup_out / "CART02.png").convert("RGB").rotate(180).save(turned)
+    later, days = NOW + timedelta(hours=2), NOW + timedelta(days=2)
+    scanned_as(d, tmp_path, madeup_out / "MU05_conf.pdf", "scan.pdf", NOW, NOW - timedelta(minutes=5))     # Monday's scan
+    scanned_as(d, tmp_path, photo, "scan.pdf", later, later + timedelta(seconds=3))        # it came while the pass read the mailbox
+    scanned_as(d, tmp_path, turned, "scan.pdf", days, NOW - timedelta(days=1))             # Wednesday: Sunday's scan, copied in now
+    assert sorted(path.name for path in processed.iterdir()) == ["scan.pdf", "scan_2.pdf", "scan_3.pdf"]
+    items = aid_status.review_items(root, days)
+    assert [(item.file, item.time) for item in items] == [("scan.pdf", NOW), ("scan.pdf", later), ("scan.pdf", days)]
+    show = handler_of(page, "show").fn
+    for item, own in zip(items, ("scan.pdf", "scan_2.pdf", "scan_3.pdf"), strict=True):
+        assert [image.tobytes() for image in show(item.item_id, "nl")[1]] == images_of(processed / own), own
+        assert called(page, "case_framed", item.item_id, "nl")["review-failed"]["value"] == nl["item_notice"].format(reason=nl["look:scan"])
+    assert len({tuple(images_of(processed / own)) for own in ("scan.pdf", "scan_2.pdf", "scan_3.pdf")}) == 3
+    for number, document in enumerate((madeup_out / "MU05_conf.pdf", photo), 1):             # two e-mails "post.eml", each with a "scan.pdf"
+        mail = tmp_path / f"mail{number}"
+        mail.mkdir()
+        shutil.copy(document, mail / "scan.pdf")
+        email(mail / "post.eml", "Bevestiging", mail / "scan.pdf")
+        scanned_as(d, tmp_path, mail / "post.eml", "post.eml", days + timedelta(minutes=number), NOW - timedelta(days=3))
+    attached = [item for item in aid_status.review_items(root, days) if item.file == "post.eml/scan.pdf"]
+    assert sorted(path.name for path in processed.iterdir() if path.suffix == ".eml") == ["post.eml", "post_2.eml"] and len(attached) == 2
+    for item, document in zip(attached, (madeup_out / "MU05_conf.pdf", photo), strict=True):
+        assert [image.tobytes() for image in show(item.item_id, "nl")[1]] == images_of(document), document.name
+
+
+def test_a_document_that_cannot_be_told_from_another_of_its_name_shows_no_page(tmp_path, madeup_out):
+    """Finding 9. A document left to the buyer whose bytes no file of its name in processed/ holds any more (another file of the same
+    name stands in its place) shows no page, and its notice says where to look for it, rather than another document. A line written
+    before the scan noted the sha256 shows the one file of its name, and no page of two, as the page cannot tell which is the one."""
+    nl = STRINGS["nl"]
+    path, d, page, _ = sending_page(tmp_path, madeup_out)
+    ids = left_to_the_buyer(d, madeup_out, tmp_path)
+    root, processed = d.settings.cases_root, d.settings.watched_folder / "processed"
+    show = handler_of(page, "show").fn
+    notice = f"{nl['item_notice'].format(reason=nl['look:scan'])} {nl['item_missing'].format(time='12-11-2026 09:00')}"
+    shutil.copy(madeup_out / "MU01_conf.pdf", processed / SCAN)                  # another document under its name
+    assert show(ids[SCAN], "nl")[1] == []
+    assert called(page, "case_framed", ids[SCAN], "nl")["review-failed"] == {"__type__": "update", "value": notice, "visible": True}
+    shutil.copy(madeup_out / "MU05_conf.pdf", processed / SCAN)                  # its own again
+    lines = [json.loads(line) for line in (root / REVIEW_ITEMS_FILE).read_text(encoding="utf-8").splitlines()]
+    assert all(len(line["sha256"]) == 64 for line in lines)
+    (root / REVIEW_ITEMS_FILE).write_text("".join(json.dumps({key: value for key, value in line.items() if key != "sha256"}) + "\n"
+                                                  for line in lines), encoding="utf-8")     # as a scan before this version wrote them
+    assert aid_status.look_item(root, ids[SCAN]).sha256 is None
+    assert [image.tobytes() for image in show(ids[SCAN], "nl")[1]] == images_of(madeup_out / "MU05_conf.pdf")
+    assert called(page, "case_framed", ids[SCAN], "nl")["review-failed"]["value"] == nl["item_notice"].format(reason=nl["look:scan"])
+    shutil.copy(madeup_out / "MU01_conf.pdf", processed / "MU05_conf_2.pdf")    # a second file of its name
+    assert show(ids[SCAN], "nl")[1] == []
+    assert called(page, "case_framed", ids[SCAN], "nl")["review-failed"] == {"__type__": "update", "value": notice, "visible": True}
+
+
+def test_marking_a_document_handled_writes_its_mark_alone_and_takes_it_off_the_list(tmp_path, madeup_out):
+    """Finding 9. "Als afgehandeld noteren" on a document appends its mark to review_items_handled.jsonl in the cases folder, with the
+    time of the page's clock, and writes nothing else; the document then leaves the list, the strip's chip and the tab's count, and
+    the fold shows it as handled by the buyer. A mark that stands already (from another browser tab) is not written again, and a mark
+    after a line that a crash cut off starts a line of its own."""
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    path, d, page, _ = sending_page(tmp_path, madeup_out)
+    ids = left_to_the_buyer(d, madeup_out, tmp_path)
+    root = d.settings.cases_root
+    before = {path: path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
+    marked = called(page, "handled_marked", ids[SCAN], "nl")
+    after = {path: path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
+    mark = root / aid_status.HANDLED_ITEMS_FILE
+    assert set(after) == {*before, mark} and all(after[path] == before[path] for path in before)
+    assert [json.loads(line) for line in after[mark].splitlines()] == [{"id": ids[SCAN], "file": SCAN, "time": "2026-11-12T09:00:00",
+                                                                         "at": "2026-11-12T09:00:00"}]
+    assert marked["Markdown"] == nl["item_handled_done"].format(file="MU05\\_conf\\.pdf") == (
+        "Het document MU05\\_conf\\.pdf staat als door u afgehandeld genoteerd en staat niet meer op de lijst.")
+    rest = [(f"Document {MANY}, 2026-11-12 09:00, zelf bekijken", ids[MANY]), (f"Document {PHOTO}, 2026-11-12 09:01, zelf bekijken", ids[PHOTO])]
+    assert marked["Zaak"] == {"__type__": "update", "choices": rest, "value": None}
+    again = called(page, "handled_marked", ids[SCAN], "en")                  # another browser tab
+    assert again["Markdown"] == en["item_handled_done"].format(file="MU05\\_conf\\.pdf") and mark.read_bytes() == after[mark]
+    assert called(page, "queue_ticked", "nl", None, None)["Beoordelen"] == {"__type__": "update", "label": "Beoordelen (2)"}
+    strip = called(page, "strip_ticked", "nl")
+    assert "Zelf bekijken: 2" in strip["review-strip"]
+    assert [row for row in table_rows(strip["review-all-table"]) if row[1] == f"Document {SCAN}"] == [
+        ["12-11-2026 09:00", f"Document {SCAN}", "Door u afgehandeld", nl["todo:nothing"]]]
+    with open(mark, "ab") as cut:
+        cut.write(b'{"id": "item-0123')                                       # a mark that a crash cut off
+    called(page, "handled_marked", ids[PHOTO], "nl")
+    assert [item.file for item in aid_status.review_items(root, NOW) if item.state == "look"] == [MANY]
+    assert called(page, "queue_ticked", "nl", None, None)["Zaak"]["choices"] == rest[:1]
+    assert "Zelf bekijken: 1" in called(page, "strip_ticked", "nl")["review-strip"]
+    assert (root / REVIEW_ITEMS_FILE).read_bytes() == before[root / REVIEW_ITEMS_FILE]
+
+
+def test_the_handlers_of_the_case_list_take_a_document_without_reading_it_as_a_case(tmp_path, madeup_out, monkeypatch):
+    """Finding 9. With a document chosen, every handler that takes the value of "Zaak" answers without reading the document's id as a
+    case (load_case is never asked for it) and raises nothing: the language switch and "Lijst vernieuwen" keep it chosen and treat it
+    as no case, a close and an undo answer as with no case chosen. A document on screen that another browser tab noted as handled
+    keeps its place in the list, with a line that says so, until another case is chosen."""
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    path, d, page, _ = sending_page(tmp_path, madeup_out)
+    ids = left_to_the_buyer(d, madeup_out, tmp_path)
+    run(d, madeup_out, "MU07", "250107")
+    chosen = ids[SCAN]
+    real = page_module.load_case
+
+    def load_case_of_a_case(cases_root, case_id):
+        assert not aid_status.is_item(case_id), case_id
+        return real(cases_root, case_id)
+
+    monkeypatch.setattr(page_module, "load_case", load_case_of_a_case)
+    relabelled = called(page, "relabel", "en", chosen, None)
+    assert (f"Document {SCAN}, 2026-11-12 09:00, look yourself", chosen) in relabelled["Zaak"]["choices"]
+    assert relabelled["review-hint"] == {"__type__": "update", "value": "", "visible": False}
+    assert relabelled[nl["undo_choice"]] == {"__type__": "update", "label": en["undo_choice"], "choices": [], "value": None}
+    refreshed = called(page, "refreshed", "nl", chosen)
+    assert (f"Document {SCAN}, 2026-11-12 09:00, zelf bekijken", chosen) in refreshed["Zaak"]["choices"]
+    assert refreshed["review-hint"] == {"__type__": "update", "value": "", "visible": False}
+    assert called(page, "close", chosen, "nl") == {"Markdown": nl["no_case"], "Zaak": {"__type__": "update"}}
+    assert after_the_press(page, SimpleNamespace(case_id=chosen), "en") == (en["no_case"], chosen)
+    for entry_id in (None, "W1"):
+        assert called(page, "do_undo", chosen, entry_id, "nl") == {"Markdown": nl["choose_write"], nl["undo_choice"]: {"__type__": "update"}}
+    ticked = called(page, "queue_ticked", "nl", chosen, None)
+    assert ticked["review-gone"] == {"__type__": "update", "value": "", "visible": False} and ticked["review-pick-row"] == {"__type__": "update"}
+    assert called(page, "failed_relabel", "nl", chosen)["review-failed"]["value"].startswith("**De assistent kon dit document niet plaatsen:**")
+    called(page, "strip_ticked", "en")
+    handler_of(page, "show").fn(chosen, "en")
+    called(page, "handled_marked", chosen, "en")                              # noted as handled in another browser tab
+    gone = called(page, "queue_ticked", "nl", chosen, ticked["State"])
+    kept = (f"Document {SCAN}, 2026-11-12 09:00, door u afgehandeld", chosen)
+    assert gone["Zaak"]["choices"][-1] == kept and gone["review-gone"] == {"__type__": "update", "visible": True, "value": (
+        "Het document MU05\\_conf\\.pdf staat niet meer op de lijst: het is intussen als afgehandeld genoteerd. Kies een andere zaak.")}
+    assert called(page, "refreshed", "nl", chosen)["Zaak"]["choices"] == gone["Zaak"]["choices"]
+    assert called(page, "relabel", "nl", chosen, None)["Zaak"]["choices"] == gone["Zaak"]["choices"]
+    assert called(page, "relabel", "en", chosen, None)["Zaak"]["choices"][-1] == (f"Document {SCAN}, 2026-11-12 09:00, handled by you", chosen)
+    framed = called(page, "case_framed", chosen, "nl")
+    assert framed["review-failed"] == {"__type__": "update", "value": "", "visible": False} and framed["review-handled"] == {"__type__": "update", "visible": False}
+    other = called(page, "queue_ticked", "nl", ids[MANY], gone["State"])     # another one chosen: the handled document leaves the list
+    assert kept not in other["Zaak"]["choices"] and other["review-gone"] == {"__type__": "update", "value": "", "visible": False}

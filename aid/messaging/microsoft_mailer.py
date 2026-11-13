@@ -52,9 +52,10 @@ Errors. A lapsed sign-in, an answer of Graph other than success and a request th
 code ("HTTP 403"), the class of the error or the lapsed sign-in, and the step it stopped at; never a token, an address or Graph's
 own text, which the pipeline would keep in the audit. A lapsed sign-in (no token to be had, or a 401) is SignInLapsed, a MailerError
 of its own, so that the runner writes the digest as a file instead; so is a store of the sign-in that this process may not use
-(StoreRefused of aid/connections/secrets.py), by a fixed text that names neither its folder nor its kind. A Microsoft that cannot
-be reached for the token is a MailerError with the class of the error. Each carries the kind of its cause (MailerError.kind of
-aid/messaging), by which the review page says what to do.
+(StoreRefused of aid/connections/secrets.py), by a fixed text that names neither its folder nor its kind, and with the kind "store"
+in place of "sign_in", since no sign-in puts it right: the review page then says that the store was refused, and its settings tab
+names the folders, and the runner notes no lapse of the mailbox for it. A Microsoft that cannot be reached for the token is a MailerError with the class of the error. Each carries the
+kind of its cause (MailerError.kind of aid/messaging), by which the review page says what to do.
 
 The hand-over. Until the draft is made nothing has left, and a failure is a message not sent. The send of the draft is the
 hand-over: when that request fails without an answer (a time-out, a connection lost), or is answered by a server that failed (500
@@ -85,10 +86,11 @@ PASSWORD_ENV = "AID_MAIL_PASSWORD"               # the environment variable of t
 
 
 class SignInLapsed(MailerError):
-    """A message not sent because the Microsoft sign-in has lapsed (see the module docstring)."""
+    """A message not sent because the Microsoft sign-in has lapsed, of the kind "sign_in", or because this process may not use the
+    store of the sign-in, of the kind "store" (see the module docstring)."""
 
-    def __init__(self, text: str):
-        super().__init__(text, "sign_in")
+    def __init__(self, text: str, kind: str = "sign_in"):
+        super().__init__(text, kind)
 
 
 class MicrosoftMailer:
@@ -105,7 +107,7 @@ class MicrosoftMailer:
         except SignInNeeded:
             raise SignInLapsed(f"SignInNeeded: {SIGN_IN_AGAIN}") from None
         except StoreRefused:
-            raise SignInLapsed(STORE_REFUSED) from None
+            raise SignInLapsed(STORE_REFUSED, kind="store") from None
         except MicrosoftUnreachable as error:
             raise MailerError(f"{error}: could not get a token from Microsoft", "unreachable") from None
         message_id, sent_at = uuid.uuid4().hex, self.clock()

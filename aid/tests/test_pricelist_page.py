@@ -2024,7 +2024,7 @@ TEXTS = {
     "exact_articles_field:item_code": ("Artikelcode (verplicht)", "Item code (required)"),
     "exact_articles_field:price": ("Inkoopprijs (verplicht)", "Purchase price (required)"),
     "exact_articles_field:supplier": ("Leverancier", "Supplier"),
-    "exact_test": ("Testen", "Test"), "exact_save": ("Opslaan", "Save"),
+    "exact_test": ("Testen", "Test"), "exact_articles_save": ("Artikelkolommen opslaan", "Save the article columns"),
     "exact_articles_left:no_item_code": ("zonder artikelcode", "no item code"),
     "exact_articles_left:no_price": ("prijs niet te lezen", "price cannot be read"),
     "exact_articles_left:twice": ("artikel dubbel", "article twice"),
@@ -2327,7 +2327,7 @@ def test_the_documents_say_what_the_price_list_tab_does(tmp_path):
     assert "`article_columns`, its part 3" in manual["3.7"] and "The tab \"Prijslijst\" changes none of it" in manual["4.8"]
     # 3.17: part 3, quoted whole, and no line of the two state lines that the amendments took out
     for key in ("exact_part_articles", "exact_articles_intro", "exact_articles_sample", "exact_articles_field:item_code", "exact_articles_field:price",
-                "exact_articles_field:supplier", "exact_test", "exact_save", "exact_articles_problem:price", "exact_articles_problem:none",
+                "exact_articles_field:supplier", "exact_test", "exact_articles_save", "exact_articles_problem:price", "exact_articles_problem:none",
                 "exact_articles_price", *[f"exact_articles_left:{reason}" for reason in ("no_item_code", "no_supplier", "no_price", "twice")]):
         assert f"\"{NL[key]}\"" in part, key
     assert "\"12 artikelen gelezen; 3 rijen overgeslagen (zonder artikelcode: 2, prijs niet te lezen: 1).\"" in part

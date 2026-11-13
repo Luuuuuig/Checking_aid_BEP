@@ -14,8 +14,12 @@ reading a second, empty cache. On Windows the cache is encrypted for one Windows
 that same user.
 
 The store refuses a directory that lies inside a git work tree (the directory, or a folder above it, holds .git), so that a token
-can never be committed, with StoreRefused too. Nothing in the store is ever printed, logged, or written to the settings file, a
-case folder or the audit: its repr names the directory only, and an error names the file and the problem, never a value.
+can never be committed, with StoreRefused too. work_tree_refusal(directory) gives that refusal without making anything, so that the
+review page can say why a sign-in cannot be made before the buyer tries one. A refusal carries the store's folder and the folder
+that holds .git, or the kind of store recorded, by which the review page names them on its settings tab; the mailer of the work
+mailbox names neither (aid/messaging/microsoft_mailer.py). Nothing in the store is ever printed, logged, or
+written to the settings file, a case folder or the audit: its repr names the directory only, and an error names the file and the
+problem, never a value.
 
 LazySecretStore(directory) is the same store made at its first use, which the runner takes: making the runner's Deps then never
 refuses, so that the runner starts and handles its folder, and a refusal comes with the first use of the sign-in, where the
@@ -50,7 +54,14 @@ def default_secrets_dir() -> Path:
 
 
 class StoreRefused(ValueError):
-    """A store this process may not use: a folder inside a git work tree, or one made with a kind of store this process has not."""
+    """A store this process may not use: a folder inside a git work tree, or one made with a kind of store this process has not.
+    Beside its message it carries what the review page names to say why: `directory`, the folder of the store; `work_tree`, the
+    folder at or above it that holds .git, for a folder inside a git work tree; and `recorded`, the kind of store the folder was made
+    with, for a folder of another kind. A refusal made with a message alone carries None for each."""
+
+    def __init__(self, message: str, *, directory: Path | None = None, work_tree: Path | None = None, recorded: str | None = None):
+        super().__init__(message)
+        self.directory, self.work_tree, self.recorded = directory, work_tree, recorded
 
 
 class SecretStore:
@@ -58,9 +69,8 @@ class SecretStore:
 
     def __init__(self, directory: Path):
         directory = Path(directory).expanduser().resolve()
-        if (work_tree := _work_tree(directory)) is not None:
-            raise StoreRefused(f"the secrets store may not lie inside a git work tree ({work_tree} holds .git), so that no token can be "
-                             "committed: choose a folder outside the repository")
+        if (refused := work_tree_refusal(directory)) is not None:
+            raise refused
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         if os.name == "posix":
             os.chmod(directory, 0o700)
@@ -72,7 +82,8 @@ class SecretStore:
             (directory / BACKEND).write_text(kind + "\n", encoding="utf-8")
         elif recorded != kind:
             raise StoreRefused(f"the secrets store in {directory} was made with the store {recorded!r}, which this process cannot use (it "
-                             f"has {kind!r}): start the review page and the runner as the same user, in the same kind of session")
+                               f"has {kind!r}): start the review page and the runner as the same user, in the same kind of session",
+                               directory=directory, recorded=recorded)
         self._cache: msal.TokenCache | None = None
         if kind == PLAIN and directory not in _NAMED:
             _NAMED.add(directory)
@@ -175,6 +186,17 @@ def _persistence(location: Path, plain: bool = False) -> tuple[object, str]:
             return _OwnerOnlyFile(str(location)), PLAIN
     name = type(persistence).__name__
     return persistence, _KINDS.get(name, name.lower())
+
+
+def work_tree_refusal(directory: Path) -> StoreRefused | None:
+    """The refusal of a store in the directory because it lies inside a git work tree (see the module docstring), as SecretStore
+    raises it, or None for a directory outside every work tree. The directory is taken as the store takes it (from ~, its links
+    resolved) and only looked at: no folder and no file is made."""
+    directory = Path(directory).expanduser().resolve()
+    if (work_tree := _work_tree(directory)) is None:
+        return None
+    return StoreRefused(f"the secrets store may not lie inside a git work tree ({work_tree} holds .git), so that no token can be "
+                        "committed: choose a folder outside the repository", directory=directory, work_tree=work_tree)
 
 
 def _work_tree(directory: Path) -> Path | None:

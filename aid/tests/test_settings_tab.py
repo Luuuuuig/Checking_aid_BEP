@@ -6,8 +6,9 @@ import json
 import os
 import re
 import shutil
+import socket
 import stat
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from email import message_from_bytes, policy
 from pathlib import Path
@@ -15,7 +16,8 @@ from pathlib import Path
 import pytest
 import requests
 
-from aid.connections.microsoft import COPILOT_SCOPES, MAIL_SCOPES, SHARED_SCOPES, MicrosoftAccount
+from aid.case import open_case
+from aid.connections.microsoft import COPILOT_SCOPES, MAIL_SCOPES, SHARED_SCOPES, SIGN_IN_AGAIN, MicrosoftAccount
 from aid.connections.secrets import SecretStore
 from aid.execution.by_hand import mark, open_changes
 from aid.madeup.generate import TRYOUT_PO_LAYOUT, Row, Text, pdf_bytes, tryout_po_pages
@@ -32,11 +34,12 @@ from aid.settings import Settings, SettingsInvalid, is_address, load_settings, r
 from aid.sources.mailbox import NOT_AN_EXPORT, scan_folder
 from aid.tests.conftest import SETTINGS, ReachedMicrosoft, deps
 from aid.tests.fakes import (ACCESS_TOKEN, CLIENT_ID, COPILOT, GRAPH, TENANT_ID, USERNAME, FakeApp, FakeResponse, FakeSession,
-                             copilot_answer, copilot_session, sent_text, sign_in_event)
+                             case_result, copilot_answer, copilot_session, sent_text, sign_in_event)
 from aid.tests.helpers import (ANDERS_FORM, ANDERS_LAYOUT, ANDERS_MEANINGS, ANDERS_PO, COMMAS_TITLES, ERP_FORM, ERP_MEANINGS, EXPORT_COLUMNS,
                                EXPORT_NL, EXPORT_NL_COLUMNS, EXPORT_NL_FORM, EXPORT_NL_ORDERS, EXPORT_NL_READ, EXPORT_NL_READ_EN,
                                EXPORT_NL_TITLES, MADEUP_LAYOUT, SAMPLES, SORTED_BY_DATE, SORTED_BY_DATE_COLUMNS, SORTED_BY_DATE_LONG, TABS_TITLES, TIE_TITLES,
                                TITLE_COMMAS, WIDE_TITLES, write_cut_samples, write_sheet, write_title_samples)
+from aid.tests.test_status import launcher_state
 from aid.tryout import CART_CHANGES, CHANGES, cart_html, confirmation_pdf
 
 FOLDER = "AAMkADMadeUpFolder0001="
@@ -57,9 +60,9 @@ def settings_file(tmp_path: Path, **values) -> Path:
     return path
 
 
-def local(utc: str) -> str:
-    """A time of Graph or of the state as the tab shows it: in the local time of the PC."""
-    return datetime.fromisoformat(utc).astimezone().strftime("%Y-%m-%d %H:%M")
+def local(utc: str, form: str = "%Y-%m-%d %H:%M") -> str:
+    """A time of Graph or of the state as the tab shows it: in the local time of the PC, in the form of "Postvak en AI", or another."""
+    return datetime.fromisoformat(utc).astimezone().strftime(form)
 
 
 # --- the settings and their file ---
@@ -281,6 +284,14 @@ def handler(page, name: str):
     return found
 
 
+def section(page, tab_id: str):
+    """A section of the settings tab: the gr.Tab of that id in the tab's own gr.Tabs, settings-sections."""
+    gr = import_gradio()
+    [sections] = [block for block in page.blocks.values() if isinstance(block, gr.Tabs) and block.elem_id == "settings-sections"]
+    [found] = [child for child in sections.children if child.id == tab_id]
+    return found
+
+
 def test_the_tab_opens_with_the_saved_settings_and_the_signed_in_account(tmp_path, madeup_out):
     path, page, made = tab(tmp_path, madeup_out, app=FakeApp(accounts=[USERNAME]), **SIX)
     tenant, client, mailbox, folder, send_via, account, trigger, names = handler(page, "settings_opened")("nl")
@@ -328,24 +339,66 @@ def test_a_microsoft_that_cannot_be_reached_is_named_by_the_class_of_the_error(t
     assert handler(page, "load_folders")(TENANT_ID, CLIENT_ID, "", "nl")[2] == note
 
 
-def test_a_store_the_pc_refuses_is_named_on_the_tab_without_its_folder(tmp_path, madeup_out):
+def literal(path: Path) -> str:
+    """A folder as the tab shows it, as it is: every ASCII mark escaped, so that Markdown shows it and makes nothing of it."""
+    return re.sub(r"([!-/:-@\[-`{-~])", r"\\\1", str(path))
+
+
+def test_a_store_the_pc_refuses_is_named_with_both_folders_and_what_to_do(tmp_path, madeup_out):
+    """Finding 2 of the owner's test: a folder .git in the home folder made the PC refuse the store of the sign-in, and the tab said
+    only that the store was refused. The tab now names the store's folder and the folder that holds .git, each as it is, and says
+    what to do: before any press, on the line under the sign-in buttons (store_checked, when the page loads and when the part
+    opens), and at each of those buttons; the other buttons that need the sign-in point to that line ("Aanmelden kan niet: onder
+    stap 2, Aanmelden bij Microsoft, staat waarom."). The account line says "Niet aangemeld", so the sentence stands once, it
+    follows the language switch, and nothing is made in the refused folder. A store made by another Windows user is named with
+    its folder, before any press as well (the page's account of the saved IDs made, as the account line makes it when the page
+    loads) and at a press, and any other failure to make the account keeps the fixed line of before, under every button."""
+    (tmp_path / ".git").mkdir()                               # the owner's case: a folder .git above the store of the sign-in
     path = settings_file(tmp_path, **SIX)
     d = deps(tmp_path, madeup_out).model_copy(update={"settings": load_settings(path)})
-    work_tree = tmp_path / "work-tree"                       # a folder inside a git work tree, which the store refuses
-    (work_tree / ".git").mkdir(parents=True)
+    page = build_app(d, settings_file=path, session=FakeSession())          # the page's own accounts, on the store of the PC
+    store = tmp_path / "default-secrets"                      # the store of the PC in the tests (the conftest)
+    nl, en = STRINGS["nl"], STRINGS["en"]
 
-    def refused(tenant, client):
-        return MicrosoftAccount(tenant, client, SecretStore(work_tree / "secrets"))
+    def git(strings: dict[str, str]) -> str:
+        return strings["settings_store_refused_git"].format(store=literal(store.resolve()), work_tree=literal(tmp_path.resolve()))
 
-    page = build_app(d, settings_file=path, account_factory=refused, session=FakeSession())
-    assert handler(page, "settings_opened")("nl")[5] == STRINGS["nl"]["settings_not_signed_in"]           # the tab opens all the same
+    assert git(nl).startswith(f"Aanmelden kan niet: de beveiligde opslag van de aanmelding ({literal(store.resolve())}) ligt binnen een map "
+                              f"met versiebeheer, want in {literal(tmp_path.resolve())} staat een map .git.")
+    loaded = [handler(page, "settings_opened")("nl"), handler(page, "store_checked")("nl")]
+    assert loaded[0][5] == nl["settings_not_signed_in"] and loaded[1] == git(nl)                # before any press
+    assert json.dumps(loaded, default=str).count(json.dumps(git(nl))[1:-1]) == 1                  # the sentence once
     notes = [list(handler(page, "sign_in_browser")(TENANT_ID, CLIENT_ID, "", "nl"))[-1][3],
+             list(handler(page, "sign_in_code")(TENANT_ID, CLIENT_ID, "", "nl"))[-1][3],
              handler(page, "sign_out")(TENANT_ID, CLIENT_ID, "nl")[3], handler(page, "load_folders")(TENANT_ID, CLIENT_ID, "", "nl")[2],
-             handler(page, "check_connection")(TENANT_ID, CLIENT_ID, "", FOLDER, "nl")]
-    assert notes == [STRINGS["nl"]["settings_store_refused"]] * 4 and "secrets" not in STRINGS["nl"]["settings_store_refused"]
-    ai = [list(handler(page, "sign_in_copilot")(TENANT_ID, CLIENT_ID, "", "nl"))[-1][1], handler(page, "test_copilot")(TENANT_ID, CLIENT_ID, "nl")]
-    assert ai == [STRINGS["nl"]["settings_store_refused"]] * 2
-    assert not (work_tree / "secrets").exists()
+             handler(page, "check_connection")(TENANT_ID, CLIENT_ID, "", FOLDER, "nl"),
+             list(handler(page, "sign_in_copilot")(TENANT_ID, CLIENT_ID, "", "nl"))[-1][1], handler(page, "test_copilot")(TENANT_ID, CLIENT_ID, "nl")]
+    see = nl["settings_store_refused_see"]
+    assert notes == [git(nl)] * 3 + [see] * 4                                 # the sign-in buttons' line holds it, the others point there
+    assert (see, en["settings_store_refused_see"]) == ("Aanmelden kan niet: onder stap 2, Aanmelden bij Microsoft, staat waarom.",
+                                                       "Signing in is not possible: step 2, Sign in with Microsoft, says why.")
+    before = path.read_bytes()
+    assert handler(page, "save_reader")("llm", "nl") == ("parser", see) and path.read_bytes() == before
+    assert handler(page, "sections_relabelled")("en")[5] == git(en) and handler(page, "store_checked")("en") == git(en)
+    assert not store.exists()                                 # nothing made in the refused folder
+    # a store made by another Windows user, or in another kind of session: named at a press, with its folder
+    (tmp_path / ".git").rmdir()
+    store.mkdir()
+    (store / "backend").write_text("made-up-kind\n", encoding="utf-8")
+    kind = nl["settings_store_refused_kind"].format(store=literal(store.resolve()))
+    assert kind.startswith(f"Aanmelden kan niet: de beveiligde opslag van de aanmelding ({literal(store.resolve())}) is gemaakt door een "
+                           "andere Windows-gebruiker")
+    assert handler(page, "sign_out")(TENANT_ID, CLIENT_ID, "nl")[3] == kind and handler(page, "check_connection")(TENANT_ID, CLIENT_ID, "", FOLDER, "nl") == see
+    assert handler(page, "store_checked")("nl") == kind and handler(page, "sections_relabelled")("nl")[5] == kind      # before any press
+    assert handler(page, "store_checked")("en") == en["settings_store_refused_kind"].format(store=literal(store.resolve()))
+    assert sorted(made.name for made in store.iterdir()) == ["backend"]
+
+    def broken(tenant, client):
+        raise PermissionError("made-up: the folder cannot be opened")
+
+    other = build_app(deps(tmp_path / "other", madeup_out).model_copy(update={"settings": load_settings(path)}), settings_file=path,
+                      account_factory=broken, session=FakeSession())
+    assert handler(other, "check_connection")(TENANT_ID, CLIENT_ID, "", FOLDER, "nl") == nl["settings_store_refused"]      # the line of before
 
 
 def test_the_browser_sign_in_shows_the_account_and_lists_the_folders_and_never_the_token(tmp_path, madeup_out):
@@ -561,9 +614,9 @@ def test_the_review_command_gives_the_page_its_settings_file_and_its_share_and_s
 
 
 def test_the_extension_code_is_shown_on_the_local_page_only(tmp_path, madeup_out):
-    """The code the browser extension sends (capture_token) is one line inside the folded connections that cannot be edited, with
-    a button to copy it, filled from the settings file when the page loads: on the page of this PC only, not on a public link and
-    not on a page without its settings file."""
+    """The code the browser extension sends (capture_token) is one line inside the section "Postvak en AI" that cannot be edited,
+    with a button to copy it, filled from the settings file when the page loads: on the page of this PC only, not on a public link
+    and not on a page without its settings file."""
     gr = import_gradio()
     nl, en = STRINGS["nl"], STRINGS["en"]
     assert (nl["settings_extension_code"], en["settings_extension_code"]) == ("Code voor de uitbreiding in de browser", "Code for the browser extension")
@@ -571,13 +624,12 @@ def test_the_extension_code_is_shown_on_the_local_page_only(tmp_path, madeup_out
     assert en["settings_extension_code_help"] == "Paste this code into the options of the Inkoopassistent extension in Edge or Chrome."
     token = "made-up-code-of-the-extension-0123456789"
     path, page, made = tab(tmp_path, madeup_out, capture_token=token)
-    [settings] = [block for block in page.blocks.values() if isinstance(block, gr.Tab) and block.label == nl["settings_tab"]]
-    [folded] = [block for block in settings.children if isinstance(block, gr.Accordion) and block.label == nl["settings_connections"]]
+    connections = section(page, "koppelingen")
 
     def inside(block) -> list:
         return [block, *[found for child in getattr(block, "children", []) for found in inside(child)]]
     [code] = [block for block in page.blocks.values() if getattr(block, "label", None) == nl["settings_extension_code"]]
-    assert code in inside(folded) and isinstance(code, gr.Textbox) and code.interactive is False and code.buttons == ["copy"]
+    assert code in inside(connections) and isinstance(code, gr.Textbox) and code.interactive is False and code.buttons == ["copy"]
     assert code.info == nl["settings_extension_code_help"] and code.max_lines == 1
     [fill] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == "extension_code_opened"]
     assert fill.outputs == [code] and fill.fn() == token
@@ -601,6 +653,116 @@ def test_switching_the_language_relabels_the_tab_and_clears_its_note(tmp_path, m
     assert shown[0] == STRINGS["en"]["settings_intro"] and shown[1]["label"] == "Directory (tenant) ID" and shown[-1] == ""
 
 
+def test_each_group_of_buttons_of_the_connections_answers_right_under_it(tmp_path, madeup_out):
+    """Finding 1 of the owner's test: the answer of a sign-in stood at the end of the part, 618 px under its buttons. The part
+    "Postvak en AI" now reads as the state first and then five numbered steps, and each group of buttons answers on a line of its
+    own, the next block after the group: the three sign-in buttons on settings-sign-note (the waiting line, the code and the
+    address, a refusal, "Afgemeld." and the folders listed), "Mappen ophalen" and "Verbinding testen" on settings-folder-note,
+    "Postvak opslaan", the one filled button of the part, on the note right after it, the choice of the reader on
+    settings-reader-note right after its radio, and the two Copilot buttons on the line under them. Selecting the part's section
+    reads the account and the state of the mailbox again, and the language switch relabels the steps and empties the new answer
+    lines."""
+    gr = import_gradio()
+    session = FakeSession({("GET", f"{GRAPH}/me/mailFolders?$top=100"): FOLDERS})
+    path, page, made = tab(tmp_path, madeup_out, app=FakeApp(accounts=[USERNAME]), session=session, **SIX)
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    connections = section(page, "koppelingen")
+
+    def inside(block) -> list:
+        return [block, *[found for child in getattr(block, "children", []) for found in inside(child)]]
+
+    def bound(fn_name: str):
+        [found] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == fn_name]
+        return found
+
+    opened = bound("settings_opened")
+    roles = {id(opened.outputs[5]): "account", id(opened.outputs[6]): "trigger", id(bound("save_settings").outputs[0]): "save note",
+             id(bound("test_copilot").outputs[0]): "copilot note"}           # the lines of before, which have no id of their own
+
+    def name(block) -> str:
+        """A block as the buyer sees it: a line by its role or its id, a heading or a text by itself, a button by its text."""
+        if id(block) in roles:
+            return roles[id(block)]
+        if isinstance(block, gr.Button):
+            return f"button {block.value}"
+        if isinstance(block, gr.Markdown):
+            return block.elem_id or block.value
+        return getattr(block, "label", None) or type(block).__name__
+
+    def triggers(f) -> list:
+        return sorted((name(page.blocks[block]) if block != page._id else "page", event) for block, event in f.targets)
+
+    def after(block):
+        """The next block after this one, in the same row or part; a field the page library holds in a form of its own is taken with
+        that form."""
+        while type(block.parent).__name__ == "Form":
+            block = block.parent
+        siblings = block.parent.children
+        return siblings[siblings.index(block) + 1]
+
+    steps = [f"## {nl[f'mail_step:{step}']}" for step in ("ids", "sign_in", "mailbox", "send", "read")]
+    assert steps == ["## 1. Gegevens van de app-registratie", "## 2. Aanmelden bij Microsoft", "## 3. Map van het postvak", "## 4. Verzenden",
+                     "## 5. Documenten lezen"]
+    order = [name(block) for block in inside(connections) if isinstance(block, (gr.Markdown, gr.Textbox, gr.Dropdown, gr.Radio, gr.Button))]
+    assert order == ["account", f"## {nl['settings_trigger']}", "trigger", nl["settings_intro"],
+                     steps[0], nl["settings_tenant"], nl["settings_client"],
+                     steps[1], nl["settings_browser_note"], f"button {nl['settings_sign_in']}", f"button {nl['settings_sign_in_code']}",
+                     f"button {nl['settings_sign_out']}", "settings-sign-note",
+                     steps[2], nl["settings_mailbox"], nl["settings_folder"], f"button {nl['settings_folders']}", f"button {nl['settings_test']}",
+                     "settings-folder-note",
+                     steps[3], nl["settings_send_via"], f"button {nl['settings_save']}", "save note",
+                     steps[4], "settings-reader-state", nl["settings_ai_reader"], "settings-reader-note", f"### {nl['settings_ai']}",
+                     nl["settings_ai_needs"],
+                     f"button {nl['settings_ai_sign_in']}", f"button {nl['settings_ai_test']}", "copilot note", nl["settings_extension_code"]]
+    assert (nl["settings_trigger"], nl["settings_save"], nl["settings_ai"]) == ("Stand van het postvak", "Postvak opslaan", "Microsoft 365 Copilot")
+    filled = [block.value for block in inside(connections) if isinstance(block, gr.Button) and block.variant == "primary"]
+    assert filled == [nl["settings_save"]]                                           # the one filled button of the part
+    # each group of buttons and the line right under it
+    lines = {block.elem_id: block for block in inside(connections) if isinstance(block, gr.Markdown) and block.elem_id}
+    [sign_in_row, copilot_row] = [block for block in inside(connections) if isinstance(block, gr.Row) and all(
+        isinstance(child, gr.Button) for child in block.children)]
+    assert [name(child) for child in sign_in_row.children] == [f"button {nl[key]}" for key in ("settings_sign_in", "settings_sign_in_code",
+                                                                                                "settings_sign_out")]
+    assert after(sign_in_row) is lines["settings-sign-note"] and name(after(copilot_row)) == "copilot note"
+    for fn_name in ("sign_in_browser", "sign_in_code", "sign_out"):
+        assert [name(output) for output in bound(fn_name).outputs] == ["account", nl["settings_folder"], "State", "settings-sign-note"], fn_name
+    [test_button, save_button] = [block for block in inside(connections) if name(block) in (f"button {nl['settings_test']}", f"button {nl['settings_save']}")]
+    assert after(test_button) is lines["settings-folder-note"] and name(after(save_button)) == "save note"
+    assert [name(output) for output in bound("load_folders").outputs] == [nl["settings_folder"], "State", "settings-folder-note"]
+    assert [name(output) for output in bound("check_connection").outputs] == ["settings-folder-note"]
+    assert [name(output) for output in bound("save_settings").outputs] == ["save note", "trigger"]
+    [reader] = [block for block in inside(connections) if isinstance(block, gr.Radio) and block.label == nl["settings_ai_reader"]]
+    assert after(reader) is lines["settings-reader-note"]
+    assert [name(output) for output in bound("save_reader").outputs] == [nl["settings_ai_reader"], "settings-reader-note"]
+    answers = [lines["settings-sign-note"], lines["settings-folder-note"], lines["settings-reader-note"], after(save_button), after(copilot_row)]
+    assert [line.elem_classes for line in answers] == [["answer"]] * 5 and [line.value for line in answers] == [""] * 5
+    waiting, signed = list(handler(page, "sign_in_browser")(TENANT_ID, CLIENT_ID, "", "nl"))
+    assert (waiting[3], signed[3]) == (nl["settings_waiting"], nl["settings_folders_loaded"].format(count=2))
+    # selecting the part's section reads the account and the state of the mailbox again, and the line under the sign-in buttons
+    selected, checked = bound("connections_selected"), bound("store_checked")
+    assert triggers(selected) == [(nl["settings_connections"], "select")] and triggers(checked) == [(nl["settings_connections"], "select"),
+                                                                                                    ("page", "load")]
+    assert [name(block) for block in selected.inputs] == [nl["language"], nl["settings_tenant"], nl["settings_client"]]
+    assert [name(block) for block in selected.outputs] == ["account", "trigger"] and [name(block) for block in checked.outputs] == ["settings-sign-note"]
+    assert (selected.show_progress, checked.show_progress) == ("hidden", "hidden")
+    assert selected.fn("nl", TENANT_ID, CLIENT_ID) == (nl["settings_signed_in"].format(account=USERNAME), nl["settings_trigger_pending"])
+    (tmp_path / "cases").mkdir(exist_ok=True)                  # the runner connected the folder after the page loaded
+    state = {"mailbox": None, "folder": FOLDER, "connected_at": "2026-11-12T08:00:00Z", "delta_link": "made-up", "last_sync": "2026-11-12T09:15:00Z",
+             "saved": 3}
+    (tmp_path / "cases" / "mailbox_state.json").write_text(json.dumps(state), encoding="utf-8")
+    assert selected.fn("en", TENANT_ID, CLIENT_ID) == (en["settings_signed_in"].format(account=USERNAME), en["settings_trigger_on"].format(
+        since=local("2026-11-12T08:00:00+00:00"), last=local("2026-11-12T09:15:00+00:00"), saved=3))
+    assert checked.fn("nl") == {"__type__": "update"}          # a store the PC takes: the line keeps the answer it holds
+    # the language switch: the five steps in the other language, the new answer lines emptied (its other outputs are the sections
+    # it relabels, which test_the_settings_tab_has_five_sections holds)
+    relabelled = bound("sections_relabelled")
+    assert triggers(relabelled) == [(nl["language"], "change")] and relabelled.show_progress == "hidden"
+    assert [name(block) for block in relabelled.outputs[:8]] == [*steps, "settings-sign-note", "settings-folder-note", "settings-reader-note"]
+    assert relabelled.fn("en")[:8] == ("## 1. The app registration", "## 2. Sign in with Microsoft", "## 3. The mailbox folder",
+                                       "## 4. Sending", "## 5. Reading documents", "", "", "")
+    assert [f"## {en[f'mail_step:{step}']}" for step in ("ids", "sign_in", "mailbox", "send", "read")] == list(relabelled.fn("en")[:5])
+
+
 def test_a_public_link_is_refused_while_the_settings_name_a_tenant_or_a_folder():
     for name, value in (("ms_tenant_id", TENANT_ID), ("mail_folder", FOLDER)):
         settings = SETTINGS.model_copy(update={"authorization_limit": None, name: value})
@@ -612,10 +774,250 @@ def test_the_two_languages_have_the_same_strings_for_the_tab():
     assert {key for key in STRINGS["nl"] if key.startswith("settings")} == {key for key in STRINGS["en"] if key.startswith("settings")}
     assert STRINGS["nl"]["settings_tab"] == "Instellingen" and STRINGS["en"]["settings_tab"] == "Settings"
     assert STRINGS["nl"]["settings_sign_in"] == "Aanmelden bij Microsoft" and STRINGS["nl"]["settings_sign_in_code"] == "Aanmelden met een code"
-    assert STRINGS["nl"]["settings_test"] == "Verbinding testen" and STRINGS["nl"]["settings_save"] == "Opslaan"
+    assert STRINGS["nl"]["settings_test"] == "Verbinding testen" and STRINGS["nl"]["settings_save"] == "Postvak opslaan"
     assert STRINGS["nl"]["settings_sign_out"] == "Afmelden"
     assert (STRINGS["nl"]["settings_tenant"], STRINGS["nl"]["settings_client"]) == ("Map-id (tenant)", "Toepassings-id (client)")
     assert STRINGS["nl"]["settings_ids_needed"] == "Vul eerst een geldige map-id (tenant) en toepassings-id (client) in."
+
+
+# --- the five sections of the tab, and the state of the assistant (findings 7 and 8 of the owner's test) ---
+
+# Each section of the tab by its id, in the order of the page, with the key of its label.
+SECTIONS = {"regels": "settings_section:rules", "leveranciers": "settings_section:suppliers", "koppelingen": "settings_connections",
+            "exact": "exact_title", "assistent": "settings_section:assistant"}
+# Each save of the tab by its handler, with the key of its button's text.
+SAVES = {"save_buyer": "settings_buyer_save", "save_supplier": "settings_supplier_save", "save_settings": "settings_save",
+         "exact_saved": "exact_save", "exact_numbers_saved": "exact_po_number_save", "export_saved": "exact_export_save",
+         "articles_saved": "exact_articles_save"}
+
+
+def test_the_settings_tab_has_five_sections(tmp_path, madeup_out):
+    """Finding 7 of the owner's test: the tab was one long page, the buyer's rules and the suppliers on top and two folds under
+    them. Under the line of a settings file that cannot be read, which stays its first block, the tab now holds five sections in a
+    gr.Tabs of its own, settings-sections, the buyer's things first and the installer's after: "Uw regels" (chosen when the page
+    opens), "Leveranciers", "Postvak en AI", "Koppeling met Exact" (the block of before, with its id) and "Stand van de assistent".
+    Each part stands in its section, and no fold is left. The language switch relabels the three new sections
+    (sections_relabelled), while the other two keep their own relabel, and selecting "Postvak en AI" reads its state again, as
+    opening its fold did. On a public link and without a settings file the tab shows its one line and nothing else."""
+    gr = import_gradio()
+    shared = tab(tmp_path / "share", madeup_out, share=True, **BUYER)[1]
+    without = build_app(deps(tmp_path / "nofile", madeup_out))
+    path, page, made = tab(tmp_path, madeup_out, **BUYER)
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    [settings] = [block for block in page.blocks.values() if isinstance(block, gr.Tab) and block.label == nl["settings_tab"]]
+    line, sections = settings.children                     # the line of a file that cannot be read first, then the sections
+    assert (type(line).__name__, line.elem_id) == ("Markdown", "settings-file-line")
+    assert isinstance(sections, gr.Tabs) and (sections.elem_id, sections.selected) == ("settings-sections", "regels")
+    assert [(child.id, child.label) for child in sections.children] == [(tab_id, nl[key]) for tab_id, key in SECTIONS.items()]
+    assert all(isinstance(child, gr.Tab) for child in sections.children) and section(page, "exact").elem_id == "exact-block"
+    assert [nl[key] for key in SECTIONS.values()] == ["Uw regels", "Leveranciers", "Postvak en AI", "Koppeling met Exact",
+                                                      "Stand van de assistent"]
+    assert [en[key] for key in SECTIONS.values()] == ["Your rules", "Suppliers", "Mailbox and AI", "Connection to Exact",
+                                                      "The assistant's state"]
+
+    def inside(block) -> list:
+        return [block, *[found for child in getattr(block, "children", []) for found in inside(child)]]
+
+    def held_in(tab_id: str) -> set:
+        """What a section holds: its fields and lists by their labels, and whatever has an id by its id."""
+        blocks = inside(section(page, tab_id))
+        return {getattr(block, "label", None) for block in blocks} | {getattr(block, "elem_id", None) for block in blocks}
+    rules = {nl[f"settings_field:{field}"] for field in BUYER_FIELDS} | {"settings-buyer-note"}
+    suppliers = {nl["settings_supplier_choice"], nl["settings_supplier_name"], nl["settings_supplier_review"], "settings-supplier-note"}
+    assert rules <= held_in("regels") and suppliers <= held_in("leveranciers")
+    assert not rules & held_in("leveranciers") and not suppliers & held_in("regels")
+    assert {nl["settings_tenant"], nl["settings_folder"], nl["settings_ai_reader"], nl["settings_extension_code"]} <= held_in("koppelingen")
+    assert {nl["exact_sample"], nl["exact_export_sample"], nl["exact_articles_sample"], nl["tryout_switch"]} <= held_in("exact")
+    assert {"assistant-lines", "assistant-refresh", "assistant-log", "assistant-log-help"} <= held_in("assistent")
+    assert not [block for block in inside(settings) if isinstance(block, gr.Accordion)]                  # no fold is left
+    # the language switch: the three new sections by sections_relabelled, "Postvak en AI" and the Exact section by their own relabel
+    [relabelled] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == "sections_relabelled"]
+    new = [section(page, tab_id) for tab_id in ("regels", "leveranciers", "assistent")]
+    assert [block for block in relabelled.outputs if isinstance(block, gr.Tab)] == new
+    given = dict(zip([id(block) for block in relabelled.outputs], relabelled.fn("en")))
+    assert [given[id(block)] for block in new] == [{"__type__": "update", "label": en[f"settings_section:{key}"]}
+                                                   for key in ("rules", "suppliers", "assistant")]
+    connections = section(page, "koppelingen")
+    [own] = [f for f in page.fns.values() if f.outputs and f.outputs[0] is connections]
+    assert own.fn("en") == {"__type__": "update", "label": en["settings_connections"]} and len(own.outputs) == 1
+    assert handler(page, "exact_relabel")("en", None, "comma", [], *[None] * SLOTS)[0] == {"__type__": "update", "label": en["exact_title"]}
+    [exact_relabel] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == "exact_relabel"]
+    assert exact_relabel.outputs[0] is section(page, "exact")
+    # selecting "Postvak en AI" reads its state again: the account and the mailbox, the line under the sign-in buttons, the reader
+    for fn_name in ("connections_selected", "store_checked", "reader_shown"):
+        assert [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == fn_name and (connections._id, "select") in f.targets], fn_name
+    assert not [f for f in page.fns.values() if any(event in ("expand", "collapse") for _, event in f.targets)]
+    # on a public link and without a settings file: the tab's one line, and no section
+    for other in (shared, without):
+        [settings] = [block for block in other.blocks.values() if isinstance(block, gr.Tab) and block.label == nl["settings_tab"]]
+        assert [type(child).__name__ for child in settings.children] == ["Markdown"]
+        assert not [block for block in other.blocks.values() if isinstance(block, gr.Tabs) and block.elem_id == "settings-sections"]
+
+
+def test_each_save_of_the_tab_names_what_it_saves(tmp_path, madeup_out):
+    """Finding 7 of the owner's test, after proposal C (its B11): five buttons of the tab read "Opslaan", each in another part. Each
+    save now names what it saves, in both languages, each name differs from the others and none is "Opslaan" alone: "Regels
+    opslaan", "Leverancier opslaan", "Postvak opslaan", "Opmaak opslaan" (part 1 of "Koppeling met Exact"), "Nummerherkenning opslaan" (at
+    the end of part 1), "Exportkolommen opslaan" (part 2) and "Artikelkolommen opslaan" (part 3). The language switch gives each its
+    own name, and the sentence of part 1 that sends the buyer to its save names that button. The three "Testen" of the Exact parts
+    each stand inside their own numbered part and stay as they are."""
+    gr = import_gradio()
+    path, page, made = tab(tmp_path, madeup_out, **BUYER)
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    for fn_name, key in SAVES.items():
+        [f] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == fn_name]
+        [(button, event)] = f.targets
+        assert (type(page.blocks[button]).__name__, page.blocks[button].value, event) == ("Button", nl[key], "click"), fn_name
+    assert [nl[key] for key in SAVES.values()] == ["Regels opslaan", "Leverancier opslaan", "Postvak opslaan", "Opmaak opslaan",
+                                                   "Nummerherkenning opslaan", "Exportkolommen opslaan", "Artikelkolommen opslaan"]
+    assert [en[key] for key in SAVES.values()] == ["Save the rules", "Save the supplier", "Save the mailbox", "Save the layout",
+                                                   "Save number recognition", "Save the export columns", "Save the article columns"]
+    for strings in (nl, en):
+        names = [strings[key] for key in SAVES.values()]
+        assert len(set(names)) == len(names) and not {"Opslaan", "Save"} & set(names)
+    [settings] = [block for block in page.blocks.values() if isinstance(block, gr.Tab) and block.label == nl["settings_tab"]]
+
+    def inside(block) -> list:
+        return [block, *[found for child in getattr(block, "children", []) for found in inside(child)]]
+    buttons = [block.value for block in inside(settings) if isinstance(block, gr.Button)]
+    assert not {"Opslaan", "Save"} & set(buttons)
+    assert sorted(value for value in buttons if value.endswith("opslaan")) == sorted(nl[key] for key in SAVES.values())
+    # the language switch gives each save its own name
+    for name, args, key in (("buyer_relabel", ("en", "daily", "nl", NEW_SUPPLIER), "settings_buyer_save"),
+                            ("buyer_relabel", ("en", "daily", "nl", NEW_SUPPLIER), "settings_supplier_save"),
+                            ("settings_relabel", ("en", "", "", "", "auto"), "settings_save"),
+                            ("exact_relabel", ("en", None, "comma", [], *[None] * SLOTS), "exact_save"),
+                            ("exact_numbers_relabel", ("en", None), "exact_po_number_save"),
+                            ("export_relabel", ("en", None, None, *[NO_COLUMN] * len(EXPORT_FORM), [], "point"), "exact_export_save"),
+                            ("articles_relabel", ("en", None, None, *[NO_COLUMN] * len(ARTICLE_FORM), [], "point"), "exact_articles_save")):
+        assert {"__type__": "update", "value": en[key]} in handler(page, name)(*args), (name, key)
+    assert nl["exact_read"].endswith("Klopt alles, druk dan op Opmaak opslaan.") and en["exact_read"].endswith("press Save the layout.")
+
+
+def test_the_assistants_state_shows_its_lines_and_the_last_lines_of_the_log(tmp_path, madeup_out, monkeypatch):
+    """Finding 8 of the owner's test: whether the assistant still made its passes, whether the launcher ran it and what the runner
+    wrote could be seen in PowerShell only. The section "Stand van de assistent" shows it, read from the files of this PC alone
+    (aid/review/status.py) and never from Microsoft, when the section is selected and with "Stand van de assistent vernieuwen"
+    (assistant_shown): a line each for the runner's last pass, the launcher, a STOP file, a runner the launcher gave up, the mailbox
+    with its lapse, what reads the documents with the purchase orders that wait for Copilot, and a refused store, a line that tells a
+    problem in bold; then the last 20 lines of runner.log, the newest first, in a box that cannot be edited, and whom they are for. A
+    file that cannot be read leaves the section as it is. A public link and a page without its settings file have no such section."""
+    gr = import_gradio()
+    shared = tab(tmp_path / "share", madeup_out, share=True, **SIX)[1]
+    without = build_app(deps(tmp_path / "nofile", madeup_out))
+    for other in (shared, without):
+        assert "assistant_shown" not in {getattr(f.fn, "__name__", "") for f in other.fns.values()}
+        assert not [block for block in other.blocks.values() if getattr(block, "elem_id", None) in ("assistant-lines", "assistant-log")]
+    path, page, made = tab(tmp_path, madeup_out, **SIX)
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    assistant = section(page, "assistent")
+
+    def inside(block) -> list:
+        return [block, *[found for child in getattr(block, "children", []) for found in inside(child)]]
+    lines, refresh, log, help_line = [block for block in inside(assistant) if isinstance(block, (gr.Markdown, gr.Button, gr.Textbox))]
+    assert [block.elem_id for block in (lines, refresh, log, help_line)] == ["assistant-lines", "assistant-refresh", "assistant-log",
+                                                                             "assistant-log-help"]
+    assert (lines.value, refresh.value, refresh.variant) == ("", nl["assistant_refresh"], "secondary")
+    assert (type(log).__name__, log.label, log.interactive, log.lines, log.max_lines) == ("Textbox", nl["assistant_log"], False, 12, 20)
+    assert help_line.value == nl["assistant_log_help"] == "Deze regels zijn voor de onderzoeker. Ze staan alleen op deze pc."
+    assert (nl["assistant_refresh"], nl["assistant_log"]) == ("Stand van de assistent vernieuwen",
+                                                              "Laatste meldingen van de assistent (runner.log), de nieuwste bovenaan")
+    # bound once to the section and its button, and chained once after the strip's button of the tab "Beoordelen" (test_review.py)
+    [bound] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == "assistant_shown" and f.trigger_after is None]
+    [language] = [block for block in page.blocks.values() if getattr(block, "label", None) == nl["language"]]
+    assert sorted(bound.targets, key=str) == sorted([(assistant._id, "select"), (refresh._id, "click")], key=str)
+    assert bound.inputs == [language] and bound.outputs == [lines, log, help_line] and bound.show_progress == "hidden"
+
+    def no_network(*args, **kwargs):
+        raise OSError("no network in the tests")
+
+    def made_one(*args, **kwargs):
+        raise ReachedMicrosoft("the state of the assistant made a Microsoft account")
+
+    monkeypatch.setattr(socket.socket, "connect", no_network)              # nothing is sent, and no account is made
+    monkeypatch.setattr(socket, "create_connection", no_network)
+    monkeypatch.setattr(MicrosoftAccount, "__init__", made_one)
+
+    def strong(text: str) -> str:                                          # a line that tells a problem stands out
+        return f"**{text}**"
+
+    def shown(language_now: str = "nl") -> tuple:
+        return bound.fn(language_now)
+    # nothing yet: no pass, no launcher, the mailbox not connected yet, the parser, and no log
+    pending = f"{nl['settings_trigger']}: {nl['settings_trigger_pending']}"
+    assert shown() == ("\n\n".join([strong(nl["assistant_pass_none"]), nl["assistant_launcher_off"], pending, nl["reader_state:parser"]]),
+                       nl["assistant_log_none"], nl["assistant_log_help"])
+    assert nl["assistant_pass_none"] == ("De assistent heeft nog geen ronde gemaakt. Start de Inkoopassistent, of geef dit door aan de "
+                                         "onderzoeker.")
+    assert nl["assistant_launcher_off"] == "De starter draait niet: de assistent is met de hand gestart, of staat stil."
+    # a pass a minute ago, the launcher running, the mailbox read, and 25 lines in runner.log, of which the last 20 show, the newest first
+    root = tmp_path / "cases"
+    root.mkdir(exist_ok=True)
+    state = root / "digest_state.json"
+    state.write_text(json.dumps({"last_sent": None, "reported": [], "skipped": []}), encoding="utf-8")
+    os.utime(state, ((NOW - timedelta(minutes=1)).timestamp(),) * 2)
+    launcher_state(path, NOW.timestamp() - 5)
+    connection = {"mailbox": None, "folder": FOLDER, "connected_at": "2026-11-12T08:00:00Z", "delta_link": "made-up",
+                  "last_sync": "2026-11-12T08:30:00Z", "saved": 3}
+    (root / "mailbox_state.json").write_text(json.dumps(connection), encoding="utf-8")
+    written = [f"2026-11-12T08:{minute:02d}:00 250107_20261112T080000: line {minute}" for minute in range(25)]
+    (root / "runner.log").write_text("\n".join(written) + "\n", encoding="utf-8")
+    day = "%d-%m-%Y %H:%M"                                                  # the one form of a day in the section
+    read = f"{nl['settings_trigger']}: " + nl["settings_trigger_on"].format(since=local("2026-11-12T08:00:00+00:00", day),
+                                                                            last=local("2026-11-12T08:30:00+00:00", day), saved=3)
+    assert shown() == ("\n\n".join(["Laatste ronde: 12-11-2026 08:59.", "De starter draait sinds 12-11-2026 08:01; de assistent is 1 keer gestart.",
+                                    read, nl["reader_state:parser"]]), "\n".join(written[::-1][:20]), nl["assistant_log_help"])
+    assert not re.search(r"\b\d{4}-\d{2}-\d{2}\b", shown()[0])                 # no day in another form beside them
+    # a STOP file, and a runner the launcher gave up after starting it six times: each a line of its own
+    (path.parent / "STOP").write_text("", encoding="utf-8")
+    assert shown()[0].split("\n\n") == ["Laatste ronde: 12-11-2026 08:59.", "De starter draait sinds 12-11-2026 08:01; de assistent is 1 keer gestart.",
+                                        strong("Er staat een STOP-bestand: de assistent begint geen nieuwe ronde tot het weg is."), read,
+                                        nl["reader_state:parser"]]
+    (path.parent / "STOP").unlink()
+    launcher_state(path, NOW.timestamp() - 1, starts=6, given_up=True)
+    assert shown()[0].split("\n\n")[1:3] == ["De starter draait sinds 12-11-2026 08:01; de assistent is 6 keer gestart.",
+                                             strong(nl["assistant_given_up"])]
+    assert "Zie de laatste meldingen hieronder" in nl["assistant_given_up"]
+    # no pass for 11 minutes, no launcher, the sign-in of the mailbox lapsed, Copilot down with two orders waiting, and the store of
+    # the sign-in refused: the problems in bold, Copilot's cause by its status code, never by its words
+    copilot = {"since": "2026-11-12T08:15:00", "error": "Copilot refused: 400 BadRequest", "waiting": 2}
+    lapse = {"since": "2026-11-12T08:40:00", "logged": "2026-11-12T08:40:00"}
+    state.write_text(json.dumps({"last_sent": None, "reported": [], "skipped": [], "mailbox_lapsed": lapse, "copilot": copilot}), encoding="utf-8")
+    os.utime(state, ((NOW - timedelta(minutes=11)).timestamp(),) * 2)
+    launcher_state(path, NOW.timestamp() - 30)                            # a heartbeat that stands still: no launcher runs
+    by_hand(path, reader="llm")
+    document = tmp_path / "document.pdf"
+    document.write_bytes(b"%PDF-1.4\n% a made-up document\n")
+    for po_number, minutes in (("250109", 20), ("250108", 30)):            # two cases without a result
+        open_case(root, "confirmation", [document], po_number, NOW - timedelta(minutes=minutes))
+    (tmp_path / ".git").mkdir()                                            # the store of the sign-in lies inside a work tree
+    assert shown()[0].split("\n\n") == [
+        strong("De assistent heeft sinds 12-11-2026 08:49 geen ronde gemaakt. Zolang hij stilstaat, komt er niets binnen. Start de "
+               "Inkoopassistent opnieuw, of geef dit door aan de onderzoeker."),
+        nl["assistant_launcher_off"], read,
+        strong("De aanmelding van het postvak is verlopen sinds 12-11-2026 08:40: meld u opnieuw aan onder Postvak en AI."),
+        strong(nl["reader_state:down"].format(since="12-11-2026 08:15", cause="code 400", n=2)), "Wachten op Copilot: inkooporder 250108, 250109.",
+        strong("Aanmelden kan niet: de beveiligde opslag is geweigerd. Onder Postvak en AI staat waarom.")]
+    english = shown("en")
+    assert english[0].split("\n\n")[0] == strong(en["assistant_pass_old"].format(time="12-11-2026 08:49"))
+    assert english[0].split("\n\n")[-2:] == [en["assistant_waiting_copilot"].format(orders="250108, 250109"), strong(en["assistant_store"])]
+    assert english[1:] == ("\n".join(written[::-1][:20]), en["assistant_log_help"])
+    assert "BadRequest" not in json.dumps([shown(), english])
+    # the language switch gives the section in the other language: its label, the lines, the button, the log's label, the help
+    [relabelled] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == "sections_relabelled"]
+    given = dict(zip([id(block) for block in relabelled.outputs], relabelled.fn("en")))
+    assert given[id(assistant)] == {"__type__": "update", "label": en["settings_section:assistant"]}
+    assert (given[id(lines)], given[id(help_line)]) == (english[0], en["assistant_log_help"])
+    assert given[id(refresh)] == {"__type__": "update", "value": en["assistant_refresh"]}
+    assert given[id(log)] == {"__type__": "update", "label": en["assistant_log"], "value": english[1]}
+    # a file that cannot be read leaves what the section shows as it is
+    (root / "runner.log").unlink()
+    assert shown("en")[1] == en["assistant_log_none"] == "There are no messages in runner.log yet."
+
+    def held_open(*args, **kwargs):
+        raise OSError("made-up: the file is held by another program")
+    monkeypatch.setattr("aid.review.status.log_tail", held_open)
+    assert shown() == (SAME, SAME, SAME)
 
 
 # --- the AI section: Microsoft 365 Copilot (Task 27) ---
@@ -669,12 +1071,12 @@ def test_the_copilot_test_shows_the_error_text_and_never_a_message_of_microsoft(
 
 
 def test_the_choice_of_the_reader_is_written_to_the_settings_file_and_shown_when_the_tab_opens(tmp_path, madeup_out):
-    path, page, made = tab(tmp_path, madeup_out, **SIX)
+    path, page, made = tab(tmp_path, madeup_out, app=FakeApp(accounts=[USERNAME]), session=copilot_session("OK"), **SIX)
     before = json.loads(path.read_text(encoding="utf-8"))
     assert handler(page, "ai_opened")("nl") == "parser"
-    choice, note = handler(page, "save_reader")("llm", "nl")
+    choice, note = handler(page, "save_reader")("llm", "nl")                # Copilot answers the test first
     after = json.loads(path.read_text(encoding="utf-8"))
-    assert after == before | {"reader": "llm"} and list(after) == list(before) and note == STRINGS["nl"]["settings_buyer_saved"]
+    assert after == before | {"reader": "llm"} and list(after) == list(before) and note == STRINGS["nl"]["settings_ai_switched"]
     assert choice == "llm" and handler(page, "ai_opened")("en") == "llm"
     choice, note = handler(page, "save_reader")("parser", "en")
     assert json.loads(path.read_text(encoding="utf-8"))["reader"] == "parser" and note == STRINGS["en"]["settings_buyer_saved"]
@@ -685,6 +1087,121 @@ def test_copilot_is_not_chosen_before_the_tenant_and_the_client_are_saved(tmp_pa
     before = path.read_bytes()
     choice, note = handler(page, "save_reader")("llm", "nl")
     assert (choice, note) == ("parser", STRINGS["nl"]["settings_ai_ids_needed"]) and path.read_bytes() == before
+
+
+BAD_REQUEST = FakeResponse(400, json_data={"error": {"code": "BadRequest", "message": "made-up: this account has no Copilot licence"}})
+
+
+def test_choosing_copilot_tests_it_first_and_keeps_the_parser_when_it_refuses(tmp_path, madeup_out):
+    """Finding 6 of the owner's test: Copilot could be chosen while Microsoft refused it (a 400 for an account without a Copilot
+    licence), and every case then waited for it. Choosing Copilot now sends the one test message of "Copilot testen" first, with the
+    saved tenant and client, and writes the setting only once Copilot answered. A refusal leaves the file as it was byte for byte,
+    keeps the parser, and says why by the status code with a hint, never by Copilot's own words; a sign-in for Copilot that is
+    missing, a Copilot that cannot be reached and an answer without text each have their cause and hint too."""
+    session = copilot_session(BAD_REQUEST)
+    path, page, made = tab(tmp_path, madeup_out, app=FakeApp(accounts=[USERNAME]), session=session, **SIX)
+    before = path.read_bytes()
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    choice, note = handler(page, "save_reader")("llm", "nl")
+    assert (choice, note) == ("parser", nl["settings_ai_switch_refused"].format(cause=nl["copilot_cause:code"].format(code="400"),
+                                                                                hint=nl["copilot_hint:400"]))
+    assert note == ("Niet opgeslagen: Copilot gaf geen antwoord op de test (code 400). De assistent blijft lezen zonder AI. Een 400 komt "
+                    "meestal doordat het account geen licentie voor Microsoft 365 Copilot heeft, of doordat het een persoonlijk "
+                    "Microsoft-account is. Copilot werkt alleen met een werkaccount met die licentie.")
+    assert path.read_bytes() == before                                                     # nothing written
+    chats = [call for call in session.calls if call["url"].endswith("/chat")]
+    assert len(chats) == 1 and json.loads(chats[0]["data"])["message"] == {"text": "Answer with the word OK only."}     # the test alone
+    assert "BadRequest" not in note and "made-up" not in note and ACCESS_TOKEN not in note
+    english = handler(page, "save_reader")("llm", "en")
+    assert english == ("parser", en["settings_ai_switch_refused"].format(cause="code 400", hint=en["copilot_hint:400"]))
+    assert "BadRequest" not in english[1] and path.read_bytes() == before
+
+    class Unreachable(FakeSession):
+        def post(self, url, headers=None, data=None, timeout=None, **kwargs):
+            raise requests.ConnectionError(f"made-up failure for {url}")
+
+    forbidden = FakeResponse(403, json_data={"error": {"code": "Forbidden", "message": "made-up"}})
+    for name, app, answering, cause, hint in (
+            ("not signed in", FakeApp(), copilot_session("OK"), nl["copilot_cause:sign_in"], "copilot_hint:401"),
+            ("forbidden", FakeApp(accounts=[USERNAME]), copilot_session(forbidden), nl["copilot_cause:code"].format(code="403"),
+             "copilot_hint:403"),
+            ("unreachable", FakeApp(accounts=[USERNAME]), Unreachable(), nl["copilot_cause:unreachable"], "copilot_hint:other"),
+            ("no answer", FakeApp(accounts=[USERNAME]), copilot_session(lambda request: copilot_answer(None, sent_text(request))),
+             nl["copilot_cause:other"], "copilot_hint:other")):
+        path, page, made = tab(tmp_path / name.replace(" ", "-"), madeup_out, app=app, session=answering, **SIX)
+        before = path.read_bytes()
+        note = handler(page, "save_reader")("llm", "nl")
+        assert note == ("parser", nl["settings_ai_switch_refused"].format(cause=cause, hint=nl[hint])), name
+        assert path.read_bytes() == before and "Forbidden" not in note[1] and "made-up" not in note[1], name
+
+
+def test_choosing_copilot_writes_it_once_copilot_answers(tmp_path, madeup_out):
+    """Copilot that answers the test message is written as the reader, in its place and with every other key kept, and the note says
+    that the assistant reads with it from its next pass; the choice of the parser writes at once, as before, asking Copilot nothing."""
+    session = copilot_session("OK")
+    path, page, made = tab(tmp_path, madeup_out, app=FakeApp(accounts=[USERNAME]), session=session, **SIX)
+    before = json.loads(path.read_text(encoding="utf-8"))
+    choice, note = handler(page, "save_reader")("llm", "nl")
+    after = json.loads(path.read_text(encoding="utf-8"))
+    assert (choice, note) == ("llm", STRINGS["nl"]["settings_ai_switched"]) and after == before | {"reader": "llm"} and list(after) == list(before)
+    assert note == ("Opgeslagen. Copilot antwoordde op de test; de assistent leest documenten vanaf de volgende ronde met Copilot, binnen "
+                    "een minuut.")
+    assert len([call for call in session.calls if call["url"].endswith("/chat")]) == 1
+    assert handler(page, "save_reader")("parser", "en") == ("parser", STRINGS["en"]["settings_buyer_saved"])
+    assert json.loads(path.read_text(encoding="utf-8"))["reader"] == "parser" and len(session.calls) == 2
+
+
+def test_the_reader_line_says_what_reads_the_documents_now(tmp_path, madeup_out):
+    """Step 5 of "Postvak en AI" opens with a line that says what reads the documents now: the parser, Copilot, or Copilot while it
+    fails as a whole, as the runner notes it in its digest state under "copilot" (aid/runner.py), with the time it began, its cause
+    by a status code and never by the error's text, and the cases that wait for it; or Copilot while it refuses documents, with the
+    cases that failed for it in the last seven days. The line is read when the page loads, when the part's section is selected, at
+    the language switch and after each choice, from the files of this PC only."""
+    gr = import_gradio()
+    path, page, made = tab(tmp_path, madeup_out, **SIX)
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    connections = section(page, "koppelingen")
+    [line] = [block for block in page.blocks.values() if getattr(block, "elem_id", None) == "settings-reader-state"]
+    [on_page, after_choice] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == "reader_shown"]
+    [chosen] = [index for index, f in page.fns.items() if getattr(f.fn, "__name__", "") == "save_reader"]
+    [language] = [block for block in page.blocks.values() if getattr(block, "label", None) == nl["language"]]
+    assert sorted(on_page.targets, key=str) == sorted([(page._id, "load"), (connections._id, "select"), (language._id, "change")], key=str)
+    assert after_choice.targets == [(None, "then")] and after_choice.trigger_after == chosen
+    assert on_page.outputs == after_choice.outputs == [line] and on_page.show_progress == after_choice.show_progress == "hidden"
+    assert line.value == ""
+    shown = on_page.fn
+    assert shown("nl") == nl["reader_state:parser"] == "De assistent leest documenten nu zonder AI."
+    by_hand(path, reader="llm")
+    assert shown("en") == en["reader_state:llm"] == "The assistant now reads documents with Copilot."
+    root = tmp_path / "cases"
+    document = tmp_path / "document.pdf"
+    document.write_bytes(b"%PDF-1.4\n% a made-up document\n")
+    for po_number, minutes in (("250108", 30), ("250109", 20)):                 # two cases without a result
+        open_case(root, "confirmation", [document], po_number, NOW - timedelta(minutes=minutes))
+    note = {"since": "2026-11-12T08:57:00", "error": "Copilot refused: 400 BadRequest", "waiting": 2}
+    (root / "digest_state.json").write_text(json.dumps({"last_sent": None, "reported": [], "skipped": [], "copilot": note}), encoding="utf-8")
+    assert shown("nl") == ("De assistent leest documenten nu met Copilot, maar Copilot werkt niet sinds 12-11-2026 08:57 (code 400); "
+                           "wachtende zaken: 2.")
+    assert shown("en") == en["reader_state:down"].format(since="12-11-2026 08:57", cause="code 400", n=2) and "BadRequest" not in shown("en")
+    for error, cause in ((f"no Microsoft account is signed in: {SIGN_IN_AGAIN}", "copilot_cause:sign_in"),
+                         ("Copilot could not be reached: ConnectionError", "copilot_cause:unreachable"),
+                         ("Copilot ended the conversation: disengagedForRai", "copilot_cause:other")):
+        state = {"last_sent": None, "reported": [], "skipped": [], "copilot": note | {"error": error}}
+        (root / "digest_state.json").write_text(json.dumps(state), encoding="utf-8")
+        assert shown("nl") == nl["reader_state:down"].format(since="12-11-2026 08:57", cause=nl[cause], n=2), error
+    # Copilot refuses documents: a case it could not read, finished as failed today, and one it still tries
+    failed = open_case(root, "confirmation", [document], "250110", NOW - timedelta(hours=1))
+    failed.write_step(8, "result", case_result(failed.case_id, "failed", supplier="S07").model_copy(update={
+        "error": "ReaderError: Copilot could not read this document: Copilot refused: 400 BadRequest"}))
+    tried = {"last_sent": None, "reported": [], "skipped": [], "copilot_cases": {"250111_20261112T080000": {"refused": 1}}}
+    (root / "digest_state.json").write_text(json.dumps(tried), encoding="utf-8")
+    assert shown("nl") == nl["reader_state:refused"].format(n=1) == ("De assistent leest documenten nu met Copilot, maar Copilot weigert "
+                                                                     "documenten. Mislukt in de laatste 7 dagen: 1.")
+    failed.write_step(8, "result", case_result(failed.case_id, "review", supplier="S07"))         # none failed for it yet
+    assert shown("nl") == nl["reader_state:refused_none"] == "De assistent leest documenten nu met Copilot, maar Copilot weigert documenten."
+    assert shown("en") == en["reader_state:refused_none"] == "The assistant now reads documents with Copilot, but Copilot refuses documents."
+    by_hand(path, reader="parser")
+    assert shown("nl") == nl["reader_state:parser"]                    # the line follows the file, whatever the runner noted
 
 
 def test_the_ai_section_says_what_copilot_needs_in_both_languages():
@@ -1441,23 +1958,23 @@ def test_one_name_per_thing_on_the_tab():
     assert "webshop" in nl["settings_help:language"] and "webshop" in en["settings_help:language"]
     for strings in (nl, en):                                   # the choices of the aid's language read as the page's own switch does
         assert (strings["settings_language:nl"], strings["settings_language:en"]) == ("Nederlands", "English")
-    assert nl["settings_connections"] == "Koppelingen: het Microsoft-postvak en de AI-dienst"
-    assert en["settings_connections"] == "Connections: the Microsoft mailbox and the AI service"
+    assert nl["settings_connections"] == "Postvak en AI"
+    assert en["settings_connections"] == "Mailbox and AI"
 
 
 def test_the_buyers_part_is_wired_as_the_page_shows_it(tmp_path, madeup_out):
     """The built page itself: each handler's trigger, inputs and outputs, each field's help, the headings in their order and the
-    table that cannot be edited."""
+    table that cannot be edited, the line of a file that cannot be read first on the tab and the rest in the sections "Uw regels" and
+    "Leveranciers", whose label names the suppliers in place of their heading."""
     gr = import_gradio()
     path, page, made = tab(tmp_path, madeup_out, **BUYER)
     nl = STRINGS["nl"]
     [settings] = [block for block in page.blocks.values() if isinstance(block, gr.Tab) and block.label == nl["settings_tab"]]
-    [folded] = [block for block in settings.children if isinstance(block, gr.Accordion) and block.label == nl["settings_connections"]]
-    [exact] = [block for block in settings.children if isinstance(block, gr.Accordion) and block.label == nl["exact_title"]]
+    [sections] = [block for block in settings.children if isinstance(block, gr.Tabs)]
 
     def inside(block) -> list:
         return [block, *[found for child in getattr(block, "children", []) for found in inside(child)]]
-    buyers = [block for block in inside(settings) if block not in inside(folded) and block not in inside(exact)]
+    buyers = [settings.children[0], *inside(section(page, "regels")), *inside(section(page, "leveranciers"))]
     [fill] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == "buyer_opened"]
     states = {id(fill.outputs[OPENED.index("filled")]): "filled", id(fill.outputs[-1]): "supplier filled"}
     assert all(isinstance(fill.outputs[OPENED.index(name)], gr.State) for name in ("filled", "supplier_filled"))
@@ -1508,7 +2025,9 @@ def test_the_buyers_part_is_wired_as_the_page_shows_it(tmp_path, madeup_out):
                       f"button {nl['settings_buyer_save']}", note, headings[4], nl["settings_suppliers_help"], "table", choice, *supplier_form,
                       f"button {nl['settings_supplier_save']}", f"button {nl['settings_supplier_remove']}", supplier_note]
     [table] = [block for block in buyers if isinstance(block, gr.Dataframe)]
-    assert table.interactive is False and settings.children[-1] is folded and settings.children[0].elem_id == line
+    assert table.interactive is False and settings.children[-1] is sections and settings.children[0].elem_id == line
+    [suppliers_title] = [block for block in buyers if isinstance(block, gr.Markdown) and block.value == headings[4]]
+    assert suppliers_title.visible is False
 
 
 def test_switching_the_language_relabels_the_buyers_part_and_keeps_what_is_chosen(tmp_path, madeup_out):
@@ -1529,19 +2048,19 @@ def test_switching_the_language_relabels_the_buyers_part_and_keeps_what_is_chose
     assert handler(page, "buyer_relabel")("en", "daily", "nl", NEW_SUPPLIER)[0] == f"**{unreadable('en', STRINGS['en']['settings_field:price_pct'])}**"
 
 
-def test_the_connections_are_folded_away_under_one_heading_and_still_work(tmp_path, madeup_out):
+def test_the_connections_have_their_own_section_and_still_work(tmp_path, madeup_out):
     gr = import_gradio()
     path, page, made = tab(tmp_path, madeup_out, app=FakeApp(accounts=[USERNAME]), **SIX)
     [settings] = [block for block in page.blocks.values() if isinstance(block, gr.Tab) and block.label == STRINGS["nl"]["settings_tab"]]
-    [folded] = [block for block in settings.children if isinstance(block, gr.Accordion) and block.label == STRINGS["nl"]["settings_connections"]]
-    assert folded.label == STRINGS["nl"]["settings_connections"] == "Koppelingen: het Microsoft-postvak en de AI-dienst"
-    assert folded.open is False and type(settings.children[-1]).__name__ == "Accordion"
+    connections = section(page, "koppelingen")
+    assert connections.label == STRINGS["nl"]["settings_connections"] == "Postvak en AI"
+    assert isinstance(connections, gr.Tab) and [child.id for child in connections.parent.children].index("koppelingen") == 2
 
     def inside(block) -> list:
         return [block, *[found for child in getattr(block, "children", []) for found in inside(child)]]
-    labels = {getattr(block, "label", None) for block in inside(folded)}
+    labels = {getattr(block, "label", None) for block in inside(connections)}
     assert {STRINGS["nl"]["settings_tenant"], STRINGS["nl"]["settings_folder"], STRINGS["nl"]["settings_ai_reader"]} <= labels
-    buyer_labels = {getattr(block, "label", None) for block in inside(settings) if block not in inside(folded)}
+    buyer_labels = {getattr(block, "label", None) for block in inside(settings) if block not in inside(connections)}
     assert {STRINGS["nl"][f"settings_field:{field}"] for field in BUYER_FIELDS} <= buyer_labels
     assert handler(page, "settings_opened")("nl")[0] == TENANT_ID and handler(page, "ai_opened")("nl") == "parser"
 
@@ -1564,7 +2083,7 @@ def test_the_buyers_part_shows_no_rule_code_and_no_setting_name_and_says_the_lim
         "Wat de assistent zelf mag afhandelen", "Vragen aan leveranciers", "Dagoverzicht en taal", "Fiattering"]
     assert f"### {STRINGS['nl']['settings_suppliers']}" in texts and STRINGS["nl"]["settings_suppliers"] == "Leveranciers"
     assert (STRINGS["nl"]["settings_buyer_save"], STRINGS["nl"]["settings_supplier_save"], STRINGS["nl"]["settings_supplier_remove"]) == (
-        "Opslaan", "Leverancier opslaan", "Leverancier verwijderen")
+        "Regels opslaan", "Leverancier opslaan", "Leverancier verwijderen")
 
 
 def test_on_a_public_link_and_without_a_file_the_buyers_part_is_not_there_either(tmp_path, madeup_out):
@@ -1738,7 +2257,7 @@ def test_the_manual_names_the_tab_as_the_page_does():
         assert f"\"{nl[key]}\"" in buyers, key                                              # quoted word for word
     assert nl["settings_file_unreadable"].format(fields="") in buyers and nl["settings_problem:decimals"] in buyers
     whole = Path("aid/MANUAL.md").read_text(encoding="utf-8")
-    # the connections' heading names no installation; the block "Koppeling met Exact (bij de installatie)" is the one that does
+    # no section's label names the installation, also not "Koppeling met Exact", whose label said it before
     assert "(bij de installatie)" not in whole.replace(f"\"{nl['exact_title']}\"", "")
     assert "Geen e-mails" not in whole and "geen e-mails" not in whole
     assert "never e-mails" not in whole and "after the PO's date" not in whole and "This many first cases" not in whole
@@ -1747,13 +2266,13 @@ def test_the_manual_names_the_tab_as_the_page_does():
     guide = manual["7"]
     for key in ("settings_supplier_new", "settings_buyer_save", "settings_supplier_save", "settings_supplier_remove", "settings_connections"):
         assert f"\"{nl[key]}\"" in guide, key
-    for number in ("3.14", "3.15", "5", "7"):                 # where the manual sends the reader to a button of the folded part, it names the part
-        assert "\"Koppelingen" in manual[number], number
+    for number in ("3.14", "3.15", "5", "7"):                 # where the manual sends the reader to a button of the part, it names the part
+        assert f"\"{nl['settings_connections']}" in manual[number], number
     for button in ("Aanmelden bij Microsoft", "Aanmelden voor Copilot"):
         for number in ("3.14", "3.15", "5", "7"):
             section = manual[number]
             if button in section:                             # the first mention of the button comes after the part is named
-                assert section.index("Koppelingen") < section.index(f"\"{button}\""), (number, button)
+                assert section.index(nl["settings_connections"]) < section.index(f"\"{button}\""), (number, button)
 
 
 def test_the_manual_and_the_readme_say_what_a_save_does_and_does_not_do():
@@ -1867,7 +2386,7 @@ def test_testing_writes_nothing(tmp_path, madeup_out):
     flat = json.dumps(result, ensure_ascii=False)
     assert not any(text in flat for text in ("777", "4417", "4.417", "fiat", "Fiat", "grens", "limiet", "boven de"))
     unpriced = named(TESTED, handler(page, "exact_tested")(*exact_args(ANDERS_PO, ANDERS_FORM | {"per_piece": False}, language="en")))
-    assert unpriced["summary"] == en["exact_read"].format(n=12, answer=en["exact_no"]) and unpriced["summary"].endswith("press Save.")
+    assert unpriced["summary"] == en["exact_read"].format(n=12, answer=en["exact_no"]) and unpriced["summary"].endswith("press Save the layout.")
     # a form that gives no layout reads nothing and says why, in the note
     refused = named(TESTED, handler(page, "exact_tested")(*exact_args(ANDERS_PO, ANDERS_FORM | {"po_label": ""}, senders="Inkoop")))
     assert refused["note"] == " ".join([nl["exact_problem:po_label"], nl["exact_problem:sender"].format(text="Inkoop")])
@@ -2004,7 +2523,7 @@ def test_both_languages_hold_the_same_keys():
         assert nl[key] and en[key], key
         assert re.findall(r"\{(\w+)\}", nl[key]) == re.findall(r"\{(\w+)\}", en[key]), key       # the same places for the same values
         assert not re.search(r"[—–_]", nl[key] + en[key]), key                                  # no dash, and no setting's name
-    assert (nl["exact_title"], en["exact_title"]) == ("Koppeling met Exact (bij de installatie)", "Connection to Exact (at the installation)")
+    assert (nl["exact_title"], en["exact_title"]) == ("Koppeling met Exact", "Connection to Exact")
     assert nl["exact_intro"] == ("De assistent leest wat Exact zelf levert en verandert zelf niets in Exact. Hier stelt u in hoe de documenten uit "
                                  "Exact eruitzien. Uw voorbeeldbestanden blijven op deze pc.")
     assert en["exact_intro"] == ("The assistant reads what Exact itself delivers and changes nothing in Exact. Here you set what the documents "
@@ -2031,11 +2550,11 @@ def test_both_languages_hold_the_same_keys():
         "De tabel houdt op bij de regel met deze tekst (leeg: tot het eind)", "Getallen op de pdf", "1.234,50 (komma voor de decimalen)",
         "1,234.50 (punt voor de decimalen)")
     assert nl["exact_field:per_piece"] == "De pdf heeft geen kolom prijs per: elke prijs is per 1 stuk"
-    assert (nl["exact_test"], nl["exact_save"], en["exact_test"], en["exact_save"]) == ("Testen", "Opslaan", "Test", "Save")
+    assert (nl["exact_test"], nl["exact_save"], en["exact_test"], en["exact_save"]) == ("Testen", "Opmaak opslaan", "Test", "Save the layout")
     assert (nl["exact_reading"], nl["exact_state_title"], nl["exact_refresh"]) == ("Zo leest de assistent het voorbeeld", "Stand van de koppeling",
                                                                                   "Stand vernieuwen")
     assert nl["exact_read"] == ("Het voorbeeld is gelezen: {n} orderregels; het totaal is te berekenen: {answer}. Vergelijk de tabel met de "
-                                "inkooporder in Exact. Klopt alles, druk dan op Opslaan.")
+                                "inkooporder in Exact. Klopt alles, druk dan op Opmaak opslaan.")
     assert nl["exact_saved"] == ("Opgeslagen. De assistent leest inkooporders in deze opmaak vanaf de volgende ronde, binnen een minuut. "
                                  "Inkooporders die nog in de bewaakte map liggen omdat de assistent ze niet kon lezen, worden dan opgenomen; "
                                  "andere geeft u opnieuw.")
@@ -2055,16 +2574,14 @@ def test_both_languages_hold_the_same_keys():
 
 
 def test_the_exact_block_is_wired_as_the_page_shows_it(tmp_path, madeup_out):
-    """The built page itself: the block folded away just above the connections, its controls in their order, each field's help, and
-    each handler's trigger, inputs and outputs."""
+    """The built page itself: the block in a section of its own, after "Postvak en AI" and before the state of the assistant, its
+    controls in their order, each field's help, and each handler's trigger, inputs and outputs."""
     gr = import_gradio()
     path, page, made = tab(tmp_path, madeup_out, **BUYER)
     nl = STRINGS["nl"]
-    [settings] = [block for block in page.blocks.values() if isinstance(block, gr.Tab) and block.label == nl["settings_tab"]]
-    accordions = [block for block in settings.children if isinstance(block, gr.Accordion)]
-    assert [block.label for block in accordions] == [nl["exact_title"], nl["settings_connections"]]
-    exact = accordions[0]
-    assert exact.open is False and settings.children[-2:] == accordions                  # above the Microsoft connections, at the bottom
+    exact = section(page, "exact")
+    assert isinstance(exact, gr.Tab) and (exact.elem_id, exact.label) == ("exact-block", nl["exact_title"])
+    assert [child.id for child in exact.parent.children][-3:] == ["koppelingen", "exact", "assistent"]
 
     def inside(block) -> list:
         return [block, *[found for child in getattr(block, "children", []) for found in inside(child)]]
@@ -2279,7 +2796,7 @@ def test_a_pdf_that_cannot_be_opened_is_named_in_every_handler_that_opens_it(tmp
 
 
 def test_the_summary_is_shown_only_when_the_trial_has_no_problem(tmp_path, madeup_out):
-    """Ruling L12: "Klopt alles, druk dan op Opslaan" stands only above a reading without problems; a warning alone keeps it."""
+    """Ruling L12: "Klopt alles, druk dan op Opmaak opslaan" stands only above a reading without problems; a warning alone keeps it."""
     nl = STRINGS["nl"]
     path, page, made = tab(tmp_path, madeup_out, **BUYER)
     wrong = named(TESTED, handler(page, "exact_tested")(*exact_args(madeup_out / "MU01_po_v1.pdf")))
@@ -2295,7 +2812,7 @@ def test_the_manual_says_how_the_review_round_reads_a_sample():
     exact = manual_sections()["3.17"]
     assert "the first 60 lines" in exact and "\"1000 (1.000)\"" in exact and "\"1 (1.000)\"" in exact
     assert "\"Inkooporder:\"" in exact and "which is two purchase orders in one PDF" not in exact
-    assert "another browser tab" in exact and "\"Klopt alles, druk dan op Opslaan\"" in exact
+    assert "another browser tab" in exact and "\"Klopt alles, druk dan op Opmaak opslaan\"" in exact
 
 
 # --- the number recognition of part 1, and the count of the cases that wait for their purchase order (Task 36) ---
@@ -2759,13 +3276,12 @@ def test_a_save_of_the_columns_from_a_form_the_file_no_longer_holds_is_refused_a
 
 
 def test_the_export_part_is_wired_as_the_page_shows_it(tmp_path, madeup_out):
-    """The built page itself: part 2 below part 1 in the folded block, its controls in their order, and each handler's trigger, inputs
-    and outputs; the fill at the load and at each select of the settings tab, as part 1's (amendment 2)."""
+    """The built page itself: part 2 below part 1 in the block's section, its controls in their order, and each handler's trigger,
+    inputs and outputs; the fill at the load and at each select of the settings tab, as part 1's (amendment 2)."""
     gr = import_gradio()
     path, page, made = tab(tmp_path, madeup_out, **BUYER)
     nl = STRINGS["nl"]
-    [settings] = [block for block in page.blocks.values() if isinstance(block, gr.Tab) and block.label == nl["settings_tab"]]
-    [exact] = [block for block in settings.children if isinstance(block, gr.Accordion) and block.label == nl["exact_title"]]
+    exact = section(page, "exact")
 
     def inside(block) -> list:
         return [block, *[found for child in getattr(block, "children", []) for found in inside(child)]]
@@ -2795,7 +3311,7 @@ def test_the_export_part_is_wired_as_the_page_shows_it(tmp_path, madeup_out):
     sample, row, numbers, tick, page_language = (nl["exact_export_sample"], nl["exact_export_header_row"], nl["exact_export_field:numbers"],
                                                  nl["exact_export_field:fill_down"], nl["language"])
     assert part == [f"### {nl['exact_part_export']}", nl["exact_export_intro"], sample, "export-head", "export-sample-note", row, *labels, numbers,
-                    tick, f"button {nl['exact_test']}", f"button {nl['exact_save']}", "export-note", "export-read", "export-lines"]
+                    tick, f"button {nl['exact_test']}", f"button {nl['exact_export_save']}", "export-note", "export-read", "export-lines"]
     assert bound("export_opened") == ([(nl["settings_tab"], "select"), ("page", "load")], [sample, row, page_language],
                                       [*labels, numbers, tick, "offered", "export filled"])
     assert bound("export_sample_shown") == ([(sample, "change")], [sample, *labels, page_language],
@@ -2803,7 +3319,7 @@ def test_the_export_part_is_wired_as_the_page_shows_it(tmp_path, madeup_out):
     assert bound("export_header_shown") == ([(row, "input")], [sample, row, *labels, page_language], [*labels, "offered", "export-sample-note"])
     inputs = [sample, *labels, numbers, tick, "export filled", page_language]
     assert bound("export_tested") == ([(f"button {nl['exact_test']}", "click")], inputs, ["export-read", "export-lines", "export-note"])
-    assert bound("export_saved") == ([(f"button {nl['exact_save']}", "click")], inputs,
+    assert bound("export_saved") == ([(f"button {nl['exact_export_save']}", "click")], inputs,
                                      ["export-note", "exact-state", "export filled", "export-read", "export-lines"])
     assert bound("export_relabel")[0] == [(page_language, "change")]
     shown = {name(block): block for block in order[names.index(f"### {nl['exact_part_export']}"):names.index(f"### {nl['exact_part_articles']}")]}
@@ -2829,7 +3345,8 @@ def test_switching_the_language_relabels_the_export_part_and_keeps_what_is_chose
     assert [shown[name]["value"] for name in CHOSEN] == chosen and shown["field:line_id"]["info"] == en["exact_export_help:line_id"]
     assert (shown["numbers"]["label"], shown["numbers"]["value"]) == (en["exact_export_field:numbers"], "comma")
     assert shown["numbers"]["choices"] == [(en["exact_numbers:comma"], "comma"), (en["exact_numbers:point"], "point")]
-    assert (shown["fill_down"]["label"], shown["test"]["value"], shown["save"]["value"]) == (en["exact_export_field:fill_down"], "Test", "Save")
+    assert (shown["fill_down"]["label"], shown["test"]["value"], shown["save"]["value"]) == (en["exact_export_field:fill_down"], "Test",
+                                                                                                          "Save the export columns")
     assert (shown["note"], shown["reading"], shown["lines"]["value"]) == ("", "", {"headers": export_headers(None, "en"), "data": []})
     flat = json.dumps(shown, default=str, ensure_ascii=False)
     assert nl["exact_export_sample"] not in flat and nl["exact_export_no_column"] not in flat and nl["exact_export_help:line_id"] not in flat
@@ -2909,7 +3426,7 @@ def test_the_manual_says_how_the_columns_are_set_and_what_the_digest_says_of_ano
     part2 = exact[exact.index(f"**Part 2, \"{nl['exact_part_export']}\".**"):]
     for key in ("exact_part_export", "exact_export_sample", "exact_export_head", "exact_export_header_row", "exact_export_field:po_number",
                 "exact_export_field:item_code", "exact_export_no_column", "exact_export_help:line_id", "exact_export_field:numbers",
-                "exact_numbers:comma", "exact_export_field:fill_down", "exact_test", "exact_save", "exact_export_saved", "exact_state_columns_set",
+                "exact_numbers:comma", "exact_export_field:fill_down", "exact_test", "exact_export_save", "exact_export_saved", "exact_state_columns_set",
                 "exact_state_columns_unset", "exact_state_no_export", "exact_export_first_and_last"):
         assert f"\"{nl[key]}\"" in exact, key                                                # quoted word for word
     assert EXPORT_NL_READ in part2 and "Laatste export opgenomen" in exact
@@ -3278,8 +3795,7 @@ def test_the_try_out_part_stands_at_the_end_of_the_exact_block(tmp_path, madeup_
     gr = import_gradio()
     path, page, made = tab(tmp_path, madeup_out, **BUYER)
     nl, en = STRINGS["nl"], STRINGS["en"]
-    [settings] = [block for block in page.blocks.values() if isinstance(block, gr.Tab) and block.label == nl["settings_tab"]]
-    [exact, _] = [block for block in settings.children if isinstance(block, gr.Accordion)]
+    exact = section(page, "exact")
 
     def inside(block) -> list:
         return [block, *[found for child in getattr(block, "children", []) for found in inside(child)]]
@@ -3613,7 +4129,7 @@ def test_the_documents_say_what_the_second_review_round_of_the_try_out_settled()
     assert "an item code of up to 20 characters prints whole" not in exact
     assert f'"{nl["tryout_reason:version"]}"' in exact
     assert "The demo folder knows the made-up orders already" in exact and 'such as 250108 under "Inkooporder"' in exact
-    assert '1. Open "Koppeling met Exact (bij de installatie)" and switch the test mode off' in exact
+    assert '1. Open "Koppeling met Exact" and switch the test mode off' in exact
     assert '2. Open "Koppeling met Exact' not in exact
 
 
@@ -3662,7 +4178,7 @@ def test_the_documents_say_what_the_review_round_of_the_try_out_settled():
     assert "whatever the authorization limit" in readme and "only the switch on the settings tab ends it" in readme
     assert "only the switch on the settings tab ends it" in " ".join(Path("aid/settings.py").read_text(encoding="utf-8").split())
     assert "2. Switch the test mode off on the settings tab" in folder
-    assert '1. Open "Koppeling met Exact (bij de installatie)" and switch the test mode off' in exact          # ruling Y25 of the second round
+    assert '1. Open "Koppeling met Exact" and switch the test mode off' in exact          # ruling Y25 of the second round
     for section in (exact, folder, settings_section, tab_section):
         assert not re.search(r"[—–]", section)
 
@@ -3802,14 +4318,13 @@ def test_a_save_of_part_3_is_refused_with_each_problem_and_writes_nothing(tmp_pa
 
 
 def test_part_3_is_wired_as_the_page_shows_it_and_switches_its_language(tmp_path, madeup_out):
-    """The built page: part 3 below part 2 and above the try-out in the folded block, its controls in their order, each handler's
-    trigger, inputs and outputs, its buttons 'Testen' and 'Opslaan', and the part in English after a switch of the language. On a
-    share link and without a settings file the part is not on the page (rule 11)."""
+    """The built page: part 3 below part 2 and above the try-out in the block's section, its controls in their order, each
+    handler's trigger, inputs and outputs, its buttons 'Testen' and 'Artikelkolommen opslaan', and the part in English after a switch
+    of the language. On a share link and without a settings file the part is not on the page (rule 11)."""
     gr = import_gradio()
     path, page, made = tab(tmp_path, madeup_out, **BUYER)
     nl, en = STRINGS["nl"], STRINGS["en"]
-    [settings] = [block for block in page.blocks.values() if isinstance(block, gr.Tab) and block.label == nl["settings_tab"]]
-    [exact] = [block for block in settings.children if isinstance(block, gr.Accordion) and block.label == nl["exact_title"]]
+    exact = section(page, "exact")
 
     def inside(block) -> list:
         return [block, *[found for child in getattr(block, "children", []) for found in inside(child)]]
@@ -3838,7 +4353,7 @@ def test_part_3_is_wired_as_the_page_shows_it_and_switches_its_language(tmp_path
     names = [name(block) for block in order]
     part = names[names.index(f"### {nl['exact_part_articles']}"):names.index(f"### {nl['tryout_title']}")]
     fields = [f"articles-field-{field}" for field in ARTICLE_FORM]
-    test, save = f"button {nl['exact_test']}", f"button {nl['exact_save']}"
+    test, save = f"button {nl['exact_test']}", f"button {nl['exact_articles_save']}"
     assert part == [f"### {nl['exact_part_articles']}", nl["exact_articles_intro"], "articles-sample", "articles-head", "articles-sample-note",
                     "articles-row", *fields, "articles-numbers", test, save, "articles-note", "articles-read", "articles-rows"]
     page_language = nl["language"]
@@ -3854,7 +4369,7 @@ def test_part_3_is_wired_as_the_page_shows_it_and_switches_its_language(tmp_path
     [saved] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == "articles_saved"]
     by_id = {block.elem_id: block for block in order if getattr(block, "elem_id", None)}
     assert tested.targets == [(by_id["articles-test"]._id, "click")] and saved.targets == [(by_id["articles-save"]._id, "click")]
-    assert (by_id["articles-test"].value, by_id["articles-save"].value) == ("Testen", "Opslaan")
+    assert (by_id["articles-test"].value, by_id["articles-save"].value) == ("Testen", "Artikelkolommen opslaan")
     assert [name(component) for component in tested.inputs] == inputs == [name(component) for component in saved.inputs]
     assert [by_id[key] for key in ("articles-read", "articles-rows", "articles-note")] == tested.outputs
     assert saved.outputs == [by_id["articles-note"], fill.outputs[-1], by_id["articles-read"], by_id["articles-rows"]]
@@ -3875,7 +4390,7 @@ def test_part_3_is_wired_as_the_page_shows_it_and_switches_its_language(tmp_path
     assert [shown[name]["label"] for name in ARTICLE_CHOSEN] == ["Item code (required)", "Purchase price (required)", "Supplier"]
     assert [shown[name]["value"] for name in ARTICLE_CHOSEN] == ["Artikel", "Inkoopprijs", NO_COLUMN]
     assert [shown[name]["choices"] for name in ARTICLE_CHOSEN] == [offered(ARTICLE_TITLES, "en")] * 3
-    assert (shown["numbers"]["value"], shown["test"]["value"], shown["save"]["value"]) == ("comma", "Test", "Save")
+    assert (shown["numbers"]["value"], shown["test"]["value"], shown["save"]["value"]) == ("comma", "Test", "Save the article columns")
     assert (shown["note"], shown["reading"], shown["rows"]["value"]) == ("", "", {"headers": articles_headers(None, "en"), "data": []})
     assert (nl["exact_part_articles"], nl["exact_articles_intro"]) == (
         "3. Inkoopprijzen van artikelen als export uit Exact (voor de prijslijst)",

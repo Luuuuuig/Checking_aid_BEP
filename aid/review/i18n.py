@@ -8,12 +8,43 @@ never the texts themselves, so that no rule code and no setting value reaches it
 the page and for the digest (aid/notify.py), which imports these strings and not gradio. "message_not_sent" is what the page says
 after a close whose message could not be sent, followed by "not_sent:<cause>", the kind of its cause and what to do about it
 (the causes of aid/review/close.py: the sign-in, a mailbox or server not reached or refusing, no mailbox connected, the mail
-server's password, the settings file, the case's document, no address for the supplier); "message_filed" after one whose
+server's password, the settings file, the case's document, no address for the supplier, and the store of the sign-in that the PC
+refuses, "not_sent:store"); "message_filed" after one whose
 message was written as a file because the settings say so, into {folder}; "message_unconfirmed" after one whose hand-over was not confirmed; and "reply_unread" after a
-close that did nothing because a reply filed with the case could not be read at that moment. The keys that begin with "settings"
-are the
+close that did nothing because a reply filed with the case could not be read at that moment. "state:<state>" is what a case is now
+(STATES of aid/review/status.py), and "state:look" and "state:looked" what a document is that the intake left to the buyer, before
+and after he noted it as handled; "fail:<reason>" says why a failed case failed and "look:<reason>" why the intake left a document
+to the buyer, each by its kind (REASONS and LOOK_REASONS of aid/review/status.py), never by the error or the scan's own reason.
+"review_tab_count" is the label of the tab "Beoordelen" while cases wait for the buyer. On the strip at the top of that tab,
+"chip:<state>" counts the cases of a state, "problem:<kind>" names a problem of the assistant (PROBLEMS of aid/review/status.py, a key
+that ends in "_one" for a count of one beside the one that ends in "_many") and "act:<place>" labels the button that opens the place
+that handles it ("assistant" for the runner and its launcher, "connections" for the sign-in, the mailbox and Copilot); the keys that
+begin with "strip_" are its last line. "review_all" labels the fold of every case of the last 7 days under it, "all_column:<column>"
+the columns of its table and "todo:<state>" what the buyer does for a case of that state ("todo:closed_changes" for a closed case
+whose changes stand on the list In Exact invoeren, "todo:nothing" for one with nothing left to do). "review_pick" and
+"review_pick_none" are the line under the field "Zaak" while no case is chosen, "review_open_oldest" its button and "review_gone"
+the line of a case on screen that left the list ("review_gone_handled" for a failed case noted as handled meanwhile). A failed case
+reads "case_failed_look" in the case list, "failed_notice" above its documents, with its "fail:<reason>", and "handled_go" on its
+button, whose press says "handled_done". A document the intake left to
+the buyer reads "item_label" in the case list ("item_label_handled" once it is noted as handled while it is on screen) and
+"item_name" in the fold, where "todo:look" says what the buyer does, and "chip:look" counts the documents that wait for him on the
+strip; chosen, it shows "item_notice", with its "look:<reason>" and "item_missing" behind it when its file is no longer on this PC,
+and the press of "handled_go" says "item_handled_done"; "item_gone" is the line of such a document on screen that left the list.
+The keys that begin with "settings" are the
 strings of the settings tab, "settings_via:<value>" labelling a value of the setting send_via and "settings_reader:<value>" a value of
-the setting reader. Of the buyer's part of that tab, "settings_field:<setting>" is the label of a field and "settings_help:<setting>"
+the setting reader; "mail_step:<step>" heads a numbered step of its part "Postvak en AI" (MAIL_STEPS of aid/review/page.py), and
+"settings_store_refused_git" and "settings_store_refused_kind" say why no sign-in can be made, with the folders of a store of the
+sign-in that the PC refuses and what to do, "settings_store_refused" any other failure to make the account, and
+"settings_store_refused_see" points the buttons of the other steps to the line under the sign-in buttons that says so;
+"reader_state:<state>" says what reads the documents now, "copilot_cause:<cause>" why Copilot fails (a status code, a sign-in, a
+Copilot not reached or no usable answer, never its own words), "copilot_hint:<code>" what the buyer can do about a choice of Copilot
+that "Copilot testen" refused, by its status code, and "settings_ai_switched" and "settings_ai_switch_refused" answer that choice.
+"settings_section:<section>"
+labels a section of that tab ("Uw regels", "Leveranciers", "Stand van de assistent"; "Postvak en AI" is "settings_connections" and
+"Koppeling met Exact" "exact_title"), and the keys that begin with "assistant" are the strings of its section "Stand van de assistent":
+the lines of the runner's last pass, the launcher, a STOP file, the sign-in of the mailbox, the purchase orders that wait for Copilot
+and a refused store, and the box of the last lines of runner.log. Of the buyer's part of
+that tab, "settings_field:<setting>" is the label of a field and "settings_help:<setting>"
 its help, which says what the rule does and no more, in the words the review tab and the banner use ("de drempel", "de marge",
 "naar u"); "settings_problem:<kind>" is what a refused field takes; "settings_file_unreadable" is the one line of a settings file
 that cannot be read, with "settings_file_fields" for the fields it names, and "settings_file_write_route" the line of a settings
@@ -34,8 +65,10 @@ are the strings of the tab "Bestanden"
 (aid/review/intake.py): "files_refused:<reason>" the note of a file it refuses ("type_export" the one of a type while the export's
 columns are set), "files_column:<column>" a column of its table, "files_outcome:<outcome>" the label of an outcome of the intake file
 ("export_one" for an export of one purchase order, "case_unknown" for a case without one, "set_aside" with the {n} days a file stayed,
-"unread" for a case opened from a scan that failed at reading, by which the digest names that case too),
-"files_skipped:<key>" the label of a reason of a skip (intake.SKIPPED; "other" for a reason it does not know), "files_error" the label of
+"unread" for a case opened from a scan that failed at reading, by which the digest names that case too), "files_now" what the case
+of a line that opened one is now, behind its label, with "files_now:<state>" for its state (STATES of aid/review/status.py; a case in
+review has none, and keeps its label alone), "files_skipped:<key>" the label of a reason of a skip (intake.SKIPPED; "other" for a
+reason it does not know), "files_error" the label of
 an error the scan does not tell apart and "files_error:<key>" that of an export refused (intake.EXPORT_REFUSED) and of a version the
 store holds from another file ("version"), each by intake.ERRORS. The keys that begin with "hand" are the strings of the
 tab "In Exact invoeren" (aid/review/hand_list.py), "hand_row:<kind>" the row of a change of that kind and "hand_row:article_price_back"
@@ -52,6 +85,7 @@ sentence behind the note of a put-back when the aid knows another value from bef
 "hand_put_back_source:marks" and "hand_put_back_source:look"), and
 "hand_confirmation*" and "hand_attach_only" the section of the confirmations to attach in Exact. The keys that begin with "exact" are
 the strings of the block "Koppeling met Exact" of the settings tab (aid/review/exact_settings.py), one block in each language:
+"exact_save", "exact_export_save" and "exact_articles_save" the saves of its parts 1, 2 and 3, each named after what it saves,
 "exact_field:<field>" the label of a field of its form and "exact_help:<field>" its help, "exact_meaning:<meaning>" what a column of
 the title row holds, "exact_problem:<kind>" a problem that refuses a save, "exact_place:<kind>" the lines or pages of the sample that a
 problem names, and "exact_warning:<kind>" what the reader of the sample passes by. Of its part 2, the export of order lines,
@@ -126,12 +160,12 @@ STRINGS: dict[str, dict[str, str]] = {
         "message_not_sent": "Een bericht is niet verzonden; de zaak blijft ter beoordeling.",
         "message_filed": ("Het bericht is niet verstuurd maar als bestand klaargezet ({folder}): de instellingen laten berichten als "
                           "bestand schrijven."),
-        "not_sent:sign_in": ("De aanmelding bij Microsoft is verlopen: meld u opnieuw aan onder Instellingen, Koppelingen, en sluit de zaak "
-                             "opnieuw af."),
+        "not_sent:sign_in": ("De aanmelding bij Microsoft is verlopen: meld u opnieuw aan onder Instellingen, Postvak en AI, en sluit de "
+                             "zaak opnieuw af."),
         "not_sent:unreachable": "Het postvak of de mailserver was niet bereikbaar: sluit de zaak later opnieuw af.",
         "not_sent:refused": "Het postvak of de mailserver weigerde het bericht: geef dit door aan de onderzoeker.",
-        "not_sent:no_mailbox": ("Er is geen postvak verbonden: verbind een postvak onder Instellingen, Koppelingen, en sluit de zaak opnieuw "
-                                "af."),
+        "not_sent:no_mailbox": ("Er is geen postvak verbonden: verbind een postvak onder Instellingen, Postvak en AI, en sluit de zaak "
+                                "opnieuw af."),
         "not_sent:no_password": "Het wachtwoord van de mailserver is niet ingesteld: geef dit door aan de onderzoeker.",
         "not_sent:settings": "De instellingen kunnen nu niet worden gelezen: er is niets verstuurd. Geef dit door aan de onderzoeker.",
         "not_sent:document": "Het document van de zaak kan nu niet worden gelezen: er is niets verstuurd.",
@@ -263,6 +297,75 @@ STRINGS: dict[str, dict[str, str]] = {
         "files_column:time": "Tijd",
         "files_column:file": "Bestand",
         "files_column:what": "Wat de assistent deed",
+        "review_tab_count": "Beoordelen ({n})",
+        "chip:review": "Ter beoordeling: {n}",
+        "chip:failed": "Mislukt: {n}",
+        "chip:copilot_wait": "Wacht op Copilot: {n}",
+        "chip:waiting": "Wacht op leverancier: {n}",
+        "chip:closed_itself": "Vanzelf afgesloten: {n}",
+        "strip_pass": "Laatste ronde: {time}",
+        "strip_mailbox:read": "Postvak gelezen om {last}",
+        "strip_mailbox:unread": "Postvak verbonden sinds {since}, nog niet gelezen",
+        "strip_mailbox:pending": "Postvak wordt bij de volgende ronde verbonden",
+        "strip_mailbox:off": "Geen postvak: de assistent leest de bewaakte map",
+        "strip_reader:parser": "Documenten lezen zonder AI",
+        "strip_reader:llm": "Documenten lezen met Copilot",
+        "strip_updated": "Bijgewerkt om {time}",
+        "problem:no_pass": "Geen ronde van de assistent sinds {time}",
+        "problem:no_pass_ever": "De assistent heeft nog geen ronde gemaakt",
+        "problem:stopped": "De assistent staat stil: er staat een STOP-bestand",
+        "problem:given_up": "De starter start de assistent niet meer na herhaalde fouten",
+        "problem:store": "Aanmelden kan niet: de beveiligde opslag is geweigerd",
+        "problem:lapsed": "Postvak niet verbonden: de aanmelding is verlopen",
+        "problem:copilot_down_one": "Copilot werkt niet sinds {since}: 1 zaak wacht",
+        "problem:copilot_down_many": "Copilot werkt niet sinds {since}: {n} zaken wachten",
+        "problem:copilot_refused_one": "Copilot weigerde het document van 1 zaak",
+        "problem:copilot_refused_many": "Copilot weigerde de documenten van {n} zaken",
+        "act:assistant": "Stand van de assistent openen",
+        "act:connections": "Postvak en AI openen",
+        "review_all": "Alle zaken van de laatste 7 dagen ({n})",
+        "review_all_none": "De laatste 7 dagen is er geen zaak binnengekomen.",
+        "all_column:time": "Binnengekomen",
+        "all_column:case": "Zaak",
+        "all_column:state": "Stand",
+        "all_column:todo": "Wat u doet",
+        "todo:review": "Kies de zaak bij Zaak.",
+        "todo:waiting_po": "Niets te doen: de assistent kijkt opnieuw zodra de inkooporder uit Exact binnen is.",
+        "todo:failed": "Kies de zaak bij Zaak en handel de bevestiging zelf af in Exact.",
+        "todo:copilot_wait": "Niets te doen: de assistent probeert het bij de volgende ronde opnieuw.",
+        "todo:reading": "Niets te doen: de assistent leest het document nu.",
+        "todo:waiting": "Niets te doen: de zaak komt terug als de leverancier antwoordt of als de wachttijd om is.",
+        "todo:closed_changes": "Voer de wijzigingen in Exact in: tabblad In Exact invoeren.",
+        "todo:nothing": "Niets te doen.",
+        "review_pick": "Kies een zaak bij Zaak, of open de oudste.",
+        "review_pick_none": "Er wachten geen zaken op uw besluit. Een nieuwe zaak verschijnt hier vanzelf.",
+        "review_open_oldest": "Oudste zaak openen",
+        "review_gone": "Inkooporder {po} staat niet meer op de lijst: de zaak is intussen afgesloten of vervangen. Kies een andere zaak.",
+        "review_gone_handled": ("Inkooporder {po} staat niet meer op de lijst: de zaak is intussen als afgehandeld genoteerd. Kies een "
+                                "andere zaak."),
+        "case_failed_look": "mislukt: zelf bekijken",
+        "failed_notice": ("**De assistent kon deze zaak niet afmaken:** {reason}. Bekijk het document van de leverancier en handel de "
+                          "bevestiging zelf af in Exact. Druk daarna op Als afgehandeld noteren; de zaak gaat dan van de lijst."),
+        "handled_go": "Als afgehandeld noteren",
+        "handled_done": "Inkooporder {po} staat als door u afgehandeld genoteerd en staat niet meer op de lijst.",
+        "chip:look": "Zelf bekijken: {n}",
+        "todo:look": "Kies het document bij Zaak, bekijk het en handel het zelf af.",
+        "item_name": "Document {file}",
+        "item_label": "Document {file}, {time}, zelf bekijken",
+        "item_label_handled": "Document {file}, {time}, door u afgehandeld",
+        "item_notice": ("**De assistent kon dit document niet plaatsen:** {reason}. Bekijk het document en handel het zelf af in Exact. "
+                        "Druk daarna op Als afgehandeld noteren; het document gaat dan van de lijst."),
+        "item_missing": "Het document staat niet meer op deze pc: zoek het in uw postvak, in de e-mail van {time}.",
+        "item_handled_done": "Het document {file} staat als door u afgehandeld genoteerd en staat niet meer op de lijst.",
+        "item_gone": "Het document {file} staat niet meer op de lijst: het is intussen als afgehandeld genoteerd. Kies een andere zaak.",
+        "files_now": "{label}. Nu: {state}.",
+        "files_now:failed": "mislukt",
+        "files_now:handled": "mislukt, door u afgehandeld",
+        "files_now:waiting": "wacht op de leverancier",
+        "files_now:closed_itself": "vanzelf afgesloten",
+        "files_now:closed_by_you": "door u afgesloten",
+        "files_now:copilot_wait": "wacht op Copilot",
+        "files_now:reading": "wordt gelezen",
         "files_outcome:po": "Inkooporder {number} opgenomen (versie {version})",
         "files_outcome:export": "Export uit Exact opgenomen: {n} inkooporders, waarvan {m} nieuw of gewijzigd",
         "files_outcome:export_one": "Export uit Exact opgenomen: 1 inkooporder, waarvan {m} nieuw of gewijzigd",
@@ -404,6 +507,62 @@ STRINGS: dict[str, dict[str, str]] = {
         "settings_not_signed_in": "Niet aangemeld",
         "settings_lapsed": "Aanmelding van {account} verlopen: meld u opnieuw aan",
         "settings_store_refused": "De beveiligde opslag op deze pc is geweigerd",
+        "mail_step:ids": "1. Gegevens van de app-registratie",
+        "mail_step:sign_in": "2. Aanmelden bij Microsoft",
+        "mail_step:mailbox": "3. Map van het postvak",
+        "mail_step:send": "4. Verzenden",
+        "mail_step:read": "5. Documenten lezen",
+        "settings_store_refused_git": ("Aanmelden kan niet: de beveiligde opslag van de aanmelding ({store}) ligt binnen een map met "
+                                       "versiebeheer, want in {work_tree} staat een map .git. Staat die map .git daar per ongeluk, "
+                                       "verplaats hem dan naar een andere plek en druk opnieuw op Aanmelden bij Microsoft. Hebt u die "
+                                       "map .git nodig, geef dit dan door aan de onderzoeker."),
+        "settings_store_refused_kind": ("Aanmelden kan niet: de beveiligde opslag van de aanmelding ({store}) is gemaakt door een andere "
+                                        "Windows-gebruiker of in een ander soort sessie. Start de pagina en de assistent als dezelfde "
+                                        "gebruiker, of geef dit door aan de onderzoeker."),
+        "settings_store_refused_see": "Aanmelden kan niet: onder stap 2, Aanmelden bij Microsoft, staat waarom.",
+        "not_sent:store": ("De beveiligde opslag van de aanmelding op deze pc is geweigerd: er is niets verzonden. Onder Instellingen, "
+                           "Postvak en AI, staat waarom en wat u kunt doen; sluit de zaak daarna opnieuw af."),
+        "reader_state:parser": "De assistent leest documenten nu zonder AI.",
+        "reader_state:llm": "De assistent leest documenten nu met Copilot.",
+        "reader_state:down": ("De assistent leest documenten nu met Copilot, maar Copilot werkt niet sinds {since} ({cause}); wachtende "
+                              "zaken: {n}."),
+        "reader_state:refused": ("De assistent leest documenten nu met Copilot, maar Copilot weigert documenten. Mislukt in de laatste 7 "
+                                 "dagen: {n}."),
+        "reader_state:refused_none": "De assistent leest documenten nu met Copilot, maar Copilot weigert documenten.",
+        "copilot_cause:code": "code {code}",
+        "copilot_cause:sign_in": "aanmelding voor Copilot verlopen",
+        "copilot_cause:unreachable": "niet bereikbaar",
+        "copilot_cause:other": "geen bruikbaar antwoord",
+        "settings_ai_switched": ("Opgeslagen. Copilot antwoordde op de test; de assistent leest documenten vanaf de volgende ronde met "
+                                 "Copilot, binnen een minuut."),
+        "settings_ai_switch_refused": ("Niet opgeslagen: Copilot gaf geen antwoord op de test ({cause}). De assistent blijft lezen zonder "
+                                       "AI. {hint}"),
+        "copilot_hint:400": ("Een 400 komt meestal doordat het account geen licentie voor Microsoft 365 Copilot heeft, of doordat het een "
+                             "persoonlijk Microsoft-account is. Copilot werkt alleen met een werkaccount met die licentie."),
+        "copilot_hint:401": "Druk eerst op Aanmelden voor Copilot en kies daarna opnieuw Copilot.",
+        "copilot_hint:403": ("De app-registratie mist een machtiging of de toestemming van een beheerder: zie wat Copilot nodig heeft, bij "
+                             "deze stap."),
+        "copilot_hint:other": "Probeer het later opnieuw.",
+        "settings_section:rules": "Uw regels",
+        "settings_section:suppliers": "Leveranciers",
+        "settings_section:assistant": "Stand van de assistent",
+        "assistant_pass": "Laatste ronde: {time}.",
+        "assistant_pass_old": ("De assistent heeft sinds {time} geen ronde gemaakt. Zolang hij stilstaat, komt er niets binnen. Start de "
+                               "Inkoopassistent opnieuw, of geef dit door aan de onderzoeker."),
+        "assistant_pass_none": "De assistent heeft nog geen ronde gemaakt. Start de Inkoopassistent, of geef dit door aan de onderzoeker.",
+        "assistant_launcher_on_one": "De starter draait sinds {since}; de assistent is 1 keer gestart.",
+        "assistant_launcher_on_many": "De starter draait sinds {since}; de assistent is {n} keer gestart.",
+        "assistant_launcher_off": "De starter draait niet: de assistent is met de hand gestart, of staat stil.",
+        "assistant_stop": "Er staat een STOP-bestand: de assistent begint geen nieuwe ronde tot het weg is.",
+        "assistant_given_up": ("De starter start de assistent niet meer: hij stopte na herhaalde fouten. Zie de laatste meldingen hieronder, "
+                               "of geef dit door aan de onderzoeker."),
+        "assistant_lapsed": "De aanmelding van het postvak is verlopen sinds {since}: meld u opnieuw aan onder Postvak en AI.",
+        "assistant_waiting_copilot": "Wachten op Copilot: inkooporder {orders}.",
+        "assistant_store": "Aanmelden kan niet: de beveiligde opslag is geweigerd. Onder Postvak en AI staat waarom.",
+        "assistant_refresh": "Stand van de assistent vernieuwen",
+        "assistant_log": "Laatste meldingen van de assistent (runner.log), de nieuwste bovenaan",
+        "assistant_log_none": "Er staan nog geen meldingen in runner.log.",
+        "assistant_log_help": "Deze regels zijn voor de onderzoeker. Ze staan alleen op deze pc.",
         "settings_sign_out": "Afmelden",
         "settings_signed_out": "Afgemeld.",
         "settings_sign_in_failed": "Aanmelden is niet gelukt ({code}).",
@@ -425,14 +584,14 @@ STRINGS: dict[str, dict[str, str]] = {
         "settings_via:file": "Bestanden: niets verzenden",
         "settings_via:smtp": "De SMTP-server van de instellingen",
         "settings_via:microsoft": "Het postvak van de aanmelding",
-        "settings_save": "Opslaan",
+        "settings_save": "Postvak opslaan",
         "settings_not_saved": "Niet opgeslagen: controleer {fields}.",
-        "settings_trigger": "Stand van de controle",
+        "settings_trigger": "Stand van het postvak",
         "settings_trigger_off": "De controle leest geen postvak: zij werkt met de bewaakte map.",
         "settings_trigger_pending": "Nog niet verbonden: de controle maakt de verbinding bij de volgende ronde.",
         "settings_trigger_on": "Verbonden sinds {since}; laatst gelezen: {last}; opgeslagen berichten: {saved}.",
         "settings_trigger_unread": "Verbonden sinds {since}; nog niet gelezen.",
-        "settings_ai": "De AI-dienst: Microsoft 365 Copilot",
+        "settings_ai": "Microsoft 365 Copilot",
         "settings_ai_needs": ("Copilot heeft nodig: een licentie voor Microsoft 365 Copilot op het account; de zeven machtigingen "
                               "Sites.Read.All, Mail.Read, People.Read.All, OnlineMeetingTranscript.Read.All, Chat.Read, "
                               "ChannelMessage.Read.All en ExternalItem.Read.All op de app-registratie; en voor vier daarvan "
@@ -447,7 +606,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "settings_reader:llm": "Copilot",
         "settings_reader:parser": "zonder AI (parser)",
         "settings_ai_ids_needed": "Sla eerst de map-id en de toepassings-id op; daarna kan Copilot de documenten lezen.",
-        "settings_connections": "Koppelingen: het Microsoft-postvak en de AI-dienst",
+        "settings_connections": "Postvak en AI",
         "settings_extension_code": "Code voor de uitbreiding in de browser",
         "settings_extension_code_help": "Plak deze code in de opties van de uitbreiding Inkoopassistent in Edge of Chrome.",
         "settings_file_unreadable": ("Het instellingenbestand kan niet worden gelezen{fields}. Hieronder staan de instellingen die de "
@@ -504,7 +663,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "settings_help:approver_email": ("Verandert de assistent een inkooporder boven de fiatteringsgrens, dan vraagt de assistent deze "
                                          "persoon de order opnieuw te fiatteren."),
         "settings_limit": "De fiatteringsgrens zelf is bij de installatie ingesteld en staat niet op deze pagina.",
-        "settings_buyer_save": "Opslaan",
+        "settings_buyer_save": "Regels opslaan",
         "settings_buyer_saved": "Opgeslagen. De assistent gebruikt dit vanaf de volgende ronde, binnen een minuut.",
         "settings_buyer_unchanged": "Er is niets gewijzigd; er is niets opgeslagen.",
         "settings_buyer_refilled": ("Niet opgeslagen: de pagina heeft het formulier opnieuw gevuld met de instellingen van nu. Vul uw "
@@ -547,7 +706,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "settings_problem:name": "één regel van hoogstens 80 tekens",
         "settings_problem:supplier_name": "een naam van 1 tot 80 tekens",
         "settings_problem:language": "Nederlands of English",
-        "exact_title": "Koppeling met Exact (bij de installatie)",
+        "exact_title": "Koppeling met Exact",
         "exact_intro": ("De assistent leest wat Exact zelf levert en verandert zelf niets in Exact. Hier stelt u in hoe de documenten uit "
                         "Exact eruitzien. Uw voorbeeldbestanden blijven op deze pc."),
         "exact_part_po": "1. Inkooporders die Exact per e-mail stuurt (pdf)",
@@ -610,10 +769,12 @@ STRINGS: dict[str, dict[str, str]] = {
                                "dan als orderbevestiging, zodat een bevestiging die op uw inkooporder lijkt nooit als inkooporder wordt "
                                "opgenomen."),
         "exact_test": "Testen",
-        "exact_save": "Opslaan",
+        "exact_save": "Opmaak opslaan",
+        "exact_export_save": "Exportkolommen opslaan",
+        "exact_articles_save": "Artikelkolommen opslaan",
         "exact_reading": "Zo leest de assistent het voorbeeld",
         "exact_read": ("Het voorbeeld is gelezen: {n} orderregels; het totaal is te berekenen: {answer}. Vergelijk de tabel met de "
-                       "inkooporder in Exact. Klopt alles, druk dan op Opslaan."),
+                       "inkooporder in Exact. Klopt alles, druk dan op Opmaak opslaan."),
         "exact_yes": "ja",
         "exact_no": "nee",
         "exact_read_what": "Wat",
@@ -852,6 +1013,24 @@ STRINGS: dict[str, dict[str, str]] = {
         "status:review": "ter beoordeling",
         "status:waiting": "wacht op de leverancier",
         "status:failed": "mislukt",
+        "state:review": "Ter beoordeling",
+        "state:waiting_po": "Wacht op de inkooporder",
+        "state:failed": "Mislukt",
+        "state:handled": "Mislukt, door u afgehandeld",
+        "state:copilot_wait": "Wacht op Copilot",
+        "state:reading": "Wordt gelezen",
+        "state:waiting": "Wacht op de leverancier",
+        "state:closed_itself": "Vanzelf afgesloten",
+        "state:closed_by_you": "Door u afgesloten",
+        "state:look": "Zelf bekijken",
+        "state:looked": "Door u afgehandeld",
+        "fail:unread": "het document is een scan zonder leesbare tekst",
+        "fail:parser": "de assistent herkent de opmaak van dit document niet",
+        "fail:copilot": "Copilot kon het document niet lezen",
+        "fail:other": "er ging iets mis bij het verwerken van de zaak",
+        "look:scan": "het is een scan zonder leesbare tekst, en de assistent kon niet zien wat voor document het is",
+        "look:many": "het noemt meer dan één inkooporder, en de assistent kon niet kiezen bij welke het hoort",
+        "look:other": "de assistent kon het niet plaatsen",
         "field:price": "Prijs",
         "field:quantity": "Aantal",
         "field:unit": "Eenheid",
@@ -967,10 +1146,10 @@ STRINGS: dict[str, dict[str, str]] = {
         "write_refused": "The write was refused",
         "message_not_sent": "A message was not sent; the case stays for review.",
         "message_filed": "The message was not sent but written as a file ({folder}): the settings have messages written as files.",
-        "not_sent:sign_in": "The Microsoft sign-in has lapsed: sign in again under Settings, Connections, and close the case again.",
+        "not_sent:sign_in": "The Microsoft sign-in has lapsed: sign in again under Settings, Mailbox and AI, and close the case again.",
         "not_sent:unreachable": "The mailbox or the mail server could not be reached: close the case again later.",
         "not_sent:refused": "The mailbox or the mail server refused the message: pass this on to the researcher.",
-        "not_sent:no_mailbox": "No mailbox is connected: connect a mailbox under Settings, Connections, and close the case again.",
+        "not_sent:no_mailbox": "No mailbox is connected: connect a mailbox under Settings, Mailbox and AI, and close the case again.",
         "not_sent:no_password": "The mail server's password is not set: pass this on to the researcher.",
         "not_sent:settings": "The settings cannot be read now: nothing was sent. Pass this on to the researcher.",
         "not_sent:document": "The case's document cannot be read now: nothing was sent.",
@@ -1094,6 +1273,74 @@ STRINGS: dict[str, dict[str, str]] = {
         "files_column:time": "Time",
         "files_column:file": "File",
         "files_column:what": "What the assistant did",
+        "review_tab_count": "Review ({n})",
+        "chip:review": "For review: {n}",
+        "chip:failed": "Failed: {n}",
+        "chip:copilot_wait": "Waiting for Copilot: {n}",
+        "chip:waiting": "Waiting for supplier: {n}",
+        "chip:closed_itself": "Closed by itself: {n}",
+        "strip_pass": "Last pass: {time}",
+        "strip_mailbox:read": "Mailbox read at {last}",
+        "strip_mailbox:unread": "Mailbox connected since {since}, not read yet",
+        "strip_mailbox:pending": "Mailbox connects at the next pass",
+        "strip_mailbox:off": "No mailbox: the assistant reads the watched folder",
+        "strip_reader:parser": "Documents read without AI",
+        "strip_reader:llm": "Documents read with Copilot",
+        "strip_updated": "Updated at {time}",
+        "problem:no_pass": "No pass of the assistant since {time}",
+        "problem:no_pass_ever": "The assistant has not made a pass yet",
+        "problem:stopped": "The assistant is stopped: a STOP file is there",
+        "problem:given_up": "The launcher no longer starts the assistant after repeated errors",
+        "problem:store": "Signing in is not possible: the protected store is refused",
+        "problem:lapsed": "Mailbox not connected: the sign-in has lapsed",
+        "problem:copilot_down_one": "Copilot is not working since {since}: 1 case waits",
+        "problem:copilot_down_many": "Copilot is not working since {since}: {n} cases wait",
+        "problem:copilot_refused_one": "Copilot refused the document of 1 case",
+        "problem:copilot_refused_many": "Copilot refused the documents of {n} cases",
+        "act:assistant": "Open the assistant's state",
+        "act:connections": "Open Mailbox and AI",
+        "review_all": "All cases of the last 7 days ({n})",
+        "review_all_none": "No case came in during the last 7 days.",
+        "all_column:time": "Came in",
+        "all_column:case": "Case",
+        "all_column:state": "State",
+        "all_column:todo": "What you do",
+        "todo:review": "Choose the case under Case.",
+        "todo:waiting_po": "Nothing to do: the assistant looks again once the purchase order from Exact is in.",
+        "todo:failed": "Choose the case under Case and handle the confirmation yourself in Exact.",
+        "todo:copilot_wait": "Nothing to do: the assistant tries again at its next pass.",
+        "todo:reading": "Nothing to do: the assistant is reading the document now.",
+        "todo:waiting": "Nothing to do: the case comes back when the supplier answers or when the wait is over.",
+        "todo:closed_changes": "Enter the changes in Exact: tab Enter in Exact.",
+        "todo:nothing": "Nothing to do.",
+        "review_pick": "Choose a case under Case, or open the oldest.",
+        "review_pick_none": "No cases wait for your decision. A new case appears here by itself.",
+        "review_open_oldest": "Open the oldest case",
+        "review_gone": "Purchase order {po} is no longer on the list: the case was closed or replaced meanwhile. Choose another case.",
+        "review_gone_handled": "Purchase order {po} is no longer on the list: it was noted as handled meanwhile. Choose another case.",
+        "case_failed_look": "failed: look yourself",
+        "failed_notice": ("**The assistant could not finish this case:** {reason}. Look at the supplier's document and handle the confirmation "
+                          "yourself in Exact. Then press Mark as handled; the case then leaves the list."),
+        "handled_go": "Mark as handled",
+        "handled_done": "Purchase order {po} is noted as handled by you and is no longer on the list.",
+        "chip:look": "To look at: {n}",
+        "todo:look": "Choose the document under Case, look at it and handle it yourself.",
+        "item_name": "Document {file}",
+        "item_label": "Document {file}, {time}, look yourself",
+        "item_label_handled": "Document {file}, {time}, handled by you",
+        "item_notice": ("**The assistant could not place this document:** {reason}. Look at the document and handle it yourself in Exact. "
+                        "Then press Mark as handled; the document then leaves the list."),
+        "item_missing": "The document is no longer on this PC: look for it in your mailbox, in the e-mail of {time}.",
+        "item_handled_done": "The document {file} is noted as handled by you and is no longer on the list.",
+        "item_gone": "The document {file} is no longer on the list: it was noted as handled meanwhile. Choose another case.",
+        "files_now": "{label}. Now: {state}.",
+        "files_now:failed": "failed",
+        "files_now:handled": "failed, handled by you",
+        "files_now:waiting": "waits for the supplier",
+        "files_now:closed_itself": "closed by itself",
+        "files_now:closed_by_you": "closed by you",
+        "files_now:copilot_wait": "waits for Copilot",
+        "files_now:reading": "being read",
         "files_outcome:po": "Purchase order {number} filed (version {version})",
         "files_outcome:export": "Export from Exact filed: {n} purchase orders, of which {m} new or changed",
         "files_outcome:export_one": "Export from Exact filed: 1 purchase order, of which {m} new or changed",
@@ -1231,6 +1478,62 @@ STRINGS: dict[str, dict[str, str]] = {
         "settings_not_signed_in": "Not signed in",
         "settings_lapsed": "The sign-in of {account} has lapsed: sign in again",
         "settings_store_refused": "The protected store on this PC was refused",
+        "mail_step:ids": "1. The app registration",
+        "mail_step:sign_in": "2. Sign in with Microsoft",
+        "mail_step:mailbox": "3. The mailbox folder",
+        "mail_step:send": "4. Sending",
+        "mail_step:read": "5. Reading documents",
+        "settings_store_refused_git": ("Signing in is not possible: the protected store of the sign-in ({store}) lies inside a folder under "
+                                       "version control, as {work_tree} holds a .git folder. If that .git folder is there by mistake, "
+                                       "move it somewhere else and press Sign in with Microsoft again. If you need that .git folder, pass "
+                                       "this on to the researcher."),
+        "settings_store_refused_kind": ("Signing in is not possible: the protected store of the sign-in ({store}) was made by another "
+                                        "Windows user or in another kind of session. Start the page and the assistant as the same user, "
+                                        "or pass this on to the researcher."),
+        "settings_store_refused_see": "Signing in is not possible: step 2, Sign in with Microsoft, says why.",
+        "not_sent:store": ("The protected store of the sign-in on this PC was refused: nothing was sent. Settings, Mailbox and AI, says "
+                           "why and what you can do; then close the case again."),
+        "reader_state:parser": "The assistant now reads documents without AI.",
+        "reader_state:llm": "The assistant now reads documents with Copilot.",
+        "reader_state:down": ("The assistant now reads documents with Copilot, but Copilot is not working since {since} ({cause}); cases "
+                              "waiting: {n}."),
+        "reader_state:refused": ("The assistant now reads documents with Copilot, but Copilot refuses documents. Failed in the last 7 "
+                                 "days: {n}."),
+        "reader_state:refused_none": "The assistant now reads documents with Copilot, but Copilot refuses documents.",
+        "copilot_cause:code": "code {code}",
+        "copilot_cause:sign_in": "sign-in for Copilot lapsed",
+        "copilot_cause:unreachable": "not reachable",
+        "copilot_cause:other": "no usable answer",
+        "settings_ai_switched": ("Saved. Copilot answered the test; from its next pass, within a minute, the assistant reads documents "
+                                 "with Copilot."),
+        "settings_ai_switch_refused": ("Not saved: Copilot gave no answer to the test ({cause}). The assistant keeps reading without AI. "
+                                       "{hint}"),
+        "copilot_hint:400": ("A 400 usually means that the account has no Microsoft 365 Copilot licence, or that it is a personal "
+                             "Microsoft account. Copilot works only with a work account that has that licence."),
+        "copilot_hint:401": "Press Sign in for Copilot first, then choose Copilot again.",
+        "copilot_hint:403": ("The app registration lacks a permission or an administrator's consent: see what Copilot needs, at this "
+                             "step."),
+        "copilot_hint:other": "Try again later.",
+        "settings_section:rules": "Your rules",
+        "settings_section:suppliers": "Suppliers",
+        "settings_section:assistant": "The assistant's state",
+        "assistant_pass": "Last pass: {time}.",
+        "assistant_pass_old": ("The assistant has made no pass since {time}. While it is stopped, nothing comes in. Start the "
+                               "Inkoopassistent again, or pass this on to the researcher."),
+        "assistant_pass_none": "The assistant has not made a pass yet. Start the Inkoopassistent, or pass this on to the researcher.",
+        "assistant_launcher_on_one": "The launcher runs since {since}; the assistant was started once.",
+        "assistant_launcher_on_many": "The launcher runs since {since}; the assistant was started {n} times.",
+        "assistant_launcher_off": "The launcher does not run: the assistant was started by hand, or is stopped.",
+        "assistant_stop": "A STOP file is there: the assistant starts no new pass until it is gone.",
+        "assistant_given_up": ("The launcher no longer starts the assistant: it stopped after repeated errors. See the latest messages below, "
+                               "or pass this on to the researcher."),
+        "assistant_lapsed": "The mailbox sign-in has lapsed since {since}: sign in again under Mailbox and AI.",
+        "assistant_waiting_copilot": "Waiting for Copilot: purchase order {orders}.",
+        "assistant_store": "Signing in is not possible: the protected store is refused. Mailbox and AI says why.",
+        "assistant_refresh": "Refresh the assistant's state",
+        "assistant_log": "Latest messages of the assistant (runner.log), the newest first",
+        "assistant_log_none": "There are no messages in runner.log yet.",
+        "assistant_log_help": "These lines are for the researcher. They stay on this PC.",
         "settings_sign_out": "Sign out",
         "settings_signed_out": "Signed out.",
         "settings_sign_in_failed": "The sign-in did not succeed ({code}).",
@@ -1252,14 +1555,14 @@ STRINGS: dict[str, dict[str, str]] = {
         "settings_via:file": "Files: send nothing",
         "settings_via:smtp": "The SMTP server of the settings",
         "settings_via:microsoft": "The mailbox of the sign-in",
-        "settings_save": "Save",
+        "settings_save": "Save the mailbox",
         "settings_not_saved": "Not saved: check {fields}.",
-        "settings_trigger": "State of the check",
+        "settings_trigger": "State of the mailbox",
         "settings_trigger_off": "The check reads no mailbox: it works from the watched folder.",
         "settings_trigger_pending": "Not connected yet: the check connects at its next pass.",
         "settings_trigger_on": "Connected since {since}; last read: {last}; messages saved: {saved}.",
         "settings_trigger_unread": "Connected since {since}; not read yet.",
-        "settings_ai": "The AI service: Microsoft 365 Copilot",
+        "settings_ai": "Microsoft 365 Copilot",
         "settings_ai_needs": ("Copilot needs: a Microsoft 365 Copilot licence on the account; the seven permissions "
                               "Sites.Read.All, Mail.Read, People.Read.All, OnlineMeetingTranscript.Read.All, Chat.Read, "
                               "ChannelMessage.Read.All and ExternalItem.Read.All on the app registration; and for four of them "
@@ -1274,7 +1577,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "settings_reader:llm": "Copilot",
         "settings_reader:parser": "without AI (parser)",
         "settings_ai_ids_needed": "Save the tenant ID and the client ID first; then Copilot can read the documents.",
-        "settings_connections": "Connections: the Microsoft mailbox and the AI service",
+        "settings_connections": "Mailbox and AI",
         "settings_extension_code": "Code for the browser extension",
         "settings_extension_code_help": "Paste this code into the options of the Inkoopassistent extension in Edge or Chrome.",
         "settings_file_unreadable": ("The settings file cannot be read{fields}. Below are the settings the aid uses now. Saving works "
@@ -1328,7 +1631,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "settings_help:approver_email": ("When the aid changes a purchase order above the authorization limit, it asks this person to "
                                          "approve the order again."),
         "settings_limit": "The authorization limit itself is set at the installation and is not shown on this page.",
-        "settings_buyer_save": "Save",
+        "settings_buyer_save": "Save the rules",
         "settings_buyer_saved": "Saved. The aid uses this from its next pass, within a minute.",
         "settings_buyer_unchanged": "Nothing was changed; nothing was saved.",
         "settings_buyer_refilled": ("Not saved: the page has filled the form again with the settings as they are now. Enter your change "
@@ -1371,7 +1674,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "settings_problem:name": "one line of at most 80 characters",
         "settings_problem:supplier_name": "a name of 1 to 80 characters",
         "settings_problem:language": "Nederlands or English",
-        "exact_title": "Connection to Exact (at the installation)",
+        "exact_title": "Connection to Exact",
         "exact_intro": ("The assistant reads what Exact itself delivers and changes nothing in Exact. Here you set what the documents from "
                         "Exact look like. Your sample files stay on this PC."),
         "exact_part_po": "1. Purchase orders that Exact sends by e-mail (PDF)",
@@ -1433,10 +1736,12 @@ STRINGS: dict[str, dict[str, str]] = {
                                "confirmation, so that a confirmation that looks like your purchase order is never filed as a purchase "
                                "order."),
         "exact_test": "Test",
-        "exact_save": "Save",
+        "exact_save": "Save the layout",
+        "exact_export_save": "Save the export columns",
+        "exact_articles_save": "Save the article columns",
         "exact_reading": "This is how the assistant reads the sample",
         "exact_read": ("The sample was read: {n} order lines; the total can be worked out: {answer}. Compare the table with the purchase "
-                       "order in Exact. If all is right, press Save."),
+                       "order in Exact. If all is right, press Save the layout."),
         "exact_yes": "yes",
         "exact_no": "no",
         "exact_read_what": "What",
@@ -1667,6 +1972,24 @@ STRINGS: dict[str, dict[str, str]] = {
         "status:review": "for review",
         "status:waiting": "waiting for the supplier",
         "status:failed": "failed",
+        "state:review": "For review",
+        "state:waiting_po": "Waits for its purchase order",
+        "state:failed": "Failed",
+        "state:handled": "Failed, handled by you",
+        "state:copilot_wait": "Waits for Copilot",
+        "state:reading": "Being read",
+        "state:waiting": "Waits for the supplier",
+        "state:closed_itself": "Closed by itself",
+        "state:closed_by_you": "Closed by you",
+        "state:look": "To look at yourself",
+        "state:looked": "Handled by you",
+        "fail:unread": "the document is a scan without readable text",
+        "fail:parser": "the assistant does not recognise the layout of this document",
+        "fail:copilot": "Copilot could not read the document",
+        "fail:other": "something went wrong while the case was processed",
+        "look:scan": "it is a scan without readable text, and the assistant could not tell what kind of document it is",
+        "look:many": "it names more than one purchase order, and the assistant could not choose which one it belongs to",
+        "look:other": "the assistant could not place it",
         "field:price": "Price",
         "field:quantity": "Quantity",
         "field:unit": "Unit",

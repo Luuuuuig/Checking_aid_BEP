@@ -37,12 +37,11 @@ the same link, so that the digest does not look like a day with nothing to enter
 gelezen. Open het tabblad om te zien wat er nog in te voeren is: <link>" ("The list Enter in Exact could not be read. Open the tab to
 see what is still to enter: <link>"). While the runner cannot read the work mailbox because the Microsoft sign-in has
 lapsed (aid/runner.py), one line under the title, before the blocks, says so: "Postvak niet verbonden: meld u opnieuw aan op het
-tabblad Instellingen, onderaan bij Koppelingen" ("Mailbox not connected: sign in again on the Settings tab, at its bottom under
-Connections"). While Microsoft 365 Copilot, the AI service, fails (it refused, could not be reached, or its sign-in has lapsed), a
-line after it names the error and the number of cases waiting for Copilot: "Copilot werkt niet (<error>): 2 zaken wachten erop; meld
-u aan voor Copilot of test Copilot op het tabblad Instellingen, onderaan bij Koppelingen". Both lines name the place of the buttons,
-because the settings tab keeps them
-folded away under "Koppelingen" at its bottom (aid/review/page.py). The documents that Copilot could not read while it read
+tabblad Instellingen, onder Postvak en AI" ("Mailbox not connected: sign in again on the Settings tab, under Mailbox and AI").
+While Microsoft 365 Copilot, the AI service, fails (it refused, could not be reached, or its sign-in has lapsed), a line after it
+names the error and the number of cases waiting for Copilot: "Copilot werkt niet (<error>): 2 zaken wachten erop; meld u aan voor
+Copilot of test Copilot op het tabblad Instellingen, onder Postvak en AI". Both lines name the place of the buttons, because the
+settings tab keeps them in its part "Postvak en AI" (aid/review/page.py). The documents that Copilot could not read while it read
 others (it refused them, or failed them after reading another case) are a line of their own: "Copilot kon 1 document niet lezen;
 nieuwe poging bij de volgende ronde".
 A day without cases and without skipped files says so. A price or a quantity has the decimal comma in Dutch and the point in
@@ -106,9 +105,9 @@ _WORDS = {
            "to_enter_many": "In Exact in te voeren: {n} wijzigingen. Open het tabblad In Exact invoeren: {link}",
            "to_enter_unread": ("De lijst In Exact invoeren kon niet worden gelezen. Open het tabblad om te zien wat er nog in te voeren is: "
                                "{link}"),
-           "mailbox": "Postvak niet verbonden: meld u opnieuw aan op het tabblad Instellingen, onderaan bij Koppelingen",
+           "mailbox": "Postvak niet verbonden: meld u opnieuw aan op het tabblad Instellingen, onder Postvak en AI",
            "copilot": ("Copilot werkt niet ({error}): {waiting}; meld u aan voor Copilot of test Copilot op het tabblad Instellingen, "
-                       "onderaan bij Koppelingen"),
+                       "onder Postvak en AI"),
            "copilot_one": "1 zaak wacht erop", "copilot_many": "{n} zaken wachten erop",
            "copilot_refused": "Copilot kon {documents} niet lezen; nieuwe poging bij de volgende ronde",
            "document_one": "1 document", "documents_many": "{n} documenten",
@@ -126,9 +125,9 @@ _WORDS = {
            "to_enter_one": "To enter in Exact: 1 change. Open the tab Enter in Exact: {link}",
            "to_enter_many": "To enter in Exact: {n} changes. Open the tab Enter in Exact: {link}",
            "to_enter_unread": "The list Enter in Exact could not be read. Open the tab to see what is still to enter: {link}",
-           "mailbox": "Mailbox not connected: sign in again on the Settings tab, at its bottom under Connections",
-           "copilot": ("Copilot is not working ({error}): {waiting}; sign in for Copilot or test Copilot on the Settings tab, at its "
-                       "bottom under Connections"),
+           "mailbox": "Mailbox not connected: sign in again on the Settings tab, under Mailbox and AI",
+           "copilot": ("Copilot is not working ({error}): {waiting}; sign in for Copilot or test Copilot on the Settings tab, under "
+                       "Mailbox and AI"),
            "copilot_one": "1 case waits for it", "copilot_many": "{n} cases wait for it",
            "copilot_refused": "Copilot could not read {documents}; {again} tried again at the next pass",
            "document_one": "1 document", "documents_many": "{n} documents",

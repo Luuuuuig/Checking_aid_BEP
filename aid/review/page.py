@@ -24,10 +24,84 @@ inkooporder is opgenomen, is in Exact ingevoerd: regel 1: prijs 12,70. De assist
 shown beside the document is the version as it was filed; a case that ran while the list of those values could not be read says
 that in the line's place. The language switch relabels the line. All this is on the tab "Beoordelen".
 
-The page has five tabs in one gr.Tabs, each with an id: "Beoordelen" (REVIEW_TAB, "beoordelen"), "In Exact invoeren" (hand_list.TAB,
-"invoeren"), "Prijslijst" (pricelist_page.TAB, "prijslijst"), "Bestanden" (FILES_TAB, "bestanden") and "Instellingen" (SETTINGS_TAB,
-"instellingen"). The query tab=invoeren, the link of the digest's line of the changes to enter (aid/notify.py, list_link), selects the
-second tab when the page opens; any other value of tab selects nothing.
+The case list of that tab ("Zaak") offers, after the cases offered_cases gives, the cases that failed and that the buyer has not
+noted as handled, oldest first, each as "PO 250105 (S05), 2026-11-12 17:03, mislukt: zelf bekijken"; offered_cases itself, and so
+the digest's links and the undo, do not change. A failed case chosen shows its supplier's document, and above the documents why it
+failed in words, never by its error (fail_text of aid/review/status.py), with what to do ("De assistent kon deze zaak niet afmaken:
+de assistent herkent de opmaak van dit document niet. Bekijk het document van de leverancier en handel de bevestiging zelf af in
+Exact. ...", which the language switch relabels: failed_relabel); "Als afgehandeld noteren" stands in place of "Zaak afsluiten",
+and the title of the decisions goes, as such a case has none (case_framed, bound beside show to the change of the case list).
+That press (handled_marked) writes <case folder>/handled_by_hand.json, {"at": <the time of the clock of the page's Deps>}, the one
+file it writes, and only into a case that failed: the case then leaves the list and the counts, and a mark written before, from
+another browser tab, stays as it was. A case on screen that leaves the list meanwhile (closed in another browser tab, replaced by the
+runner, noted as handled) keeps its place in it, named as _case_label names it now, wherever the list is sent again ("Lijst
+vernieuwen", the language switch, the timer), until another case is chosen, and a line under the field says so and why
+("Inkooporder 250107 staat niet meer op de lijst: de zaak is intussen afgesloten of vervangen. Kies een andere zaak.", or "... als
+afgehandeld genoteerd. ..." for a failed case, whose notice the language switch then hides rather than leave it in the language it
+was shown in): the page library refuses a value that is not among a dropdown's choices. While no case is chosen, a line under the
+field says to choose one ("Kies een zaak bij Zaak, of open de oudste.") or that none waits for the buyer, with "Oudste zaak openen"
+while one does, which chooses the oldest case in review, else the oldest failed one, else the oldest document left to the buyer
+(below), and sends the case list with it, so that the case is among its choices (oldest_opened). The row of that line and that
+button shows and hides with the value of "Zaak" alone (case_framed, on its change), never by the timer, whose tick may have been
+sent before a case was chosen.
+
+After the failed cases the list offers the documents the intake left to the buyer to look at himself, which open no case: a scan
+that nobody could class, a confirmation that names more than one purchase order (the scan's lines of <cases_root>/review_items.jsonl,
+aid/sources/mailbox.py, as review_items of aid/review/status.py reads them), those that wait for him, oldest first, each as "Document
+MU05_conf.pdf, 2026-11-12 17:03, zelf bekijken" (_item_label), its file as the list of skipped items names it and the time of the
+scan, with its id as the value (ITEM_PREFIX and twelve hex digits: no case id begins so). The strip counts them ("Zelf bekijken: 3"),
+the tab's label counts them with the cases that wait for the buyer, and the fold lists them among the cases by their time, those that
+wait first, and those he noted as handled for 7 days ("Door u afgehandeld"). A document chosen shows why the intake left it to the
+buyer in words, never by the scan's own reason (look_text of aid/review/status.py), in the place and the look of the notice of a
+failed case ("De assistent kon dit document niet plaatsen: het is een scan zonder leesbare tekst, en de assistent kon niet zien wat
+voor document het is. ..."), with "Als afgehandeld noteren" and neither "Zaak afsluiten" nor the title of the decisions; its pages
+stand in the gallery of the supplier's document, rendered as a case's document is, from where the scan put it on this PC
+(_item_document): a file of its own in processed/ of the watched folder, under its own name or with _2, _3 and so on, and an
+attachment inside its e-mail there, of the files of that name the one whose bytes have the sha256 the scan noted, whatever the times
+of the files (of a line written before the scan noted one, the one file of that name, and none of several). When it is no longer
+there, or cannot be told from another document of the same name, the gallery stays empty, and the notice ends with where to look for
+it ("Het document staat niet meer op deze pc: zoek het in uw postvak, in de e-mail van 12-11-2026 17:03."), rather than show another
+document of the same name. "Als afgehandeld noteren" on a document (item_marked) appends its mark
+(handled_mark of aid/review/status.py) to <cases_root>/review_items_handled.jsonl in one write, the one file it writes, with the
+time of the page's clock; the document then leaves the list and the counts, and a mark written before, from another browser tab,
+is not written again. Every other handler that takes the value of "Zaak" reads no document's id as a case: show gives the document's
+pages and nothing else of a case (no list, no write to undo, no decision), a close and an undo answer as with no case chosen, and
+the language switch and "Lijst vernieuwen" treat it as no case; a document on screen that was noted as handled in another browser
+tab keeps its place in the list, "door u afgehandeld", and the line under the field says so, until another case is chosen.
+
+Above the case list, a strip shows the state of the aid, read from the aid's own files on this PC and never from Microsoft
+(aid/review/status.py): a chip for each state with its number of cases, "Ter beoordeling: 2" always and "Mislukt", "Wacht op Copilot",
+"Wacht op leverancier" and "Vanzelf afgesloten" (of the last 7 days) while their number is above 0; while the assistant has a problem,
+a chip for each, the most urgent first ("De assistent heeft nog geen ronde gemaakt", "Aanmelden kan niet: de beveiligde opslag is
+geweigerd", "Copilot werkt niet sinds 12-11-2026 15:57: 2 zaken wachten", ...), never with an error's text, and one button beside the
+strip that names the place that handles the first ("Stand van de assistent openen" for the runner and its launcher, "Postvak en AI
+openen" for the sign-in, the mailbox and Copilot) and opens the tab "Instellingen" on that section, by the problem the files tell at
+the press (strip_acted; "Stand van de assistent" when it went meanwhile), after which the section "Stand van de assistent" is read
+again (assistant_shown); and a last line with the runner's last pass, the mailbox as the settings tab tells it, the reader and the
+time the strip was read ("Laatste ronde: 18:19 · Postvak gelezen om 18:18 · Documenten lezen zonder AI · Bijgewerkt om 18:20"). On a
+public share link, and without a settings file, the strip holds the chips alone and has no button. Under it, the fold "Alle zaken van
+de laatste 7 dagen (22)" holds a table of every case that is not done and of every case done in the last 7 days (case_lines), those
+that wait for the buyer first, each with the time it came in, its order, its state and what the buyer does: mostly "Niets te doen.",
+and for a closed case whose changes stand on the list "In Exact invoeren" to enter them there. Every name in the two goes through
+html.escape, and their style rules, scoped to them, take the colours of aid/review/look.py. The label of the tab counts the cases that
+wait for the buyer, "Beoordelen (3)" (review_label: in review, or failed and not noted as handled, and the documents left to him that
+wait for him), and has no number while none waits.
+
+The strip, the fold, the tab's label, the line under the case list and the case list are read again when the page loads, with
+"Lijst vernieuwen", at the language switch and every TICK_SECONDS seconds, by one gr.Timer at the top level of the page, through
+two handlers of their own (strip_ticked and queue_ticked), which never call Microsoft. Neither sets the value of "Zaak" nor reaches
+the view of the case chosen, and the list of the tab "In Exact invoeren", whose read empties the buyer's ticks, is not on the timer.
+A tick reads again only the case folders whose files changed since it read them: through the cache of aid/review/status.py for the
+states, and through offered_cases' own for the cases offered.
+queue_ticked sends the case list only when it differs from the one it sent last, which a gr.State keeps, so that an open dropdown
+is not closed for nothing; a list that another handler sent meanwhile (a close, "Lijst vernieuwen", the language switch) and that
+differs from the kept one is sent once more at the next tick, the same list, which changes nothing on the screen. At a language switch the relabel of the tabs names the tab "Beoordelen" by
+review_label as queue_ticked does, so that the label is the same whichever runs last.
+
+The page has five tabs in one gr.Tabs (its class page-tabs), each with an id: "Beoordelen" (REVIEW_TAB, "beoordelen"), "In Exact
+invoeren" (hand_list.TAB, "invoeren"), "Prijslijst" (pricelist_page.TAB, "prijslijst"), "Bestanden" (FILES_TAB, "bestanden") and
+"Instellingen" (SETTINGS_TAB, "instellingen"). The query tab=invoeren, the link of the digest's line of the changes to enter
+(aid/notify.py, list_link), selects the second tab when the page opens; any other value of tab selects nothing.
 
 The tab "In Exact invoeren" lists what the buyer enters in Exact by hand: the open changes of <cases_root>/prepared
 (aid/execution/by_hand.py), as aid/review/hand_list.py shows them: the rows of the purchase orders, by order, each named
@@ -130,25 +204,33 @@ double click) or with the field the press before it emptied changes nothing, its
 before it says "Kies eerst een bestand.". What the tab keeps for the session (a gr.State) is the upload given last and whether the note
 says that the list failed. Under it, "Laatst verwerkt" with "Lijst vernieuwen" and a table of the last lines of
 <cases_root>/intake.jsonl, the newest first: the time, the file and what the runner did with it, each outcome by its fixed label and
-never an error's text, read again (files_opened) when the page loads, when the tab is selected and with "Lijst vernieuwen", and after
+never an error's text, and behind a line that opened a case what the case is now ("Zaak geopend voor inkooporder 250105. Nu:
+mislukt.", intake.rows), read again (files_opened) when the page loads, when the tab is selected and with "Lijst vernieuwen", and after
 each press. An intake file that cannot be read leaves the table as it was, with "Dit is niet gelukt (<the class of the error>).", which
 the next read that succeeds clears. The language switch relabels the tab (files_relabel) and clears the note; while the intake file
 cannot be read the table stays as it was, in the language it was read in, and the note says so. On a public share link and without a
 settings file the tab offers nothing, as the settings tab does.
 
-The settings tab ("Instellingen") shows the buyer's settings first, as a form (aid/review/buyer_settings.py has what it shows and
-writes): in four groups, each field with its label and a help text that says what the rule does, without a rule code or a
-setting's name: "Wat de assistent zelf mag afhandelen" (the two price thresholds, the days a delivery date may pass the supplier's
-lead time, the first cases of a supplier that always come to the buyer), "Vragen aan leveranciers" (the wait for an answer, the
-name under the messages), "Dagoverzicht en taal" (daily at a time or after every case, the time, the buyer's address, the language)
-and "Fiattering" (the approver's address, and a line that the limit itself is set at the installation), under one "Opslaan". Under
-it "Leveranciers": a table of every supplier the four supplier settings name, and a form for one supplier, chosen from a dropdown,
-which fills the form, or added with its choice "Leverancier toevoegen", with "Leverancier opslaan" and "Leverancier verwijderen".
+The settings tab ("Instellingen") holds, under the line of a settings file that cannot be read (below), its five sections in a gr.Tabs
+of its own (settings-sections), the buyer's things first and the installer's after (finding 7 of the owner's test): "Uw regels" (its
+id "regels"), chosen when the page opens, "Leveranciers" ("leveranciers"), "Postvak en AI" ("koppelingen"), "Koppeling met Exact"
+("exact", with the block's id exact-block) and "Stand van de assistent" ("assistent"). A click on a section's name opens it, and so
+does the button beside the strip of the tab "Beoordelen" for the section that handles the problem it names (strip_acted, _SECTIONS);
+the language switch relabels the five. Each save of the tab names what it saves: "Regels opslaan", "Leverancier opslaan", "Postvak
+opslaan", "Opmaak opslaan", "Nummerherkenning opslaan", "Exportkolommen opslaan" and "Artikelkolommen opslaan". "Uw regels" shows the
+buyer's settings as a form (aid/review/buyer_settings.py has what it shows and writes): in four groups, each field with its label and
+a help text that says what the rule does, without a rule code or a setting's name: "Wat de assistent zelf mag afhandelen" (the two
+price thresholds, the days a delivery date may pass the supplier's lead time, the first cases of a supplier that always come to the
+buyer), "Vragen aan leveranciers" (the wait for an answer, the name under the messages), "Dagoverzicht en taal" (daily at a time or
+after every case, the time, the buyer's address, the language) and "Fiattering" (the approver's address, and a line that the limit
+itself is set at the installation), under "Regels opslaan". "Leveranciers", whose label names it in place of its heading, which stays
+hidden: a table of every supplier the four supplier settings name, and a form for one supplier, chosen from a dropdown, which fills
+the form, or added with its choice "Leverancier toevoegen", with "Leverancier opslaan" and "Leverancier verwijderen".
 
 The form shows the file, and a save writes only what the buyer changed. The eleven fields, the table and the dropdown are filled
 from the settings file when the page loads and each time the settings tab is selected (buyer_opened), so that a change made in the
 file by hand or from another browser tab shows. Two states of the page keep what the forms were filled with: the eleven texts,
-and the supplier form with the supplier it was filled for. "Opslaan" writes the fields whose text differs from the text the form
+and the supplier form with the supplier it was filled for. "Regels opslaan" writes the fields whose text differs from the text the form
 was filled with, and no other: a field the buyer changed wins over a change made in the file meanwhile, a field he did not touch
 is never written and not checked, and with no field changed nothing is written and the file keeps its modification time. A
 refused field writes nothing and is named by its label with its problem ("1.000" for a thousand is refused: a percentage and an
@@ -204,8 +286,8 @@ decision, also "Leverancier vragen" again. "Leverancier vragen" is offered on an
 or a silence of a question the run asked itself ("Bericht kwam terug", "Geen antwoord binnen de wachttijd"), where it asks that
 question again (the state's "again", ruling C4 of the clean-up of Task 44).
 
-Below the buyer's part, folded away under "Koppeling met Exact (bij de installatie)" above the connections, the block of the
-connection to Exact (aid/review/exact_settings.py has what it shows and writes; _exact_section builds it). It shows the state of the
+The section "Koppeling met Exact", after "Postvak en AI", holds the block of the connection to Exact (aid/review/exact_settings.py
+has what it shows and writes; _exact_section builds it). It shows the state of the
 connection ("Stand van de koppeling": whether the layout of the purchase order is set, the POs the aid knows and the one filed last,
 whether the columns of the export are set, when the last export was filed, the files of the watched folder it could not read, and the
 number of cases that wait for their PO), read again with "Stand vernieuwen" and each time the tab is selected. Its part 1,
@@ -213,7 +295,7 @@ number of cases that wait for their PO), read again with "Stand vernieuwen" and 
 (the settings po_layout and po_senders) from one sample PDF of the company's own purchase order. Choosing the sample shows its first
 page line by line, the first PAGE_LINES lines with a line under the table when the page has more; "Kopregel zoeken" finds the title row
 by one of its words and shows, for each of its words, one of SLOTS dropdowns made once, labelled with the word; "Testen" reads the
-sample with the layout of the form and writes nothing; "Opslaan" reads it the same way and writes the two settings with
+sample with the layout of the form and writes nothing; "Opmaak opslaan" reads it the same way and writes the two settings with
 update_settings_file, or writes nothing and names each problem. Both show the reading below: the header values and the order lines as
 two tables, and a line for each problem and each warning of the reader, never the total or the authorization limit; the summary above
 the tables only when there is no problem. The sample field takes any file, so that the page library refuses none in its own words: a
@@ -242,7 +324,8 @@ fills "Rij met de kolomnamen" with the row found and one dropdown for each field
 minimum, and an empty field, 0 or a negative number lets the row be found again. One read of the sample gives its first rows and its
 titles, and is kept for the same file (its path, size and modification time) and row, so that a select of the settings tab or a
 language switch reads the sample no more. "Testen" reads the sample once with the three settings of the form and writes nothing;
-"Opslaan" reads it the same way and writes the three with update_settings_file, or writes nothing and names each problem. Both show
+"Exportkolommen opslaan" reads it the same way and writes the three with update_settings_file, or writes nothing and names each
+problem. Both show
 below the buttons what the trial read says and the lines of the first order and, with two orders or more, of the last order: the order
 of the file's last order line, where with the tick a total row at the end of the file joins, and the PO the file names last when that
 is yet another (exact_settings.export_lines). The sample field takes any file, so that the page library refuses none in its own words:
@@ -258,7 +341,8 @@ article_columns), and the convention of the numbers written as text (article_dec
 and fills "Rij met de kolomnamen" and the three dropdowns with the titles of that row, as in part 2; of a workbook the one sheet
 the buyer sees is read, as the tab "Prijslijst" reads the export itself, and a workbook with more than one visible sheet with
 data is refused by the names of those sheets. "Testen" (articles_tested) reads
-the sample once with the two settings of the form and writes nothing; "Opslaan" (articles_saved) reads it the same way and writes
+the sample once with the two settings of the form and writes nothing; "Artikelkolommen opslaan" (articles_saved) reads it the same
+way and writes
 the two with update_settings_file, or writes nothing and names each problem. It stores no price: the export itself is given on the
 tab "Prijslijst". Both show what the trial read says ("12 artikelen gelezen; 3 rijen overgeslagen (zonder artikelcode: 2, prijs niet
 te lezen: 1).", a count of one in the singular) and a table of the first articles as read. The part is filled from the settings file
@@ -298,70 +382,111 @@ The review tab answers "Leverancier vragen" on a case made from a try-out docume
 hierover niets naar een leverancier." (decision_text; decide of aid/review/app.py refuses it), and close_text does not count a message
 that the aid does not send about such a case as a message not sent.
 
-Below, folded away under "Koppelingen: het Microsoft-postvak en de AI-dienst" (the heading names no installation, because a sign-in
-that has lapsed sends the buyer there, as the digest's two lines say), the settings tab connects the work mailbox through the
-buyer's own Microsoft sign-in (aid/connections/): the Directory (tenant) ID and the Application (client) ID
-of the app registration; "Aanmelden bij Microsoft", which opens Microsoft's sign-in page in a browser window on the PC where the page
-runs, as the tab says, and says that it waits for it, and "Aanmelden met een code", which shows a code and an address and then waits
-until the code has been entered; the signed-in account, read from the token cache only, so that opening the tab asks Microsoft
-nothing, and "Afmelden"; the mailbox (empty: the account's own; another mailbox signs in with the shared scopes); the folder, chosen
-from the mailbox's folders once signed in ("Mappen ophalen" lists them again, for another mailbox, and a folder listed for another
-mailbox than the one in the field is not saved); "Verbinding testen", which shows how many messages the folder holds and when the
-newest arrived, never a subject or a sender, or that the sign-in has lapsed (as "Mappen ophalen" does); how the aid sends (send_via);
-and the state of the trigger, from mailbox_state.json (aid/sources/microsoft_mail.py), its times in the local time of the PC.
-"Opslaan" validates the six settings and writes them into the settings file with update_settings_file (aid/settings.py), and the
-runner takes them over at its next pass (this part is filled when the page loads, and its save gives all six to
-update_settings_file, which writes those that differ from the file's); a save that turns the trigger off or names another folder
-removes the stored connection (forget_connection), so that a folder connected again later is read from that moment. The tab never
-shows a token of the sign-in, and an error by its code ("invalid_grant"), its status ("HTTP 404"), its class, a refused field by its
-label, a browser sign-in that timed out and a store the PC refuses by a fixed line, the latter without its folder. On a page opened
-on a public share link the tab says only "Niet beschikbaar op een openbare link" and offers nothing, and on a page built without its
-settings file (the Colab notebook) it offers nothing either.
+The section "Postvak en AI" (its label names no installation, because a sign-in that has lapsed sends the buyer there, as the
+digest's two lines say) connects the work mailbox through the buyer's own Microsoft sign-in
+(aid/connections/). The part shows its state first: the signed-in account, read from the token cache only, so that opening the tab
+asks Microsoft nothing, and under "Stand van het postvak" the state of the trigger, from mailbox_state.json
+(aid/sources/microsoft_mail.py), its times in the local time of the PC; both are read when the page loads and again each time the
+section is selected (connections_selected). Five numbered steps follow (MAIL_STEPS), each group of buttons with its answer line right under
+it (finding 1 of the owner's test): "1. Gegevens van de app-registratie", the Directory (tenant) ID and the Application (client) ID
+of the app registration; "2. Aanmelden bij Microsoft", where "Aanmelden bij Microsoft" opens Microsoft's sign-in page in a browser
+window on the PC where the page runs, as the tab says, and says that it waits for it, "Aanmelden met een code" shows a code and an
+address and then waits until the code has been entered, and "Afmelden" signs out, the three answering on settings-sign-note; "3. Map
+van het postvak", the mailbox (empty: the account's own; another mailbox signs in with the shared scopes), the folder, chosen from the
+mailbox's folders once signed in ("Mappen ophalen" lists them again, for another mailbox, and a folder listed for another mailbox than
+the one in the field is not saved), and "Verbinding testen", which shows how many messages the folder holds and when the newest
+arrived, never a subject or a sender, or that the sign-in has lapsed (as "Mappen ophalen" does), the two answering on
+settings-folder-note; "4. Verzenden", how the aid sends (send_via), and "Postvak opslaan", the one filled button of the part, which
+validates the six settings and writes them into the settings file with update_settings_file (aid/settings.py), and the runner takes
+them over at its next pass (this part is filled when the page loads, and its save gives all six to update_settings_file, which writes
+those that differ from the file's); a save that turns the trigger off or names another folder removes the stored connection
+(forget_connection), so that a folder connected again later is read from that moment; and "5. Documenten lezen", the AI section below.
+The tab never shows a token of the sign-in, and an error by its code ("invalid_grant"), its status ("HTTP 404"), its class, a refused
+field by its label and a browser sign-in that timed out by a fixed line. A store of the sign-in that the PC refuses is said in words,
+with what to do (finding 2 of the owner's test, _refusal_text): a store inside a git work tree by the store's folder and the folder that
+holds .git, a store made by another Windows user or in another kind of session by its folder, each shown as it is, and any other failure
+to make the account by a fixed line. The refusal of a store inside a git work tree stands on the line under the sign-in buttons before
+any press, from the moment the page loads and each time the section is selected (store_checked, which work_tree_refusal tells without making
+anything), and so does the refusal of a store of another kind, which making the page's account of the saved IDs tells, as the account line
+makes it, while the account line says "Niet aangemeld", so that it stands once; the buttons of the other steps, and the choice of the
+reader, then point to that line ("Aanmelden kan niet: onder stap 2, Aanmelden bij Microsoft, staat waarom."). The language switch
+relabels the five steps and empties the new answer lines, but for that refusal, which it gives in the language (sections_relabelled).
+On a page opened on a public share link the tab says only "Niet beschikbaar op een openbare link" and offers nothing, no folder
+included, and on a page built without its settings file (the Colab notebook) it offers nothing either.
 
-The AI section of the settings tab is Microsoft 365 Copilot (aid/readers/copilot_client.py), under a short text of what Copilot
-needs: "Aanmelden voor Copilot" signs in in the browser as "Aanmelden bij Microsoft" does, saying first that it waits, with the
-permissions of the mailbox in the field (mail_scopes) and of Copilot together; "Copilot testen" sends Copilot one message, "Answer with the word OK only.", and shows "Copilot antwoordt" with
-the first 20 characters of the answer, or the error of the client by its text, which names a status and Graph's error code
-("Copilot refused: 403 Forbidden") and never a token or a message of Microsoft; and "Documenten lezen met", Copilot or "zonder AI
-(parser)", writes the setting reader ("llm" or "parser") into the settings file as soon as it is chosen, as "Opslaan" writes the
-six settings, Copilot only once the tenant and the client are saved.
+The AI section of the settings tab, step 5 of "Postvak en AI", is first the line of what reads the documents now (reader_shown): the
+parser or Copilot, and Copilot failing as a whole since when, with its cause by a status code and the cases that wait for it, or
+refusing documents, from the runner's digest state and the case folders (aid/review/status.py), read when the page loads, when the
+section is selected, at the language switch and after each choice. Then "Documenten lezen met", Copilot or "zonder AI (parser)", writes
+the setting reader ("llm" or "parser") into the settings file as soon as it is chosen, as "Postvak opslaan" writes the six settings,
+and answers on settings-reader-note right under it. Copilot is written only once the tenant and the client are saved, and only once
+Copilot answered the test message of "Copilot testen", sent with them (finding 6 of the owner's test): a refusal writes nothing,
+keeps the reader of the file and says why by the status code with a hint (400: most often no licence or a personal account; 401: sign
+in for Copilot first; 403: a permission or a consent missing), never by Copilot's own words. It is the one choice of the page that
+sends something to Microsoft, at the buyer's own press, and never when the page loads or its language changes. Then Microsoft 365
+Copilot (aid/readers/copilot_client.py), under a short text of what Copilot needs: "Aanmelden voor Copilot" signs in in the browser as
+"Aanmelden bij Microsoft" does, saying first that it waits, with the permissions of the mailbox in the field (mail_scopes) and of
+Copilot together, and "Copilot testen" sends Copilot one message, "Answer with the word OK only.", and shows "Copilot antwoordt" with
+the first 20 characters of the answer, or the error of the client by its text, which names a status and Graph's error code ("Copilot
+refused: 403 Forbidden") and never a token or a message of Microsoft; the two answer on the line under them.
 
-The connections end with "Code voor de uitbreiding in de browser": the code the browser extension sends to the capture server
+The part ends with "Code voor de uitbreiding in de browser": the code the browser extension sends to the capture server
 (capture_token of the settings file), one line that cannot be edited, with a button to copy it, filled from the settings file each
 time the page loads, for the buyer to paste into the extension's options. Like the rest of the tab it is on the page of this PC only:
 a page on a public share link, or without its settings file, has none.
+
+The last section, "Stand van de assistent" (_assistant_section, finding 8 of the owner's test), says what the assistant is doing, read
+from the files of this PC by aid/review/status.py and never from Microsoft, each time the section is selected, at a press of "Stand
+van de assistent vernieuwen" and after a press of the strip's button (assistant_shown): a line each for the runner's last pass (the
+modification time of its digest state), or since when it made none once status.PASS_LATE passed without one, or that it made none yet;
+whether the launcher runs (its heartbeat), since when and how often it started the runner; a STOP file next to the settings file; a
+runner the launcher gave up; the mailbox as "Postvak en AI" tells it, and since when its sign-in has lapsed; what reads the documents
+(_reader_text, the line of reader_shown) with the purchase orders that wait for Copilot; and a store of the sign-in that the PC
+refuses (_assistant_lines). A line that tells one of the problems of status.problems, the problems the review tab tells too, is in
+bold. Under them the last status.LOG_LINES lines of <cases_root>/runner.log stand as the runner wrote them, the newest first, in a box
+that cannot be edited (a box and no Markdown, so that an underscore of a case id stays as it is), with a line that says that they are
+for the researcher and stay on this PC: the runner's own words, the one place of the page that shows them, on the page of this PC
+only. A file that cannot be read leaves the section as it is, and the language switch gives it in the language, its lines and its log
+read again (sections_relabelled).
 """
 import asyncio
+import hashlib
 import io
+import json
 import re
 import tempfile
 import threading
 import warnings
-from collections.abc import Callable, Mapping
-from datetime import datetime, timezone
+from collections import Counter
+from collections.abc import Callable, Mapping, Sequence
+from datetime import datetime, timedelta, timezone
+from html import escape
 from pathlib import Path
 from typing import NamedTuple, get_args
 
 from msal.oauth2cli.oauth2 import BrowserInteractionTimeoutError
 
-from aid.case import TEMPORARY, WORK, Case, load_case, work_copy_folder
+from aid.case import TEMPORARY, WORK, Case, load_case, sha256_file, work_copy_folder
 from aid.connections.microsoft import COPILOT_SCOPES, MicrosoftAccount, SignInFailed, SignInNeeded, mail_scopes
-from aid.connections.secrets import LazySecretStore, SecretStore, default_secrets_dir
-from aid.execution.by_hand import FIELDS, FOLDER, Change, ListUnread, changes, mark, reopen
+from aid.connections.secrets import LazySecretStore, SecretStore, StoreRefused, default_secrets_dir, work_tree_refusal
+from aid.execution.by_hand import FIELDS, FOLDER, Change, ListUnread, changes, mark, open_changes, reopen
 from aid.execution.ops import WriteOp
+from aid.execution.writer import LOG_FILE as WRITE_LOG
 from aid.execution.writer import WriteLog, WriteLogEntry, WriterError, read_before
 from aid.messaging import FileMailer, Mailer, NoRoute
+from aid.messaging import _append_line           # a line appended in one write, a line a crash cut off ended first
 from aid.messaging.microsoft_mailer import mailer_of
-from aid.pipeline import LOOKS, NOT_SENT, SENT, Deps, asked_by_the_run
+from aid.pipeline import LOOKS, NOT_SENT, RESULT_FILE, SENT, CaseResult, Deps, asked_by_the_run
 from aid.po_store import PoStore
 from aid.pricelist import (NameRefused, NoArticle, also_held, current_prices, is_supplier_name, keep_columns, kept_columns, others_asking,
                            remove_stored, store_current, stored_prices, supplier_named, with_others)
-from aid.readers.copilot_client import CopilotClient, CopilotError
+from aid.readers.copilot_client import UNREACHABLE, CopilotClient, CopilotError
 from aid.readers.llm_client import ReaderError
 from aid.readers.po_export import ExportRefused
 from aid.review import hand_list, intake, pricelist_page
-from aid.review.app import (DECISIONS_FILE, CaseSummary, Decision, EnteredValue, FlagRow, NothingAsked, _list_cases, _saved_result,
-                            decide, load_case_view)
+from aid.review import status as aid_status      # the module: the page has a status line of its own
+from aid.review.app import (CAPTURE_FILE, DECISIONS_FILE, CaseSummary, Decision, EnteredValue, FlagRow, NothingAsked, _pages, _saved_result,
+                            _summary, decide, load_case_view, marked_replaced)
 from aid.review.buyer_settings import (BUYER_FIELDS, SUPPLIER_FIELDS, changed_fields, parse, shown, supplier_changes, supplier_names,
                                        supplier_rows, supplier_shown, supplier_update, without_supplier)
 from aid.review.close import _records, close_case, standing_decisions, undo, waiting_for_po
@@ -374,12 +499,14 @@ from aid.review.exact_settings import (ARTICLE_FORM, EXPORT_FORM, MEANINGS, NO_C
                                        refusal_text, sample_head, saved_articles, saved_export, saved_values, senders_from, state_lines,
                                        title_words, trial, typed_words)
 from aid.review.i18n import STRINGS, reason_label
+from aid.review.look import LINE, LINE_STRONG, MUTED, SURFACE, TONES
 from aid.settings import Settings, SettingsInvalid, WriteRouteSet, is_client_id, is_tenant_id, load_settings, read_settings, update_settings_file
 from aid.sources.dropin import drop
+from aid.sources.mailbox import PROCESSED_FOLDER, attachment_of
 from aid.sources.microsoft_mail import GraphError, connection_of, folder_summary, forget_connection, list_folders, trigger_on
 from aid.tryout import (CART_CHANGES, CHANGES, TryoutRefused, as_compared, cart_link, checked_cart, checked_confirmation, file_name,
                         known_pos, made_from, write_cart)
-from aid.tryout_mark import TRYOUT_NOT_SENT, offers_tryouts
+from aid.tryout_mark import TRYOUT_NOT_SENT, case_is_tryout, offers_tryouts
 
 _REVIEW_ITEM = re.compile(r"RI\d+")              # the ids of the review items (aid/pipeline.py)
 # The ids of three tabs; "In Exact invoeren" has hand_list.TAB and "Prijslijst" pricelist_page.TAB.
@@ -391,6 +518,8 @@ _WHOLE_TITLES = "#export-head th, #export-head th *, #export-lines th, #export-l
 SEND_VIA = get_args(Settings.model_fields["send_via"].annotation)     # the values of send_via, in the order the tab offers them
 READERS = get_args(Settings.model_fields["reader"].annotation)        # the values of reader: "llm" (Copilot) and "parser"
 COPILOT_TEST = "Answer with the word OK only."                         # the message of "Copilot testen"
+MAIL_STEPS = ("ids", "sign_in", "mailbox", "send", "read")             # the five numbered steps of "Postvak en AI" ("mail_step:<step>")
+_STATUS_CODE = re.compile(r"\b[1-5][0-9]{2}\b")  # a status code of HTTP in an error of Copilot: three digits, standing on their own
 # The label on the tab of each setting the tab writes, by which a refused field is named, never by its value: the six of the mailbox,
 # the reader, the eleven of the buyer's form, the four supplier settings by the heading of the suppliers, the three fields of the
 # supplier form (the keys of with_supplier's problems), the layout of the purchase order and its senders of the block "Koppeling met
@@ -419,6 +548,44 @@ _COLUMNS = ("item", "field", "line", "po_value", "doc_value", "reason", "po_sour
 _WIDTHS = {"item": 5, "field": 9, "line": 5, "po_value": 9, "doc_value": 9, "reason": 25, "po_source": 19, "doc_source": 19}
 COLUMN_WIDTHS = [f"{_WIDTHS[column]}%" for column in _COLUMNS]
 _ENTERED = {field: kind for kind, field in FIELDS.items()}        # the kind of change of each field of an entered value, for its form
+# The strip of the tab "Beoordelen" (see the module docstring): the states it counts, in their order, each with the tone of its chip
+# (TONES of aid/review/look.py), "look" for the documents the intake left to the buyer that wait for him; the tone of each state in the
+# fold's table, a document's two states among them; the place that handles each problem of the assistant (aid/review/status.py),
+# which names the strip's button ("act:<place>"); and the section of the settings tab that is that place, which the button opens: the
+# id of its gr.Tab in settings-sections (_settings_tab, _assistant_section).
+_CHIPS = (("review", "attention"), ("failed", "problem"), ("look", "attention"), ("copilot_wait", "waiting"), ("waiting", "waiting"),
+          ("closed_itself", "done"))
+_TONE = {"review": "attention", "waiting_po": "waiting", "failed": "problem", "handled": "done", "copilot_wait": "waiting",
+         "reading": "waiting", "waiting": "waiting", "closed_itself": "done", "closed_by_you": "done", "look": "attention", "looked": "done"}
+_PLACES = {"stopped": "assistant", "given_up": "assistant", "no_pass_ever": "assistant", "no_pass": "assistant", "store": "connections",
+           "lapsed": "connections", "copilot_down": "connections", "copilot_refused": "connections"}
+_SECTIONS = {"assistant": "assistent", "connections": "koppelingen"}
+_CLOSED = ("closed_itself", "closed_by_you")
+TICK_SECONDS = 30                                # how often the page reads the strip, the count and the case list again
+WHEN_FORM = "%Y-%m-%d %H:%M"                     # a time of the mailbox on the tab "Postvak en AI" (_when)
+DAY_FORM = "%d-%m-%Y %H:%M"                      # a time in the section "Stand van de assistent" (_day_time), the mailbox's too
+# The files of a case folder whose offer offered_cases tells by (case.json first), and what it read of each folder at its last call,
+# by cases root, by folder: the stamp of each of those files (_stamp), and the case as offered then (None: not offered); the folders
+# of the last aid_status.CACHED_ROOTS cases roots are kept.
+_OFFER_FILES = ("case.json", f"steps/{RESULT_FILE}", WRITE_LOG, CAPTURE_FILE)
+_OFFERED: dict[Path, dict[str, tuple[tuple, CaseSummary | None]]] = {}
+_OFFERED_LOCK = threading.Lock()                 # the page reads in threads of its own
+# A chip: 24 px high, a dot of 6 px before its word, in the colours of its tone, so that a colour never says something alone.
+_CHIP_RULES = (".chip { display: inline-flex; align-items: center; gap: 6px; min-height: 24px; padding: 0 8px; border-radius: 4px; "
+               "font-size: 13px; line-height: 18px; font-weight: 600; font-variant-numeric: tabular-nums; } "
+               '.chip::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 3px; } '
+               + " ".join(f".chip.{name} {{ color: {tone.text}; background: {tone.tint}; }} .chip.{name}::before {{ background: {tone.mark}; }}"
+                          for name, tone in TONES.items()))
+# The style of the strip and of the fold's table, scoped to their gr.HTML (its css_template), so that the page's own look is untouched;
+# the page library's own style of an HTML block (apply_default_css), which rules a table's rows in the text colour, is left off them.
+_STRIP_CSS = (f".strip {{ display: flex; flex-direction: column; gap: 8px; padding: 12px 16px; background: {SURFACE}; border: 1px solid {LINE}; "
+              "border-radius: 6px; } .chips { display: flex; flex-wrap: wrap; gap: 8px; } "
+              f".meta {{ font-size: 13px; line-height: 18px; color: {MUTED}; }} {_CHIP_RULES}")
+_ALL_CSS = ("table { width: 100%; margin: 0; border: 0; border-collapse: collapse; font-size: 14px; line-height: 20px; "
+            "font-variant-numeric: tabular-nums; } tr { border: 0; } "
+            f"th, td {{ text-align: left; vertical-align: top; padding: 10px; border: 0; border-bottom: 1px solid {LINE}; background: none; }} "
+            f"th {{ font-weight: 600; color: {MUTED}; border-bottom-color: {LINE_STRONG}; }} td:first-child {{ white-space: nowrap; }} "
+            f".empty {{ color: {MUTED}; }} {_CHIP_RULES}")
 
 
 def page_rows(rows: list[FlagRow], language: str) -> list[list[str]]:
@@ -480,6 +647,202 @@ def _case_label(summary: CaseSummary, strings: dict[str, str]) -> str:
     return f"PO {summary.po_number or strings['unknown_po']}{supplier}, {summary.opened_at[:16].replace('T', ' ')}, {items}{status}{mark}"
 
 
+def _failed_label(line: aid_status.CaseLine, strings: dict[str, str], tryout: bool) -> str:
+    """A failed case in the dropdown, which the buyer has not noted as handled: its PO, supplier and time of opening as _case_label
+    names them, then "mislukt: zelf bekijken" in place of the number of items, and the mark of a try-out."""
+    supplier = f" ({line.supplier})" if line.supplier else ""
+    mark = f" {strings['hand_tryout']}" if tryout else ""
+    return f"PO {line.po_number or strings['unknown_po']}{supplier}, {line.opened_at:%Y-%m-%d %H:%M}, {strings['case_failed_look']}{mark}"
+
+
+def _kept_label(cases_root: Path, case_id: str, strings: dict[str, str]) -> str:
+    """A case on screen that left the list (closed in another browser tab, replaced by the runner, a failed case noted as handled),
+    as _case_label names it now, its status saying why it left; its id when its folder can no longer be read."""
+    try:
+        meta = json.loads((Path(cases_root) / case_id / "case.json").read_text(encoding="utf-8"))
+        return _case_label(_summary(case_id, meta, _saved_result(load_case(cases_root, case_id))), strings)
+    except (OSError, ValueError, KeyError):
+        return case_id
+
+
+def _item_label(item: aid_status.LookItem, strings: dict[str, str]) -> str:
+    """A document the intake left to the buyer in the dropdown: "Document MU05_conf.pdf, 2026-11-12 17:03, zelf bekijken", its file
+    as the list of skipped items names it and the time of the scan that left it, written as _failed_label writes a time; once the
+    buyer noted it as handled (it stays on screen until another case is chosen), "door u afgehandeld" in place of "zelf bekijken"."""
+    return strings["item_label" if item.state == "look" else "item_label_handled"].format(file=item.file, time=f"{item.time:%Y-%m-%d %H:%M}")
+
+
+class _Found(NamedTuple):
+    """Where the document of an item lies on this PC (_item_document)."""
+    path: Path                                   # the file in processed/: the document itself, or the e-mail that holds it
+    attachment: str | None                       # the attachment's name in that e-mail; None for a document that is a file of its own
+    data: bytes | None                           # the attachment's bytes; None for a document that is a file of its own
+
+
+def _item_document(item: aid_status.LookItem, watched: Path) -> _Found | None:
+    """Where the document of an item lies on this PC (see the module docstring), found as the scan of the watched folder put it there
+    (aid/sources/mailbox.py): a file of its own, named in the item as it was named in the folder, moved to processed/ in the folder
+    under its own name, or with _2, _3 and so on before its extension when processed/ held that name already; an attachment, named
+    "<e-mail>/<attachment>", inside its e-mail, which moved there in the same way (attachment_of). Of the files of that name, the one
+    whose bytes (an attachment's own) have the sha256 that the scan noted in the item's line, whatever the times of the files say;
+    for a line written before the scan noted one, the one file of that name, and none of several, as the page cannot tell which of
+    them is the document. None when no such file is there, or it cannot be read, rather than another document of the same name."""
+    email, slash, attachment = item.file.partition("/")
+    name = Path(email if slash else item.file)
+    numbered = re.compile(rf"{re.escape(name.stem)}_([2-9]|[1-9][0-9]+){re.escape(name.suffix)}")
+    try:
+        candidates = sorted(path for path in (Path(watched) / PROCESSED_FOLDER).iterdir() if path.name == name.name or numbered.fullmatch(path.name))
+    except OSError:
+        return None
+    found = []
+    for path in candidates:
+        try:
+            if not path.is_file():
+                continue
+            data = attachment_of(path, attachment) if slash else None
+            if slash and data is None:           # an e-mail of that name without the attachment
+                continue
+            if item.sha256 is not None and (hashlib.sha256(data).hexdigest() if slash else sha256_file(path)) != item.sha256:
+                continue
+        except Exception:                        # an e-mail that cannot be read holds no document: the scan reads it as an error too
+            continue
+        found.append(_Found(path, attachment if slash else None, data))
+        if item.sha256 is not None:              # its own bytes: the document itself
+            break
+    return found[0] if len(found) == 1 else None
+
+
+def _item_pages(item: aid_status.LookItem, watched: Path, cases_root: Path) -> list[bytes]:
+    """The pages of the document of an item, as _pages of aid/review/app.py renders the document of a case: those of a PDF, the bytes
+    of a PNG. An attachment is rendered from a copy in a folder of its own under <cases_root>/tmp/work (work_copy_folder of aid/case.py),
+    which goes again at once. None for a document that is not on this PC (_item_document), or that cannot be rendered."""
+    found = _item_document(item, watched)
+    if found is None:
+        return []
+    try:
+        if found.data is None:
+            return _pages(found.path)
+        with work_copy_folder(Path(cases_root) / TEMPORARY / WORK, "aid_review_item_") as folder:
+            copy = folder / found.attachment
+            copy.write_bytes(found.data)
+            return _pages(copy)
+    except Exception:                            # a file that cannot be rendered shows no page, and no error's text
+        return []
+
+
+def review_label(lines: list[aid_status.CaseLine], language: str, items: Sequence[aid_status.LookItem] = ()) -> str:
+    """The label of the tab "Beoordelen" for the cases as case_lines of aid/review/status.py gives them, and the documents the intake
+    left to the buyer as review_items gives them: the tab's name with the number of cases that wait for the buyer (in review, or
+    failed and not noted as handled: NEEDS) and of documents that wait for him, "Beoordelen (3)", and its name alone while none waits.
+    The timer's queue_ticked and the relabel of the tabs at a language switch both name the tab by it, so that the label is the same
+    whichever of the two runs last."""
+    strings = STRINGS[language]
+    waiting = sum(1 for line in lines if line.state in aid_status.NEEDS) + sum(1 for item in items if item.state == "look")
+    return strings["review_tab_count"].format(n=waiting) if waiting else strings["review_tab"]
+
+
+def _strip_html(lines: list[aid_status.CaseLine], aid: aid_status.Assistant | None, problems: list[aid_status.Problem], now: datetime,
+                language: str, items: Sequence[aid_status.LookItem] = ()) -> str:
+    """The strip of the tab "Beoordelen" (see the module docstring) as HTML: a chip for each state it counts, "Ter beoordeling" always
+    and any other only while its count is above 0, the documents the intake left to the buyer (`items`) that wait for him among them
+    ("Zelf bekijken"); and when `aid` is given (the assistant as aid/review/status.py reads it, on the PC's own page with its settings
+    file), a chip for each problem, the most urgent first, and a last line with the runner's last pass, the mailbox, the reader and
+    the time of `now`. Every word goes through html.escape."""
+    strings = STRINGS[language]
+    counted = Counter(line.state for line in lines) + Counter(item.state for item in items)
+    parts = [_chips((strings[f"chip:{state}"].format(n=counted[state]), tone) for state, tone in _CHIPS if counted[state] or state == "review")]
+    if aid is not None:
+        if problems:
+            parts.append(_chips((_problem_text(problem, strings), "problem") for problem in problems))
+        parts.append(f'<div class="meta">{escape(" · ".join(_strip_meta(aid, now, strings)))}</div>')
+    return f'<div class="strip">{"".join(parts)}</div>'
+
+
+def _chips(chips) -> str:
+    """A line of chips, each (its words, its tone)."""
+    return '<div class="chips">' + "".join(f'<span class="chip {tone}">{escape(words)}</span>' for words, tone in chips) + "</div>"
+
+
+def _problem_text(problem: aid_status.Problem, strings: dict[str, str]) -> str:
+    """A problem of the assistant in words: since when and for how many cases, as aid/review/status.py tells it, never an error's
+    text."""
+    if problem.kind == "no_pass":
+        return strings["problem:no_pass"].format(time=_moment(problem.since))
+    if problem.kind in ("copilot_down", "copilot_refused"):
+        since = _moment(problem.since) if problem.since is not None else ""
+        return strings[f"problem:{problem.kind}_{'one' if problem.n == 1 else 'many'}"].format(since=since, n=problem.n)
+    return strings[f"problem:{problem.kind}"]
+
+
+def _strip_meta(aid: aid_status.Assistant, now: datetime, strings: dict[str, str]) -> list[str]:
+    """The last line of the strip, in its parts: the runner's last pass (none before the first), the mailbox as the settings tab
+    tells it, the reader, and the time the strip was read."""
+    parts = [strings["strip_pass"].format(time=_clock(aid.last_pass, now))] if aid.last_pass is not None else []
+    mailbox = aid.mailbox
+    if mailbox.state == "read":
+        parts.append(strings["strip_mailbox:read"].format(last=_clock(mailbox.last_sync, now)))
+    elif mailbox.state == "unread":
+        parts.append(strings["strip_mailbox:unread"].format(since=_clock(mailbox.connected_at, now) if mailbox.connected_at else "?"))
+    else:
+        parts.append(strings[f"strip_mailbox:{mailbox.state}"])
+    return [*parts, strings[f"strip_reader:{aid.reader}"], strings["strip_updated"].format(time=_clock(now, now))]
+
+
+def _all_html(lines: list[aid_status.CaseLine], asking: set[str], language: str, items: Sequence[aid_status.LookItem] = ()) -> str:
+    """The table of the fold under the strip (see the module docstring): for each case of `lines` and each document the intake left to
+    the buyer (`items`), the time it came in, its order or "Document <its file>", its state as a chip and what the buyer does, which
+    for a closed case is to enter its changes while they stand on the list In Exact invoeren (`asking` holds those cases). Those that
+    wait for the buyer come first, then the others, each newest first, the cases in the order of `lines` where two times are the same;
+    one sentence when there is none. Every name goes through html.escape."""
+    strings = STRINGS[language]
+    if not lines and not items:
+        return f'<p class="empty">{escape(strings["review_all_none"])}</p>'
+    head = "".join(f"<th>{escape(strings[f'all_column:{column}'])}</th>" for column in ("time", "case", "state", "todo"))
+    rows = [(line.state in aid_status.NEEDS, line.opened_at, _all_row(line.opened_at, _order(line, strings), line.state, _todo(line, asking), language))
+            for line in lines]
+    rows += [(item.state == "look", item.time, _all_row(item.time, strings["item_name"].format(file=item.file), item.state,
+                                                        "look" if item.state == "look" else "nothing", language)) for item in items]
+    rows.sort(key=lambda row: row[1], reverse=True)          # stable: the order of `lines` stays where two times are the same
+    rows.sort(key=lambda row: not row[0])
+    return f"<table><thead><tr>{head}</tr></thead><tbody>{''.join(row for _, _, row in rows)}</tbody></table>"
+
+
+def _all_row(moment: datetime, name: str, state: str, todo: str, language: str) -> str:
+    """A row of the fold's table: the time, the name of the case or document, its state as a chip and what the buyer does ("todo:")."""
+    return (f"<tr><td>{_moment(moment)}</td><td>{escape(name)}</td>"
+            f'<td><span class="chip {_TONE[state]}">{escape(aid_status.state_text(state, language))}</span></td>'
+            f"<td>{escape(STRINGS[language][f'todo:{todo}'])}</td></tr>")
+
+
+def _order(line: aid_status.CaseLine, strings: dict[str, str]) -> str:
+    """The order of a case in words, "Inkooporder 250107 (S07)", the supplier once the case has a result."""
+    supplier = f" ({line.supplier})" if line.supplier else ""
+    return f"{strings['po_document']} {line.po_number or strings['unknown_po']}{supplier}"
+
+
+def _todo(line: aid_status.CaseLine, asking: set[str]) -> str:
+    """What the buyer does for a case, by its state: the key after "todo:"."""
+    if line.state in _CLOSED:
+        return "closed_changes" if line.case_id in asking else "nothing"
+    return "nothing" if line.state == "handled" else line.state
+
+
+def _moment(moment: datetime) -> str:
+    """A time of the strip and of its fold as dd-mm-yyyy HH:MM, in the local time of this PC."""
+    return _local(moment).strftime("%d-%m-%Y %H:%M")
+
+
+def _clock(moment: datetime, now: datetime) -> str:
+    """A time of the strip's last line: HH:MM on the day of `now`, else as _moment."""
+    moment = _local(moment)
+    return moment.strftime("%H:%M") if moment.date() == _local(now).date() else _moment(moment)
+
+
+def _local(moment: datetime) -> datetime:
+    """The time in the local time of this PC, without a zone; a time without a zone is local time already."""
+    return moment.astimezone().replace(tzinfo=None) if moment.utcoffset() is not None else moment
+
+
 def _describe(row: FlagRow, strings: dict[str, str]) -> str:
     """A review item in one line, above its decision."""
     parts = [f"**{row.item_id}**"]
@@ -519,8 +882,62 @@ def _made_and_not_undone(root: Path) -> list[WriteLogEntry]:
 def offered_cases(cases_root: Path) -> list[CaseSummary]:
     """The cases the page offers, in the order they were opened: those in review, and any case with a write to undo
     (_made_and_not_undone), whatever its status (closed, waiting, failed). A case whose write log cannot be read is offered only
-    when it is in review."""
-    return _list_cases(cases_root, lambda root, result: result.status == "review" or bool(_readable_undoable(root)))
+    when it is in review. The page asks for them at every tick of its timer, so a case folder is read again only when one of the
+    files its offer is told by (_OFFER_FILES: case.json, the result, the write log and capture.json) changed (_stamp) since the last
+    call for the same cases root, or could not be opened then (_OFFERED)."""
+    root = Path(cases_root)
+    key = root.absolute()
+    known = _OFFERED.get(key, {})
+    seen: dict[str, tuple[tuple, CaseSummary | None]] = {}
+    for path in root.glob(f"*/steps/{RESULT_FILE}"):
+        folder = path.parents[1]
+        stamps = tuple(_stamp(folder / name) for name in _OFFER_FILES)
+        hit = known.get(folder.name)
+        if hit is None or hit[0] != stamps:
+            try:
+                hit = (stamps, _offer(root, folder))
+            except OSError:                      # a file held for a moment: not offered now, and read again at the next call
+                continue
+        seen[folder.name] = hit
+    with _OFFERED_LOCK:
+        _OFFERED.pop(key, None)
+        _OFFERED[key] = seen
+        while len(_OFFERED) > aid_status.CACHED_ROOTS:
+            _OFFERED.pop(next(iter(_OFFERED)))
+    return sorted((summary for _, summary in seen.values() if summary is not None), key=lambda summary: (summary.opened_at, summary.case_id))
+
+
+def _offer(cases_root: Path, folder: Path) -> CaseSummary | None:
+    """The case of the folder as offered_cases offers it, with its try-out mark (case_is_tryout of aid/tryout_mark.py), or None when
+    it does not, as _list_cases of aid/review/app.py lists a case: a case.json or a result that cannot be understood is not offered,
+    and neither is a capture case marked as replaced (marked_replaced). Raises OSError for a file that cannot be opened at that
+    moment, which offered_cases then reads again at its next call."""
+    try:
+        meta = json.loads((folder / "case.json").read_text(encoding="utf-8"))
+        result = CaseResult.model_validate_json((folder / "steps" / RESULT_FILE).read_text(encoding="utf-8"))
+        summary = _summary(folder.name, meta, result)
+    except (ValueError, KeyError):
+        return None
+    if result.status != "review":
+        try:
+            if not _made_and_not_undone(folder):
+                return None
+        except ValueError:                       # a write log that cannot be understood offers no undo
+            return None
+    if marked_replaced(folder):
+        return None
+    return summary.model_copy(update={"tryout": case_is_tryout(cases_root, folder.name)})
+
+
+def _stamp(path: Path) -> tuple[int, int, int] | None:
+    """The file's number in its file system, its size and its modification time in nanoseconds, so that a result written again
+    through a new file (_write_json of aid/case.py) within the same tick of the file system's clock counts as changed; None for a
+    file that is not there or cannot be looked at."""
+    try:
+        found = path.stat()
+    except OSError:
+        return None
+    return found.st_ino, found.st_size, found.st_mtime_ns
 
 
 def _readable_undoable(root: Path) -> list[WriteLogEntry]:
@@ -742,6 +1159,20 @@ class _Judged(NamedTuple):
     older: list[str]                             # the articles whose older price a row kept off the list leaves on the list
 
 
+class _Strip(NamedTuple):
+    """The strip of the tab "Beoordelen" and the fold under it, as the page reads them (see the module docstring)."""
+    html: str                                    # the strip
+    action: str | None                           # the label of its button; None while nothing is wrong, or where it has no button
+    fold: str                                    # the fold's label, with the number of cases in it
+    table: str                                   # the fold's table, or the sentence in its place when there is no case
+
+
+class _Sections(NamedTuple):
+    """The sections of the settings tab, as an action of another tab opens them (_settings_tab; the strip's button of "Beoordelen")."""
+    tabs: object                                 # the gr.Tabs settings-sections, whose `selected` names the section open
+    read_after: Callable                         # reads "Stand van de assistent" again once a given event has run (_assistant_section)
+
+
 class _Tab(NamedTuple):
     """What the settings tab is built with (see build_app)."""
     file: Path | None                            # the settings file it writes; None: the tab offers nothing
@@ -754,22 +1185,27 @@ class _Tab(NamedTuple):
 def build_app(deps: Deps, settings_file: Path | None = None, share: bool = False,
               account_factory: Callable[[str, str], MicrosoftAccount] | None = None, session=None,
               environ: Mapping[str, str] | None = None) -> "gr.Blocks":  # noqa: F821
-    """The review page, Dutch by default with a switch to English, in five tabs. On "Beoordelen": a dropdown of the cases offered
-    (offered_cases), with the case and the write of the address's query selected when the page opens (selection_from_query); the
-    supplier's document and the PO version as image galleries; the three lists as tables, with the four decisions on each review
-    item and the tick for the article price on a price; the banner when a change sends the PO through approval again; the hint on a
-    case that waits for its PO; above the lists, the line of the values entered in Exact that the case was compared with; the close
-    and undo buttons. On "In Exact invoeren", selected when the query holds tab=invoeren: the
+    """The review page, Dutch by default with a switch to English, in five tabs. On "Beoordelen": the strip of the aid's state and
+    the fold of every case of the last 7 days, read again every TICK_SECONDS seconds (see the module docstring); a dropdown of the
+    cases offered (offered_cases), of the failed cases not noted as handled and of the documents the intake left to the buyer that
+    wait for him, with the case and the write of the address's query selected when the page opens (selection_from_query), and under
+    it, while no case is chosen, "Oudste zaak openen"; the supplier's document, or the document left to the buyer, and the PO version
+    as image galleries; the three lists as tables, with the four decisions on each review item and the tick for the article price on
+    a price; the banner when a change sends the PO through approval again; the hint on a case that waits for its PO, and the notice of
+    a failed case or of a document left to the buyer; above the lists, the line of the values entered in Exact that the case was
+    compared with; the close button, or for a failed case and a document "Als afgehandeld noteren", and the undo buttons. On "In Exact invoeren",
+    selected when the query holds tab=invoeren: the
     list of the changes to enter in Exact, to tick as entered or as not to enter, and under it the changes handled in the last 14 days,
     to put on the list again or to put back in Exact, and the confirmations to attach in Exact (see the module docstring). On
     "Prijslijst": a supplier's price list compared with the article prices of an export from Exact, and its changes put on that list
     (see the module docstring). On "Bestanden": a file given to the assistant, put into the watched folder, and what the runner did
-    with the last files (see the module docstring). On "Instellingen": the buyer's settings and the suppliers, then, folded away, the
-    connection to Exact and the settings of the work mailbox (see the module docstring), written into settings_file. The last four
+    with the last files (see the module docstring). On "Instellingen", in five sections: the buyer's settings, the suppliers, the
+    settings of the work mailbox, the connection to Exact (see the module docstring), written into settings_file, and the state of the
+    assistant, read from the files of this PC. The last four
     tabs show nothing but a line when the page is opened on a public link (share) or without a settings file. account_factory gives
     the Microsoft account of a tenant and a client (by default with the token cache of the store in default_secrets_dir(); the tests
     give a fake one), and session is the requests session Graph is called through. No rule code is shown, and no setting value
-    outside the settings tab. Built inside an event loop of its own (see the module docstring). The connections end with the AI
+    outside the settings tab. Built inside an event loop of its own (see the module docstring). The part "Postvak en AI" holds the AI
     section (see the module docstring), whose Copilot is called through the same session. With `environ`, the environment that the
     password of the aid's mailbox is looked up in, the page makes the mailer of each close from the settings as they are then, as the
     runner makes its own (see "The mailer of a close" in the module docstring); without it, and on a public link whatever is given, a
@@ -805,9 +1241,87 @@ def _page(gr, deps: Deps, tab: _Tab):
 
     # The Deps of the page's actions, with the settings of the file as it is now, and for a close the mailer of those settings.
     live = _Live(deps, tab.file, sending_mailer if tab.environ is not None else None)
+    # The strip has its problems, its last line and its button on the page of this PC with its settings file only (see the module
+    # docstring).
+    acting = not tab.share and tab.file is not None
 
-    def choices(language: str) -> list[tuple[str, str]]:
-        return [(_case_label(summary, STRINGS[language]), summary.case_id) for summary in offered_cases(cases_root)]
+    def lines_now() -> list[aid_status.CaseLine]:
+        """The cases as case_lines of aid/review/status.py gives them, at the time of the page's clock."""
+        return aid_status.case_lines(cases_root, live.now().clock())
+
+    def items_now() -> list[aid_status.LookItem]:
+        """The documents the intake left to the buyer as review_items of aid/review/status.py gives them, at the time of the page's
+        clock: those that wait for him, and those he noted as handled in the last 7 days."""
+        return aid_status.review_items(cases_root, live.now().clock())
+
+    def choices(language: str, lines: list[aid_status.CaseLine] | None = None, items: list[aid_status.LookItem] | None = None,
+                keep: str | None = None) -> list[tuple[str, str]]:
+        """The case list (see the module docstring): the cases offered (offered_cases), then the failed cases that the buyer has not
+        noted as handled and that are not offered already, oldest first, then the documents the intake left to him that wait for him,
+        oldest first, and last the case or document `keep` (the one chosen) when it is no longer among them, so that it keeps its
+        place until another one is chosen (kept). `lines` and `items` are the cases and the documents as lines_now and items_now give
+        them, read here when they are not given."""
+        strings = STRINGS[language]
+        named = [(_case_label(summary, strings), summary.case_id) for summary in offered_cases(cases_root)]
+        offered = {case_id for _, case_id in named}
+        failed = sorted((line for line in (lines_now() if lines is None else lines) if line.state == "failed" and line.case_id not in offered),
+                        key=lambda line: (line.opened_at, line.case_id))
+        named += [(_failed_label(line, strings, case_is_tryout(cases_root, line.case_id)), line.case_id) for line in failed]
+        named += [(_item_label(item, strings), item.item_id) for item in (items_now() if items is None else items) if item.state == "look"]
+        if keep and keep not in {case_id for _, case_id in named}:
+            named.append(kept(keep, strings))
+        return named
+
+    def kept(case_id: str, strings: dict[str, str]) -> tuple[str, str]:
+        """The choice of a case on screen that left the list, as _kept_label names it, or of a document the buyer noted as handled
+        meanwhile (in another browser tab), as _item_label names it; a document no line names any more by its id."""
+        if aid_status.is_item(case_id):
+            item = aid_status.look_item(cases_root, case_id)
+            return (_item_label(item, strings) if item is not None else case_id), case_id
+        return _kept_label(cases_root, case_id, strings), case_id
+
+    def waits(lines: list[aid_status.CaseLine], items: list[aid_status.LookItem]) -> bool:
+        """Whether a case waits for the buyer, one in review or failed and not noted as handled, or a document left to him."""
+        return any(line.state in aid_status.NEEDS for line in lines) or any(item.state == "look" for item in items)
+
+    def pick_text(lines: list[aid_status.CaseLine], items: list[aid_status.LookItem], strings: dict[str, str]) -> str:
+        """The line under "Zaak" while no case is chosen: to choose one, or that none waits."""
+        return strings["review_pick"] if waits(lines, items) else strings["review_pick_none"]
+
+    def failed_text(line: aid_status.CaseLine, language: str) -> str:
+        """The notice of a failed case: why it failed in words (fail_text of aid/review/status.py), never its error, and what to do."""
+        return STRINGS[language]["failed_notice"].format(reason=aid_status.fail_text(line.reason, language))
+
+    def item_text(item: aid_status.LookItem, language: str) -> str:
+        """The notice of a document left to the buyer: why the intake left it to him in words (look_text of aid/review/status.py), never
+        the scan's own reason, and what to do; when it is no longer on this PC (_item_document), where to look for it."""
+        strings = STRINGS[language]
+        text = strings["item_notice"].format(reason=aid_status.look_text(item.reason, language))
+        if _item_document(item, live.settings().watched_folder) is None:
+            text += " " + strings["item_missing"].format(time=_moment(item.time))
+        return text
+
+    def asking(lines: list[aid_status.CaseLine]) -> set[str]:
+        """The closed cases among the lines whose changes stand on the list In Exact invoeren, still to enter; none when that list
+        cannot be read, or when no case is closed."""
+        if not any(line.state in _CLOSED for line in lines):
+            return set()
+        try:
+            return {case_id for change in open_changes(Path(cases_root) / FOLDER) for case_id in change.case_ids}
+        except (OSError, ValueError):
+            return set()
+
+    def strip_read(language: str) -> _Strip:
+        """The strip, the label of its button, the fold's label and its table, as the aid's files are now (see the module docstring):
+        the problems and the last line only on the page of this PC with its settings file (acting), from files only, at the time of
+        the page's clock."""
+        now_deps = live.now()
+        now, strings = now_deps.clock(), STRINGS[language]
+        lines, items = aid_status.case_lines(cases_root, now), aid_status.review_items(cases_root, now)
+        aid = aid_status.assistant(tab.file, cases_root, now_deps.settings, now) if acting else None
+        problems = aid_status.problems(aid, lines) if aid is not None else []
+        return _Strip(_strip_html(lines, aid, problems, now, language, items), strings[f"act:{_PLACES[problems[0].kind]}"] if problems else None,
+                      strings["review_all"].format(n=len(lines) + len(items)), _all_html(lines, asking(lines), language, items))
 
     def tables(lists: dict, language: str) -> list[dict]:
         headers = [STRINGS[language][column] for column in _COLUMNS]
@@ -846,12 +1360,18 @@ def _page(gr, deps: Deps, tab: _Tab):
         them), the state the decisions are shown from (those that stand: standing_decisions), the hint of a case that waits for its
         PO, the line of the values entered in Exact, and a message ("" when there is none). With no case chosen the status line is
         left as it is: a close that takes its case out of the review empties the case list, and what the close said must stay on
-        the screen. A decisions file that cannot be read empties the view and says so."""
+        the screen. A decisions file that cannot be read empties the view and says so. A document the intake left to the buyer shows
+        its pages in the place of the supplier's document (_item_pages), from where the scan put it, and nothing else of a case: no
+        list, no write to undo and no state, so no decision."""
         nothing = (gr.update(visible=False), [], [], *tables(empty, language), gr.update(choices=[], value=None), None, hint_of(None, language),
                    entered_of([], False, language))
         now = live.now()
         if not case_id:
             return (*nothing, gr.update())
+        if aid_status.is_item(case_id):
+            item = aid_status.look_item(cases_root, case_id)
+            pages = _item_pages(item, now.settings.watched_folder, cases_root) if item is not None else []
+            return (nothing[0], [Image.open(io.BytesIO(page)) for page in pages], *nothing[2:], "")
         case = load_case(cases_root, case_id)
         try:
             view = load_case_view(case, now.store)              # the store as it is now: a moved folder keeps its PO pages
@@ -871,10 +1391,10 @@ def _page(gr, deps: Deps, tab: _Tab):
     def relabel(language: str, case_id: str | None, state: dict | None) -> tuple:
         strings = STRINGS[language]
         flags, matches, uncompared = tables(state["lists"] if state else empty, language)
-        case = load_case(cases_root, case_id) if case_id else None
+        case = load_case(cases_root, case_id) if case_id and not aid_status.is_item(case_id) else None     # a document: as no case
         undo_choices = _undo_choices(case, strings) if case is not None else []
-        return (f"# {strings['title']}", gr.update(label=strings["language"]), gr.update(label=strings["case"], choices=choices(language)),
-                gr.update(value=strings["refresh"]), f"**{strings['banner']}**", gr.update(label=strings["document"]),
+        return (f"# {strings['title']}", gr.update(label=strings["language"]),
+                gr.update(label=strings["case"], choices=choices(language, keep=case_id)), gr.update(value=strings["refresh"]), f"**{strings['banner']}**", gr.update(label=strings["document"]),
                 gr.update(label=strings["po_document"]), f"### {strings['flags']}", flags, f"### {strings['decisions']}",
                 f"### {strings['matches']}", matches, f"### {strings['uncompared']}", uncompared, gr.update(value=strings["close"]),
                 gr.update(label=strings["undo_choice"], choices=undo_choices, value=None), gr.update(value=strings["undo"]),
@@ -886,6 +1406,8 @@ def _page(gr, deps: Deps, tab: _Tab):
             runner no longer checks the case again."""
             if not decision:
                 return gr.update(), gr.update()
+            if aid_status.is_item(case_id):      # a document left to the buyer has no decision
+                return STRINGS[language]["refused"], gr.update()
             try:
                 case = load_case(cases_root, case_id)
             except ValueError:
@@ -899,26 +1421,197 @@ def _page(gr, deps: Deps, tab: _Tab):
         return save
 
     def refreshed(language: str, case_id: str | None) -> tuple:
-        """"Lijst vernieuwen": the cases offered as they are now, and the hint of the case chosen as it is now (a decision saved in
-        another browser tab, or the runner's check again, may have ended its wait). A case whose folder is gone or cannot be read has
-        no hint."""
+        """"Lijst vernieuwen": the case list as it is now, the case chosen kept in it when it left the list, and the hint of the case
+        chosen as it is now (a decision saved in another browser tab, or the runner's check again, may have ended its wait). A case
+        whose folder is gone or cannot be read has no hint, and neither has a document the intake left to the buyer."""
         try:
-            case = load_case(cases_root, case_id) if case_id else None
+            case = load_case(cases_root, case_id) if case_id and not aid_status.is_item(case_id) else None
         except (OSError, ValueError):
             case = None
-        return gr.update(choices=choices(language)), hint_of(case, language)
+        return gr.update(choices=choices(language, keep=case_id)), hint_of(case, language)
 
     def close(case_id: str | None, language: str) -> tuple:
-        if not case_id:
+        if not case_id or aid_status.is_item(case_id):           # a document left to the buyer: as no case
             return STRINGS[language]["no_case"], gr.update()
         text, still_open = close_text(load_case(cases_root, case_id), live.sending(), language)
         return text, gr.update(choices=choices(language), value=case_id if still_open else None)
 
     def do_undo(case_id: str | None, entry_id: str | None, language: str) -> tuple:
-        if not case_id or not entry_id:
+        if not case_id or not entry_id or aid_status.is_item(case_id):     # a document left to the buyer: as no case
             return STRINGS[language]["choose_write"], gr.update()
         case = load_case(cases_root, case_id)
         return undo_text(case, entry_id, live.now(), language), gr.update(choices=_undo_choices(case, STRINGS[language]), value=None)
+
+    # The strip, the fold, the count, the case list and a failed case (see the module docstring): handlers of their own, each bound
+    # once. A file that cannot be read leaves on the screen what it showed.
+
+    def strip_ticked(language_now: str) -> tuple:
+        """The page loaded, the timer ticked, "Lijst vernieuwen" or the language switch: the strip, its button (where it has one),
+        the fold's label and its table, as strip_read reads them."""
+        try:
+            read = strip_read(language_now)
+        except (OSError, ValueError):
+            return (gr.update(),) * (4 if acting else 3)
+        action = (gr.update(value=read.action, visible=True) if read.action else gr.update(visible=False),) if acting else ()
+        return (read.html, *action, gr.update(label=read.fold), read.table)
+
+    def queue_ticked(language_now: str, case_id: str | None, listed: list | None) -> tuple:
+        """The page loaded, the timer ticked, "Lijst vernieuwen" or the language switch: the tab's label with its count, the case
+        list only when it differs from the one this handler sent last (`listed`, given back as its last output), the line and the
+        button under "Zaak", which stand while no case is chosen, and the line of a case on screen that left the list, which keeps
+        its place in it (kept), or of a document the buyer noted as handled in another browser tab. Never a value of "Zaak": the case
+        chosen stays chosen and its view is not shown again. Nor whether the row of that line and that button shows, which follows
+        the value of "Zaak" alone (case_framed): the case this tick was sent with may have been chosen meanwhile, as a page opened
+        from the digest's link chooses its case once it has loaded."""
+        strings = STRINGS[language_now]
+        try:
+            lines, items = lines_now(), items_now()
+            offered = choices(language_now, lines, items)
+        except (OSError, ValueError):
+            return (gr.update(),) * 7
+        gone = bool(case_id) and case_id not in {value for _, value in offered}
+        if gone:
+            offered.append(kept(case_id, strings))
+        sent = [[label, value] for label, value in offered]
+        gone_line = gr.update(value=gone_text(case_id, strings), visible=True) if gone else gr.update(value="", visible=False)
+        return (gr.update(label=review_label(lines, language_now, items)), gr.update(choices=offered) if sent != listed else gr.update(),
+                gr.update(), pick_text(lines, items, strings),
+                gr.update(value=strings["review_open_oldest"], visible=waits(lines, items)), gone_line, sent)
+
+    def gone_text(case_id: str, strings: dict[str, str]) -> str:
+        """The line of a case on screen that left the list, by its PO number, saying why: noted as handled meanwhile, for a failed
+        case (its state "handled", whatever its age), else closed or replaced; or of a document the buyer noted as handled meanwhile,
+        by its file; each as a Markdown text shows it as it is."""
+        if aid_status.is_item(case_id):
+            item = aid_status.look_item(cases_root, case_id)
+            return strings["item_gone"].format(file=_literal(item.file if item is not None else case_id))
+        handled = aid_status.case_states(cases_root, [case_id]).get(case_id) == "handled"
+        return strings["review_gone_handled" if handled else "review_gone"].format(po=po_of(case_id, strings))
+
+    def po_of(case_id: str, strings: dict[str, str]) -> str:
+        """The PO number of a case, as a Markdown text shows it as it is; "onbekend" when it has none or its folder cannot be read."""
+        try:
+            number = load_case(cases_root, case_id).po_number
+        except (OSError, ValueError):
+            number = None
+        return _literal(number) if number else strings["unknown_po"]
+
+    def case_framed(case_id: str | None, language_now: str) -> tuple:
+        """The case chosen, or none after a close that took it out of the review: the line and the button under "Zaak" shown while no
+        case is chosen, the line of a case that left the list hidden, and for a failed case its notice, with "Als afgehandeld
+        noteren" in place of "Zaak afsluiten" and of the title of the decisions; for a document the intake left to the buyer, while it
+        waits for him, its notice (item_text) in the same place, with the same button, and neither "Zaak afsluiten" nor the title."""
+        strings = STRINGS[language_now]
+        try:
+            lines, items = lines_now(), items_now()
+        except (OSError, ValueError):
+            return (gr.update(),) * 8
+        if aid_status.is_item(case_id):
+            item = aid_status.look_item(cases_root, case_id)
+            closable, handling = False, item is not None and item.state == "look"
+            notice = gr.update(value=item_text(item, language_now), visible=True) if handling else gr.update(value="", visible=False)
+        else:
+            line = next((line for line in lines if line.case_id == case_id), None) if case_id else None
+            state = line.state if line is not None else None
+            closable, handling = state not in ("failed", "handled"), state == "failed"
+            notice = gr.update(value=failed_text(line, language_now), visible=True) if handling else gr.update(value="", visible=False)
+        return (gr.update(visible=not case_id), pick_text(lines, items, strings),
+                gr.update(value=strings["review_open_oldest"], visible=waits(lines, items)), gr.update(value="", visible=False), notice,
+                gr.update(visible=closable), gr.update(visible=handling), gr.update(visible=closable))
+
+    def failed_relabel(language_now: str, case_id: str | None) -> tuple:
+        """The language switched: the words of the notice of a failed case on screen, or of a document left to the buyer that waits
+        for him, and of "Als afgehandeld noteren"; the notice hidden, as choosing the case now would (case_framed), when the case or
+        the document no longer waits for the buyer (noted as handled in another browser tab meanwhile), so that no notice stays in
+        the language it was shown in. A file that cannot be read leaves the notice as it is."""
+        go, hidden = gr.update(value=STRINGS[language_now]["handled_go"]), gr.update(value="", visible=False)
+        if aid_status.is_item(case_id):
+            item = aid_status.look_item(cases_root, case_id)
+            return (gr.update(value=item_text(item, language_now)) if item is not None and item.state == "look" else hidden), go
+        try:
+            line = next((line for line in lines_now() if line.case_id == case_id), None) if case_id else None
+        except (OSError, ValueError):
+            return gr.update(), go
+        return (gr.update(value=failed_text(line, language_now)) if line is not None and line.state == "failed" else hidden), go
+
+    def oldest_opened(language_now: str) -> dict:
+        """"Oudste zaak openen": the oldest case in review, else the oldest failed one, else the oldest document the intake left to
+        the buyer that waits for him, chosen, with the case list as it is now, so that it is among its choices; nothing when none
+        waits."""
+        try:
+            lines, items = lines_now(), items_now()
+            offered = choices(language_now, lines, items)
+        except (OSError, ValueError):
+            return gr.update()
+        ids = {case_id for _, case_id in offered}
+        waiting = [line.case_id for line in sorted((line for line in lines if line.state in aid_status.NEEDS and line.case_id in ids),
+                                                   key=lambda line: (line.state != "review", line.opened_at, line.case_id))]
+        waiting += [item.item_id for item in items if item.state == "look" and item.item_id in ids]       # oldest first already
+        return gr.update(choices=offered, value=waiting[0]) if waiting else gr.update()
+
+    def handled_marked(case_id: str | None, language_now: str) -> tuple:
+        """"Als afgehandeld noteren" on a failed case: its mark, handled_by_hand.json in its folder with the time of the page's clock,
+        the one file written, and the case list without it; a mark that stands already (from another browser tab) stays as it is,
+        the first counting. A case that did not fail is refused, and its folder is left as it is. A document the intake left to the
+        buyer is marked by item_marked."""
+        strings = STRINGS[language_now]
+        if not case_id:
+            return strings["no_case"], gr.update()
+        if aid_status.is_item(case_id):
+            return item_marked(case_id, language_now)
+        try:
+            case = load_case(cases_root, case_id)
+            failed = _saved_result(case).status == "failed"
+        except (OSError, ValueError):
+            failed = False
+        if not failed:
+            return strings["refused"], gr.update()
+        try:
+            with open(case.root / aid_status.HANDLED_FILE, "x", encoding="utf-8") as noted:
+                noted.write(json.dumps({"at": live.now().clock().isoformat(timespec="seconds")}) + "\n")
+        except FileExistsError:
+            pass
+        except OSError as error:
+            return strings["settings_failed"].format(code=type(error).__name__), gr.update()
+        return (strings["handled_done"].format(po=_literal(case.po_number) if case.po_number else strings["unknown_po"]),
+                gr.update(choices=choices(language_now), value=None))
+
+    def item_marked(item_id: str, language_now: str) -> tuple:
+        """"Als afgehandeld noteren" on a document the intake left to the buyer: its mark (handled_mark of aid/review/status.py), with
+        the time of the page's clock, appended to review_items_handled.jsonl in the cases folder in one write, the one file written,
+        and the case list without it; a mark that stands already (from another browser tab) is not written again, the first counting.
+        An id that no line of review_items.jsonl gives is refused, and nothing is written."""
+        strings = STRINGS[language_now]
+        item = aid_status.look_item(cases_root, item_id)
+        if item is None:
+            return strings["refused"], gr.update()
+        if item.handled_at is None:
+            try:
+                _append_line(Path(cases_root) / aid_status.HANDLED_ITEMS_FILE,
+                             json.dumps(aid_status.handled_mark(item, live.now().clock()), ensure_ascii=False))
+            except OSError as error:
+                return strings["settings_failed"].format(code=type(error).__name__), gr.update()
+        return strings["item_handled_done"].format(file=_literal(item.file)), gr.update(choices=choices(language_now), value=None)
+
+    def strip_acted(language_now: str) -> tuple:
+        """The strip's button: the tab Instellingen, on its section that handles the most urgent problem as the aid's files tell it
+        now (_PLACES, _SECTIONS), the one the button names, as the strip may be up to TICK_SECONDS old: "Stand van de assistent" for
+        the runner and its launcher, "Postvak en AI" for the store of the sign-in, the mailbox and Copilot. A problem that went
+        meanwhile, or files that cannot be read, open "Stand van de assistent", which says what the assistant is doing now. That
+        section is read again after the press (assistant_shown, chained to it in build_app). Asks Microsoft nothing."""
+        try:
+            now_deps = live.now()
+            now = now_deps.clock()
+            found = aid_status.problems(aid_status.assistant(tab.file, cases_root, now_deps.settings, now),
+                                        aid_status.case_lines(cases_root, now))
+        except (OSError, ValueError):
+            found = []
+        return gr.update(selected=SETTINGS_TAB), gr.update(selected=_SECTIONS[_PLACES[found[0].kind] if found else "assistant"])
+
+    try:                                         # what the page shows before its load reads it again
+        first_lines, first_items, first_strip = lines_now(), items_now(), strip_read("nl")
+    except (OSError, ValueError):
+        first_lines, first_items, first_strip = [], [], _Strip("", None, first["review_all"].format(n=0), _all_html([], set(), "nl"))
 
     # delete_cache: every hour the page library removes the temporary files of this page that are older than an hour (an uploaded
     # file, the page images of a document), so a file goes between one and two hours after it was made, and all of them at a stop
@@ -927,16 +1620,32 @@ def _page(gr, deps: Deps, tab: _Tab):
     with gr.Blocks(analytics_enabled=False, title=first["title"], delete_cache=(3600, 3600)) as app:
         state = gr.State(None)
         wanted = gr.State(None)                      # the write of the query to undo, selected when its case is shown
+        listed = gr.State(None)                      # the case list as queue_ticked sent it last
+        ticker = gr.Timer(TICK_SECONDS)              # the strip, the count and the case list read again (see the module docstring)
         with gr.Row():
             title = gr.Markdown(f"# {first['title']}")
             language = gr.Radio(choices=[("Nederlands", "nl"), ("English", "en")], value="nl", label=first["language"])
-        with gr.Tabs() as tabs:
+        with gr.Tabs(elem_classes=["page-tabs"]) as tabs:            # the page's five tabs; the settings tab has a gr.Tabs of its own
             with gr.Tab(first["review_tab"], id=REVIEW_TAB) as review_tab:
+                with gr.Row(elem_id="review-strip-row"):
+                    strip = gr.HTML(first_strip.html, css_template=_STRIP_CSS, apply_default_css=False, container=False, padding=False,
+                                    js_on_load=None, elem_id="review-strip")
+                    if acting:
+                        strip_action = gr.Button(first_strip.action or "", visible=first_strip.action is not None, size="sm", scale=0,
+                                                 min_width=240, elem_id="review-strip-action")
+                with gr.Accordion(first_strip.fold, open=False, elem_id="review-all") as fold:
+                    fold_table = gr.HTML(first_strip.table, css_template=_ALL_CSS, apply_default_css=False, js_on_load=None,
+                                         elem_id="review-all-table")
                 with gr.Row():
-                    case_choice = gr.Dropdown(choices=choices("nl"), value=None, label=first["case"], scale=4)
+                    case_choice = gr.Dropdown(choices=choices("nl", first_lines, first_items), value=None, label=first["case"], scale=4)
                     refresh = gr.Button(first["refresh"], scale=1)
+                gone = gr.Markdown("", visible=False, elem_id="review-gone")
+                with gr.Row(elem_id="review-pick-row") as pick_row:
+                    pick = gr.Markdown(pick_text(first_lines, first_items, first), elem_id="review-pick", elem_classes=["notice"])
+                    oldest = gr.Button(first["review_open_oldest"], visible=waits(first_lines, first_items), scale=0, min_width=200, elem_id="review-oldest")
                 banner = gr.Markdown(f"**{first['banner']}**", visible=False)
                 hint = gr.Markdown("", visible=False, elem_id="review-hint")
+                failed_notice = gr.Markdown("", visible=False, elem_id="review-failed", elem_classes=["notice", "attention"])
                 with gr.Row():
                     doc_gallery = gr.Gallery(label=first["document"], columns=1, height=700, object_fit="contain")
                     po_gallery = gr.Gallery(label=first["po_document"], columns=1, height=700, object_fit="contain")
@@ -970,7 +1679,9 @@ def _page(gr, deps: Deps, tab: _Tab):
                 matches_table = gr.Dataframe(value=tables(empty, "nl")[1], interactive=False, wrap=True, column_widths=COLUMN_WIDTHS)
                 uncompared_title = gr.Markdown(f"### {first['uncompared']}")
                 uncompared_table = gr.Dataframe(value=tables(empty, "nl")[2], interactive=False, wrap=True, column_widths=COLUMN_WIDTHS)
-                close_button = gr.Button(first["close"], variant="primary")
+                with gr.Row():                       # a failed case has the second in place of the first
+                    close_button = gr.Button(first["close"], variant="primary")
+                    handled = gr.Button(first["handled_go"], visible=False, elem_id="review-handled")
                 status = gr.Markdown("")
                 with gr.Row():
                     undo_choice = gr.Dropdown(choices=[], value=None, label=first["undo_choice"], scale=4)
@@ -982,7 +1693,8 @@ def _page(gr, deps: Deps, tab: _Tab):
             with gr.Tab(first["files_tab"], id=FILES_TAB) as files_tab:
                 _files_tab(gr, app, language, files_tab, live, tab, cases_root)
             with gr.Tab(first["settings_tab"], id=SETTINGS_TAB) as settings_tab:
-                _settings_tab(gr, app, language, settings_tab, live, tab, accounts)
+                # its five sections (None on a public link and without a settings file), which an action on another tab can select
+                sections = _settings_tab(gr, app, language, settings_tab, live, tab, accounts)
 
         view = [banner, doc_gallery, po_gallery, flags_table, matches_table, uncompared_table, undo_choice, state, hint, entered_line]
         app.load(opened, inputs=language, outputs=[case_choice, wanted, tabs])
@@ -995,9 +1707,22 @@ def _page(gr, deps: Deps, tab: _Tab):
         close_button.click(close, inputs=[case_choice, language], outputs=[status, case_choice]).then(
             lambda case_id, language_now: show(case_id, language_now)[:-1], inputs=[case_choice, language], outputs=view)
         undo_button.click(do_undo, inputs=[case_choice, undo_choice, language], outputs=[status, undo_choice])
-        language.change(lambda language_now: (gr.update(label=STRINGS[language_now]["review_tab"]),
+        language.change(lambda language_now: (gr.update(label=review_label(lines_now(), language_now, items_now())),
                                                gr.update(label=STRINGS[language_now]["settings_tab"])),
                         inputs=language, outputs=[review_tab, settings_tab])
+        # the strip, the fold, the count and the case list, read again with the timer, and a failed case (see the module docstring)
+        every = [app.load, ticker.tick, refresh.click, language.change]
+        gr.on(triggers=every, fn=strip_ticked, inputs=language, outputs=[strip, *([strip_action] if acting else []), fold, fold_table],
+              show_progress="hidden")
+        gr.on(triggers=every, fn=queue_ticked, inputs=[language, case_choice, listed],
+              outputs=[review_tab, case_choice, pick_row, pick, oldest, gone, listed], show_progress="hidden")
+        case_choice.change(case_framed, inputs=[case_choice, language],
+                           outputs=[pick_row, pick, oldest, gone, failed_notice, close_button, handled, decisions_title], show_progress="hidden")
+        language.change(failed_relabel, inputs=[language, case_choice], outputs=[failed_notice, handled], show_progress="hidden")
+        oldest.click(oldest_opened, inputs=language, outputs=case_choice, show_progress="hidden")
+        handled.click(handled_marked, inputs=[case_choice, language], outputs=[status, case_choice], show_progress="hidden")
+        if acting:              # bound once all tabs are made, as its outputs are the page's Tabs and the sections of Instellingen
+            sections.read_after(strip_action.click(strip_acted, inputs=language, outputs=[tabs, sections.tabs], show_progress="hidden"))
     return app
 
 
@@ -1705,21 +2430,25 @@ def _literal(name: str) -> str:
 
 # --- the settings tab ---
 
-def _settings_tab(gr, app, language, settings_tab, live: _Live, tab: _Tab, accounts: dict[tuple[str, str], MicrosoftAccount]) -> None:
-    """The content of the settings tab and its events, inside the tab (see the module docstring): the buyer's settings and the
-    suppliers (_buyer_section), then folded away the block of the connection to Exact (_exact_section) and the connections.
-    settings_tab is the tab itself, whose selection fills the buyer's part again; live holds the Deps of the page's own actions: its
-    clock is the block's time, and its settings are those the tab shows when its file cannot be read,
-    and it is given the settings each save wrote, so that the page's own actions use them at once. accounts holds the Microsoft
-    accounts of the page by tenant and client, which the tab makes and signs in with and a close sends through (_sending_account).
-    The folders listed are kept as {"mailbox": the mailbox they were listed for, "folders": id -> display name}, so that a folder is
-    never saved with another mailbox's address."""
+def _settings_tab(gr, app, language, settings_tab, live: _Live, tab: _Tab, accounts: dict[tuple[str, str], MicrosoftAccount]):
+    """The content of the settings tab and its events, inside the tab (see the module docstring): the line of a settings file that
+    cannot be read, then the tab's five sections in a gr.Tabs of their own (settings-sections, see the module docstring): the buyer's
+    rules and the suppliers (_buyer_section), the part "Postvak en AI", the block of the connection to Exact (_exact_section) and the
+    state of the assistant (_assistant_section). settings_tab is the tab itself, whose selection fills the buyer's sections and the Exact
+    block again; live holds the Deps of the page's own actions: its clock is the block's time, and its settings are those the tab
+    shows when its file cannot be read, and it is given the settings each save wrote, so that the page's own actions use them at
+    once. accounts holds the Microsoft accounts of the page by tenant and client, which the tab makes and signs in with and a close
+    sends through (_sending_account). The folders listed are kept as {"mailbox": the mailbox they were listed for, "folders": id ->
+    display name}, so that a folder is never saved with another mailbox's address. Returns the sections as an action of another tab
+    opens them (_Sections: the gr.Tabs of the sections, whose selected section such an action sets, and what reads the section
+    "Stand van de assistent" again after it); None on a public share link and without a settings file, where the tab shows one line
+    and nothing else."""
     first = STRINGS["nl"]
     if tab.share or tab.file is None:
         key = "settings_share" if tab.share else "settings_no_file"
         notice = gr.Markdown(first[key])
         language.change(lambda language_now: STRINGS[language_now][key], inputs=language, outputs=notice)
-        return
+        return None
 
     def unreadable(fields: list[str], strings: dict[str, str], error: Exception | None = None) -> str:
         """The one line of a settings file that cannot be read, naming the fields at fault by their labels and never a value; for
@@ -1788,13 +2517,71 @@ def _settings_tab(gr, app, language, settings_tab, live: _Live, tab: _Tab, accou
         except Exception:
             return None
 
-    def begin(tenant: str, client: str, strings: dict[str, str]) -> tuple[MicrosoftAccount | None, str | None]:
-        """The account for an action, or None with the note that says why there is none."""
+    def begin(tenant: str, client: str, strings: dict[str, str], elsewhere: bool = False) -> tuple[MicrosoftAccount | None, str | None]:
+        """The account for an action, or None with the note that says why there is none: a store the PC refuses in words
+        (_refusal_text). For a button of another step than the sign-in (`elsewhere`), while the line under the sign-in buttons
+        holds that refusal already (store_line), the note points to that line, so that the sentence stands once."""
         try:
             account = account_of(tenant, client)
-        except Exception:                            # the store refused, by a fixed label: its text names the folder
-            return None, strings["settings_store_refused"]
+        except Exception as error:
+            refused = _refusal_text(error, strings)
+            return None, strings["settings_store_refused_see"] if elsewhere and refused == store_line(strings) else refused
         return (account, None) if account is not None else (None, strings["settings_ids_needed"])
+
+    def store_line(strings: dict[str, str]) -> str | None:
+        """Why no sign-in can be made, told before any press: while the store of the sign-in (in default_secrets_dir(), where the
+        page's accounts keep their tokens) lies inside a git work tree, which work_tree_refusal tells without making anything; and
+        while the store that is there refuses this page (made by another Windows user or in another kind of session), which making
+        the page's account of the saved tenant and client tells, as the account line makes it when the page loads; else None, also
+        when the folder cannot be looked at or the account cannot be made for another reason, which a press names."""
+        try:
+            refused = work_tree_refusal(default_secrets_dir())
+        except OSError:
+            return None
+        if refused is None:
+            saved = current()
+            try:
+                account_of(saved.ms_tenant_id, saved.ms_client_id)
+            except StoreRefused as error:
+                refused = error
+            except Exception:
+                return None
+        return _refusal_text(refused, strings) if refused is not None else None
+
+    def store_checked(language_now: str):
+        """The page loaded or the part opened: the line under the sign-in buttons says why no sign-in can be made while the store is
+        refused (store_line), so that the buyer reads it before he presses anything; else that line keeps the answer it holds."""
+        line = store_line(STRINGS[language_now])
+        return line if line is not None else gr.update()
+
+    def connections_selected(language_now: str, tenant_now: str, client_now: str) -> tuple:
+        """The part opened: the signed-in account of the IDs in the fields (as the language switch reads it) and the state of the
+        mailbox, read again, as the page reads them when it loads."""
+        strings = STRINGS[language_now]
+        return _account_text(known(tenant_now, client_now), strings), _trigger_text(current(), strings)
+
+    def sections_relabelled(language_now: str) -> tuple:
+        """The language switch: the five steps of "Postvak en AI" in the language, and its answer lines of the sign-in, the folder and
+        the reader emptied, as the switch empties the tab's other notes, but for the refusal of the store, which the line under the
+        sign-in buttons keeps, in the language, while the store is refused; the labels of the three sections that no other relabel
+        names ("Uw regels", "Leveranciers", "Stand van de assistent"); and that last section in the language, its lines and its log
+        read again (a file that cannot be read leaves them as they are)."""
+        strings = STRINGS[language_now]
+        try:
+            lines, log = assistant_texts(language_now)
+        except OSError:
+            lines, log = gr.update(), gr.update(label=strings["assistant_log"])
+        else:
+            log = gr.update(label=strings["assistant_log"], value=log)
+        return (*[f"## {strings[f'mail_step:{step}']}" for step in MAIL_STEPS], store_line(strings) or "", "", "",
+                *[gr.update(label=strings[f"settings_section:{key}"]) for key in ("rules", "suppliers", "assistant")],
+                lines, gr.update(value=strings["assistant_refresh"]), log, strings["assistant_log_help"])
+
+    def local_now() -> datetime:
+        """The time of the page's clock in the local time of this PC, without a zone, as aid/review/status.py reads the times of the
+        files it looks at."""
+        now = live.now().clock()
+        return now.astimezone().replace(tzinfo=None) if now.utcoffset() is not None else now
 
     def current() -> Settings:
         """The settings in the file, or the settings in use when the file cannot be read."""
@@ -1870,8 +2657,8 @@ def _settings_tab(gr, app, language, settings_tab, live: _Live, tab: _Tab, accou
         strings = STRINGS[language_now]
         try:
             account = account_of(tenant, client)
-        except Exception:
-            return gr.update(), gr.update(), gr.update(), strings["settings_store_refused"]
+        except Exception as error:
+            return gr.update(), gr.update(), gr.update(), _refusal_text(error, strings)
         try:
             if account is not None:
                 account.sign_out()
@@ -1882,7 +2669,7 @@ def _settings_tab(gr, app, language, settings_tab, live: _Live, tab: _Tab, accou
     def load_folders(tenant: str, client: str, mailbox: str, language_now: str) -> tuple:
         """List the folders again, of the mailbox now in the field: (the folder list, the folders listed, a note)."""
         strings = STRINGS[language_now]
-        account, refused = begin(tenant, client, strings)
+        account, refused = begin(tenant, client, strings, elsewhere=True)
         if refused:
             return gr.update(), gr.update(), refused
         return folders_shown(account, mailbox, strings)
@@ -1890,7 +2677,7 @@ def _settings_tab(gr, app, language, settings_tab, live: _Live, tab: _Tab, accou
     def check_connection(tenant: str, client: str, mailbox: str, folder: str | None, language_now: str) -> str:
         """How many messages the folder holds and when the newest arrived; never a subject or a sender."""
         strings = STRINGS[language_now]
-        account, refused = begin(tenant, client, strings)
+        account, refused = begin(tenant, client, strings, elsewhere=True)
         if refused:
             return refused
         if not folder:
@@ -1938,48 +2725,68 @@ def _settings_tab(gr, app, language, settings_tab, live: _Live, tab: _Tab, accou
                 gr.update(label=strings["settings_folder"]), gr.update(value=strings["settings_folders"]),
                 gr.update(value=strings["settings_test"]),
                 gr.update(label=strings["settings_send_via"], choices=_via_choices(strings), value=send_via_now),
-                gr.update(value=strings["settings_save"]), f"### {strings['settings_trigger']}", _trigger_text(current(), strings), "")
+                gr.update(value=strings["settings_save"]), f"## {strings['settings_trigger']}", _trigger_text(current(), strings), "")
 
-    _buyer_section(gr, app, language, settings_tab, read, write)
-    _exact_section(gr, app, language, settings_tab, read, write, lambda: live.now().clock())
-    with gr.Accordion(first["settings_connections"], open=False) as connections:
-        intro = gr.Markdown(first["settings_intro"])
-        with gr.Row():
-            tenant = gr.Textbox(label=first["settings_tenant"])
-            client = gr.Textbox(label=first["settings_client"])
-        with gr.Row():
-            sign_in_button = gr.Button(first["settings_sign_in"], variant="primary")
-            code_button = gr.Button(first["settings_sign_in_code"])
-            sign_out_button = gr.Button(first["settings_sign_out"])
-        browser_note = gr.Markdown(first["settings_browser_note"])
-        account_shown = gr.Markdown(first["settings_not_signed_in"])
-        mailbox = gr.Textbox(label=first["settings_mailbox"])
-        with gr.Row():
-            folder = gr.Dropdown(choices=[], value=None, label=first["settings_folder"], scale=4)
-            folders_button = gr.Button(first["settings_folders"], scale=1)
-        test_button = gr.Button(first["settings_test"])
-        send_via = gr.Radio(choices=_via_choices(first), value="auto", label=first["settings_send_via"])
-        save_button = gr.Button(first["settings_save"], variant="primary")
-        note = gr.Markdown("")
-        trigger_title = gr.Markdown(f"### {first['settings_trigger']}")
-        trigger_shown = gr.Markdown("")
-        listed = gr.State({})                        # the folders listed and the mailbox they were listed for
+    # The line of a settings file that cannot be read stands above the sections, as the tab's first block; the sections follow in the
+    # order of the work, the buyer's things first and the installer's after.
+    file_line = gr.Markdown("", elem_id="settings-file-line")
+    with gr.Tabs(elem_id="settings-sections", selected="regels") as sections:
+        rules_section, suppliers_section = _buyer_section(gr, app, language, settings_tab, file_line, read, write)
+        with gr.Tab(first["settings_connections"], id="koppelingen") as connections:
+            account_shown = gr.Markdown(first["settings_not_signed_in"])          # the state first: the account and the mailbox
+            trigger_title = gr.Markdown(f"## {first['settings_trigger']}")
+            trigger_shown = gr.Markdown("")
+            intro = gr.Markdown(first["settings_intro"])
+            steps = [gr.Markdown(f"## {first['mail_step:ids']}")]
+            with gr.Row():
+                tenant = gr.Textbox(label=first["settings_tenant"])
+                client = gr.Textbox(label=first["settings_client"])
+            steps.append(gr.Markdown(f"## {first['mail_step:sign_in']}"))
+            browser_note = gr.Markdown(first["settings_browser_note"])
+            with gr.Row():
+                sign_in_button = gr.Button(first["settings_sign_in"])
+                code_button = gr.Button(first["settings_sign_in_code"])
+                sign_out_button = gr.Button(first["settings_sign_out"])
+            sign_note = gr.Markdown("", elem_id="settings-sign-note", elem_classes=["answer"])          # the answer of the three buttons
+            steps.append(gr.Markdown(f"## {first['mail_step:mailbox']}"))
+            mailbox = gr.Textbox(label=first["settings_mailbox"])
+            with gr.Row():
+                folder = gr.Dropdown(choices=[], value=None, label=first["settings_folder"], scale=4)
+                folders_button = gr.Button(first["settings_folders"], scale=1)
+            test_button = gr.Button(first["settings_test"])
+            folder_note = gr.Markdown("", elem_id="settings-folder-note", elem_classes=["answer"])      # the answer of the two buttons above
+            steps.append(gr.Markdown(f"## {first['mail_step:send']}"))
+            send_via = gr.Radio(choices=_via_choices(first), value="auto", label=first["settings_send_via"])
+            save_button = gr.Button(first["settings_save"], variant="primary")
+            note = gr.Markdown("", elem_classes=["answer"])                       # the answer of "Postvak opslaan"
+            listed = gr.State({})                        # the folders listed and the mailbox they were listed for
+            steps.append(gr.Markdown(f"## {first['mail_step:read']}"))
 
-        signed = [account_shown, folder, listed, note]
-        app.load(settings_opened, inputs=language, outputs=[tenant, client, mailbox, folder, send_via, account_shown, trigger_shown, listed])
-        sign_in_button.click(sign_in_browser, inputs=[tenant, client, mailbox, language], outputs=signed)
-        code_button.click(sign_in_code, inputs=[tenant, client, mailbox, language], outputs=signed)
-        sign_out_button.click(sign_out, inputs=[tenant, client, language], outputs=signed)
-        folders_button.click(load_folders, inputs=[tenant, client, mailbox, language], outputs=[folder, listed, note])
-        test_button.click(check_connection, inputs=[tenant, client, mailbox, folder, language], outputs=note)
-        save_button.click(save_settings, inputs=[tenant, client, mailbox, folder, send_via, listed, language], outputs=[note, trigger_shown])
-        language.change(settings_relabel, inputs=[language, tenant, client, mailbox, send_via],
-                        outputs=[intro, tenant, client, sign_in_button, code_button, sign_out_button, browser_note, account_shown, mailbox,
-                                 folder, folders_button, test_button, send_via, save_button, trigger_title, trigger_shown, note])
-        _ai_section(gr, app, language, tab, tenant, client, mailbox, account_shown, begin, read, write)
-        _extension_code(gr, app, language, current)
+            signed = [account_shown, folder, listed, sign_note]
+            app.load(settings_opened, inputs=language, outputs=[tenant, client, mailbox, folder, send_via, account_shown, trigger_shown, listed])
+            gr.on(triggers=[app.load, connections.select], fn=store_checked, inputs=language, outputs=sign_note, show_progress="hidden")
+            connections.select(connections_selected, inputs=[language, tenant, client], outputs=[account_shown, trigger_shown],
+                               show_progress="hidden")
+            sign_in_button.click(sign_in_browser, inputs=[tenant, client, mailbox, language], outputs=signed)
+            code_button.click(sign_in_code, inputs=[tenant, client, mailbox, language], outputs=signed)
+            sign_out_button.click(sign_out, inputs=[tenant, client, language], outputs=signed)
+            folders_button.click(load_folders, inputs=[tenant, client, mailbox, language], outputs=[folder, listed, folder_note])
+            test_button.click(check_connection, inputs=[tenant, client, mailbox, folder, language], outputs=folder_note)
+            save_button.click(save_settings, inputs=[tenant, client, mailbox, folder, send_via, listed, language], outputs=[note, trigger_shown])
+            language.change(settings_relabel, inputs=[language, tenant, client, mailbox, send_via],
+                            outputs=[intro, tenant, client, sign_in_button, code_button, sign_out_button, browser_note, account_shown, mailbox,
+                                     folder, folders_button, test_button, send_via, save_button, trigger_title, trigger_shown, note])
+            reader_note = _ai_section(gr, app, language, tab, tenant, client, mailbox, account_shown, begin, read, write, connections.select,
+                                      local_now)
+            _extension_code(gr, app, language, current)
+        _exact_section(gr, app, language, settings_tab, read, write, lambda: live.now().clock())
+        assistant_section, assistant_parts, assistant_texts, read_after = _assistant_section(gr, language, tab, read, local_now)
+    language.change(sections_relabelled, inputs=language,
+                    outputs=[*steps, sign_note, folder_note, reader_note, rules_section, suppliers_section, assistant_section, *assistant_parts],
+                    show_progress="hidden")
     language.change(lambda language_now: gr.update(label=STRINGS[language_now]["settings_connections"]), inputs=language,
                     outputs=connections)
+    return _Sections(sections, read_after)
 
 
 def _extension_code(gr, app, language, current: Callable[[], Settings]) -> None:
@@ -2001,13 +2808,16 @@ def _extension_code(gr, app, language, current: Callable[[], Settings]) -> None:
     language.change(extension_code_relabel, inputs=language, outputs=code)
 
 
-def _buyer_section(gr, app, language, settings_tab, read: Callable[[dict[str, str]], tuple[Settings, str | None]], write: Callable) -> None:
-    """The buyer's part of the settings tab and its events, at its top (see the module docstring): the line of a settings file that
-    cannot be read; the eleven settings of buyer_settings.BUYER_FIELDS in the groups of BUYER_GROUPS, each field with its label and
-    its help, under one save button; then the suppliers, a table and a form for one supplier. read gives the settings in the file
-    (or those in use, with the line), and write saves into it (both of _settings_tab). The fill (buyer_opened) runs when the page
-    loads and each time settings_tab is selected. Two states of the page hold what the forms were filled with: the eleven texts,
-    and the supplier form with the supplier it was filled for, so that a save writes what the buyer changed and nothing else."""
+def _buyer_section(gr, app, language, settings_tab, file_line, read: Callable[[dict[str, str]], tuple[Settings, str | None]],
+                   write: Callable) -> tuple:
+    """The buyer's two sections of the settings tab and their events, its first two (see the module docstring): "Uw regels", the
+    eleven settings of buyer_settings.BUYER_FIELDS in the groups of BUYER_GROUPS, each field with its label and its help, under
+    "Regels opslaan"; and "Leveranciers", a table of the suppliers and a form for one supplier. file_line is the line of a settings
+    file that cannot be read, which _settings_tab puts above the sections and the handlers here write. read gives the settings in
+    the file (or those in use, with the line), and write saves into it (both of _settings_tab). The fill (buyer_opened) runs when the
+    page loads and each time settings_tab is selected. Two states of the page hold what the forms were filled with: the eleven texts,
+    and the supplier form with the supplier it was filled for, so that a save writes what the buyer changed and nothing else.
+    Returns the two sections, which the language switch of _settings_tab relabels."""
     first = STRINGS["nl"]
 
     def headers(strings: dict[str, str]) -> list[str]:
@@ -2192,38 +3002,40 @@ def _buyer_section(gr, app, language, settings_tab, read: Callable[[dict[str, st
                 gr.update(label=strings["settings_supplier_messages_off"]), gr.update(value=strings["settings_supplier_save"]),
                 gr.update(value=strings["settings_supplier_remove"]))
 
-    file_line = gr.Markdown("", elem_id="settings-file-line")
-    headings, fields = [], {}
-    for group, names in BUYER_GROUPS:
-        headings.append(gr.Markdown(f"### {first[f'settings_group:{group}']}"))
-        for field in names:
-            label, info = first[f"settings_field:{field}"], first[f"settings_help:{field}"]
-            if field == "digest":
-                fields[field] = gr.Radio(choices=_digest_choices(first), value=None, label=label, info=info)
-            elif field == "language":
-                fields[field] = gr.Radio(choices=_language_choices(first), value=None, label=label, info=info)
-            else:
-                fields[field] = gr.Textbox(label=label, info=info)
-    limit = gr.Markdown(first["settings_limit"])
-    save_button = gr.Button(first["settings_buyer_save"], variant="primary")
-    note = gr.Markdown("", elem_id="settings-buyer-note")
-    suppliers_title = gr.Markdown(f"### {first['settings_suppliers']}")
-    suppliers_help = gr.Markdown(first["settings_suppliers_help"])
-    suppliers = gr.Dataframe(value={"headers": headers(first), "data": []}, interactive=False, wrap=True)
-    supplier = gr.Dropdown(choices=[(first["settings_supplier_new"], NEW_SUPPLIER)], value=NEW_SUPPLIER, label=first["settings_supplier_choice"])
-    with gr.Row():
-        name = gr.Textbox(label=first["settings_supplier_name"])
-        email = gr.Textbox(label=first["settings_supplier_email"])
-        lead_time = gr.Textbox(label=first["settings_supplier_lead_time"])
-    with gr.Row():
-        review = gr.Checkbox(value=False, label=first["settings_supplier_review"])
-        off = gr.Checkbox(value=False, label=first["settings_supplier_messages_off"])
-    with gr.Row():
-        supplier_save = gr.Button(first["settings_supplier_save"])
-        supplier_remove = gr.Button(first["settings_supplier_remove"])
-    supplier_note = gr.Markdown("", elem_id="settings-supplier-note")
-    filled = gr.State(None)                          # the eleven texts the form was filled with
-    supplier_filled = gr.State(None)                 # the supplier form as it was filled, with the supplier it was filled for
+    with gr.Tab(first["settings_section:rules"], id="regels") as rules_section:
+        headings, fields = [], {}
+        for group, names in BUYER_GROUPS:
+            headings.append(gr.Markdown(f"### {first[f'settings_group:{group}']}"))
+            for field in names:
+                label, info = first[f"settings_field:{field}"], first[f"settings_help:{field}"]
+                if field == "digest":
+                    fields[field] = gr.Radio(choices=_digest_choices(first), value=None, label=label, info=info)
+                elif field == "language":
+                    fields[field] = gr.Radio(choices=_language_choices(first), value=None, label=label, info=info)
+                else:
+                    fields[field] = gr.Textbox(label=label, info=info)
+        limit = gr.Markdown(first["settings_limit"])
+        save_button = gr.Button(first["settings_buyer_save"], variant="primary")
+        note = gr.Markdown("", elem_id="settings-buyer-note")
+        filled = gr.State(None)                      # the eleven texts the form was filled with
+    with gr.Tab(first["settings_section:suppliers"], id="leveranciers") as suppliers_section:
+        suppliers_title = gr.Markdown(f"### {first['settings_suppliers']}", visible=False)       # the section's label names it
+        suppliers_help = gr.Markdown(first["settings_suppliers_help"])
+        suppliers = gr.Dataframe(value={"headers": headers(first), "data": []}, interactive=False, wrap=True)
+        supplier = gr.Dropdown(choices=[(first["settings_supplier_new"], NEW_SUPPLIER)], value=NEW_SUPPLIER,
+                               label=first["settings_supplier_choice"])
+        with gr.Row():
+            name = gr.Textbox(label=first["settings_supplier_name"])
+            email = gr.Textbox(label=first["settings_supplier_email"])
+            lead_time = gr.Textbox(label=first["settings_supplier_lead_time"])
+        with gr.Row():
+            review = gr.Checkbox(value=False, label=first["settings_supplier_review"])
+            off = gr.Checkbox(value=False, label=first["settings_supplier_messages_off"])
+        with gr.Row():
+            supplier_save = gr.Button(first["settings_supplier_save"])
+            supplier_remove = gr.Button(first["settings_supplier_remove"])
+        supplier_note = gr.Markdown("", elem_id="settings-supplier-note")
+        supplier_filled = gr.State(None)             # the supplier form as it was filled, with the supplier it was filled for
 
     form = [fields[field] for field in BUYER_FIELDS]
     supplier_form_fields = [name, email, lead_time, review, off]
@@ -2240,6 +3052,7 @@ def _buyer_section(gr, app, language, settings_tab, read: Callable[[dict[str, st
     language.change(buyer_relabel, inputs=[language, fields["digest"], fields["language"], supplier],
                     outputs=[file_line, *headings, *form, limit, save_button, note, suppliers_title, suppliers_help, suppliers, supplier,
                              *supplier_form_fields, supplier_save, supplier_remove])
+    return rules_section, suppliers_section
 
 
 # The fields of the block "Koppeling met Exact" above the title row, in the order of the page: the six labels and the supplier's line.
@@ -2248,7 +3061,7 @@ _EXACT_FIELDS = ("po_label", "date_label", "supplier_label", "supplier_line", "v
 
 def _exact_section(gr, app, language, settings_tab, read: Callable[[dict[str, str]], tuple[Settings, str | None]], write: Callable,
                    clock: Callable[[], datetime]) -> None:
-    """The block "Koppeling met Exact (bij de installatie)" of the settings tab and its events, folded away above the connections (see
+    """The block "Koppeling met Exact" of the settings tab and its events, the tab's section of that name, after "Postvak en AI" (see
     the module docstring; aid/review/exact_settings.py has what it shows and writes). read gives the settings in the file (or those in
     use, with the line of a file that cannot be read) and write saves into it (both of _settings_tab); clock is the time of the page's
     own actions, against which the state lines tell how long a file lies in the watched folder. Every control is made once, the SLOTS
@@ -2329,7 +3142,7 @@ def _exact_section(gr, app, language, settings_tab, read: Callable[[dict[str, st
             gr.update(visible=False, value=None) for _ in range(SLOTS - len(words))]
 
     def given(values: tuple) -> tuple:
-        """The inputs of "Testen" and "Opslaan" after the sample: (the form, the title row, the meanings, the senders, what the form
+        """The inputs of "Testen" and "Opmaak opslaan" after the sample: (the form, the title row, the meanings, the senders, what the form
         was filled with, the language)."""
         form = dict(zip(EXACT_FORM, values))
         meanings = list(values[len(EXACT_FORM) + 1:len(EXACT_FORM) + 1 + SLOTS])
@@ -2408,7 +3221,7 @@ def _exact_section(gr, app, language, settings_tab, read: Callable[[dict[str, st
         return (*reading(tried, layout, language_now), " ".join(before + after))
 
     def exact_saved(sample: str | None, *values) -> tuple:
-        """"Opslaan": the sample read as "Testen" reads it, and po_layout and po_senders written into the settings file when nothing
+        """"Opmaak opslaan": the sample read as "Testen" reads it, and po_layout and po_senders written into the settings file when nothing
         is wrong (write, which writes the keys whose value changed): (the note, the state lines, what the form is now filled with, the
         reading). Any problem of the form, the sample or the senders refuses the save, each named in the page's language, and nothing
         is written; so does a settings file that cannot be read, with its line, and a file whose two settings are no longer those the
@@ -2520,7 +3333,7 @@ def _exact_section(gr, app, language, settings_tab, read: Callable[[dict[str, st
                 gr.update(label=strings["exact_field:po_digits_least"]), gr.update(label=strings["exact_field:po_digits_most"]),
                 gr.update(value=strings["exact_po_number_save"]), "")
 
-    with gr.Accordion(first["exact_title"], open=False, elem_id="exact-block") as block:
+    with gr.Tab(first["exact_title"], id="exact", elem_id="exact-block") as block:
         intro = gr.Markdown(first["exact_intro"])
         state_title = gr.Markdown(f"### {first['exact_state_title']}")
         state = gr.Markdown("", elem_id="exact-state")
@@ -2673,7 +3486,7 @@ def _export_part(gr, app, language, settings_tab, read: Callable[[dict[str, str]
         return head_table(head, language_now), found, titles, ""
 
     def given(values: tuple) -> tuple[dict, object, str]:
-        """The inputs of "Testen" and "Opslaan" after the sample: (the form, what the part was filled with, the language)."""
+        """The inputs of "Testen" and "Exportkolommen opslaan" after the sample: (the form, what the part was filled with, the language)."""
         count = len(EXPORT_FORM)
         return dict(zip(EXPORT_FORM, values)) | {"numbers": values[count], "fill_down": values[count + 1]}, values[-2], values[-1]
 
@@ -2745,7 +3558,7 @@ def _export_part(gr, app, language, settings_tab, read: Callable[[dict[str, str]
         return (*reading(tried, settings, language_now), " ".join(before))
 
     def export_saved(sample: str | None, *values) -> tuple:
-        """"Opslaan": the sample read as "Testen" reads it, and the three settings written into the settings file when nothing is wrong
+        """"Exportkolommen opslaan": the sample read as "Testen" reads it, and the three settings written into the settings file when nothing is wrong
         (write, which writes the keys whose value changed): (the note, the state lines, what the part is now filled with, the reading).
         Any problem of the form or of the sample refuses the save, each named in the page's language, and nothing is written; so does a
         settings file that cannot be read, with its line, and a file whose three settings are no longer those the part was filled with
@@ -2786,7 +3599,7 @@ def _export_part(gr, app, language, settings_tab, read: Callable[[dict[str, str]
                             value=value) for field, value in zip(EXPORT_FORM, chosen)],
                 gr.update(label=strings["exact_export_field:numbers"], choices=number_choices(strings), value=numbers_now),
                 gr.update(label=strings["exact_export_field:fill_down"]), gr.update(value=strings["exact_test"]),
-                gr.update(value=strings["exact_save"]), "", "", lines_table([], None, language_now))
+                gr.update(value=strings["exact_export_save"]), "", "", lines_table([], None, language_now))
 
     with gr.Column(elem_id="export-part"):
         part = gr.Markdown(f"### {first['exact_part_export']}")
@@ -2805,7 +3618,7 @@ def _export_part(gr, app, language, settings_tab, read: Callable[[dict[str, str]
         fill_down = gr.Checkbox(value=False, label=first["exact_export_field:fill_down"], elem_id="export-fill-down")
         with gr.Row():
             test_button = gr.Button(first["exact_test"], elem_id="export-test")
-            save_button = gr.Button(first["exact_save"], variant="primary", elem_id="export-save")
+            save_button = gr.Button(first["exact_export_save"], variant="primary", elem_id="export-save")
         note = gr.Markdown("", elem_id="export-note")
         read_text = gr.Markdown("", elem_id="export-read")
         lines = gr.Dataframe(value={"headers": export_headers(None, "nl"), "data": []}, interactive=False, wrap=True, elem_id="export-lines")
@@ -2891,7 +3704,7 @@ def _articles_part(gr, app, language, settings_tab, read: Callable[[dict[str, st
         return head_table(head, language_now), found_row, titles, ""
 
     def given(values: tuple) -> tuple[dict, object, str]:
-        """The inputs of "Testen" and "Opslaan" after the sample: (the form, what the part was filled with, the language)."""
+        """The inputs of "Testen" and "Artikelkolommen opslaan" after the sample: (the form, what the part was filled with, the language)."""
         count = len(ARTICLE_FORM)
         return dict(zip(ARTICLE_FORM, values)) | {"numbers": values[count]}, values[-2], values[-1]
 
@@ -2961,7 +3774,7 @@ def _articles_part(gr, app, language, settings_tab, read: Callable[[dict[str, st
         return (*reading(tried, settings, language_now), " ".join(before))
 
     def articles_saved(sample: str | None, *values) -> tuple:
-        """"Opslaan": the sample read as "Testen" reads it, and the two settings written into the settings file when nothing is wrong
+        """"Artikelkolommen opslaan": the sample read as "Testen" reads it, and the two settings written into the settings file when nothing is wrong
         (write, which writes the keys whose value changed): (the note, what the part is now filled with, the reading). No price is
         stored. Any problem of the form or of the sample refuses the save, each named in the page's language, and nothing is written;
         so does a settings file that cannot be read, with its line, and a file whose two settings are no longer those the part was
@@ -3000,7 +3813,8 @@ def _articles_part(gr, app, language, settings_tab, read: Callable[[dict[str, st
                 *[gr.update(label=article_label(field, language_now), choices=choices(offered_now or [], strings), value=value)
                   for field, value in zip(ARTICLE_FORM, chosen)],
                 gr.update(label=strings["exact_export_field:numbers"], choices=number_choices(strings), value=numbers_now),
-                gr.update(value=strings["exact_test"]), gr.update(value=strings["exact_save"]), "", "", rows_table([], None, language_now))
+                gr.update(value=strings["exact_test"]), gr.update(value=strings["exact_articles_save"]), "", "",
+                rows_table([], None, language_now))
 
     with gr.Column(elem_id="articles-part"):
         part = gr.Markdown(f"### {first['exact_part_articles']}")
@@ -3015,7 +3829,7 @@ def _articles_part(gr, app, language, settings_tab, read: Callable[[dict[str, st
         numbers = gr.Radio(choices=number_choices(first), value="point", label=first["exact_export_field:numbers"], elem_id="articles-numbers")
         with gr.Row():
             test_button = gr.Button(first["exact_test"], elem_id="articles-test")
-            save_button = gr.Button(first["exact_save"], variant="primary", elem_id="articles-save")
+            save_button = gr.Button(first["exact_articles_save"], variant="primary", elem_id="articles-save")
         note = gr.Markdown("", elem_id="articles-note")
         read_text = gr.Markdown("", elem_id="articles-read")
         rows = gr.Dataframe(value={"headers": articles_headers(None, "nl"), "data": []}, interactive=False, wrap=True, elem_id="articles-rows")
@@ -3271,12 +4085,16 @@ def _open_from_tryouts(cases_root: Path) -> int:
 
 
 def _ai_section(gr, app, language, tab: _Tab, tenant, client, mailbox, account_shown,
-                begin: Callable[[str, str, dict[str, str]], tuple[MicrosoftAccount | None, str | None]],
-                read: Callable[[dict[str, str]], tuple[Settings, str | None]], write: Callable) -> None:
-    """The AI section of the settings tab and its events, after the mailbox in its connections (see the module docstring): tenant, client
-    and mailbox are the fields of the tab, account_shown the line that names the signed-in account, begin gives the account for an
-    action or the note that says why there is none, and read and write are those of _settings_tab: the settings in the file (or
-    those in use, with the line of a file that cannot be read), and a save into it."""
+                begin: Callable[..., tuple[MicrosoftAccount | None, str | None]],
+                read: Callable[[dict[str, str]], tuple[Settings, str | None]], write: Callable, opened, clock: Callable[[], datetime]):
+    """The AI section of the settings tab and its events, step 5 of its part "Postvak en AI" (see the module docstring): the line of
+    what reads the documents now, the choice of the reader with its answer line, then Copilot with its two buttons and their answer
+    line. tenant, client and mailbox are the fields of the tab, account_shown the line that names the signed-in account, begin gives
+    the account for an action or the note that says why there is none, and read and write are those of _settings_tab: the settings in
+    the file (or those in use, with the line of a file that cannot be read), and a save into it. opened is the select of the part's
+    section, and clock gives the time of the page's Deps in the local time of this PC. Its buttons and its choice take the account as
+    a step other than the sign-in (begin's `elsewhere`). Returns the answer line of the choice, which the language switch of
+    _settings_tab empties."""
     first = STRINGS["nl"]
 
     def ai_opened(language_now: str) -> str:
@@ -3287,7 +4105,7 @@ def _ai_section(gr, app, language, tab: _Tab, tenant, client, mailbox, account_s
         """Sign in in the browser of this PC for the mailbox and for Copilot together, saying first that the page waits for it: (the
         account, a note)."""
         strings = STRINGS[language_now]
-        account, refused = begin(tenant_now, client_now, strings)
+        account, refused = begin(tenant_now, client_now, strings, elsewhere=True)
         if refused:
             yield gr.update(), refused
             return
@@ -3308,7 +4126,7 @@ def _ai_section(gr, app, language, tab: _Tab, tenant, client, mailbox, account_s
     def test_copilot(tenant_now: str, client_now: str, language_now: str) -> str:
         """One message to Copilot: the first 20 characters of its answer, or the error of the client (no token, no text of Microsoft)."""
         strings = STRINGS[language_now]
-        account, refused = begin(tenant_now, client_now, strings)
+        account, refused = begin(tenant_now, client_now, strings, elsewhere=True)
         if refused:
             return refused
         try:
@@ -3319,19 +4137,55 @@ def _ai_section(gr, app, language, tab: _Tab, tenant, client, mailbox, account_s
             return strings["settings_failed"].format(code=type(error).__name__)
         return strings["settings_ai_answer"].format(answer=" ".join(answer.split())[:20])
 
+    def copilot_refusal(settings: Settings, strings: dict[str, str]) -> str | None:
+        """None once Copilot answered the one test message of "Copilot testen" (COPILOT_TEST, nothing of a document), sent with the
+        tenant and the client of the settings; else why it did not: the cause by a status code and its hint (_copilot_cause), never
+        Copilot's own words, or why no account could be made."""
+        account, refused = begin(settings.ms_tenant_id, settings.ms_client_id, strings, elsewhere=True)
+        if refused:
+            return refused
+        try:
+            CopilotClient(account, session=tab.session).ask(COPILOT_TEST)
+        except Exception as error:
+            cause, code = _copilot_cause(error)
+            return strings["settings_ai_switch_refused"].format(cause=_cause_text(cause, code, strings),
+                                                                hint=_copilot_hint(cause, code, strings))
+        return None
+
     def save_reader(reader_now: str, language_now: str) -> tuple:
-        """Write the reader chosen into the settings file, Copilot only once the tenant and the client are saved: (the reader the file
-        then holds, a note). Nothing is written into a file that cannot be read: the note is then the line that says so."""
+        """Write the reader chosen into the settings file: (the reader the file then holds, a note). Copilot only once the tenant and
+        the client are saved, and only once it answered the test message, sent with the saved tenant and client (copilot_refusal),
+        so that a Copilot this account cannot use is never chosen (finding 6 of the owner's test): a refusal writes nothing and
+        keeps the reader the file holds. This is the one choice of the page that sends something to Microsoft, at the buyer's own
+        press. Nothing is written into a file that cannot be read: the note is then the line that says so."""
         strings = STRINGS[language_now]
         before, line = read(strings)
         if line is not None:
             return before.reader, line
-        if reader_now == "llm" and not (before.ms_tenant_id and before.ms_client_id):
-            return before.reader, strings["settings_ai_ids_needed"]
+        if reader_now == "llm":
+            if not (before.ms_tenant_id and before.ms_client_id):
+                return before.reader, strings["settings_ai_ids_needed"]
+            if (refused := copilot_refusal(before, strings)) is not None:
+                return before.reader, refused
         saved, refused, _ = write(lambda held: {"reader": reader_now}, strings)
         if saved is None:
             return before.reader, refused
-        return saved.reader, strings["settings_buyer_saved"]
+        return saved.reader, strings["settings_ai_switched" if saved.reader == "llm" else "settings_buyer_saved"]
+
+    def reader_shown(language_now: str):
+        """The line of what reads the documents now, by the settings file (_reader_text), read from the files of this PC by
+        aid/review/status.py; it asks Microsoft nothing. A file that cannot be read leaves the line as it is."""
+        strings = STRINGS[language_now]
+        settings = read(strings)[0]
+        if settings.reader != "llm":
+            return strings["reader_state:parser"]
+        now = clock()
+        try:
+            state = aid_status.assistant(tab.file, settings.cases_root, settings, now)
+            lines = aid_status.case_lines(settings.cases_root, now)
+        except OSError:
+            return gr.update()
+        return _reader_text(state, lines, now, strings)
 
     def ai_relabel(language_now: str, reader_now: str | None) -> tuple:
         strings = STRINGS[language_now]
@@ -3339,19 +4193,74 @@ def _ai_section(gr, app, language, tab: _Tab, tenant, client, mailbox, account_s
                 gr.update(value=strings["settings_ai_test"]),
                 gr.update(label=strings["settings_ai_reader"], choices=_reader_choices(strings), value=reader_now), "")
 
+    reader_state = gr.Markdown("", elem_id="settings-reader-state")         # what reads the documents now
+    reader = gr.Radio(choices=_reader_choices(first), value=None, label=first["settings_ai_reader"])
+    reader_note = gr.Markdown("", elem_id="settings-reader-note", elem_classes=["answer"])       # the answer of the choice
     title = gr.Markdown(f"### {first['settings_ai']}")
     needs = gr.Markdown(first["settings_ai_needs"])
     with gr.Row():
         copilot_button = gr.Button(first["settings_ai_sign_in"])
         copilot_test_button = gr.Button(first["settings_ai_test"])
-    reader = gr.Radio(choices=_reader_choices(first), value=None, label=first["settings_ai_reader"])
-    note = gr.Markdown("")
+    note = gr.Markdown("", elem_classes=["answer"])                           # the answer of the two buttons above
 
     app.load(ai_opened, inputs=language, outputs=reader)
     copilot_button.click(sign_in_copilot, inputs=[tenant, client, mailbox, language], outputs=[account_shown, note])
     copilot_test_button.click(test_copilot, inputs=[tenant, client, language], outputs=note)
-    reader.input(save_reader, inputs=[reader, language], outputs=[reader, note])      # a choice of the user, not the value the tab loads
+    gr.on(triggers=[app.load, opened, language.change], fn=reader_shown, inputs=language, outputs=reader_state, show_progress="hidden")
+    # a choice of the user, not the value the tab loads; its test of Copilot takes a few seconds, the line follows the choice
+    reader.input(save_reader, inputs=[reader, language], outputs=[reader, reader_note], show_progress="minimal").then(
+        reader_shown, inputs=language, outputs=reader_state, show_progress="hidden")
     language.change(ai_relabel, inputs=[language, reader], outputs=[title, needs, copilot_button, copilot_test_button, reader, note])
+    return reader_note
+
+
+def _assistant_section(gr, language, tab: _Tab, read: Callable[[dict[str, str]], tuple[Settings, str | None]],
+                       clock: Callable[[], datetime]) -> tuple:
+    """The section "Stand van de assistent" of the settings tab and its events, its last (see the module docstring): the lines of the
+    assistant's state (_assistant_lines), "Stand van de assistent vernieuwen", the last status.LOG_LINES lines of runner.log, the
+    newest first, in a box that cannot be edited, and the line that says whom they are for. They are read from the files of this PC
+    by aid/review/status.py when the section is selected, at a press of its button and after the strip's button of the tab
+    "Beoordelen" (assistant_shown), never from Microsoft. tab is what the settings tab is built with (its settings file), read gives
+    the settings in the file (or those in use), and clock the time of the page's Deps in the local time of this PC. Returns (the
+    section, its four blocks, the function that gives its lines and its log in a language), for the language switch of
+    _settings_tab, and the function that reads the section again once an event of another tab has run (read_after), for build_app."""
+    first = STRINGS["nl"]
+
+    def texts(language_now: str) -> tuple[str, str]:
+        """The lines of the assistant's state and the last lines of runner.log, in the language; raises OSError for a file that
+        cannot be read."""
+        strings = STRINGS[language_now]
+        settings, now = read(strings)[0], clock()
+        state = aid_status.assistant(tab.file, settings.cases_root, settings, now)
+        lines = aid_status.case_lines(settings.cases_root, now)
+        log = aid_status.log_tail(settings.cases_root)
+        return (_assistant_lines(settings, state, lines, aid_status.problems(state, lines), now, strings),
+                "\n".join(log) if log else strings["assistant_log_none"])
+
+    def assistant_shown(language_now: str) -> tuple:
+        """The section selected, or its button pressed: (the lines, the log, its help line) as the files of this PC hold them now. A
+        file that cannot be read leaves the section as it is."""
+        try:
+            lines, log = texts(language_now)
+        except OSError:
+            return gr.update(), gr.update(), gr.update()
+        return lines, log, STRINGS[language_now]["assistant_log_help"]
+
+    with gr.Tab(first["settings_section:assistant"], id="assistent") as section:
+        lines = gr.Markdown("", elem_id="assistant-lines")
+        refresh = gr.Button(first["assistant_refresh"], elem_id="assistant-refresh")
+        # a box, not a Markdown: the runner's lines are shown as they stand, an underscore of a case id included
+        log = gr.Textbox(label=first["assistant_log"], elem_id="assistant-log", interactive=False, lines=12, max_lines=20)
+        help_line = gr.Markdown(first["assistant_log_help"], elem_id="assistant-log-help")
+    gr.on(triggers=[section.select, refresh.click], fn=assistant_shown, inputs=language, outputs=[lines, log, help_line],
+          show_progress="hidden")
+
+    def read_after(event) -> None:
+        """assistant_shown chained after `event`, an event of another tab that opens the section (the strip's button), so that the
+        section shows the state at that moment, also when it was open already and its select does not fire again."""
+        event.then(assistant_shown, inputs=language, outputs=[lines, log, help_line], show_progress="hidden")
+
+    return section, [lines, refresh, log, help_line], texts, read_after
 
 
 def _account(tenant: str, client: str) -> MicrosoftAccount:
@@ -3363,8 +4272,8 @@ def _account(tenant: str, client: str) -> MicrosoftAccount:
 def _sending_account(tab: _Tab, settings: Settings, accounts: dict[tuple[str, str], MicrosoftAccount]) -> MicrosoftAccount:
     """The Microsoft account that a close sends through: the page's account of the settings' tenant and client, the one the settings
     tab signs in with, made once (accounts). When it cannot be made (its store is refused), the account as the runner makes it,
-    whose store is made, and refused, at its first use: the mailer then takes it as the runner's does, as a lapsed sign-in, and the
-    message is not sent (aid/messaging/microsoft_mailer.py)."""
+    whose store is made, and refused, at its first use: the mailer then takes it as the runner's does, as a store refused (of the
+    kind "store"), the message is not sent (aid/messaging/microsoft_mailer.py), and the close says so (not_sent:store)."""
     key = (settings.ms_tenant_id, settings.ms_client_id)
     if key not in accounts:
         try:
@@ -3372,6 +4281,110 @@ def _sending_account(tab: _Tab, settings: Settings, accounts: dict[tuple[str, st
         except Exception:
             return MicrosoftAccount(*key, LazySecretStore(default_secrets_dir()))
     return accounts[key]
+
+
+def _refusal_text(error: Exception, strings: dict[str, str]) -> str:
+    """Why no account can be made, for the line under a button (finding 2 of the owner's test): a store of the sign-in that lies
+    inside a git work tree by its folder and the folder that holds .git, and one made by another Windows user or in another kind of
+    session by its folder, each shown as it is (_literal) and with what to do; any other failure by the fixed line, which names
+    nothing of the error. The folders are shown on the settings tab of this PC only, which a public link does not offer."""
+    if isinstance(error, StoreRefused) and error.directory is not None:
+        if error.work_tree is not None:
+            return strings["settings_store_refused_git"].format(store=_literal(str(error.directory)), work_tree=_literal(str(error.work_tree)))
+        if error.recorded is not None:
+            return strings["settings_store_refused_kind"].format(store=_literal(str(error.directory)))
+    return strings["settings_store_refused"]
+
+
+def _copilot_cause(error: Exception) -> tuple[str, str | None]:
+    """Why Copilot did not answer the test of a choice, by the error of its client (aid/readers/copilot_client.py), as the status
+    module tells the runner's note of it: "sign_in" for a sign-in to make (SignInNeeded), "unreachable" for a Copilot not reached,
+    "code" with the status code of a refusal, and "other" for anything else; nothing else of the error."""
+    if isinstance(error, SignInNeeded):
+        return "sign_in", None
+    if isinstance(error, CopilotError):
+        if str(error).startswith(UNREACHABLE.partition(":")[0]):
+            return "unreachable", None
+        if (code := _STATUS_CODE.search(str(error))) is not None:
+            return "code", code.group()
+    return "other", None
+
+
+def _cause_text(cause: str, code: str | None, strings: dict[str, str]) -> str:
+    """The cause of a Copilot that fails, in words: "code 400", or the words of a sign-in, a Copilot not reached or no usable answer."""
+    return strings["copilot_cause:code"].format(code=code) if cause == "code" else strings[f"copilot_cause:{cause}"]
+
+
+def _copilot_hint(cause: str, code: str | None, strings: dict[str, str]) -> str:
+    """What the buyer can do about a choice of Copilot that Copilot did not answer, by its status code: 400 (most often no licence
+    for Microsoft 365 Copilot, or a personal account), 401 and a sign-in to make (sign in for Copilot first), 403 (a permission or an
+    administrator's consent missing), and else to try again later."""
+    key = "401" if cause == "sign_in" else code if cause == "code" and f"copilot_hint:{code}" in strings else "other"
+    return strings[f"copilot_hint:{key}"]
+
+
+def _day_time(moment: datetime) -> str:
+    """A moment in the local time of this PC as the lines of the state show it: "12-11-2026 15:57" (DAY_FORM)."""
+    return moment.strftime(DAY_FORM)
+
+
+def _reader_text(state: aid_status.Assistant, lines: list[aid_status.CaseLine], now: datetime, strings: dict[str, str]) -> str:
+    """What reads the documents now, in words, by the reader of the settings: the parser or Copilot, and while it is Copilot, Copilot
+    failing as a whole as the runner notes it in its digest state (since when, its cause by a status code, never the error's text,
+    and the cases that wait for it now), or refusing documents (the cases that failed for it in the last status.DAYS days before
+    `now`, the page's clock in the local time of this PC, named only while there are any). The line of step 5 of "Postvak en AI"
+    (reader_shown) and of the section "Stand van de assistent" (_assistant_lines)."""
+    if state.reader != "llm":
+        return strings["reader_state:parser"]
+    if state.copilot is not None:
+        waiting = sum(1 for case in lines if case.state == "copilot_wait")
+        return strings["reader_state:down"].format(since=_day_time(state.copilot.since), n=waiting,
+                                                   cause=_cause_text(state.copilot.cause, state.copilot.code, strings))
+    since = now - timedelta(days=aid_status.DAYS)
+    failed = sum(1 for case in lines if case.reason == "copilot" and case.opened_at >= since)
+    if failed:
+        return strings["reader_state:refused"].format(n=failed)
+    return strings["reader_state:refused_none" if state.refused else "reader_state:llm"]
+
+
+def _assistant_lines(settings: Settings, state: aid_status.Assistant, lines: list[aid_status.CaseLine], problems: list[aid_status.Problem],
+                     now: datetime, strings: dict[str, str]) -> str:
+    """The lines of the section "Stand van de assistent", a paragraph each, in this order: the runner's last pass, or since when it
+    made none, or that it made none yet; whether the launcher runs, since when and how often it started the runner; a STOP file; a
+    runner the launcher gave up; the mailbox as the tab tells it (_trigger_text) and since when its sign-in has lapsed; what reads the
+    documents (_reader_text) and the purchase orders that wait for Copilot, oldest first; and a store of the sign-in that the PC
+    refuses, whose folders "Postvak en AI" names. A line that tells one of `problems` (status.problems: the same as the review tab's)
+    is in bold. Every time is in the local time of this PC, and every day in one form, that of _day_time ("12-11-2026 15:57"), the
+    mailbox's line too; no line holds an error's text."""
+    told = {problem.kind for problem in problems}
+    shown: list[tuple[str, str | None]] = []            # each line with the problem it tells, or None
+    if state.last_pass is None:
+        shown.append((strings["assistant_pass_none"], "no_pass_ever"))
+    elif state.late:
+        shown.append((strings["assistant_pass_old"].format(time=_day_time(state.last_pass)), "no_pass"))
+    else:
+        shown.append((strings["assistant_pass"].format(time=_day_time(state.last_pass)), None))
+    launcher = state.launcher
+    if launcher.running:
+        key = "assistant_launcher_on_one" if launcher.starts == 1 else "assistant_launcher_on_many"
+        shown.append((strings[key].format(since=_day_time(launcher.since) if launcher.since else "?", n=launcher.starts), None))
+    else:
+        shown.append((strings["assistant_launcher_off"], None))
+    if state.stopped:
+        shown.append((strings["assistant_stop"], "stopped"))
+    if launcher.given_up:
+        shown.append((strings["assistant_given_up"], "given_up"))
+    shown.append((f"{strings['settings_trigger']}: {_trigger_text(settings, strings, DAY_FORM)}", None))
+    if state.mailbox.lapsed is not None:
+        shown.append((strings["assistant_lapsed"].format(since=_day_time(state.mailbox.lapsed)), "lapsed"))
+    shown.append((_reader_text(state, lines, now, strings), "copilot_down" if state.copilot is not None else "copilot_refused"))
+    waiting = sorted((line for line in lines if line.state == "copilot_wait"), key=lambda line: (line.opened_at, line.case_id))
+    if waiting:
+        orders = dict.fromkeys(line.po_number or strings["unknown_po"] for line in waiting)
+        shown.append((strings["assistant_waiting_copilot"].format(orders=", ".join(orders)), None))
+    if state.store_refused:
+        shown.append((strings["assistant_store"], "store"))
+    return "\n\n".join(f"**{text}**" if kind in told else text for text, kind in shown)
 
 
 def _account_text(account: MicrosoftAccount | None, strings: dict[str, str]) -> str:
@@ -3395,16 +4408,18 @@ def _no_token_text(account: MicrosoftAccount, strings: dict[str, str]) -> str:
     return strings["settings_lapsed"].format(account=name) if name else strings["settings_not_signed_in"]
 
 
-def _trigger_text(settings: Settings, strings: dict[str, str]) -> str:
-    """The state of the trigger for the settings, from mailbox_state.json (aid/sources/microsoft_mail.py)."""
+def _trigger_text(settings: Settings, strings: dict[str, str], form: str = WHEN_FORM) -> str:
+    """The state of the trigger for the settings, from mailbox_state.json (aid/sources/microsoft_mail.py), its times in `form`: that
+    of the tab "Postvak en AI" (_when), or DAY_FORM in the section "Stand van de assistent", whose other lines show a day so."""
     if not trigger_on(settings):
         return strings["settings_trigger_off"]
     state = connection_of(settings)
     if state is None:
         return strings["settings_trigger_pending"]
     if not state["last_sync"]:
-        return strings["settings_trigger_unread"].format(since=_when(state["connected_at"]))
-    return strings["settings_trigger_on"].format(since=_when(state["connected_at"]), last=_when(state["last_sync"]), saved=state["saved"])
+        return strings["settings_trigger_unread"].format(since=_when(state["connected_at"], form))
+    return strings["settings_trigger_on"].format(since=_when(state["connected_at"], form), last=_when(state["last_sync"], form),
+                                                 saved=state["saved"])
 
 
 def _via_choices(strings: dict[str, str]) -> list[tuple[str, str]]:
@@ -3429,8 +4444,9 @@ def _reader_choices(strings: dict[str, str]) -> list[tuple[str, str]]:
     return [(strings[f"settings_reader:{value}"], value) for value in READERS]
 
 
-def _when(moment: datetime | str) -> str:
-    """A time of the mailbox as the tab shows it, in the local time of this PC: "2026-11-12 09:00"; a time without a zone is UTC."""
+def _when(moment: datetime | str, form: str = WHEN_FORM) -> str:
+    """A time of the mailbox as the tab shows it, in the local time of this PC: "2026-11-12 09:00", or in another form; a time
+    without a zone is UTC."""
     moment = datetime.fromisoformat(moment) if isinstance(moment, str) else moment
     moment = moment.replace(tzinfo=timezone.utc) if moment.utcoffset() is None else moment
-    return moment.astimezone().strftime("%Y-%m-%d %H:%M")
+    return moment.astimezone().strftime(form)

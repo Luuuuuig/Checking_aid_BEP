@@ -146,7 +146,11 @@ its attachments raised, and the attachments that were handled are then handled a
 (the duplicate check), the PO store files a PDF once, and an export given again files nothing.
 
 Review items. cases_root/review_items.jsonl has one JSON line for each item that the buyer must look at, appended:
-{"time": <the scan's time>, "file": <the name used in the list of skipped items>, "reason": <the reason>}.
+{"time": <the scan's time>, "file": <the name used in the list of skipped items>, "reason": <the reason>, "sha256": <the sha256 of
+the document's bytes: of the file, or of the attachment as extract_eml writes it>}. The review page offers each to the buyer and shows
+its document from processed/, an attachment from its e-mail there by attachment_of, which gives the attachment that extract_eml writes
+under a name: of the files of that name there, the one whose bytes have that sha256, so that a later document of the same name is
+never shown in its place, whatever the times of the files.
 
 Events. ScanResult.events says what became of each document, for the tab "Bestanden" of the review page (aid/review/intake.py, where
 the runner appends them to <cases_root>/intake.jsonl): (the name as the list of skipped items names it, the outcome, the detail), by
@@ -504,14 +508,28 @@ def extract_eml(path: Path, out_dir: Path) -> tuple[str, list[Path]]:
     text = "\n".join(part for part in (subject, _body_text(message)) if part)
     folder = Path(out_dir) / hashlib.sha256(data).hexdigest()[:12]
     attachments: list[Path] = []
-    taken: set[str] = set()
-    for number, part in enumerate(_attachments(message), 1):
-        name = _free_name(_attachment_name(part, number), lambda candidate: candidate.casefold() in taken)
-        taken.add(name.casefold())
+    for name, part in _named_attachments(message):
         folder.mkdir(parents=True, exist_ok=True)
         (folder / name).write_bytes(_payload(part))
         attachments.append(folder / name)
     return text, attachments
+
+
+def attachment_of(eml: Path, name: str) -> bytes | None:
+    """The bytes of the attachment of the e-mail file that extract_eml writes under `name`, the name that follows the e-mail's own
+    in the list of skipped items ("PO.eml/<name>"); None when the e-mail has no attachment of that name. Nothing is written: the
+    review page shows such an attachment that the scan left to the buyer from the e-mail in processed/."""
+    message = BytesParser(policy=policy.default).parsebytes(Path(eml).read_bytes())
+    return next((_payload(part) for named, part in _named_attachments(message) if named == name), None)
+
+
+def _named_attachments(message: EmailMessage) -> Iterator[tuple[str, EmailMessage]]:
+    """The attachments of the e-mail in its order, each with the name extract_eml writes it under (see extract_eml)."""
+    taken: set[str] = set()
+    for number, part in enumerate(_attachments(message), 1):
+        name = _free_name(_attachment_name(part, number), lambda candidate: candidate.casefold() in taken)
+        taken.add(name.casefold())
+        yield name, part
 
 
 def sender_of(eml: Path) -> str | None:
@@ -858,7 +876,7 @@ class _Scan:
             elif document.kind == "confirmation":
                 self._confirmation(document)
             elif document.kind is None and not document.text.strip():
-                self.skip(document.place, document.label, "no text layer; class unknown", review=True)
+                self.skip(document.place, document.label, "no text layer; class unknown", review=True, sha256=document.sha256)
             else:
                 self.skip(document.place, document.label, document.kind or "other")
         except Exception as error:
@@ -875,7 +893,7 @@ class _Scan:
             page = _fold(document.text)
             numbers = [number for number in numbers if _coded(self.store, number, page)]
             if len(numbers) != 1:
-                self.skip(document.place, document.label, "more than one PO number", review=True)
+                self.skip(document.place, document.label, "more than one PO number", review=True, sha256=document.sha256)
                 return
             found_by = FOUND_AMONG_NUMBERS
         if numbers:
@@ -903,10 +921,12 @@ class _Scan:
         """Note what became of the document (see "Events" in the module docstring)."""
         self.events.append((document.place, document.label, outcome, detail))
 
-    def skip(self, place: Place, label: str, reason: str, review: bool = False) -> None:
-        """Note that the item is left alone. A review item is written first, so that a failure to write it is an error and not a skip."""
+    def skip(self, place: Place, label: str, reason: str, review: bool = False, sha256: str | None = None) -> None:
+        """Note that the item is left alone. A review item, with the sha256 of the document's bytes (see "Review items" in the module
+        docstring), is written first, so that a failure to write it is an error and not a skip."""
         if review:
-            _append_line(self.cases_root / REVIEW_ITEMS_FILE, {"time": self.now.isoformat(), "file": label, "reason": reason})
+            _append_line(self.cases_root / REVIEW_ITEMS_FILE, {"time": self.now.isoformat(), "file": label, "reason": reason,
+                                                               "sha256": sha256})
         self.skips.append((place, label, reason))
         self.events.append((place, label, "skipped", reason))
 

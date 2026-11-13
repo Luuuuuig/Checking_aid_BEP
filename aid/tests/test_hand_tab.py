@@ -179,7 +179,7 @@ def test_nothing_ticked_writes_nothing(tmp_path, madeup_out):
 def test_the_query_selects_the_tab(tmp_path, madeup_out):
     gr = import_gradio()
     page, prepared, d = tab_page(tmp_path, madeup_out)
-    [tabs] = [block for block in page.blocks.values() if isinstance(block, gr.Tabs)]
+    [tabs] = [block for block in page.blocks.values() if isinstance(block, gr.Tabs) and "page-tabs" in (block.elem_classes or [])]
     assert [(tab.label, tab.id) for tab in tabs.children] == [(NL["review_tab"], "beoordelen"), (NL["hand_tab"], "invoeren"),
                                                               (NL["pricelist_tab"], "prijslijst"), (NL["files_tab"], "bestanden"),
                                                               (NL["settings_tab"], "instellingen")]
@@ -480,7 +480,7 @@ def test_the_documents_say_what_the_tab_does():
     assert "In Exact in te voeren: 2 wijzigingen. Open het tabblad In Exact invoeren: <link>" in manual["2.1"]
     guide = manual["7"]
     assert "\"(voorbereid)\" betekent: nog niet in Exact. Het staat op het tabblad In Exact invoeren." in guide
-    assert "\"Postvak niet verbonden: meld u opnieuw aan op het tabblad Instellingen, onderaan bij Koppelingen\"" in guide and "meld je" not in whole
+    assert "\"Postvak niet verbonden: meld u opnieuw aan op het tabblad Instellingen, onder Postvak en AI\"" in guide and "meld je" not in whole
     for words in ("researcher applies", "applies those changes by hand", "onderzoeker voert", "onderzoeker draait", "changes to apply by hand"):
         assert words not in whole, words
     door = manual["3.10"]
@@ -1055,8 +1055,8 @@ def files_of(*folders: Path) -> dict:
 def test_a_confirmation_given_on_the_tab_shows_its_case_after_a_pass(tmp_path, madeup_out):
     """Rules 1 to 3 of Task 37: the confirmation given on the tab lies whole in the watched folder of the settings under its own name,
     and the page wrote nothing else, no case and nothing in the PO store. The runner's next pass opens its case as for any file saved
-    there, and the list "Laatst verwerkt" then names it in the page's language; the same confirmation given again is received before,
-    the newest line first."""
+    there, and the list "Laatst verwerkt" then names it in the page's language, with what the case is now (findings 3 and 4 of the
+    owner's test); the same confirmation given again is received before, the newest line first."""
     page, prepared, d = tab_page(tmp_path, madeup_out, cases=())
     root, watched = d.settings.cases_root, d.settings.watched_folder
     kept = files_of(root, d.store.root, tmp_path / "po_store")
@@ -1068,16 +1068,16 @@ def test_a_confirmation_given_on_the_tab_shows_its_case_after_a_pass(tmp_path, m
     assert [path.name for path in watched.iterdir()] == ["MU01_conf.pdf"] and (watched / "MU01_conf.pdf").read_bytes() == conf
     assert Path(upload).exists() and files_of(root, d.store.root, tmp_path / "po_store") == kept       # rule 2
     _pass(_Loop(d))
-    assert files_opened(page, "nl")["table"] == {"headers": ["Tijd", "Bestand", "Wat de assistent deed"],
-                                                  "data": [["2026-11-12 09:00", "MU01_conf.pdf", "Zaak geopend voor inkooporder 250101"]]}
-    assert files_opened(page, "en")["table"] == {"headers": ["Time", "File", "What the assistant did"],
-                                                  "data": [["2026-11-12 09:00", "MU01_conf.pdf", "Case opened for purchase order 250101"]]}
+    assert files_opened(page, "nl")["table"] == {"headers": ["Tijd", "Bestand", "Wat de assistent deed"], "data": [
+        ["2026-11-12 09:00", "MU01_conf.pdf", "Zaak geopend voor inkooporder 250101. Nu: vanzelf afgesloten."]]}
+    assert files_opened(page, "en")["table"] == {"headers": ["Time", "File", "What the assistant did"], "data": [
+        ["2026-11-12 09:00", "MU01_conf.pdf", "Case opened for purchase order 250101. Now: closed by itself."]]}
     assert len(list(root.glob("250101_*/steps/08_result.json"))) == 1 and (watched / "processed" / "MU01_conf.pdf").exists()
     assert file_given(page, uploaded(tmp_path, "MU01_conf.pdf", conf), "en")["note"] == (
         "MU01\\_conf\\.pdf was accepted. Below you see within a minute what was done with it.")
     _pass(_Loop(d))
     assert [row[1:] for row in files_opened(page, "nl")["table"]["data"]] == [
-        ["MU01_conf.pdf", "Al eerder ontvangen: niets gedaan"], ["MU01_conf.pdf", "Zaak geopend voor inkooporder 250101"]]
+        ["MU01_conf.pdf", "Al eerder ontvangen: niets gedaan"], ["MU01_conf.pdf", "Zaak geopend voor inkooporder 250101. Nu: vanzelf afgesloten."]]
 
 
 def test_the_files_tab_offers_nothing_on_a_share_link(tmp_path, madeup_out):
@@ -1193,7 +1193,7 @@ def test_the_intro_names_the_export_only_while_its_columns_are_set(tmp_path, mad
 def test_a_try_out_given_on_the_tab_is_a_case_marked_as_a_try_out(tmp_path, madeup_out):
     """Amendment 9: a try-out confirmation given on the tab is handled as any file, and its line is marked as Task 33 marks its case.
     Ruling O10 (c): the mark stands behind every line that names a case made from a try-out, the outcomes guess and recheck as well,
-    and behind no line of a supplier's case."""
+    and behind no line of a supplier's case. What the case is now follows the mark (findings 3 and 4 of the owner's test)."""
     from aid.review.intake import append
     from aid.tryout import confirmation_pdf, made_from
     page, prepared, d = tab_page(tmp_path, madeup_out, cases=(), test_mode=True, authorization_limit=None)
@@ -1201,16 +1201,17 @@ def test_a_try_out_given_on_the_tab_is_a_case_marked_as_a_try_out(tmp_path, made
     file_given(page, uploaded(tmp_path, "PROEF orderbevestiging 250108.pdf", pdf), "nl")
     _pass(_Loop(d))
     assert files_opened(page, "nl")["table"]["data"] == [
-        ["2026-11-12 09:00", "PROEF orderbevestiging 250108.pdf", "Zaak geopend voor inkooporder 250108 (proefdocument)"]]
-    assert files_opened(page, "en")["table"]["data"][0][2] == "Case opened for purchase order 250108 (try-out document)"
+        ["2026-11-12 09:00", "PROEF orderbevestiging 250108.pdf", "Zaak geopend voor inkooporder 250108 (proefdocument). Nu: vanzelf afgesloten."]]
+    assert files_opened(page, "en")["table"]["data"][0][2] == "Case opened for purchase order 250108 (try-out document). Now: closed by itself."
     [tryout] = [path.name for path in d.settings.cases_root.glob("250108_*")]
     supplier = open_upload_case(d.settings.cases_root, [madeup_out / "MU01_conf.pdf"], "250101", "confirmation", datetime(2026, 11, 12, 9, 1))
     append(d.settings.cases_root, [("a.pdf", "guess", tryout), ("b.pdf", "recheck", tryout), ("c.pdf", "guess", supplier.case_id),
                                    ("d.pdf", "recheck", supplier.case_id)], datetime(2026, 11, 12, 9, 2))
     assert [row[2] for row in files_opened(page, "nl")["table"]["data"][:4]] == [
-        "Inkooporder 250101 is binnen: de wachtende zaak is opnieuw gecontroleerd", "Zaak geopend voor inkooporder 250101, afgeleid: kijk de zaak na",
-        "Inkooporder 250108 is binnen: de wachtende zaak is opnieuw gecontroleerd (proefdocument)",
-        "Zaak geopend voor inkooporder 250108, afgeleid: kijk de zaak na (proefdocument)"]
+        "Inkooporder 250101 is binnen: de wachtende zaak is opnieuw gecontroleerd. Nu: wordt gelezen.",
+        "Zaak geopend voor inkooporder 250101, afgeleid: kijk de zaak na. Nu: wordt gelezen.",
+        "Inkooporder 250108 is binnen: de wachtende zaak is opnieuw gecontroleerd (proefdocument). Nu: vanzelf afgesloten.",
+        "Zaak geopend voor inkooporder 250108, afgeleid: kijk de zaak na (proefdocument). Nu: vanzelf afgesloten."]
 
 
 def test_a_list_that_cannot_be_read_says_so_and_leaves_the_table(tmp_path, madeup_out):

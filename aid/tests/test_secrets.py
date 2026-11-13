@@ -4,13 +4,14 @@ gives it a persistence of its own."""
 import os
 import stat
 import sys
+from pathlib import Path
 
 import msal
 import msal_extensions
 import pytest
 from msal_extensions.persistence import PersistenceNotFound
 
-from aid.connections.secrets import LazySecretStore, SecretStore, StoreRefused, default_secrets_dir
+from aid.connections.secrets import LazySecretStore, SecretStore, StoreRefused, default_secrets_dir, work_tree_refusal
 from aid.tests.conftest import REPO_ROOT
 from aid.tests.fakes import sign_in_event
 
@@ -33,6 +34,64 @@ def test_the_store_refuses_a_folder_inside_a_git_work_tree(tmp_path):
         with pytest.raises(ValueError, match="git work tree"):
             SecretStore(REPO_ROOT / "aid" / "secrets")          # the repository of the aid itself
         assert not (REPO_ROOT / "aid" / "secrets").exists()
+
+
+def test_the_git_refusal_is_told_without_making_the_store(tmp_path, monkeypatch):
+    """work_tree_refusal gives the refusal of a store inside a git work tree as SecretStore raises it, so that the review page can
+    say why a sign-in cannot be made before the buyer presses anything (aid/review/status.py). It makes no folder and no file, takes
+    the folder as the store takes it (from ~, its links resolved), and gives None for a folder outside every work tree."""
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    (worktree / ".git").write_text("gitdir: /elsewhere/.git/worktrees/w\n", encoding="utf-8")    # a worktree's .git is a file
+    home = tmp_path / "home"                                 # the owner's case: a folder .git in the home folder, above the store
+    (home / ".git").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))             # what Path.home() reads on Windows
+    before = sorted(tmp_path.rglob("*"))
+    for store, work_tree in ((repo / "aid" / "secrets", repo), (worktree / "secrets", worktree), (repo, repo),
+                             (Path("~") / ".config" / "inkoopassistent", home)):
+        refused = work_tree_refusal(store)
+        with pytest.raises(StoreRefused) as raised:
+            SecretStore(store)
+        assert isinstance(refused, StoreRefused) and str(refused) == str(raised.value)
+        assert f"({work_tree.resolve()} holds .git)" in str(refused)
+    assert work_tree_refusal(tmp_path / "elsewhere" / "secrets") is None
+    assert sorted(tmp_path.rglob("*")) == before             # no folder and no file made, by the refusals or by the store
+
+
+def refusal(make) -> StoreRefused:
+    """The StoreRefused that making a store with `make` raises."""
+    with pytest.raises(StoreRefused) as raised:
+        make()
+    return raised.value
+
+
+def test_a_refused_store_carries_the_folder_that_holds_git_and_its_own_folder(tmp_path):
+    """A refusal carries the folders the review page names (finding 2 of the owner's test): for a store inside a git work tree the
+    store's own folder (directory) and the folder that holds .git (work_tree), for a store made with a kind of store this process
+    has not its own folder and the kind recorded in it (recorded). Its message stays as it was, and a refusal made with a message
+    alone carries none of them."""
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    store = repo / "aid" / "secrets"
+    inside = (f"the secrets store may not lie inside a git work tree ({repo.resolve()} holds .git), so that no token can be committed: "
+              "choose a folder outside the repository")
+    for refused in (work_tree_refusal(store), refusal(lambda: SecretStore(store)), refusal(lambda: LazySecretStore(store).token_cache())):
+        assert (refused.directory, refused.work_tree, refused.recorded) == (store.resolve(), repo.resolve(), None)
+        assert str(refused) == inside
+    other = tmp_path / "other"                                 # a folder made with a kind of store this process cannot use
+    other.mkdir()
+    (other / "backend").write_text("made-up-kind\n", encoding="utf-8")
+    refused = refusal(lambda: SecretStore(other))
+    kind = "dpapi" if sys.platform.startswith("win") else "plain"
+    assert (refused.directory, refused.work_tree, refused.recorded) == (other.resolve(), None, "made-up-kind")
+    assert str(refused) == (f"the secrets store in {other.resolve()} was made with the store 'made-up-kind', which this process cannot use "
+                            f"(it has {kind!r}): start the review page and the runner as the same user, in the same kind of session")
+    plain = StoreRefused("made-up refusal")
+    assert (plain.directory, plain.work_tree, plain.recorded, str(plain)) == (None, None, None, "made-up refusal")
+    assert isinstance(plain, ValueError)
 
 
 @PLAIN_ONLY

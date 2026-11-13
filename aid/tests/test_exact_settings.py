@@ -1,4 +1,4 @@
-"""Tests of what the block "Koppeling met Exact (bij de installatie)" of the settings tab shows and writes (aid/review/exact_settings.py),
+"""Tests of what the block "Koppeling met Exact" of the settings tab shows and writes (aid/review/exact_settings.py),
 without a page: the first page of a sample purchase order as a table, the title row found by one of its words, the layout made from
 the form and the form made from a layout, the senders, the trial read of a sample (what it reads, what is wrong with it and what the
 reader passes by) and the state lines; and of part 2, the export of order lines: the first rows of a sample, its row of column titles,

@@ -1,6 +1,7 @@
 """Tests of the watched folder source (aid/sources/mailbox.py) on the made-up documents, and on e-mails and variants of them
 that the tests build with the standard library and the generator. Every address is made up (example.com)."""
 import csv
+import hashlib
 import io
 import json
 import mimetypes
@@ -856,12 +857,28 @@ def test_two_different_po_numbers_anywhere_make_no_case(tmp_path, madeup_out, ma
 
 # review items
 
-def test_a_review_item_is_a_json_line_with_the_time_the_file_and_the_reason(tmp_path, madeup_out):
+def test_a_review_item_is_a_json_line_with_the_time_the_file_the_reason_and_the_sha256_of_the_document(tmp_path, madeup_out):
     inbox = inbox_of(tmp_path)
     write_eml(inbox / "m.eml", subject="Bevestiging PO 250101 en PO 250102", attachments=[madeup_out / "MU01_conf.pdf"])
     scan(tmp_path, inbox)
+    digest = sha256_file(madeup_out / "MU01_conf.pdf")                                                        # the attachment's own bytes
     assert (tmp_path / "cases" / "review_items.jsonl").read_text(encoding="utf-8") == (
-        '{"time": "2026-11-16T08:00:00", "file": "m.eml/MU01_conf.pdf", "reason": "more than one PO number"}\n')
+        f'{{"time": "2026-11-16T08:00:00", "file": "m.eml/MU01_conf.pdf", "reason": "more than one PO number", "sha256": "{digest}"}}\n')
+
+
+def test_a_review_item_names_its_document_by_the_sha256_of_its_bytes(tmp_path, madeup_out):
+    """The sha256 of a review item is that of the document's own bytes: of the file, which keeps them in processed/, and of an
+    attachment as attachment_of gives it from its e-mail there, so that the review page tells the document from another of the same
+    name."""
+    inbox = inbox_of(tmp_path)
+    put(inbox, madeup_out / "MU05_conf.pdf", "scan.pdf")                                                       # a scan: no class
+    write_eml(inbox / "m.eml", subject="Bevestiging PO 250101 en PO 250102", attachments=[madeup_out / "MU01_conf.pdf"])
+    scan(tmp_path, inbox)
+    processed = inbox / "processed"
+    by_file = {item["file"]: item["sha256"] for item in review_items(tmp_path)}
+    assert by_file == {"scan.pdf": sha256_file(processed / "scan.pdf"),
+                       "m.eml/MU01_conf.pdf": hashlib.sha256(mailbox.attachment_of(processed / "m.eml", "MU01_conf.pdf")).hexdigest()}
+    assert list(by_file.values()) == [sha256_file(madeup_out / name) for name in ("MU01_conf.pdf", "MU05_conf.pdf")]
 
 
 def test_review_items_are_appended_and_a_name_is_kept_as_it_is(tmp_path, madeup_out):
@@ -871,8 +888,10 @@ def test_review_items_are_appended_and_a_name_is_kept_as_it_is(tmp_path, madeup_
     drawn_confirmation(inbox / "twee.pdf", add=("Ook inkooporder 250102",))
     scan(tmp_path, inbox, now=datetime(2026, 11, 16, 9, 30))
     items = review_items(tmp_path)
-    assert items == [{"time": "2026-11-16T08:00:00", "file": "bevestiging é.pdf", "reason": "no text layer; class unknown"},
-                     {"time": "2026-11-16T09:30:00", "file": "twee.pdf", "reason": "more than one PO number"}]
+    assert items == [{"time": "2026-11-16T08:00:00", "file": "bevestiging é.pdf", "reason": "no text layer; class unknown",
+                      "sha256": sha256_file(madeup_out / "MU05_conf.pdf")},
+                     {"time": "2026-11-16T09:30:00", "file": "twee.pdf", "reason": "more than one PO number",
+                      "sha256": sha256_file(inbox / "processed" / "twee.pdf")}]
     assert "é" in (tmp_path / "cases" / "review_items.jsonl").read_text(encoding="utf-8")                      # not escaped
 
 

@@ -1,4 +1,4 @@
-"""What the block "Koppeling met Exact (bij de installatie)" of the settings tab shows and writes, without gradio, so that it is tested
+"""What the block "Koppeling met Exact" of the settings tab shows and writes, without gradio, so that it is tested
 without a page (aid/review/page.py builds the block, as aid/review/buyer_settings.py is built for the buyer's part).
 
 The block connects the aid to what Exact itself delivers; it changes nothing in Exact. Part 1 sets the layout of the purchase order

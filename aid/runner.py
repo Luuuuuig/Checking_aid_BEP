@@ -126,6 +126,10 @@ clock:
   same, as the loop keeps the period it closed until the file holds it (_closed_again). A digest that the work mailbox cannot send
   because the sign-in has lapsed (SignInLapsed of aid/messaging/microsoft_mailer.py) is written through the file mailer into
   <cases_root>/outbox instead, the period is closed as for a digest sent, and the lapse is logged under the same once-an-hour limit.
+  So is a digest that it cannot send because this process may not use the store of the sign-in (a SignInLapsed of the kind
+  "store"), but that is no lapse, as no sign-in puts it right: the state notes no lapse, so that neither the digest nor the review
+  page tells the buyer to sign in again, and it is logged once in a run of the loop, until a digest goes out through the mailbox
+  again (the review page tells a store inside a git work tree by itself).
 
 When run_loop is given the settings file the Deps were built from, it looks at the file's modification time at the start of each
 pass. When the time has changed, the file is read again with load_settings and the pass runs with the Deps that `rebuild` makes of
@@ -229,6 +233,7 @@ WORK_FOLDER = "work folder"                      # the stage of <cases_root>/tmp
 DROPS = "watched folder"                         # the stage of the copies of drops cut off, removed from it at the start of the runner
 MAILBOX_LAPSED = "mailbox_lapsed"                # the key of the digest state while the sign-in of the mailbox has lapsed
 LAPSE_LOG = timedelta(hours=1)                   # a lapsed sign-in is logged at most once in this time
+STORE_DIGEST = "digest store"                    # among the loop's failed stages while a refused store sends its digests to the outbox
 ERROR = "error: "                                # the start of the reason of a file the scan left in the inbox after an exception
 NO_LLM = "reader 'llm' needs the Copilot sign-in: fill the tenant and the client on the Settings tab and sign in for Copilot"
 SERVICE_FAILURES = (CopilotError, SignInNeeded)  # a failure of the AI service while a case runs: the case runs again at a later pass
@@ -1042,10 +1047,18 @@ def _digest(loop: _Loop, root: Path, state: dict, now: datetime) -> None:
             send_digest(digest, deps.mailer, settings)
         except SignInLapsed as error:            # the work mailbox cannot send it: the digest is written as a file, as without SMTP
             send_digest(digest, FileMailer(root / OUTBOX, sender=settings.aid_email), settings)
-            try:
-                _lapsed(root, state, now, f"the digest is written to {OUTBOX}/, as the work mailbox cannot send it: {error}")
-            except OSError:                      # the state file: the save below names it
-                pass
+            line = f"the digest is written to {OUTBOX}/, as the work mailbox cannot send it: {error}"
+            if error.kind == "store":            # a store this process may not use: no lapse, which a sign-in would put right
+                if STORE_DIGEST not in loop.failed:
+                    _log(root, now, MAILBOX, line)
+                    loop.failed.add(STORE_DIGEST)
+            else:
+                try:
+                    _lapsed(root, state, now, line)
+                except OSError:                  # the state file: the save below names it
+                    pass
+        else:
+            loop.failed.discard(STORE_DIGEST)
     else:
         (folder / f"{digest.period}.txt").write_text(digest.text, encoding="utf-8")
     closed = {"last_sent": now.isoformat(), "reported": list(state["reported"]), "skipped": [list(pair) for pair in state["skipped"]]}

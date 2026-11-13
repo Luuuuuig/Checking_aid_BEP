@@ -155,7 +155,7 @@ class Mailer(Protocol):
 class MailerError(Exception):
     """A message the mailer could not send. Its text names the class of the error behind it, never a password, a login or a
     recipient. `kind` is the kind of its cause, by which the review page says what to do (aid/review/page.py): "sign_in" (the
-    Microsoft sign-in has lapsed), "unreachable" (no connection, a time-out, an answer that another try may get past), "refused"
+    Microsoft sign-in has lapsed), "store" (this process may not use the store of the sign-in), "unreachable" (no connection, a time-out, an answer that another try may get past), "refused"
     (the mailbox or the server will not take the message), "no_password" (the mail server's password is not set), or what a
     mailer without a route gives (NoRoute)."""
 

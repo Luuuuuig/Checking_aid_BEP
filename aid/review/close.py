@@ -45,7 +45,7 @@ _QUESTIONS = {"quantity": "quantity_unit", "unit": "quantity_unit", "line_presen
 _ASKED_OTHERWISE = "missing_info"               # the question about a price, a delivery date or an uncompared item
 _DISPOSITIONS = {"keep": "accept the PO value", "confirm": "accept the supplier's value", "ask": "ask the supplier", "unresolved": "unresolved"}
 _ACKNOWLEDGED = "accept"                         # "confirm" or "keep" on an item without a finding
-# Why the close did not send a message, besides the kinds of a mailer's own error (MailerError.kind of aid/messaging: "sign_in",
+# Why the close did not send a message, besides the kinds of a mailer's own error (MailerError.kind of aid/messaging: "sign_in", "store",
 # "unreachable", "refused", "no_password") and of a mailer without a route ("no_mailbox", "settings"): the case's document cannot
 # be read, so that nobody can say whether it is a try-out. The record of the message keeps the kind as its "cause", by which the
 # page says what to do (aid/review/page.py); its status reads "not sent (<the words of the cause>)".
@@ -187,25 +187,27 @@ def undo(case: Case, entry_id: str, deps: Deps, again: bool = False) -> WriteLog
 
 # --- a case that waits for its PO, and its finish when it is checked again ---
 
-def waiting_for_po(case: Case) -> str | None:
+def waiting_for_po(case: Case, result: CaseResult | None = None) -> str | None:
     """What the case waits for when it waits for its PO ("po" or "version <n>"), else None: a case with a PO number of its own, the
     one number of the PO number pattern, that the runner checks again (checked_again). A case opened without a PO number waits for
-    nothing, and nor does a case whose PO number was the aid's guess (case.json's po_found_by): it is the buyer's."""
-    return checked_again(case) if case.po_number is not None and case.po_found_by is None else None
+    nothing, and nor does a case whose PO number was the aid's guess (case.json's po_found_by): it is the buyer's. `result` is the
+    case's saved result when the caller has read it already (aid/review/status.py), so that it is not read again."""
+    return checked_again(case, result) if case.po_number is not None and case.po_found_by is None else None
 
 
-def checked_again(case: Case) -> str | None:
+def checked_again(case: Case, result: CaseResult | None = None) -> str | None:
     """What the saved result of the case waits for when the runner checks the case again, as waits_for_po of aid/pipeline.py gives it
     ("po" or "version <n>"), else None. That is a confirmation, with or without a PO number, whose saved result waits by waits_for_po
     and on which nothing was done: no line in its write log, no message sent (messages/sent.jsonl), no decision of the buyer
     (decisions.jsonl), no record in steps/09_close.json (a close, an undo, a replacement), and no case of the capture server
-    (capture.json). A case whose result or whose records cannot be read is not checked again."""
+    (capture.json). A case whose result or whose records cannot be read is not checked again. `result` is the saved result when the
+    caller has read it already; else it is read here."""
     if case.kind != "confirmation" or (case.root / CAPTURE_FILE).exists() or (case.root / MESSAGES / SENT_FILE).exists():
         return None
     try:
         if _written(case.root / LOG_FILE) or _written(case.root / DECISIONS_FILE) or _records(case):
             return None
-        return waits_for_po(_saved_result(case))
+        return waits_for_po(result if result is not None else _saved_result(case))
     except (OSError, ValueError, KeyError, TypeError):
         return None
 

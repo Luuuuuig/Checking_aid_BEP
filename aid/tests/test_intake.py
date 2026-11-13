@@ -361,3 +361,70 @@ def test_the_intake_file_holds_names_numbers_and_case_ids_and_stays_under_the_ca
     assert [path.relative_to(tmp_path).as_posix() for path in tmp_path.rglob("*") if path.is_file()] == ["cases/intake.jsonl"]
     [line] = (root / INTAKE_FILE).read_text(encoding="utf-8").splitlines()
     assert set(json.loads(line)) == {"time", "file", "outcome", "detail"} and os.linesep not in line
+
+
+def test_a_line_that_opened_a_case_says_what_the_case_is_now(tmp_path, madeup_out):
+    """Findings 3 and 4: behind the label of a line that opened a case (the outcomes case, guess and recheck) the table says what the
+    case is now, read from the case's folder when the table is read, "Zaak geopend voor inkooporder 250105. Nu: mislukt.", with the
+    mark of a try-out before it. A case in review keeps the label alone, one that waits for its purchase order too, and so does a
+    case whose folder is gone. No other outcome changes, also one that names a case, and the intake file is not written."""
+    from aid.case import open_case
+    from aid.review.i18n import STRINGS
+    from aid.tests.conftest import deps
+    from aid.tests.fakes import case_result
+    from aid.tests.test_status import UNTEMPLATED, WAITS, digest, folder, handled, records
+    from aid.tryout import confirmation_pdf, made_from
+    root = tmp_path / "cases"
+    (tmp_path / "document.pdf").write_bytes((madeup_out / "MU01_conf.pdf").read_bytes())    # the document of each case: a supplier's
+    made = {state: folder(root, number, datetime(2026, 11, 18, 9, minute), saved, **update).name for minute, (state, number, saved, update) in enumerate((
+        ("failed", "250105", "failed", {"error": UNTEMPLATED}), ("handled", "250106", "failed", {"error": UNTEMPLATED}),
+        ("closed_itself", "250102", "closed", {}), ("closed_by_you", "250107", "closed", {}), ("waiting", "250101", "waiting", {}),
+        ("copilot_wait", "250112", None, {}), ("reading", "250109", None, {}), ("review", "250110", "review", {}),
+        ("waiting_po", "250111", "review", {"version": WAITS})))}
+    handled(root / made["handled"])
+    records(root / made["closed_by_you"], "close")
+    digest(root, copilot_cases={made["copilot_wait"]: {"refused": 1, "failed": 0, "read_after": False}})
+    tryout_pdf = tmp_path / "PROEF orderbevestiging 250108.pdf"
+    tryout_pdf.write_bytes(confirmation_pdf(made_from(deps(tmp_path, madeup_out).store, "250108"), "price_small", datetime(2026, 11, 18, 8, 59)))
+    tryout = open_case(root, "confirmation", [tryout_pdf], "250108", datetime(2026, 11, 18, 9, 30))
+    tryout.write_step(8, "result", case_result(tryout.case_id, "closed", supplier="S08"))
+    events = [*((f"{state}.pdf", "case", case_id) for state, case_id in made.items()),
+              ("gissing.pdf", "guess", made["failed"]), ("opnieuw.pdf", "recheck", made["closed_itself"]),
+              ("PROEF orderbevestiging 250108.pdf", "case", tryout.case_id), ("weg.pdf", "case", "250199_20261118T090000"),
+              ("antwoord.eml", "answer", made["closed_by_you"]), ("scan.pdf", "unread", made["failed"]),
+              ("PO.eml/Inkooporder.pdf", "po", "250105 v1"), ("dubbel.pdf", "skipped", "duplicate")]
+    append(root, events, NOW)
+    written = (root / INTAKE_FILE).read_bytes()
+    nl = {row[1]: row[2] for row in intake.rows(root, "nl", limit=50)}
+    assert nl == {
+        "failed.pdf": "Zaak geopend voor inkooporder 250105. Nu: mislukt.",
+        "handled.pdf": "Zaak geopend voor inkooporder 250106. Nu: mislukt, door u afgehandeld.",
+        "closed_itself.pdf": "Zaak geopend voor inkooporder 250102. Nu: vanzelf afgesloten.",
+        "closed_by_you.pdf": "Zaak geopend voor inkooporder 250107. Nu: door u afgesloten.",
+        "waiting.pdf": "Zaak geopend voor inkooporder 250101. Nu: wacht op de leverancier.",
+        "copilot_wait.pdf": "Zaak geopend voor inkooporder 250112. Nu: wacht op Copilot.",
+        "reading.pdf": "Zaak geopend voor inkooporder 250109. Nu: wordt gelezen.",
+        "review.pdf": "Zaak geopend voor inkooporder 250110",
+        "waiting_po.pdf": "Zaak geopend voor inkooporder 250111",
+        "gissing.pdf": "Zaak geopend voor inkooporder 250105, afgeleid: kijk de zaak na. Nu: mislukt.",
+        "opnieuw.pdf": "Inkooporder 250102 is binnen: de wachtende zaak is opnieuw gecontroleerd. Nu: vanzelf afgesloten.",
+        "PROEF orderbevestiging 250108.pdf": "Zaak geopend voor inkooporder 250108 (proefdocument). Nu: vanzelf afgesloten.",
+        "weg.pdf": "Zaak geopend voor inkooporder 250199",
+        "antwoord.eml": "Antwoord van een leverancier bij de zaak gelegd",
+        "scan.pdf": "Scan zonder leesbare tekst: de assistent kon dit document niet lezen; bekijk het zelf",
+        "PO.eml/Inkooporder.pdf": "Inkooporder 250105 opgenomen (versie 1)",
+        "dubbel.pdf": "Al eerder ontvangen: niets gedaan"}
+    en = {row[1]: row[2] for row in intake.rows(root, "en", limit=50)}
+    assert (en["failed.pdf"], en["handled.pdf"], en["PROEF orderbevestiging 250108.pdf"], en["review.pdf"]) == (
+        "Case opened for purchase order 250105. Now: failed.", "Case opened for purchase order 250106. Now: failed, handled by you.",
+        "Case opened for purchase order 250108 (try-out document). Now: closed by itself.", "Case opened for purchase order 250110")
+    for language in ("nl", "en"):
+        rows = {row[1]: row[2] for row in intake.rows(root, language, limit=50)}
+        for event in events:
+            if event[1] not in ("case", "guess", "recheck") or event[0] in ("review.pdf", "waiting_po.pdf", "weg.pdf"):
+                assert rows[event[0]] == shown({"outcome": event[1], "detail": event[2]}, language), event
+    assert {key: STRINGS["nl"][key] for key in STRINGS["nl"] if key.startswith("files_now")} == {
+        "files_now": "{label}. Nu: {state}.", "files_now:failed": "mislukt", "files_now:handled": "mislukt, door u afgehandeld",
+        "files_now:waiting": "wacht op de leverancier", "files_now:closed_itself": "vanzelf afgesloten",
+        "files_now:closed_by_you": "door u afgesloten", "files_now:copilot_wait": "wacht op Copilot", "files_now:reading": "wordt gelezen"}
+    assert STRINGS["en"]["files_now"] == "{label}. Now: {state}." and (root / INTAKE_FILE).read_bytes() == written

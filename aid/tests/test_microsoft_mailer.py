@@ -14,7 +14,7 @@ from aid.case import open_case
 from aid.connections.microsoft import SHARED_SCOPES, MicrosoftAccount
 from aid.connections.secrets import LazySecretStore, SecretStore
 from aid.messaging import FileMailer, HandOverUnconfirmed, MailerError, Message, SmtpMailer
-from aid.messaging.microsoft_mailer import AutoMailer, MicrosoftMailer, SignInLapsed, mailer_of
+from aid.messaging.microsoft_mailer import STORE_REFUSED, AutoMailer, MicrosoftMailer, SignInLapsed, mailer_of
 from aid.pipeline import run_case
 from aid.runner import build_deps
 from aid.settings import load_settings
@@ -241,6 +241,28 @@ def test_a_store_this_process_cannot_use_is_a_lapse_of_the_mailer_that_names_nei
     with pytest.raises(SignInLapsed, match="^StoreRefused: ") as raised:
         refused.send(MESSAGE)
     assert str(store) not in str(raised.value) and "made-up-kind" not in str(raised.value) and session.calls == []
+
+
+def test_a_refused_store_is_its_own_cause_and_not_a_lapsed_sign_in(tmp_path):
+    """Finding 2 of the owner's test: a close on the review page told the buyer to sign in again while the PC refused the store of the
+    sign-in, which no sign-in puts right. The mailer stops the message as for a lapsed sign-in (SignInLapsed, which makes the runner
+    write its digest as a file), but with the kind "store", by which the page names that cause (not_sent:store of aid/review/i18n.py)
+    and the runner notes no lapse (aid/tests/test_review.py), for a store
+    inside a git work tree and for one of another kind alike; its text stays the fixed STORE_REFUSED, which names no folder. A lapsed
+    sign-in keeps the kind "sign_in"."""
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / "backend").write_text("made-up-kind\n", encoding="utf-8")
+    for store in (repo / "secrets", other):
+        session = graph()
+        refused = MicrosoftMailer(MicrosoftAccount(TENANT_ID, CLIENT_ID, LazySecretStore(store)), None, "", clock=lambda: NOW, session=session)
+        with pytest.raises(SignInLapsed) as raised:
+            refused.send(MESSAGE)
+        assert (raised.value.kind, str(raised.value)) == ("store", STORE_REFUSED) and session.calls == [], store
+    assert "secrets" not in STORE_REFUSED and str(tmp_path) not in STORE_REFUSED
+    assert SignInLapsed("made-up").kind == "sign_in" and SignInLapsed("made-up", kind="store").kind == "store"
 
 
 def test_a_draft_without_an_internet_message_id_keeps_the_aids_own_id(tmp_path):
