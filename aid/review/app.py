@@ -27,14 +27,32 @@ detail or the uncompared item's reason. thumbnail is None, kept for a later crop
 the PO is above the buyer's authorization, by the routing context of step 06, or by the selected version of step 01 without it.
 entered names the values entered in Exact that the case was compared with in place of the selected version's own, as step
 03_entered of the case holds them (aid/pipeline.py), and entered_unread says that the list of them could not be read when the case
-ran; the page says either above the lists. A case without that step has neither.
+ran; the page says either above the decisions. A case without that step has neither. compared is False for a case whose result holds
+no findings: nothing was compared, as when the run failed before the comparison or had no version to compare with; the page then
+shows no comparison.
+
+The marks. doc_marks and po_marks mark the lines that the values of the differences (the rows of `flags`) were read from, on the
+pages of the supplier's document and of the selected version's PDF (the file whose pages po_pages holds): the same sources that a
+row cites as "p<page> r<line>", the document's value marking the supplier's document and the PO's value the purchase order. A mark
+(LineMark) is the line's page, the line's box in pixels of the page image as _pages renders it at DPI (its box in points by
+line_boxes of aid/readers/pdf_text.py, measured from the page's top left corner, where the image starts also on a page whose
+MediaBox does not start at 0 0, times DPI/72) and the item of its row. Only a PDF gets marks: a PNG or an HTML cart, an export, a
+scan without a text layer and a file that is gone get none, and so does a source whose line has no box. A page whose image differs
+from the page's size in points times DPI/72 by more than 2 pixels (a page cut to a crop box) gets none, and so do a page that its
+/Rotate turns, which the aid does not mark (its text layer and its turned image need not agree where a line stands, as with a turn
+written as 90.0), and a line that does not lie on the page's image (text of the text layer printed above or beside the page, hidden
+or cut off), so that a mark is never drawn in the wrong place; reading the boxes never raises into the page: any error means no
+marks. The matches and the uncompared items are not marked. The page draws the marks on the page images it shows
+(aid/review/page.py).
 """
+import io
 import json
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Literal, get_args
 
+from PIL import Image
 from pydantic import BaseModel
 
 from aid.case import Case
@@ -42,7 +60,7 @@ from aid.comparison import Findings, Flag, Match, Uncompared
 from aid.messaging import _append_line           # the lines of a file of records, appended as the messaging module appends them
 from aid.pipeline import LOOKS, RESULT_FILE, CaseResult, ReviewItem, asked_by_the_run
 from aid.po_store import PoStore, PoVersion
-from aid.readers.pdf_text import page_count, render_page
+from aid.readers.pdf_text import line_boxes, page_count, render_page
 from aid.routing import CaseContext, findings_by_id
 from aid.routing import _shown                   # a value as the routing's questions show it
 from aid.schema import DocValue
@@ -51,6 +69,7 @@ from aid.tryout_mark import case_is_tryout, tryout_case
 DECISIONS_FILE = "decisions.jsonl"
 CAPTURE_FILE = "capture.json"                    # what the capture server keeps of its case, in the case folder (aid/capture_server.py)
 DPI = 100
+MARK_FIT = 2                                     # pixels: a page image farther than this from its page's size gets no marks
 Decision = Literal["confirm", "keep", "ask", "unresolved"]
 
 
@@ -85,6 +104,13 @@ class EnteredValue(BaseModel):
     value: str                                   # the entered value, in normal form
 
 
+class LineMark(BaseModel):
+    """A line of a document that a difference was read from, as the page marks it (see the module docstring)."""
+    page: int                                    # counted from 1
+    box: tuple[float, float, float, float]       # left, top, right, bottom, in pixels of the page image of _pages, at DPI
+    item_id: str                                 # the row of the differences that cites the line
+
+
 class CaseView(BaseModel, arbitrary_types_allowed=True):
     """One case as the page shows it (see the module docstring)."""
     summary: CaseSummary
@@ -97,6 +123,9 @@ class CaseView(BaseModel, arbitrary_types_allowed=True):
     reapproval_banner: bool
     entered: list[EnteredValue] = []             # the values entered in Exact that took the place of the selected version's own
     entered_unread: bool = False                 # the list of them could not be read when the case ran
+    compared: bool = True                        # False when nothing was compared: the result holds no findings
+    doc_marks: list[LineMark] = []               # the lines of the supplier's document that the differences were read from
+    po_marks: list[LineMark] = []                # the lines of the selected version's PDF that the differences were read from
 
 
 # --- the open cases and the view ---
@@ -146,17 +175,21 @@ def load_case_view(case: Case, store: PoStore | None = None) -> CaseView:
     export names its export, which has no pages and is not looked up."""
     result = _saved_result(case)
     meta = json.loads((case.root / "case.json").read_text(encoding="utf-8"))
-    flags, matches, uncompared = _rows(result)
+    flags, matches, uncompared, read = _rows(result)
     version = _selected_version(case, result)
     pdf = version.pdf_path if version is not None else None
     if version is not None and store is not None and Path(pdf).name == "po.pdf" and not Path(pdf).is_file():
         pdf = next((stored.pdf_path for stored in store.versions(version.po_number) if stored.version == version.version), pdf)
     summary = _summary(case.case_id, meta, result).model_copy(update={"tryout": tryout_case(case)})
     entered, unread = _entered(case)
-    return CaseView(summary=summary, doc_pages=_pages(case.input_files[0] if case.input_files else None),
-                    po_pages=_pages(pdf), flags=flags, matches=matches, uncompared=uncompared,
+    document = case.input_files[0] if case.input_files else None
+    doc_pages, po_pages = _pages(document), _pages(pdf)
+    return CaseView(summary=summary, doc_pages=doc_pages, po_pages=po_pages, flags=flags, matches=matches, uncompared=uncompared,
                     decisions={item_id: record["decision"] for item_id, record in _decisions(case).items()},
-                    reapproval_banner=bool(_context(case, result).po_above_authorization), entered=entered, entered_unread=unread)
+                    reapproval_banner=bool(_context(case, result).po_above_authorization), entered=entered, entered_unread=unread,
+                    compared=result.findings is not None,
+                    doc_marks=_marks(document, doc_pages, [(item_id, doc) for item_id, _, doc in read]),
+                    po_marks=_marks(pdf, po_pages, [(item_id, po) for item_id, po, _ in read]))
 
 
 def _entered(case: Case) -> tuple[list[EnteredValue], bool]:
@@ -175,22 +208,32 @@ def _summary(case_id: str, meta: dict, result: CaseResult) -> CaseSummary:
                        opened_at=meta["opened_at"], items=sum(not item.settled for item in result.review_items))
 
 
-def _rows(result: CaseResult) -> tuple[list[FlagRow], list[FlagRow], list[FlagRow]]:
-    """The rows of the three lists (see the module docstring)."""
+def _rows(result: CaseResult) -> tuple[list[FlagRow], list[FlagRow], list[FlagRow],
+                                       list[tuple[str, DocValue | None, DocValue | None]]]:
+    """The rows of the three lists (see the module docstring), and for each row of `flags` its item id with the PO's and the
+    document's value it shows, whose sources it cites (_values)."""
     findings = result.findings or Findings(version=None, flags=[], matches=[], uncompared=[])
     by_id = findings_by_id(findings)
     naming: dict[str, ReviewItem] = {}           # finding id -> the first review item that names it
     for item in result.review_items:
         if item.finding_id is not None:
             naming.setdefault(item.finding_id, item)
-    flags, uncompared = [], []
+    flags, uncompared, read = [], [], []
     for finding_id, finding in by_id.items():
         item = naming.get(finding_id)
-        (flags if isinstance(finding, Flag) else uncompared).append(_row(item.item_id if item else finding_id, finding, item))
+        row = _row(item.item_id if item else finding_id, finding, item)
+        if isinstance(finding, Flag):
+            flags.append(row)
+            read.append((row.item_id, *_values(finding, item)))
+        else:
+            uncompared.append(row)
     matches = [_row(f"M{n}", match) for n, match in enumerate(findings.matches, 1)]
     shown = {row.item_id for row in flags + uncompared}
-    flags += [_row(item.item_id, by_id.get(item.finding_id), item) for item in result.review_items if item.item_id not in shown and not item.settled]
-    return flags, matches, uncompared
+    for item in result.review_items:
+        if item.item_id not in shown and not item.settled:
+            flags.append(_row(item.item_id, by_id.get(item.finding_id), item))
+            read.append((item.item_id, *_values(by_id.get(item.finding_id), item)))
+    return flags, matches, uncompared, read
 
 
 def _row(item_id: str, finding: Flag | Match | Uncompared | None, item: ReviewItem | None = None) -> FlagRow:
@@ -199,13 +242,19 @@ def _row(item_id: str, finding: Flag | Match | Uncompared | None, item: ReviewIt
         return FlagRow(item_id=item_id, field=finding.field, line=_line(finding), po_value=finding.value, doc_value=finding.value,
                        po_source="", doc_source="", thumbnail=None)
     flag = finding if isinstance(finding, Flag) else None
-    po_value = flag.po_value if flag else (item.po_value if item else None)
-    doc_value = flag.doc_value if flag else (item.doc_value if item else None)
+    po_value, doc_value = _values(finding, item)
     own = flag.detail if flag else (finding.reason if finding is not None else "")
     field = finding.field if finding is not None else (item.field or "" if item else "")
     return FlagRow(item_id=item_id, field=field, line=_line(finding) if finding is not None else "", po_value=_shown(po_value),
                    doc_value=_shown(doc_value), po_source=_cited(po_value), doc_source=_cited(doc_value), thumbnail=None,
                    reason=item.reason if item is not None else own)
+
+
+def _values(finding: Flag | Uncompared | None, item: ReviewItem | None) -> tuple[DocValue | None, DocValue | None]:
+    """The PO's and the document's value of a row that is not a match: the flag's, else the review item's."""
+    if isinstance(finding, Flag):
+        return finding.po_value, finding.doc_value
+    return (item.po_value, item.doc_value) if item is not None else (None, None)
 
 
 def _line(finding: Flag | Match | Uncompared) -> str:
@@ -228,6 +277,43 @@ def _pages(path: Path | None) -> list[bytes]:
     if suffix == ".pdf":
         return [render_page(path, number, dpi=DPI) for number in range(1, page_count(path) + 1)]
     return [Path(path).read_bytes()] if suffix == ".png" else []
+
+
+def _marks(path: Path | None, pages: list[bytes], read: list[tuple[str, DocValue | None]]) -> list[LineMark]:
+    """The marks of the lines that the values `read` were read from, each with the item id of its row, on the pages of the document
+    at `path` as _pages rendered them (`pages`): only on a PDF, only for a source whose line has a box, only on an upright page whose
+    image is the page's size at DPI to within MARK_FIT pixels, and only for a box that lies on that image once it is measured from
+    the page's corner (see the module docstring). Reading the boxes never raises: a PDF that cannot be read for any reason gives no
+    marks."""
+    sources = [(item_id, value.source) for item_id, value in read if value is not None and value.source is not None]
+    if not sources or not pages or path is None or Path(path).suffix.lower() != ".pdf":
+        return []
+    scale = DPI / 72
+    marks = []
+    try:
+        boxes = line_boxes(path)
+        sizes = {number: _fitted(png, boxes.pages.get(number), scale) for number, png in enumerate(pages, 1)}
+        for item_id, source in sources:
+            box, size = boxes.lines.get((source.page, source.line)), sizes.get(source.page)
+            if box is None or size is None or boxes.turns[source.page]:      # a turned page is not marked (module docstring)
+                continue
+            x, y = boxes.origins[source.page]                  # the page's corner: its image starts there
+            left, top, right, bottom = ((box[0] - x) * scale, (box[1] - y) * scale, (box[2] - x) * scale, (box[3] - y) * scale)
+            if 0 <= left < right <= size[0] and 0 <= top < bottom <= size[1]:
+                marks.append(LineMark(page=source.page, box=(left, top, right, bottom), item_id=item_id))
+    except Exception:                            # any fault of the file or of its reading means no marks, never a fault of the page
+        return []
+    return marks
+
+
+def _fitted(png: bytes, size: tuple[float, float] | None, scale: float) -> tuple[int, int] | None:
+    """The width and the height in pixels of the page image `png` when it is the page's size in points (`size`) at `scale` pixels a
+    point, to within MARK_FIT pixels; None when it is not, or when the page's size is not known."""
+    if size is None:
+        return None
+    with Image.open(io.BytesIO(png)) as image:
+        width, height = image.size
+    return (width, height) if abs(width - size[0] * scale) <= MARK_FIT and abs(height - size[1] * scale) <= MARK_FIT else None
 
 
 def _saved_result(case: Case) -> CaseResult:

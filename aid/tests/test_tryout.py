@@ -1096,9 +1096,9 @@ def test_the_review_tab_names_a_try_out(tmp_path, madeup_out):
     made_up = {r.case_id for r in results(settings) if tryout_case(load_case(settings.cases_root, r.case_id))}
     offered = offered_cases(settings.cases_root)
     assert len(offered) == 2 and len(made_up) == 1
-    for language, one, mark in (("nl", "1 punt", "(proefdocument)"), ("en", "1 item", "(try-out document)")):
+    for language, order, one, mark in (("nl", "Inkooporder", "1 punt", "(proefdocument)"), ("en", "Purchase order", "1 item", "(try-out document)")):
         labels = sorted((summary.case_id in made_up, _case_label(summary, STRINGS[language])) for summary in offered)
-        assert labels == [(False, f"PO 250108 (S08), 2026-11-12 09:00, {one}"), (True, f"PO 250108 (S08), 2026-11-12 09:00, {one} {mark}")]
+        assert labels == [(False, f"{order} 250108 (S08): {one}, 12-11-2026 09:00"), (True, f"{order} 250108 (S08): {one}, 12-11-2026 09:00 {mark}")]
     [tried] = made_up
     assert load_case_view(load_case(settings.cases_root, tried)).summary.tryout
     manual = Path("aid/MANUAL.md").read_text(encoding="utf-8")
@@ -1106,7 +1106,7 @@ def test_the_review_tab_names_a_try_out(tmp_path, madeup_out):
 
 
 def test_the_confirmations_under_the_list_mark_a_try_out(tmp_path, madeup_out):
-    """The merge with Task 35: the section "Bevestigd door de leverancier" under the list shows the confirmation of a try-out with
+    """The merge with Task 35: the section "Bevestigingen om bij te voegen" under the list shows the confirmation of a try-out with
     "(proefdocument)" behind its line, in both languages, so that it never asks the buyer to attach a made-up document and set the
     status Bevestigd in the real Exact; a supplier's own confirmation keeps its line. MANUAL 2.6 says so."""
     d = deps(tmp_path, madeup_out, settings=OPEN)

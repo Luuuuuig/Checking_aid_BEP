@@ -66,10 +66,11 @@ researcher is left for a state the rules cannot give. A put-back that exists alr
 is on the list; dropped, it is put on the list again; entered or seen, the change was put back already; replaced by a newer change,
 or dropped with a newer row after it, it does not return to the list while a row after it is open or a newer change of the change
 still counts (as _newer counts it), and is made again, a second undo of the same entry, once nothing stands in its way.
-confirmations gives the section "Bevestigd door de leverancier (laatste 7 dagen)": the rows that attach a confirmation, without a
-tick, while the newest row of their case that attaches it or sets the status is at most 7 days old, each with the day of that row,
-the order, the file and whether the status is to be set to Bevestigd as well (the case's last row that sets the status sets
-Bevestigd); confirmation_lines and confirmations_text show them.
+confirmations gives the section "Bevestigingen om bij te voegen", which the tab shows between the list and the handled changes: the
+rows that attach a confirmation, without a tick, while the newest row of their case that attaches it or sets the status is at most
+7 days old, each with the day of that row, the order, the file and whether the status is to be set to Bevestigd as well (the case's
+last row that sets the status sets Bevestigd); confirmation_lines and confirmations_text show them, under the section's heading and a
+line that counts them and says what to do.
 """
 import re
 from datetime import datetime, timedelta
@@ -438,13 +439,13 @@ def put_back_note(deps: Deps, made: WriteLogEntry, of: str, now: datetime, langu
 
 
 def confirmations(prepared: Path, now: datetime, days: int = CONFIRMATION_DAYS) -> list[dict]:
-    """The section "Bevestigd door de leverancier (laatste 7 dagen)": the rows of the folder's prepared_changes.csv that attach a
-    confirmation, without a tick, while the newest row of their case that attaches it or sets the status was prepared at most `days`
-    before now, so that a status that a close prepares days after the run brings its confirmation back; the newest such row first.
-    Each is {"date": the day of that newest row, "po_number", "file": the name of the file, "set_status": whether the status is to be
-    set to Bevestigd as well, "case_id"}, and "tryout": True for a row of a case made from a try-out, whose line confirmation_lines
-    marks. The status is to be set when the last row of the case that sets the status sets Bevestigd (its undo sets Besteld again); a
-    row whose attachment a later row of its case detaches (an undo) is left out."""
+    """The section "Bevestigingen om bij te voegen": the rows of the folder's prepared_changes.csv that attach a confirmation,
+    without a tick, while the newest row of their case that attaches it or sets the status was prepared at most `days` before now,
+    so that a status that a close prepares days after the run brings its confirmation back; the newest such row first. Each is
+    {"date": the day of that newest row, "po_number", "file": the name of the file, "set_status": whether the status is to be set to
+    Bevestigd as well, "case_id"}, and "tryout": True for a row of a case made from a try-out, whose line confirmation_lines marks.
+    The status is to be set when the last row of the case that sets the status sets Bevestigd (its undo sets Besteld again); a row
+    whose attachment a later row of its case detaches (an undo) is left out."""
     rows = prepared_rows(prepared, (_ATTACH, _DETACH, _STATUS))
     found = []
     for index, row in enumerate(rows):
@@ -480,11 +481,15 @@ def confirmation_lines(found: list[dict], cases_root: Path, language: str) -> li
 
 
 def confirmations_text(found: list[dict], cases_root: Path, language: str) -> str:
-    """The section of the confirmations as Markdown: its heading in bold, then a line per confirmation; "" when there is none."""
+    """The section of the confirmations as Markdown: its heading, a line that counts them and says what to do with them ("2
+    bevestigingen van de laatste 7 dagen: voeg ze in Exact bij en zet de status op Bevestigd."), then a line per confirmation; ""
+    when there is none."""
     if not found:
         return ""
+    strings = STRINGS[language]
+    count = strings["hand_confirmations_one"] if len(found) == 1 else strings["hand_confirmations_many"].format(n=len(found))
     lines = confirmation_lines(found, cases_root, language)
-    return f"**{STRINGS[language]['hand_confirmations']}**\n\n" + "\n".join(f"- {_markdown(line)}" for line in lines)
+    return f"## {strings['hand_confirmations']}\n\n{count}\n\n" + "\n".join(f"- {_markdown(line)}" for line in lines)
 
 
 def _how(change: Change, strings: dict[str, str], language: str) -> str:

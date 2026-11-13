@@ -17,7 +17,7 @@ builds the route:
   and not sure, with the first case's error and its previous value, although nothing was sent in that case. A doubt must end
   with the operation that left it, or a later call that sent nothing must not be logged as made.
 - The article price that waits behind a look. When the price of an order line is made and not verified, the article price of
-  the same rule is not applied and is a review item of its own. "Bevestigen" on that item writes the article price only with
+  the same rule is not applied and is a review item of its own. "Overnemen" on that item writes the article price only with
   the article box ticked, which the page ticks for no such item, and nothing on the page names the article.
 - A close's own write that asks for a look. On a review page whose writer is a route, a write that the close makes itself and
   that ends not verified or not sure stops the close, and the next close counts it as made: no review item was decided on it,

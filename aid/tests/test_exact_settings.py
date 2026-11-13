@@ -490,7 +490,7 @@ def test_the_state_lines_hold_counts_and_no_content(tmp_path, madeup_out):
     (tmp_path / "inbox").mkdir()
     (tmp_path / "inbox" / "refused.pdf").write_bytes(b"made-up")
     lines = state_lines(settings.model_copy(update={"po_layout": ANDERS_LAYOUT}), store, now + timedelta(seconds=300), "en")
-    local = datetime.fromtimestamp(filed, timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M")
+    local = datetime.fromtimestamp(filed, timezone.utc).astimezone().strftime("%d-%m-%Y %H:%M")
     assert lines == [EN["exact_state_set"], EN["exact_state_known"].format(count=1, number="250108", version=1, time=local),
                      EN["exact_state_columns_unset"], EN["exact_state_no_export"], EN["exact_state_unread"].format(n=1),
                      EN["exact_state_waiting"].format(n=0),
@@ -929,7 +929,7 @@ def test_the_state_lines_say_whether_the_columns_are_set_and_when_the_last_expor
     os.utime(store.root / "250302" / "e1" / "po.json", (filed - 600, filed - 600))
     assert last_export(store) == store.filed_at("250301", "e1") == datetime.fromtimestamp(filed).astimezone()
     lines = state_lines(settings.model_copy(update=values), store, now, "en")
-    local = datetime.fromtimestamp(filed, timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M")
+    local = datetime.fromtimestamp(filed, timezone.utc).astimezone().strftime("%d-%m-%Y %H:%M")
     assert lines == [EN["exact_state_unset"], EN["exact_state_known_export"].format(count=2, number="250301", time=local),     # ruling M8
                      EN["exact_state_columns_set"], EN["exact_state_export"].format(time=local), EN["exact_state_unread"].format(n=0),
                      EN["exact_state_waiting"].format(n=0),
@@ -1201,7 +1201,7 @@ def test_the_purchase_orders_known_count_the_looks_and_name_what_was_filed_last(
         os.utime(store.root / folder / "po.json", (base + seconds, base + seconds))
 
     def at(seconds: int) -> str:
-        return datetime.fromtimestamp(base + seconds, timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M")
+        return datetime.fromtimestamp(base + seconds, timezone.utc).astimezone().strftime("%d-%m-%Y %H:%M")
 
     def known_line(language: str = "nl") -> str:
         return state_lines(settings, store, now, language)[1]

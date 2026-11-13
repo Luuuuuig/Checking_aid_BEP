@@ -23,7 +23,7 @@ from aid.execution.by_hand import mark, open_changes
 from aid.madeup.generate import TRYOUT_PO_LAYOUT, Row, Text, pdf_bytes, tryout_po_pages
 from aid.po_store import PoStore
 from aid.readers.po_export import read_export
-from aid.review.__main__ import company_values, refuse_share
+from aid.review.__main__ import company_values, launch_options, refuse_share
 from aid.review.buyer_settings import BUYER_FIELDS, SUPPLIER_FIELDS, supplier_rows
 from aid.review.exact_settings import FORM as EXACT_FORM
 from aid.review.exact_settings import (EXPORT_FORM, MEANINGS, NO_COLUMN, SLOTS, export_headers, field_label, line_headers, page_lines,
@@ -38,7 +38,8 @@ from aid.tests.fakes import (ACCESS_TOKEN, CLIENT_ID, COPILOT, GRAPH, TENANT_ID,
 from aid.tests.helpers import (ANDERS_FORM, ANDERS_LAYOUT, ANDERS_MEANINGS, ANDERS_PO, COMMAS_TITLES, ERP_FORM, ERP_MEANINGS, EXPORT_COLUMNS,
                                EXPORT_NL, EXPORT_NL_COLUMNS, EXPORT_NL_FORM, EXPORT_NL_ORDERS, EXPORT_NL_READ, EXPORT_NL_READ_EN,
                                EXPORT_NL_TITLES, MADEUP_LAYOUT, SAMPLES, SORTED_BY_DATE, SORTED_BY_DATE_COLUMNS, SORTED_BY_DATE_LONG, TABS_TITLES, TIE_TITLES,
-                               TITLE_COMMAS, WIDE_TITLES, write_cut_samples, write_sheet, write_title_samples)
+                               TITLE_COMMAS, WIDE_TITLES, shown_headings, skipped_headings, write_cut_samples, write_sheet,
+                               write_title_samples)
 from aid.tests.test_status import launcher_state
 from aid.tryout import CART_CHANGES, CHANGES, cart_html, confirmation_pdf
 
@@ -60,7 +61,7 @@ def settings_file(tmp_path: Path, **values) -> Path:
     return path
 
 
-def local(utc: str, form: str = "%Y-%m-%d %H:%M") -> str:
+def local(utc: str, form: str = "%d-%m-%Y %H:%M") -> str:
     """A time of Graph or of the state as the tab shows it: in the local time of the PC, in the form of "Postvak en AI", or another."""
     return datetime.fromisoformat(utc).astimezone().strftime(form)
 
@@ -585,6 +586,7 @@ def test_a_page_without_its_settings_file_offers_no_settings_either(tmp_path, ma
 
 def test_the_review_command_gives_the_page_its_settings_file_and_its_share_and_stays_on_the_loopback(tmp_path, monkeypatch):
     import aid.review.__main__ as review
+    from aid.review import look
     monkeypatch.setenv("GRADIO_TEMP_DIR", "")                   # recorded, so that the folder the command names is undone after the test
     monkeypatch.delenv("GRADIO_TEMP_DIR")
     path = settings_file(tmp_path)
@@ -601,16 +603,220 @@ def test_the_review_command_gives_the_page_its_settings_file_and_its_share_and_s
     assert review.main(["--settings", str(path)]) == 0
     assert review.main(["--settings", str(path), "--share"]) == 0               # made-up settings: the link is allowed
     guards = [options.pop("app_kwargs") for options in built if isinstance(options, dict) and "app_kwargs" in options]
+    themes = [options.pop("theme") for options in built if isinstance(options, dict) and "theme" in options]
     # the page gets the environment too, where it looks up the password of the aid's mailbox for the mailer of a close (Task 44); it
     # is launched without holding the thread, so that the command can remove the page library's empty folder after the launch, and
-    # the command then waits for the page itself (the review round of Task 44, ruling S28)
-    launched = {"server_name": "127.0.0.1", "ssr_mode": False, "prevent_thread_lock": True}
+    # the command then waits for the page itself (the review round of Task 44, ruling S28); it has the look of aid/review/look.py,
+    # a theme without a stylesheet, the style rules and the load script, and no footer (the redesign's chunk 2)
+    launched = {"server_name": "127.0.0.1", "ssr_mode": False, "prevent_thread_lock": True, "css": look.PAGE_CSS, "js": look.PAGE_JS,
+                "footer_links": []}
     assert built == [{"settings_file": path, "share": False, "environ": os.environ}, launched | {"share": False}, "waiting for the page",
                      {"settings_file": path, "share": True, "environ": os.environ}, launched | {"share": True}, "waiting for the page"]
     for guard in guards:                                      # each launch with the check of the Host header, and nothing else
         assert list(guard) == ["middleware"] and [middleware.cls for middleware in guard["middleware"]] == [review.OwnHost]
     assert len(guards) == 2
+    gr = import_gradio()
+    assert len(themes) == 2 and all(isinstance(theme, gr.themes.ThemeClass) and theme._stylesheets == [] for theme in themes)
     assert os.environ["GRADIO_TEMP_DIR"] == str(tmp_path / "cases" / "tmp")           # the page library's temporary files
+
+
+# --- the look of the page (aid/review/look.py), which the review command gives to launch() ---
+
+def contrast(one: str, two: str) -> float:
+    """The contrast ratio of two colours written #RRGGBB, by the formula of WCAG 2.x."""
+    def luminance(colour: str) -> float:
+        red, green, blue = [channel / 12.92 if channel <= 0.03928 else ((channel + 0.055) / 1.055) ** 2.4
+                            for channel in (int(colour[at:at + 2], 16) / 255 for at in (1, 3, 5))]
+        return 0.2126 * red + 0.7152 * green + 0.0722 * blue
+    lighter, darker = sorted((luminance(one), luminance(two)), reverse=True)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+def theme_variables(theme) -> tuple[dict[str, str], dict[str, str]]:
+    """The variables of a theme's style as the browser gets them: those of :root, and those of :root.dark, which the page library
+    uses while the browser is in dark mode."""
+    css = theme._get_theme_css()
+
+    def variables(selector: str) -> dict[str, str]:
+        [body] = re.findall(rf"^{re.escape(selector)} \{{\n(.*?)\n\}}", css, re.S | re.M)
+        return dict(re.findall(r"^\s*(--[\w-]+): (.*);$", body, re.M))
+    return variables(":root"), variables(":root.dark, :root .dark")
+
+
+def test_the_page_launches_with_a_local_look_that_names_no_outside_host(tmp_path, madeup_out):
+    """The review command launches the page with the look of aid/review/look.py, with a public link or without: a theme built in
+    code (a theme's name would make the page library ask the Hub for it) with no stylesheet and no font file, as it names the PC's
+    own fonts; style rules and a load script that hold no address; and no footer, whose links lead off the PC. The page itself is
+    built without any of them, which gr.Blocks would warn about, and no gr.HTML of the page holds an address in its head. The only
+    address in the theme's style is the name of the SVG namespace inside the page library's own pictures of a tick and a dot,
+    which a browser does not ask for."""
+    gr = import_gradio()
+    path, page, made = tab(tmp_path, madeup_out)
+    for share in (False, True):
+        options = launch_options(page, share)
+        theme = options["theme"]
+        assert isinstance(theme, gr.themes.ThemeClass) and theme._stylesheets == [] and theme._font_css == []
+        assert theme.font == theme.font_mono == ("'Segoe UI', system-ui, -apple-system, 'Helvetica Neue', Arial, 'Noto Sans', "
+                                                 "'Liberation Sans', sans-serif")
+        css = theme._get_theme_css()
+        assert "@import" not in css and "url(http" not in css and set(re.findall(r"https?://[^\s\"')]*", css)) <= {"http://www.w3.org/2000/svg"}
+        assert "http" not in options["css"] and "http" not in options["js"] and options["footer_links"] == []
+    heads = [block.head for block in page.blocks.values() if isinstance(block, gr.HTML) and block.head]
+    assert heads and [head for head in heads if "http" in head] == []          # the style rules of the hand tab and of the export part
+    assert (page.theme, page.css, page.js, page.head) == (None, None, None, None)
+    assert [getattr(page, f"_deprecated_{name}") for name in ("theme", "css", "css_paths", "js", "head", "head_paths")] == [None] * 6
+
+
+def test_the_palette_meets_its_contrast_ratios():
+    """The colours of aid/review/look.py by the formula of WCAG 2.x, each pair as the page shows it: text at least 4.5:1 against its
+    ground; the edge of a control, the focus ring on the ground and the mark of a state at least 3:1. The theme the page is launched
+    with puts them in those places, and every colour of the page's style rules is one of them."""
+    from aid.review import look
+    assert round(contrast("#767676", "#FFFFFF"), 2) == 4.54                       # the formula itself, on a pair known from WCAG
+    grounds = (look.SURFACE, look.GROUND, look.SURFACE_2)
+    text = [(look.INK, ground) for ground in (*grounds, look.ACCENT_TINT)] + [(look.SURFACE, look.INK), (look.SURFACE, look.INK_HOVER)]
+    text += [(look.MUTED, ground) for ground in grounds] + [(look.CONTROL, ground) for ground in grounds[:2]]      # help, placeholders
+    text += [(look.ACCENT, ground) for ground in (*grounds, look.ACCENT_TINT)]                                    # links
+    text += [(tone.text, tone.tint) for tone in look.TONES.values()] + [(look.TONES["done"].text, look.GROUND)]
+    text += [(look.INK, tone.tint) for tone in look.TONES.values()]                                     # a notice in a tone
+    problem = look.TONES["problem"]
+    text += [(problem.mark, look.SURFACE)]                                       # the words of a button that takes something away
+    marks = [(edge, ground) for edge in (look.CONTROL, look.ACCENT) for ground in grounds[:2]]           # a control's edge, the focus ring
+    marks += [(tone.mark, tone.tint) for tone in look.TONES.values()] + [(problem.mark, look.SURFACE)]
+    assert [pair for pair in text if contrast(*pair) < 4.5] == [] and [pair for pair in marks if contrast(*pair) < 3] == []
+    placed = {"body_background_fill": look.GROUND, "background_fill_primary": look.SURFACE, "background_fill_secondary": look.SURFACE_2,
+              "block_background_fill": look.SURFACE, "input_background_fill": look.SURFACE, "body_text_color": look.INK,
+              "block_label_text_color": look.INK, "block_title_text_color": look.INK, "body_text_color_subdued": look.MUTED,
+              "block_info_text_color": look.MUTED, "input_border_color": look.CONTROL, "input_placeholder_color": look.CONTROL,
+              "checkbox_border_color": look.CONTROL, "button_secondary_border_color": look.CONTROL,
+              "button_primary_background_fill": look.INK, "button_primary_background_fill_hover": look.INK_HOVER,
+              "button_primary_text_color": look.SURFACE, "button_secondary_background_fill": look.SURFACE,
+              "button_secondary_background_fill_hover": look.SURFACE_2, "button_secondary_text_color": look.INK,
+              "color_accent": look.ACCENT, "link_text_color": look.ACCENT, "input_border_color_focus": look.ACCENT,
+              "checkbox_label_border_color_selected": look.ACCENT, "checkbox_label_background_fill_selected": look.ACCENT_TINT,
+              "checkbox_background_color_selected": look.INK, "block_border_color": look.LINE, "table_border_color": look.LINE,
+              "button_cancel_text_color": problem.mark, "button_cancel_border_color": problem.mark, "error_text_color": problem.text,
+              "error_background_fill": problem.tint}
+    theme = look.page_theme(import_gradio())
+    assert {name: getattr(theme, name) for name in placed} == placed
+    tokens = {look.GROUND, look.SURFACE, look.SURFACE_2, look.INK, look.INK_HOVER, look.MUTED, look.CONTROL, look.LINE, look.LINE_STRONG,
+              look.ACCENT, look.ACCENT_TINT, *[colour for tone in look.TONES.values() for colour in tone]}
+    assert set(re.findall(r"#[0-9A-Fa-f]{6}\b", look.PAGE_CSS)) <= tokens
+
+
+def test_a_dropdown_has_the_edge_of_a_field():
+    """Spec 3.1: the edge of a field is in the control colour (4.76:1 on white), and the line colour (1.23:1) is never the only edge of
+    a control. The theme gives the fields to type in that edge (input_border_color), but the page library draws the box of a dropdown
+    in border_color_primary, the line colour of the blocks; so the style rules give the box that holds a dropdown's inner row
+    (.wrap-inner, which the page library's dropdown and multiselect alone have) the edge of a field, its hover and its focus."""
+    from aid.review import look
+    theme = look.page_theme(import_gradio())
+    assert (theme.border_color_primary, theme.input_border_color, theme.input_border_color_focus) == (look.LINE, look.CONTROL, look.ACCENT)
+    for rule in (".wrap:has(> .wrap-inner) { border-color: var(--input-border-color); }",
+                 ".wrap:has(> .wrap-inner):hover { border-color: var(--input-border-color-hover); }",
+                 ".wrap:has(> .wrap-inner):focus-within { border-color: var(--input-border-color-focus); }"):
+        assert rule in look.PAGE_CSS, rule
+    assert contrast(look.CONTROL, look.SURFACE) >= 3 > contrast(look.LINE, look.SURFACE)
+
+
+def test_running_text_has_the_line_of_the_type_scale():
+    """Spec 3.2: every sentence the buyer reads stands at 16/24. The page library sets a paragraph of a Markdown at its own line of
+    1.625 (26 px at 16 px), over the line that a block's rules give its text, so the style rules give a paragraph the scale's 24 px;
+    the meta lines of a decision row (13/18) and the note of a row (14/20) keep their own, by rules that weigh more."""
+    from aid.review import look
+    assert ".prose p { line-height: 24px; }" in look.PAGE_CSS
+    assert ".block.decision-what .prose p:nth-of-type(n+3) { font-size: 13px; line-height: 18px; color: #475569; }" in look.PAGE_CSS
+    assert ".block.row-note .prose, .block.row-note .prose * { font-size: 14px; line-height: 20px;" in look.PAGE_CSS
+
+
+def test_a_table_head_breaks_a_word_only_where_it_cannot_fit():
+    """The heads of the tables keep their words whole in a page at least 1280 CSS pixels wide, where the page library sizes a table's
+    columns to hold them (checked in the browser at 1366 and 1280); in a narrower page, as at a zoom of 150 or 200 percent, a head
+    word that cannot fit its column is broken rather than cut off, which the page library's head cell does with what overflows it,
+    and a word is wrapped onto the next line before it is broken (overflow-wrap: break-word), never at any letter."""
+    from aid.review import look
+    whole = ".table-container .header-cell, .table-container .header-cell * { word-break: normal; overflow-wrap: normal; hyphens: none; }"
+    narrow = ("@media (max-width: 1279.98px) {\n  .table-container .header-cell, .table-container .header-cell * { overflow-wrap: break-word; }\n}")
+    assert whole in look.PAGE_CSS and narrow in look.PAGE_CSS and "anywhere" not in look.PAGE_CSS
+    assert look.PAGE_CSS.index(whole) < look.PAGE_CSS.index(narrow)          # the narrow page's rule comes after, so that it wins there
+
+
+def test_the_page_stays_light_in_dark_mode():
+    """A PC in dark mode gets the same checked colours: every *_dark variable of the theme the page is launched with is its light
+    twin, so that the theme's style holds the same values for :root.dark, which the page library sets by the browser's mode, as
+    for :root."""
+    theme = launch_options(None, False)["theme"]                  # the page itself is read for a public link only
+    darks = [name for name in vars(theme) if name.endswith("_dark")]
+    assert darks and [name for name in darks if getattr(theme, name) != getattr(theme, name[:-len("_dark")])] == []
+    light, dark = theme_variables(theme)
+    assert light and dark == light
+
+
+def test_the_head_names_the_tool_and_keeps_the_label_of_the_language_switch_for_screen_readers(tmp_path, madeup_out):
+    """The head of the page, above its tabs (the Row page-head): the tool's name, "Inkoopassistent" in both languages, the page's
+    one h1 and the title of the browser's tab; and the language switch, which the style rules of aid/review/look.py show on the
+    right as the pair "Nederlands" and "English" by its class language-switch, its scale 0 keeping the box that the page library
+    puts around it from growing over the head. The switch keeps its label "Taal", which a screen reader reads and by which the
+    tests name it, but the page does not show it. Neither the name nor the switch has an elem_id, since the language switch
+    relabels both and the wiring tests would name a component by its elem_id in place of its label."""
+    gr = import_gradio()
+    path, page, made = tab(tmp_path, madeup_out)
+    nl, en = STRINGS["nl"], STRINGS["en"]
+
+    def inside(block) -> list:
+        return [block, *[found for child in getattr(block, "children", []) for found in inside(child)]]
+    [head] = [block for block in page.blocks.values() if isinstance(block, gr.Row) and block.elem_id == "page-head"]
+    [tabs] = [block for block in page.blocks.values() if isinstance(block, gr.Tabs) and block.elem_classes == ["page-tabs"]]
+    assert head.parent is tabs.parent is page and page.children.index(head) < page.children.index(tabs)
+    [title, switch] = [block for block in inside(head) if isinstance(block, (gr.Markdown, gr.Radio))]
+    assert (title.value, title.elem_id, title.elem_classes) == ("# Inkoopassistent", None, ["page-title"])
+    assert (switch.label, switch.show_label, switch.scale, switch.elem_id, switch.elem_classes) == ("Taal", False, 0, None, ["language-switch"])
+    assert (switch.choices, switch.value) == ([("Nederlands", "nl"), ("English", "en")], "nl")
+    assert nl["title"] == en["title"] == page.title == "Inkoopassistent"
+    assert [block for block in page.blocks.values() if isinstance(block, gr.Markdown) and str(block.value).startswith("# ")] == [title]
+    for language in ("nl", "en"):                     # the language switch names the tool the same, and the switch in the language
+        assert handler(page, "relabel")(language, None, None)[:2] == (
+            "# Inkoopassistent", {"__type__": "update", "label": STRINGS[language]["language"]})
+
+
+def test_a_number_or_a_time_of_the_rules_stands_in_a_short_field(tmp_path, madeup_out):
+    """The fields of "Uw regels" that hold a percentage, an amount, a number of days or of cases, or the time of the digest have the
+    class short-field, which the style rules of aid/review/look.py keep at most 16 rem wide; the name and the two addresses keep the
+    width of the section."""
+    from aid.review import look
+    gr = import_gradio()
+    path, page, made = tab(tmp_path, madeup_out)
+    nl = STRINGS["nl"]
+
+    def inside(block) -> list:
+        return [block, *[found for child in getattr(block, "children", []) for found in inside(child)]]
+    fields = [block for block in inside(section(page, "regels")) if isinstance(block, gr.Textbox)]
+    short = ("price_pct", "price_abs", "lead_time_tolerance_days", "first_cases_review", "ask_wait_working_days", "digest_time")
+    assert [block.label for block in fields if "short-field" in (block.elem_classes or [])] == [nl[f"settings_field:{field}"] for field in short]
+    assert len(fields) == 9 and ".block.short-field textarea, .block.short-field input { max-width: 16rem; }" in look.PAGE_CSS
+
+
+def test_each_tab_has_its_headings_in_order(tmp_path, madeup_out):
+    """B2.4 of the redesign: in each section of "Instellingen" the headings the page shows follow its one h1, the tool's name in the
+    head of the page, without skipping a level. The four groups of "Uw regels", the state of the mailbox and the five steps of
+    "Postvak en AI" are h2, and "Microsoft 365 Copilot" inside step 5 is an h3. "Leveranciers" shows no heading, as the section's
+    label names it and its own "### Leveranciers" stays hidden, and "Stand van de assistent" has none. "Koppeling met Exact", the
+    part for the installation, keeps its h3 headings for now. The other four tabs, "Beoordelen" with a case chosen among them, have
+    a test of their own in test_hand_tab.py."""
+    gr = import_gradio()
+    path, page, made = tab(tmp_path, madeup_out)
+    nl = STRINGS["nl"]
+    [sections] = [block for block in page.blocks.values() if isinstance(block, gr.Tabs) and block.elem_id == "settings-sections"]
+    assert [child.id for child in sections.children] == ["regels", "leveranciers", "koppelingen", "exact", "assistent"]
+    shown = {child.id: shown_headings(child) for child in sections.children}
+    assert shown["regels"] == [f"## {nl[f'settings_group:{group}']}" for group in ("handled", "questions", "digest", "approval")]
+    assert shown["leveranciers"] == shown["assistent"] == []
+    assert shown["koppelingen"] == [f"## {nl['settings_trigger']}", *[f"## {nl[f'mail_step:{step}']}" for step in ("ids", "sign_in", "mailbox",
+                                                                                                                 "send", "read")],
+                                    f"### {nl['settings_ai']}"]
+    exact = shown.pop("exact")
+    assert exact and all(heading.startswith("### ") for heading in exact)          # the part for the installation, to align later
+    assert {name: skipped_headings(headings) for name, headings in shown.items()} == dict.fromkeys(shown, [])
 
 
 def test_the_extension_code_is_shown_on_the_local_page_only(tmp_path, madeup_out):
@@ -1962,6 +2168,24 @@ def test_one_name_per_thing_on_the_tab():
     assert en["settings_connections"] == "Mailbox and AI"
 
 
+def test_the_connections_name_the_tool_the_assistant():
+    """4.7 of the redesign: the section "Postvak en AI" names the tool as the rest of the page does, "de assistent" ("the assistant"),
+    in its intro and in the two lines of the mailbox's state that named it "de controle" ("the check"), word for word in both
+    languages; no text of the tab names it so any more."""
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    texts = {"settings_intro": ("Met een aanmelding bij Microsoft leest de assistent zelf een map van het postvak en verstuurt hij zijn "
+                                "e-mails vanuit dat postvak. Zonder aanmelding werkt hij met de bewaakte map.",
+                                "With a Microsoft sign-in the assistant reads a folder of the mailbox itself and sends its e-mails from "
+                                "that mailbox. Without a sign-in it works from the watched folder."),
+             "settings_trigger_off": ("De assistent leest geen postvak: hij werkt met de bewaakte map.",
+                                      "The assistant reads no mailbox: it works from the watched folder."),
+             "settings_trigger_pending": ("Nog niet verbonden: de assistent maakt de verbinding bij de volgende ronde.",
+                                          "Not connected yet: the assistant connects at its next pass.")}
+    assert {key: (nl[key], en[key]) for key in texts} == texts
+    for strings, name in ((nl, r"\bde controle\b"), (en, r"\bthe check\b")):
+        assert not [key for key, text in strings.items() if key.startswith("settings") and re.search(name, text, re.IGNORECASE)], name
+
+
 def test_the_buyers_part_is_wired_as_the_page_shows_it(tmp_path, madeup_out):
     """The built page itself: each handler's trigger, inputs and outputs, each field's help, the headings in their order and the
     table that cannot be edited, the line of a file that cannot be read first on the tab and the rest in the sections "Uw regels" and
@@ -2016,8 +2240,8 @@ def test_the_buyers_part_is_wired_as_the_page_shows_it(tmp_path, madeup_out):
     assert [type(shown[label]).__name__ for label in fields] == ["Textbox"] * 6 + ["Radio", "Textbox", "Textbox", "Radio", "Textbox"]
     assert shown[nl["settings_field:digest"]].choices == [(nl["settings_digest:daily"], "daily"), (nl["settings_digest:per_case"], "per_case")]
     assert shown[nl["settings_field:language"]].choices == [("Nederlands", "nl"), ("English", "en")]
-    headings = [block.value for block in buyers if isinstance(block, gr.Markdown) and str(block.value).startswith("### ")]
-    assert headings == ["### Wat de assistent zelf mag afhandelen", "### Vragen aan leveranciers", "### Dagoverzicht en taal", "### Fiattering",
+    headings = [block.value for block in buyers if isinstance(block, gr.Markdown) and str(block.value).startswith("#")]
+    assert headings == ["## Wat de assistent zelf mag afhandelen", "## Vragen aan leveranciers", "## Dagoverzicht en taal", "## Fiattering",
                         "### Leveranciers"]
     order = [block for block in buyers if isinstance(block, (gr.Markdown, gr.Textbox, gr.Radio, gr.Button, gr.Dataframe, gr.Dropdown, gr.Checkbox))]
     labels = [name(block) if not isinstance(block, gr.Markdown) or block.elem_id else block.value for block in order]
@@ -3401,7 +3625,7 @@ def test_after_a_save_the_runner_files_the_export_and_the_state_says_when(tmp_pa
     assert [look.po_number for look in store.snapshots("250301")] == ["250301"] and store.versions("250301") == []
     assert not (inbox / "EXPORT_nl.csv").exists() and scanned.skipped == []
     state = handler(page, "exact_state_shown")("nl")
-    moment = store.filed_at("250301", "e1").strftime("%Y-%m-%d %H:%M")
+    moment = store.filed_at("250301", "e1").strftime("%d-%m-%Y %H:%M")
     assert nl["exact_state_columns_set"] in state and nl["exact_state_export"].format(time=moment) in state
     # an export whose column titles differ from those saved is no export to the runner: the digest lists it with this reason
     write_sheet(inbox / "other.csv", [["Order", "Artikel"], ["250301", "KM-3101"]])

@@ -394,7 +394,7 @@ def test_the_page_shows_labels_and_no_code(tmp_path, madeup_out):
     c, r = run(deps(tmp_path, madeup_out, writer=RetryingWriter(Down(), PreparedWriter(tmp_path))), madeup_out, "MU08", "250108")
     view = load_case_view(c)
     shown = page_rows(view.flags, "nl")
-    assert shown[0] == ["RI1", "Prijs", "1", "12.50", "12.70", "Voorbereide wijziging: met de hand doorvoeren",
+    assert shown[0] == ["RI1", "Prijs", "1", "12,50", "12,70", "Voorbereide wijziging: met de hand doorvoeren",
                         view.flags[0].po_source, view.flags[0].doc_source]
     assert [row[5] for row in shown[1:]] == ["Niet uitgevoerd: een eerdere schrijfactie is mislukt"] * 3
     assert page_rows(view.matches, "en")[3][1:5] == ["Line present", "1", "present", "present"]
@@ -428,7 +428,7 @@ def test_the_page_lists_the_open_cases_and_makes_no_network_call(tmp_path, madeu
     gr = import_gradio()
     app = build_app(d)
     [cases] = [block for block in app.blocks.values() if isinstance(block, gr.Dropdown) and block.label == STRINGS["nl"]["case"]]
-    assert cases.choices == [("PO 250107 (S07), 2026-11-12 09:00, 1 punt", c.case_id)]
+    assert cases.choices == [("Inkooporder 250107 (S07): 1 punt, 12-11-2026 09:00", c.case_id)]
     assert not [block for block in app.blocks.values() if isinstance(block, gr.Markdown) and CODE.search(str(block.value))]
 
 
@@ -1017,7 +1017,8 @@ def rendered_saves(app, state: dict) -> list:
 
 def test_the_hint_follows_a_decision_and_the_refresh(tmp_path, madeup_out):
     """Ruling N8: a decision saved on a waiting case hides the hint at once, as the case then waits no longer and is not checked again;
-    the decision's radio and its tick update the hint with the status line. "Lijst vernieuwen" updates the hint as well, for a decision
+    the decision's radio and its tick update the hint with the note of their row (spec 2.1.1, chunk 3 of the redesign; the status
+    line before it). "Lijst vernieuwen" updates the hint as well, for a decision
     saved in another browser tab or a case the runner replaced meanwhile. Driven through the page's own wiring: the events the
     decision rows make, and the refresh button's."""
     d = deps(tmp_path, madeup_out)
@@ -1030,12 +1031,14 @@ def test_the_hint_follows_a_decision_and_the_refresh(tmp_path, madeup_out):
     state = shown[[type(block).__name__ for block in show.outputs].index("State")]
     saves = rendered_saves(app, state)
     assert len(saves) == 2 and {app.default_config.blocks[target[0]].__class__.__name__ for f in saves for target in f.targets} == {"Radio", "Checkbox"}
-    for f in saves:                                                          # the radio's and the tick's outputs: the status line and the hint
+    for f in saves:                                                          # the radio's and the tick's outputs: the row's note and the hint
         assert [type(block).__name__ for block in f.outputs] == ["Markdown", "Markdown"] and f.outputs[1] is hint_block
     [radio] = [f for f in saves if app.default_config.blocks[f.targets[0][0]].__class__.__name__ == "Radio"]
     assert radio.fn(None, False, "nl", state) == ({"__type__": "update"}, {"__type__": "update"})          # nothing chosen: nothing changes
     message, hint = radio.fn("unresolved", False, "nl", state)
-    assert message == STRINGS["nl"]["saved"].format(item="RI1") and hint == {"__type__": "update", "value": "", "visible": False}
+    nl = STRINGS["nl"]
+    assert message == {"__type__": "update", "value": f"{nl['row_saved']} {nl['row_open']} {nl['row_all_decided']}", "elem_classes": ["row-note"]}
+    assert hint == {"__type__": "update", "value": "", "visible": False}
     assert waiting_for_po(waiting) is None
     [refresh] = [f for f in app.fns.values() if getattr(f.fn, "__name__", "") == "refreshed"]
     assert [getattr(block, "label", None) for block in refresh.inputs] == [STRINGS["nl"]["language"], STRINGS["nl"]["case"]]
@@ -1244,8 +1247,9 @@ LIST_UNREAD = {"nl": "De lijst In Exact invoeren kon niet worden gelezen: de ass
 
 
 def test_the_page_names_the_applied_changes(tmp_path, madeup_out, monkeypatch):
-    """Rule 7 and amendment 5: above the lists of the review tab, a case that was compared with values entered in Exact names each of
-    them, in the page's language and with the values as the tab "In Exact invoeren" shows them, and the list of differences shows
+    """Rule 7 and amendment 5: above the decisions of the review tab, and so above its documents and lists (chunk 3 of the redesign), a
+    case that was compared with values entered in Exact names each of them, in the page's language and with the values as the tab
+    "In Exact invoeren" shows them, and the list of differences shows
     the entered value as the order's, without a source. A case run while the list could not be read says that instead. A case that
     was compared with the order as it was filed shows no line."""
     d = deps(tmp_path, madeup_out, writer=PreparedWriter(tmp_path / "cases" / "prepared"))
@@ -1297,7 +1301,8 @@ def test_the_page_names_the_applied_changes(tmp_path, madeup_out, monkeypatch):
     [line] = [block for block in blocks if getattr(block, "elem_id", None) == "review-entered"]
     galleries = [blocks.index(block) for block in blocks if isinstance(block, gr.Gallery)]
     tables = [blocks.index(block) for block in blocks if isinstance(block, gr.Dataframe)]
-    assert isinstance(line, gr.Markdown) and line.visible is False and max(galleries) < blocks.index(line) < min(tables)     # above the lists
+    [decisions] = [blocks.index(block) for block in blocks if isinstance(block, gr.Markdown) and block.value == f"## {STRINGS['nl']['decisions']}"]
+    assert isinstance(line, gr.Markdown) and line.visible is False and blocks.index(line) < decisions < min(galleries) < min(tables)
     [title] = [blocks.index(block) for block in blocks if isinstance(block, gr.Markdown) and block.value == f"### {STRINGS['nl']['flags']}"]
     assert blocks.index(line) < title                                             # and above the title of the first list, not under it
 
@@ -1461,6 +1466,7 @@ import requests  # noqa: E402
 
 from aid.connections.microsoft import MicrosoftAccount  # noqa: E402
 from aid.connections.secrets import SecretStore  # noqa: E402
+from aid.messaging.microsoft_mailer import PASSWORD_ENV  # noqa: E402
 from aid.pipeline import file_answer, read_with_parser  # noqa: E402
 from aid.review.page import decision_text  # noqa: E402
 from aid.settings import update_settings_file  # noqa: E402
@@ -3311,7 +3317,7 @@ def test_the_manual_says_what_a_write_made_and_not_verified_is_and_what_an_undo_
     assert f"| write outcome not known: check in Exact | {NOT_SURE_NL} | {NOT_SURE_EN} |" in reasons
     assert f"| not applied: an earlier change waits for a look in Exact ... | {nl[behind]} | {en[behind]} |" in reasons
     assert "| not applied: an earlier write failed ... | Niet uitgevoerd: een eerdere schrijfactie is mislukt | Not applied: an earlier write failed |" in reasons
-    for words in ("\"Bevestigen\": the change is in Exact and stays.", "prepares nothing more for it", "\"Houden\": the old value must stay.",
+    for words in ("\"Overnemen\": the change is in Exact and stays.", "prepares nothing more for it", "\"Houden\": the old value must stay.",
                   "what waited behind the change is not carried out", "\"Leverancier vragen\" is not offered"):
         assert words in reasons, words
     assert f"\"{NOT_VERIFIED_NL}\" or \"{NOT_SURE_NL}\"" in page and "nor on an item that asks you to look in Exact" in page
@@ -3547,7 +3553,7 @@ def test_the_timer_refreshes_beoordelen_without_touching_the_chosen_case(tmp_pat
         assert len([f for f in page.fns.values() if getattr(f.fn, "__name__", "") == name]) == 1, name
     assert ("Timer", "tick") not in bound(page, "list_opened")[0]
     first, _ = run(d, madeup_out, "MU07", "250107")                               # the case the buyer has open
-    label = "PO 250107 (S07), 2026-11-12 09:00, 1 punt"
+    label = "Inkooporder 250107 (S07): 1 punt, 12-11-2026 09:00"
     ticked = called(page, "queue_ticked", "nl", first.case_id, None)
     assert ticked["Beoordelen"] == {"__type__": "update", "label": "Beoordelen (1)"}
     assert ticked["Zaak"] == {"__type__": "update", "choices": [(label, first.case_id)]}
@@ -3631,7 +3637,8 @@ def test_the_pick_line_and_the_oldest_case(tmp_path, madeup_out):
     path, d, page, _ = sending_page(tmp_path, madeup_out)
     assert bound(page, "oldest_opened") == ([("review-oldest", "click")], ["Taal"], ["Zaak"])
     assert bound(page, "case_framed") == ([("Zaak", "change")], ["Zaak", "Taal"], ["review-pick-row", "review-pick", "review-oldest", "review-gone",
-                                                                                 "review-failed", "Zaak afsluiten", "review-handled", "### Besluiten"])
+                                                                                 "review-failed", "Zaak afsluiten", "review-handled", "## Besluiten",
+                                                                                 "review-case", "review-evidence"])
     assert bound(page, "show")[0] == [("Zaak", "change")] and handler_of(page, "case_framed").show_progress == "hidden"
     none = called(page, "case_framed", None, "nl")
     assert none["review-pick-row"] == {"__type__": "update", "visible": True} and none["review-pick"] == nl["review_pick_none"]
@@ -3649,7 +3656,7 @@ def test_the_pick_line_and_the_oldest_case(tmp_path, madeup_out):
     for case in (older, newer):
         decide(case, "RI1", "keep")
         assert close_case(case, d).status == "closed"
-    assert called(page, "oldest_opened", "nl")["Zaak"] == {"__type__": "update", "choices": [(f"PO 250105 (S05), 2026-11-12 09:00, {nl['case_failed_look']}",
+    assert called(page, "oldest_opened", "nl")["Zaak"] == {"__type__": "update", "choices": [(f"Inkooporder 250105 (S05): {nl['case_failed_look']}, 12-11-2026 09:00",
                                                                                              failed.case_id)], "value": failed.case_id}
     assert (nl["review_pick"], nl["review_pick_none"], nl["review_open_oldest"]) == (
         "Kies een zaak bij Zaak, of open de oudste.", "Er wachten geen zaken op uw besluit. Een nieuwe zaak verschijnt hier vanzelf.", "Oudste zaak openen")
@@ -3749,26 +3756,40 @@ def test_the_strip_action_opens_the_section_that_handles_the_problem(tmp_path, m
 
 
 def test_a_failed_case_marked_handled_in_another_tab_leaves_no_notice_in_the_old_language(tmp_path, madeup_out):
-    """A failed case on screen that another browser tab notes as handled: the language switch hides its notice, as choosing it now
-    would (case_framed), rather than leave it in the language it was shown in, and the line under the list says that it was noted as
-    handled, not that it was closed or replaced. A document left to the buyer, noted as handled meanwhile, goes the same way."""
+    """A failed case on screen that another browser tab notes as handled: the language switch hides its notice and its button "Als
+    afgehandeld noteren", as choosing it now would (case_framed), rather than leave the notice in the language it was shown in and
+    the button for a case that needs it no more, and the line under the list says that it was noted as handled, not that it was
+    closed or replaced. The case keeps its place in the list, wherever the list is sent again (the timer, the language switch, "Lijst
+    vernieuwen"), named as the list names a failed case, with what it is now in place of the number of items: "Inkooporder 250105
+    (S05): mislukt, door u afgehandeld, 12-11-2026 09:00". A document left to the buyer, noted as handled meanwhile, goes the same
+    way."""
     nl, en = STRINGS["nl"], STRINGS["en"]
     path, d, page, _ = sending_page(tmp_path, madeup_out)
     ids = left_to_the_buyer(d, madeup_out, tmp_path)
     failed, _ = run(d, madeup_out, "MU05", "250105")
     assert called(page, "case_framed", failed.case_id, "nl")["review-failed"]["visible"] is True
+    offered = dict((value, label) for label, value in called(page, "queue_ticked", "nl", None, None)["Zaak"]["choices"])
+    assert offered[failed.case_id] == "Inkooporder 250105 (S05): mislukt, zelf bekijken, 12-11-2026 09:00"
     called(page, "handled_marked", failed.case_id, "nl")                                     # another browser tab
     hidden = {"__type__": "update", "value": "", "visible": False}
     assert called(page, "failed_relabel", "en", failed.case_id) == {"review-failed": hidden,
-                                                                     "review-handled": {"__type__": "update", "value": en["handled_go"]}}
+                                                                     "review-handled": {"__type__": "update", "value": en["handled_go"], "visible": False}}
     for strings, language in ((nl, "nl"), (en, "en")):
         gone = called(page, "queue_ticked", language, failed.case_id, None)["review-gone"]
         assert gone == {"__type__": "update", "value": strings["review_gone_handled"].format(po="250105"), "visible": True}, language
     assert (nl["review_gone_handled"], en["review_gone_handled"]) == (
         "Inkooporder {po} staat niet meer op de lijst: de zaak is intussen als afgehandeld genoteerd. Kies een andere zaak.",
         "Purchase order {po} is no longer on the list: it was noted as handled meanwhile. Choose another case.")
+    kept = {"nl": "Inkooporder 250105 (S05): mislukt, door u afgehandeld, 12-11-2026 09:00",
+            "en": "Purchase order 250105 (S05): failed, handled by you, 12-11-2026 09:00"}
+    for language in ("nl", "en"):
+        for sent in (called(page, "queue_ticked", language, failed.case_id, None)["Zaak"], handler_of(page, "relabel").fn(language, failed.case_id, None)[2],
+                     handler_of(page, "refreshed").fn(language, failed.case_id)[0]):
+            assert [label for label, value in sent["choices"] if value == failed.case_id] == [kept[language]], language
+    assert (nl["case_failed_handled"], en["case_failed_handled"]) == ("mislukt, door u afgehandeld", "failed, handled by you")
     called(page, "handled_marked", ids[SCAN], "nl")
-    assert called(page, "failed_relabel", "en", ids[SCAN])["review-failed"] == hidden
+    assert called(page, "failed_relabel", "en", ids[SCAN]) == {"review-failed": hidden,
+                                                               "review-handled": {"__type__": "update", "value": en["handled_go"], "visible": False}}
 
 
 def test_only_the_choice_of_a_case_shows_or_hides_the_pick_row(tmp_path, madeup_out):
@@ -3829,7 +3850,7 @@ def test_a_refused_store_is_no_lapsed_sign_in_on_the_strip_after_a_digest(tmp_pa
 
 
 def test_a_failed_case_is_offered_with_why_and_can_be_marked_handled(tmp_path, madeup_out):
-    """Finding 3. A case the assistant could not finish is offered after the cases offered_cases gives, as "mislukt: zelf bekijken";
+    """Finding 3. A case the assistant could not finish is offered after the cases offered_cases gives, as "mislukt, zelf bekijken";
     chosen, it shows its supplier's document and why it failed in words, never by its error, and "Als afgehandeld noteren" in place
     of "Zaak afsluiten". The press writes handled_by_hand.json into the case's folder with the time of the page's clock, and no other
     file, and the case leaves the list and the counts. offered_cases and selection_from_query stay as they are, so that the digest's
@@ -3840,21 +3861,22 @@ def test_a_failed_case_is_offered_with_why_and_can_be_marked_handled(tmp_path, m
     review, _ = run(d, madeup_out, "MU07", "250107", now=LATER)
     assert result.status == "failed" and result.error.startswith("ReaderError: no template for ")
     root = d.settings.cases_root
-    listed = [("PO 250107 (S07), 2026-11-12 09:01, 1 punt", review.case_id), ("PO 250105 (S05), 2026-11-12 09:00, mislukt: zelf bekijken", failed.case_id)]
+    listed = [("Inkooporder 250107 (S07): 1 punt, 12-11-2026 09:01", review.case_id),
+              ("Inkooporder 250105 (S05): mislukt, zelf bekijken, 12-11-2026 09:00", failed.case_id)]
     assert called(page, "refreshed", "nl", None)["Zaak"]["choices"] == listed == called(page, "queue_ticked", "nl", None, None)["Zaak"]["choices"]
     assert handler_of(page, "opened").fn("nl", SimpleNamespace(query_params={}))[0]["choices"] == listed
-    assert called(page, "refreshed", "en", None)["Zaak"]["choices"][-1] == ("PO 250105 (S05), 2026-11-12 09:00, failed: look yourself", failed.case_id)
+    assert called(page, "refreshed", "en", None)["Zaak"]["choices"][-1] == ("Purchase order 250105 (S05): failed, look yourself, 12-11-2026 09:00", failed.case_id)
     assert [summary.case_id for summary in offered_cases(root)] == [review.case_id]
     assert selection_from_query(root, {"case": failed.case_id}) == (None, None)
     framed = called(page, "case_framed", failed.case_id, "nl")
     notice = nl["failed_notice"].format(reason=nl["fail:parser"])
     assert notice.startswith("**De assistent kon deze zaak niet afmaken:** de assistent herkent de opmaak van dit document niet. Bekijk")
     assert framed["review-failed"] == {"__type__": "update", "value": notice, "visible": True}
-    assert framed["Zaak afsluiten"] == framed["### Besluiten"] == {"__type__": "update", "visible": False}
+    assert framed["Zaak afsluiten"] == framed["## Besluiten"] == {"__type__": "update", "visible": False}
     assert framed["review-handled"] == {"__type__": "update", "visible": True}
     other = called(page, "case_framed", review.case_id, "nl")
     assert other["review-failed"] == {"__type__": "update", "value": "", "visible": False} and other["review-handled"] == {"__type__": "update", "visible": False}
-    assert other["Zaak afsluiten"] == other["### Besluiten"] == {"__type__": "update", "visible": True}
+    assert other["Zaak afsluiten"] == other["## Besluiten"] == {"__type__": "update", "visible": True}
     english = called(page, "failed_relabel", "en", failed.case_id)
     assert english == {"review-failed": {"__type__": "update", "value": en["failed_notice"].format(reason=en["fail:parser"])},
                        "review-handled": {"__type__": "update", "value": en["handled_go"]}}
@@ -3925,7 +3947,7 @@ def images_of(path) -> list[bytes]:
 def test_a_document_left_to_the_buyer_is_offered_after_the_failed_cases_and_named_in_words(tmp_path, madeup_out):
     """Finding 9. A document the intake left to the buyer to look at himself, which opens no case (a scan that nobody could class, a
     confirmation that names more than one purchase order), is offered in the case list after the failed cases, oldest first, as
-    "Document MU05_conf.pdf, 2026-11-12 09:00, zelf bekijken". The strip counts it ("Zelf bekijken: 3"), the tab's label counts it
+    "Document MU05_conf.pdf: zelf bekijken, 12-11-2026 09:00". The strip counts it ("Zelf bekijken: 3"), the tab's label counts it
     with the cases that wait for the buyer, and the fold lists it with its state and what the buyer does, among the cases by its
     time: all in words, never by the scan's own reason. "Oudste zaak openen" takes the oldest case in review, else the oldest failed
     case, else the oldest document."""
@@ -3934,14 +3956,14 @@ def test_a_document_left_to_the_buyer_is_offered_after_the_failed_cases_and_name
     ids = left_to_the_buyer(d, madeup_out, tmp_path)
     failed, _ = run(d, madeup_out, "MU05", "250105")
     review, _ = run(d, madeup_out, "MU07", "250107", now=LATER)
-    documents = [(f"Document {SCAN}, 2026-11-12 09:00, zelf bekijken", ids[SCAN]), (f"Document {MANY}, 2026-11-12 09:00, zelf bekijken", ids[MANY]),
-                 (f"Document {PHOTO}, 2026-11-12 09:01, zelf bekijken", ids[PHOTO])]
-    listed = [("PO 250107 (S07), 2026-11-12 09:01, 1 punt", review.case_id),
-              ("PO 250105 (S05), 2026-11-12 09:00, mislukt: zelf bekijken", failed.case_id), *documents]
+    documents = [(f"Document {SCAN}: zelf bekijken, 12-11-2026 09:00", ids[SCAN]), (f"Document {MANY}: zelf bekijken, 12-11-2026 09:00", ids[MANY]),
+                 (f"Document {PHOTO}: zelf bekijken, 12-11-2026 09:01", ids[PHOTO])]
+    listed = [("Inkooporder 250107 (S07): 1 punt, 12-11-2026 09:01", review.case_id),
+              ("Inkooporder 250105 (S05): mislukt, zelf bekijken, 12-11-2026 09:00", failed.case_id), *documents]
     ticked = called(page, "queue_ticked", "nl", None, None)
     assert ticked["Zaak"]["choices"] == listed == called(page, "refreshed", "nl", None)["Zaak"]["choices"]
     assert handler_of(page, "opened").fn("nl", SimpleNamespace(query_params={}))[0]["choices"] == listed
-    assert called(page, "refreshed", "en", None)["Zaak"]["choices"][2:3] == [(f"Document {SCAN}, 2026-11-12 09:00, look yourself", ids[SCAN])]
+    assert called(page, "refreshed", "en", None)["Zaak"]["choices"][2:3] == [(f"Document {SCAN}: look yourself, 12-11-2026 09:00", ids[SCAN])]
     assert all(aid_status.is_item(value) for _, value in documents)
     root = d.settings.cases_root                                  # offered_cases and the digest's links stay as they are
     assert [summary.case_id for summary in offered_cases(root)] == [review.case_id] and selection_from_query(root, {"case": ids[SCAN]}) == (None, None)
@@ -3990,7 +4012,7 @@ def test_a_document_left_to_the_buyer_shows_why_and_its_pages_where_the_scan_put
               "gaat dan van de lijst.")
     assert nl["item_notice"].format(reason=nl["look:scan"]) == notice
     assert framed["review-failed"] == {"__type__": "update", "value": notice, "visible": True}
-    assert framed["Zaak afsluiten"] == framed["### Besluiten"] == {"__type__": "update", "visible": False}
+    assert framed["Zaak afsluiten"] == framed["## Besluiten"] == {"__type__": "update", "visible": False}
     assert framed["review-handled"] == {"__type__": "update", "visible": True}
     assert framed["review-pick-row"] == {"__type__": "update", "visible": False} and framed["review-gone"] == {"__type__": "update", "value": "", "visible": False}
     many = called(page, "case_framed", ids[MANY], "nl")["review-failed"]["value"]
@@ -4111,7 +4133,7 @@ def test_marking_a_document_handled_writes_its_mark_alone_and_takes_it_off_the_l
                                                                          "at": "2026-11-12T09:00:00"}]
     assert marked["Markdown"] == nl["item_handled_done"].format(file="MU05\\_conf\\.pdf") == (
         "Het document MU05\\_conf\\.pdf staat als door u afgehandeld genoteerd en staat niet meer op de lijst.")
-    rest = [(f"Document {MANY}, 2026-11-12 09:00, zelf bekijken", ids[MANY]), (f"Document {PHOTO}, 2026-11-12 09:01, zelf bekijken", ids[PHOTO])]
+    rest = [(f"Document {MANY}: zelf bekijken, 12-11-2026 09:00", ids[MANY]), (f"Document {PHOTO}: zelf bekijken, 12-11-2026 09:01", ids[PHOTO])]
     assert marked["Zaak"] == {"__type__": "update", "choices": rest, "value": None}
     again = called(page, "handled_marked", ids[SCAN], "en")                  # another browser tab
     assert again["Markdown"] == en["item_handled_done"].format(file="MU05\\_conf\\.pdf") and mark.read_bytes() == after[mark]
@@ -4147,11 +4169,11 @@ def test_the_handlers_of_the_case_list_take_a_document_without_reading_it_as_a_c
 
     monkeypatch.setattr(page_module, "load_case", load_case_of_a_case)
     relabelled = called(page, "relabel", "en", chosen, None)
-    assert (f"Document {SCAN}, 2026-11-12 09:00, look yourself", chosen) in relabelled["Zaak"]["choices"]
+    assert (f"Document {SCAN}: look yourself, 12-11-2026 09:00", chosen) in relabelled["Zaak"]["choices"]
     assert relabelled["review-hint"] == {"__type__": "update", "value": "", "visible": False}
     assert relabelled[nl["undo_choice"]] == {"__type__": "update", "label": en["undo_choice"], "choices": [], "value": None}
     refreshed = called(page, "refreshed", "nl", chosen)
-    assert (f"Document {SCAN}, 2026-11-12 09:00, zelf bekijken", chosen) in refreshed["Zaak"]["choices"]
+    assert (f"Document {SCAN}: zelf bekijken, 12-11-2026 09:00", chosen) in refreshed["Zaak"]["choices"]
     assert refreshed["review-hint"] == {"__type__": "update", "value": "", "visible": False}
     assert called(page, "close", chosen, "nl") == {"Markdown": nl["no_case"], "Zaak": {"__type__": "update"}}
     assert after_the_press(page, SimpleNamespace(case_id=chosen), "en") == (en["no_case"], chosen)
@@ -4164,13 +4186,810 @@ def test_the_handlers_of_the_case_list_take_a_document_without_reading_it_as_a_c
     handler_of(page, "show").fn(chosen, "en")
     called(page, "handled_marked", chosen, "en")                              # noted as handled in another browser tab
     gone = called(page, "queue_ticked", "nl", chosen, ticked["State"])
-    kept = (f"Document {SCAN}, 2026-11-12 09:00, door u afgehandeld", chosen)
+    kept = (f"Document {SCAN}: door u afgehandeld, 12-11-2026 09:00", chosen)
     assert gone["Zaak"]["choices"][-1] == kept and gone["review-gone"] == {"__type__": "update", "visible": True, "value": (
         "Het document MU05\\_conf\\.pdf staat niet meer op de lijst: het is intussen als afgehandeld genoteerd. Kies een andere zaak.")}
     assert called(page, "refreshed", "nl", chosen)["Zaak"]["choices"] == gone["Zaak"]["choices"]
     assert called(page, "relabel", "nl", chosen, None)["Zaak"]["choices"] == gone["Zaak"]["choices"]
-    assert called(page, "relabel", "en", chosen, None)["Zaak"]["choices"][-1] == (f"Document {SCAN}, 2026-11-12 09:00, handled by you", chosen)
+    assert called(page, "relabel", "en", chosen, None)["Zaak"]["choices"][-1] == (f"Document {SCAN}: handled by you, 12-11-2026 09:00", chosen)
     framed = called(page, "case_framed", chosen, "nl")
     assert framed["review-failed"] == {"__type__": "update", "value": "", "visible": False} and framed["review-handled"] == {"__type__": "update", "visible": False}
     other = called(page, "queue_ticked", "nl", ids[MANY], gone["State"])     # another one chosen: the handled document leaves the list
     assert kept not in other["Zaak"]["choices"] and other["review-gone"] == {"__type__": "update", "value": "", "visible": False}
+
+
+# --- Beoordelen in the order of the work (chunk 3 of the redesign) ---
+
+from aid.tests.helpers import shown_headings, skipped_headings  # noqa: E402
+
+SHOWN, HIDDEN = {"__type__": "update", "visible": True}, {"__type__": "update", "visible": False}
+
+
+def laid_out(block) -> list:
+    """The block and every block inside it, top to bottom, as the page lays them out."""
+    return [block, *[found for child in getattr(block, "children", []) for found in laid_out(child)]]
+
+
+def by_elem_id(page) -> dict:
+    return {block.elem_id: block for block in page.blocks.values() if getattr(block, "elem_id", None)}
+
+
+def given_to(page, name: str, *args) -> dict:
+    """What the page's handler of that name gives for the inputs, by the id of each output block: for outputs that name_of cannot
+    tell apart, such as the three tables of the review tab."""
+    f = handler_of(page, name)
+    return dict(zip([block._id for block in f.outputs], f.fn(*args), strict=True))
+
+
+def applied(page, name: str, *args) -> None:
+    """The page as the handler of that name leaves it for the inputs: the visibility and the value of each update set on its block."""
+    f = handler_of(page, name)
+    for block, update in zip(f.outputs, f.fn(*args), strict=True):
+        if isinstance(update, dict) and update.get("__type__") == "update":
+            for key in ("visible", "value"):
+                if key in update:
+                    setattr(block, key, update[key])
+
+
+def test_the_case_parts_show_with_a_case_and_the_close_answer_stays(tmp_path, madeup_out):
+    """B3.6 of the redesign. Under the case list of "Beoordelen" a case stands in three parts, top to bottom: review-case (the banner,
+    the hint, the line of the values entered in Exact, the notice of a failed case or of a document left to the buyer, the title
+    "Besluiten" and the decision rows), review-close ("Zaak afsluiten" or "Als afgehandeld noteren", the status line under them, and
+    the part to undo a write) and review-evidence (the documents and the lists). The first and the last show only while a case is
+    chosen (case_framed, on the change of "Zaak" beside show); review-close always stands, so that what a close said stays on the
+    screen once the case has left the review and its parts have closed. "Zaak afsluiten" shows only with a case in review: not
+    without a case, nor on a failed case, a document left to the buyer, or a closed case offered for the undo of its write."""
+    nl = STRINGS["nl"]
+    _, d, page, _ = sending_page(tmp_path, madeup_out)
+    parts = by_elem_id(page)
+    case_part, close_part, undo_part, evidence = (parts[name] for name in ("review-case", "review-close", "review-undo", "review-evidence"))
+    assert {type(part).__name__ for part in (case_part, close_part, undo_part, evidence)} == {"Column"}
+    assert (case_part.visible, close_part.visible, undo_part.visible, evidence.visible) == (False, True, False, False)
+    [review_tab] = [block for block in page.blocks.values() if isinstance(block, gradio.Tab) and block.id == "beoordelen"]
+    tab = laid_out(review_tab)
+    assert tab.index(parts["review-pick-row"]) < tab.index(case_part) < tab.index(close_part) < tab.index(evidence)
+    [banner] = [block for block in page.blocks.values() if isinstance(block, gradio.Markdown) and block.value == f"**{nl['banner']}**"]
+    [title] = [block for block in page.blocks.values() if isinstance(block, gradio.Markdown) and block.value == f"## {nl['decisions']}"]
+    [renderable] = page.default_config.renderables
+    above = [banner, parts["review-hint"], parts["review-entered"], parts["review-failed"], title, renderable.container]
+    assert [block for block in laid_out(case_part) if block in above] == above        # the banner, the hint and the line first
+    assert "notice" in banner.elem_classes and "attention" in banner.elem_classes
+    assert "notice" in parts["review-hint"].elem_classes and "notice" in parts["review-entered"].elem_classes
+    status = handler_of(page, "close").outputs[0]
+    [close_button] = [block for block in laid_out(close_part) if isinstance(block, gradio.Button) and block.value == nl["close"]]
+    closing = [close_button, parts["review-handled"], status, undo_part]
+    assert [block for block in laid_out(close_part) if block in closing] == closing and close_button.visible is False
+    assert status not in laid_out(case_part) + laid_out(evidence) and "answer" in status.elem_classes
+    assert bound(page, "case_framed") == ([("Zaak", "change")], ["Zaak", "Taal"], [
+        "review-pick-row", "review-pick", "review-oldest", "review-gone", "review-failed", "Zaak afsluiten", "review-handled", "## Besluiten",
+        "review-case", "review-evidence"])
+
+    def framed(case_id) -> tuple:
+        given = called(page, "case_framed", case_id, "nl")
+        return given["review-case"], given["review-evidence"], given["Zaak afsluiten"], given["review-handled"]
+    assert framed(None) == (HIDDEN, HIDDEN, HIDDEN, HIDDEN)
+    ids = left_to_the_buyer(d, madeup_out, tmp_path)                                  # scanned first: MU05 is one of them
+    review, _ = run(d, madeup_out, "MU07", "250107")
+    failed, _ = run(d, madeup_out, "MU05", "250105", now=LATER)
+    made, result = run(d.model_copy(update={"writer": done_writer()}), madeup_out, "MU01", "250101", now=LATER + timedelta(minutes=1))
+    assert result.status == "closed" and made.case_id in {summary.case_id for summary in offered_cases(d.settings.cases_root)}
+    assert framed(review.case_id) == (SHOWN, SHOWN, SHOWN, HIDDEN)
+    assert framed(failed.case_id) == (SHOWN, SHOWN, HIDDEN, SHOWN)                   # its notice and its document
+    assert framed(made.case_id) == (SHOWN, SHOWN, HIDDEN, HIDDEN)                     # offered for its undo only
+    assert framed(ids[SCAN]) == (SHOWN, SHOWN, HIDDEN, SHOWN)
+    decide(review, "RI1", "keep")
+    assert after_the_press(page, review) == (CLOSED["nl"], None)                     # the answer stays; the parts close with no case
+    assert framed(None) == (HIDDEN, HIDDEN, HIDDEN, HIDDEN)
+
+
+def test_an_empty_list_is_one_sentence_and_undo_shows_only_with_a_write(tmp_path, madeup_out):
+    """B3.7 of the redesign. Under "Vergelijking" each list of the case chosen is its table, or one sentence in its place while it has
+    no row: "Geen afwijkingen in deze zaak.", "Alles in deze zaak kon worden vergeleken." and "Geen overeenkomsten in deze zaak.", in
+    the page's language. The part to undo a write ("Een schrijfactie ongedaan maken") shows only while the case has a write made in
+    Exact and not undone, so with the prepared writer never. A case that failed before it was compared, a document left to the buyer
+    and no case show no comparison at all, rather than sentences that are not true of them. record_shown gives all this, on the change
+    of the state of the view and on the language switch, from the state and the case's write log as they are then."""
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    d = deps(tmp_path, madeup_out)
+    page = build_app(d)
+    parts = by_elem_id(page)
+    flags, matches, uncompared = handler_of(page, "show").outputs[3:6]
+    record = handler_of(page, "record_shown")
+    lines = [parts[f"review-{name}-empty"] for name in ("flags", "uncompared", "matches")]
+    assert record.outputs == [parts["review-record"], flags, lines[0], uncompared, lines[1], matches, lines[2], parts["review-undo"]]
+    assert sorted(record.targets) == sorted([(handler_of(page, "show").outputs[7]._id, "change"), (record.inputs[1]._id, "change")])
+    assert [name_of(block) for block in record.inputs] == ["State", "Taal"] and record.show_progress == "hidden"
+    assert all(isinstance(line, gradio.Markdown) and line.visible is False and line.value == "" and "empty-line" in line.elem_classes
+               for line in lines)
+    assert parts["review-record"] in laid_out(parts["review-evidence"])
+    for name in ("flags", "uncompared", "matches"):
+        assert (nl[f"empty:{name}"], en[f"empty:{name}"]) == {
+            "flags": ("Geen afwijkingen in deze zaak.", "No differences in this case."),
+            "uncompared": ("Alles in deze zaak kon worden vergeleken.", "Everything in this case could be compared."),
+            "matches": ("Geen overeenkomsten in deze zaak.", "No matches in this case.")}[name]
+    mu06, _ = run(d, madeup_out, "MU06", "250106")                 # no difference, three items that could not be compared, matches
+    state = shown_state(page, mu06)
+    assert (state["lists"]["flags"], len(state["lists"]["uncompared"]), len(state["lists"]["matches"])) == ([], 3, 13)
+    for language in ("nl", "en"):
+        given = given_to(page, "record_shown", state, language)
+        assert given[parts["review-record"]._id] == SHOWN and given[parts["review-undo"]._id] == HIDDEN      # the prepared writer
+        assert given[flags._id] == HIDDEN and given[lines[0]._id] == {"__type__": "update", "value": STRINGS[language]["empty:flags"], "visible": True}
+        assert given[uncompared._id] == given[matches._id] == SHOWN
+        assert given[lines[1]._id] == {"__type__": "update", "value": STRINGS[language]["empty:uncompared"], "visible": False}
+        assert given[lines[2]._id] == {"__type__": "update", "value": STRINGS[language]["empty:matches"], "visible": False}
+    maker = deps(tmp_path, madeup_out, writer=done_writer())
+    made, _ = run(maker, madeup_out, "MU01", "250101", now=LATER)
+    state = shown_state(page, made)
+    given = given_to(page, "record_shown", state, "nl")
+    assert given[parts["review-undo"]._id] == SHOWN and given[flags._id] == HIDDEN and given[matches._id] == SHOWN
+    for entry in _undoable(made):
+        undo(made, entry.entry_id, maker)
+    assert given_to(page, "record_shown", state, "nl")[parts["review-undo"]._id] == HIDDEN       # the log as it is now
+    failed, result = run(d, madeup_out, "MU05", "250105", now=LATER + timedelta(minutes=1))
+    assert result.status == "failed" and result.findings is None
+    for nothing in (shown_state(page, failed), None):              # a failed case not compared; no case, as a document left to the buyer
+        given = given_to(page, "record_shown", nothing, "nl")
+        assert given[parts["review-record"]._id] == given[parts["review-undo"]._id] == HIDDEN
+        assert [given[block._id]["visible"] for block in (flags, uncompared, matches, *lines)] == [False] * 6
+
+
+def test_the_part_to_undo_a_write_closes_once_its_last_write_is_undone(tmp_path, madeup_out):
+    """"Ongedaan maken" is followed by undo_shown, which shows the part to undo a write (review-undo) while the case chosen still has
+    a write made in Exact and not undone, from its write log as it is then, as record_shown shows it: after the undo of the last
+    write the part closes at once, rather than stand with an empty "Schrijfactie" until the case is shown again. No case, or a
+    document left to the buyer, has no such part. record_shown stays bound once, and the undo keeps its inputs and outputs."""
+    maker = deps(tmp_path, madeup_out, writer=done_writer())
+    page = build_app(maker)
+    parts = by_elem_id(page)
+    made, _ = run(maker, madeup_out, "MU01", "250101")
+    shown, undone = handler_of(page, "undo_shown"), handler_of(page, "do_undo")
+    assert shown.trigger_after == undone._id and shown.outputs == [parts["review-undo"]] and shown.show_progress == "hidden"
+    assert [name_of(block) for block in shown.inputs] == ["Zaak"] and [name_of(block) for block in undone.outputs] == ["Markdown", "Schrijfactie"]
+    assert len([f for f in page.fns.values() if getattr(f.fn, "__name__", "") == "record_shown"]) == 1
+    entries = [entry.entry_id for entry in _undoable(made)]
+    assert len(entries) > 1 and shown.fn(made.case_id) == SHOWN
+    for n, entry_id in enumerate(entries, 1):
+        assert called(page, "do_undo", made.case_id, entry_id, "nl")["Markdown"].startswith("Ongedaan gemaakt")
+        assert shown.fn(made.case_id) == (SHOWN if n < len(entries) else HIDDEN), n
+    assert shown.fn(None) == HIDDEN and shown.fn(f"{aid_status.ITEM_PREFIX}0123456789ab") == HIDDEN
+
+
+def test_the_review_tab_puts_the_decisions_before_the_documents(tmp_path, madeup_out):
+    """B3.8 of the redesign. "Beoordelen" follows the order of the work: the decision rows (the one gr.render), then "Zaak afsluiten"
+    and the status line, then the two documents side by side, the purchase order first (on the left) and the supplier's document,
+    560 px high each and of the class doc-view, then the three lists in the order Afwijkingen, Niet te vergelijken, Overeenkomsten,
+    each with the eight columns of the page, the reason widest and the two sources next, and the matches no higher than 360 px. With
+    a case in review chosen that has a write to undo, the headings the tab shows follow the page's h1 without skipping a level (B2.4),
+    and the language switch gives the headings of the new parts in English (review_texts)."""
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    d = deps(tmp_path, madeup_out, writer=done_writer())
+    page = build_app(d)
+    parts = by_elem_id(page)
+    [review_tab] = [block for block in page.blocks.values() if isinstance(block, gradio.Tab) and block.id == "beoordelen"]
+    tab = laid_out(review_tab)
+    [renderable] = page.default_config.renderables
+    status = handler_of(page, "close").outputs[0]
+    [close_button] = [block for block in tab if isinstance(block, gradio.Button) and block.value == nl["close"]]
+    galleries = [block for block in tab if isinstance(block, gradio.Gallery)]
+    tables = [block for block in tab if isinstance(block, gradio.Dataframe)]
+    order = [tab.index(block) for block in (renderable.container, close_button, status, *galleries, *tables)]
+    assert order == sorted(order) and len(galleries) == 2 and len(tables) == 3
+    assert [gallery.label for gallery in galleries] == [nl["po_document"], nl["document"]]
+    assert all(gallery.height == 560 and "doc-view" in gallery.elem_classes and gallery in parts["review-documents"].children
+               for gallery in galleries)
+    flags, matches, uncompared = handler_of(page, "show").outputs[3:6]
+    assert tables == [flags, uncompared, matches] and matches.max_height == 360
+    headers = [nl[column] for column in ("item", "field", "line", "po_value", "doc_value", "reason", "po_source", "doc_source")]
+    for table in tables:
+        assert table.value["headers"] == headers and [int(width.rstrip("%")) for width in table.column_widths] == [5, 9, 6, 10, 10, 24, 18, 18]
+    titles = [block.value for block in tab if isinstance(block, gradio.Markdown) and str(block.value).startswith("#")]
+    assert titles[titles.index(f"## {nl['record']}"):] == [f"## {nl['record']}", f"### {nl['flags']}", f"### {nl['uncompared']}", f"### {nl['matches']}"]
+    assert bound(page, "review_texts") == ([("Taal", "change")], ["Taal"], [f"## {nl['documents']}", f"## {nl['record']}", f"### {nl['undo_title']}"])
+    assert called(page, "review_texts", "en") == {f"## {nl['documents']}": "## Documents", f"## {nl['record']}": "## Comparison",
+                                                  f"### {nl['undo_title']}": "### Undo a write"}
+    assert (nl["documents"], nl["record"], nl["undo_title"]) == ("Documenten", "Vergelijking", "Een schrijfactie ongedaan maken")
+    assert handler_of(page, "review_texts").show_progress == "hidden"
+    case, result = run(d, madeup_out, "MU01", "250101")
+    case.write_step(8, "result", result.model_copy(update={"status": "review"}))    # in review, with writes to undo
+    applied(page, "case_framed", case.case_id, "nl")
+    applied(page, "record_shown", shown_state(page, case), "nl")
+    shown = shown_headings(review_tab)
+    assert shown == [f"## {nl['decisions']}", f"### {nl['undo_title']}", f"## {nl['documents']}", f"## {nl['record']}", f"### {nl['flags']}",
+                     f"### {nl['uncompared']}", f"### {nl['matches']}"]
+    assert skipped_headings(shown) == [] and en["undo_title"] == "Undo a write"
+
+
+def test_the_handlers_the_redesign_added_to_the_language_switch_skip_the_queue(tmp_path, madeup_out):
+    """The page library's client (gradio 6.31.0) runs the listeners of one event one after another, each to its end, and a listener
+    on the queue costs a round trip of the queue, a quarter of a second in the browser, where one that skips it costs a few
+    hundredths: so the five handlers that chunks 2 to 4 of the redesign added to the language switch, each a read of a few files or
+    none, skip the queue (queue=False), and the switch takes about as long as it did before them, on the same 24 queued listeners.
+    Each of the five is bound once, with the triggers it had; every listener the switch had before keeps the queue."""
+    path, d, page, _ = sending_page(tmp_path, madeup_out)                  # the page of this PC, with its settings file: every tab
+    language = handler_of(page, "review_texts").inputs[0]
+    on_switch = [(getattr(f.fn, "__name__", ""), f.queue) for f in page.fns.values() if (language._id, "change") in f.targets]
+    added = ["files_ticked", "hand_new_cleared", "record_shown", "removal_relabelled", "review_texts"]
+    assert sorted(name for name, queued in on_switch if not queued) == added
+    assert len([name for name, queued in on_switch if queued]) == 24 and len(on_switch) == 29
+    for name in added:
+        assert [f.queue for f in page.fns.values() if getattr(f.fn, "__name__", "") == name] == [False], name
+
+
+# --- the lines a difference was read from, marked on both documents (finding 10 of the owner's test) ---
+
+import math  # noqa: E402
+
+from PIL import ImageChops, ImageColor  # noqa: E402
+from reportlab.lib.pagesizes import A4  # noqa: E402
+from reportlab.pdfgen.canvas import Canvas  # noqa: E402
+
+from aid.readers.pdf_text import extract_lines, line_boxes  # noqa: E402
+from aid.review import app as app_module  # noqa: E402
+from aid.review import look  # noqa: E402
+from aid.review.app import DPI, CaseView, LineMark  # noqa: E402
+from aid.review.page import _marked  # noqa: E402
+from aid.schema import SourceRef  # noqa: E402
+
+
+def boxed(pdf, page: int, line: int) -> tuple:
+    """The box of the line in pixels of its page as the view renders it: line_boxes' box in points, at DPI dots per inch."""
+    return tuple(value * DPI / 72 for value in line_boxes(pdf).lines[page, line])
+
+
+def cited(case, po: tuple[int, int] | None, doc: tuple[int, int] | None) -> None:
+    """The case's saved result with the values of its first flag read from these lines, (page, line), of the purchase order and of
+    the supplier's document; None leaves a value without a source."""
+    result = CaseResult.model_validate_json((case.root / "steps" / "08_result.json").read_text(encoding="utf-8"))
+    flag = result.findings.flags[0]
+
+    def placed(value, where):
+        value = value or DocValue()
+        return value.model_copy(update={"source": SourceRef(page=where[0], line=where[1], text=value.text or "") if where else None})
+    flag = flag.model_copy(update={"po_value": placed(flag.po_value, po), "doc_value": placed(flag.doc_value, doc)})
+    findings = result.findings.model_copy(update={"flags": [flag, *result.findings.flags[1:]]})
+    case.write_step(8, "result", result.model_copy(update={"findings": findings}))
+
+
+def drawn(path, crop: tuple | None = None):
+    """A one-page PDF with two lines of an order, its page cut to `crop` (a crop box in points) when given."""
+    canvas = Canvas(str(path), pagesize=A4)
+    if crop is not None:
+        canvas.setCropBox(crop)
+    canvas.setFont("Helvetica", 9)
+    canvas.drawString(60, 700, "Orderbevestiging 250107")
+    canvas.drawString(60, 680, "1 KM-0701 Klephuis DN25 3 st 14,00")
+    canvas.save()
+    return path
+
+
+def printed(path, places: list[tuple[float, float]], mediabox: tuple | None = None, turn: int = 0):
+    """A one-page A4 PDF with a line of an order at each place (x, y in points from the bottom left), its MediaBox then set to
+    `mediabox` (left, bottom, right, top in points) when given, so that the page no longer starts at 0 0, and the page turned by
+    `turn` degrees (its /Rotate)."""
+    import pypdfium2 as pdfium
+    canvas = Canvas(str(path), pagesize=A4)
+    canvas.setFont("Helvetica", 9)
+    for n, (x, y) in enumerate(places, 1):
+        canvas.drawString(x, y, f"{n} KM-07{n:02d} Klephuis DN25 3 st 14,00")
+    canvas.save()
+    if mediabox is not None or turn:
+        document = pdfium.PdfDocument(path.read_bytes())
+        if mediabox is not None:
+            document[0].set_mediabox(*mediabox)
+        document[0].set_rotation(turn)
+        document.save(path)
+        document.close()
+    return path
+
+
+def ink(png: bytes) -> list[tuple[int, int, int, int]]:
+    """The printed lines of a page image, top to bottom: for each band of pixel rows that holds ink, its first and last row and the
+    first and last column of its ink."""
+    mask = Image.open(io.BytesIO(png)).convert("L").point(lambda value: 255 if value < 128 else 0)
+    rows = [mask.crop((0, y, mask.width, y + 1)).getbbox() for y in range(mask.height)]
+    bands, start = [], None
+    for y, row in enumerate([*rows, None]):
+        if row is not None and start is None:
+            start = y
+        elif row is None and start is not None:
+            bands.append((start, y - 1, min(span[0] for span in rows[start:y]), max(span[2] for span in rows[start:y]) - 1))
+            start = None
+    return bands
+
+
+def test_the_view_marks_the_lines_a_difference_was_read_from(tmp_path, madeup_out):
+    """Finding 10. For each row of the differences the view marks the line of the supplier's document and the line of the purchase
+    order that its values were read from, the lines the row cites ("p1 r8: ..."): each mark has its page, its box in pixels of the page
+    as the view renders it (line_boxes' box in points, at DPI dots per inch) and the item of its row. A value without a source marks
+    nothing, and neither do the matches, the items that could not be compared and an item without values."""
+    d = deps(tmp_path, madeup_out)
+    c, _ = run(d, madeup_out, "MU07", "250107")
+    view = load_case_view(c)
+    po_pdf = Path(c.read_step("po_versions")["versions"][0]["pdf_path"])
+    [row] = view.flags
+    assert (row.po_source.split(":")[0], row.doc_source.split(":")[0]) == ("p1 r8", "p1 r8")
+    [doc_mark], [po_mark] = view.doc_marks, view.po_marks
+    assert isinstance(doc_mark, LineMark) and (doc_mark.page, doc_mark.item_id, po_mark.page, po_mark.item_id) == (1, "RI1", 1, "RI1")
+    assert doc_mark.box == pytest.approx(boxed(c.input_files[0], 1, 8)) and po_mark.box == pytest.approx(boxed(po_pdf, 1, 8))
+    width, height = Image.open(io.BytesIO(view.doc_pages[0])).size
+    left, top, right, bottom = view.doc_marks[0].box
+    assert 0 < left < right < width and 0 < top < bottom < height
+    mu13, _ = run(d, madeup_out, "MU13", "250113", now=LATER)                    # the document's unit has no source
+    view = load_case_view(mu13)
+    [row] = view.flags
+    assert row.doc_source == "" and row.po_source and view.doc_marks == [] and [mark.item_id for mark in view.po_marks] == [row.item_id]
+    mu06, _ = run(d, madeup_out, "MU06", "250106", now=LATER + timedelta(minutes=1))
+    view = load_case_view(mu06)
+    assert view.flags == [] and view.uncompared and view.matches and view.doc_marks == view.po_marks == []
+    new, _ = run(deps(tmp_path / "new", madeup_out, settings=NEW_SUPPLIER), madeup_out, "MU01", "250101")
+    view = load_case_view(new)
+    assert [(row.po_source, row.doc_source) for row in view.flags] == [("", "")] and view.doc_marks == view.po_marks == []
+    assert CaseView.model_fields["doc_marks"].default == CaseView.model_fields["po_marks"].default == []
+
+
+def test_only_a_pdf_whose_page_images_are_as_large_as_its_pages_gets_marks(tmp_path, madeup_out, monkeypatch):
+    """Finding 10. Only a PDF gets marks: a PNG cart, an HTML cart and a purchase order read from an export get none, whatever their
+    values cite. A source whose line has no box marks nothing. A page whose image differs from the page's size in points at DPI dots
+    per inch by more than 2 pixels (a page cut to a crop box, or turned) gets no mark, so that a mark never stands in the wrong place.
+    A page whose MediaBox does not start at 0 0, whose image starts at the MediaBox's corner, has its marks on the lines they cite, as
+    their ink shows. Reading the boxes never raises into the page: any error means no marks."""
+    from aid.tests.helpers import EXPORT_COLUMNS
+    d = deps(tmp_path, madeup_out)
+    png = cart_case(d, madeup_out, "CART02.png", "250202")
+    cited(png, (1, 1), (1, 1))
+    view = load_case_view(png)
+    assert view.doc_pages and view.doc_marks == view.po_marks == []
+    export = tmp_path / "exports" / "CART02_export.csv"
+    export.parent.mkdir()
+    shutil.copy(madeup_out / "CART02_export.csv", export)
+    d.store.from_export(export, EXPORT_COLUMNS)
+    html = open_upload_case(d.settings.cases_root, [madeup_out / "CART02.html"], "250202", "cart", LATER)
+    assert run_case(html, d).status == "review" and [v["pdf_path"] for v in html.read_step("po_versions")["versions"]] == [str(export)]
+    cited(html, (1, 1), (1, 7))
+    view = load_case_view(html, d.store)
+    assert view.flags[0].po_source.startswith("p1 r1") and view.doc_marks == view.po_marks == []
+    c, _ = run(d, madeup_out, "MU07", "250107", now=LATER + timedelta(minutes=1))
+    cited(c, (1, 99), (2, 1))                                                   # no line 99, no page 2
+    assert load_case_view(c).doc_marks == load_case_view(c).po_marks == []
+    for number, crop, marks in (("250203", None, 1), ("250204", (50, 50, 545, 792), 0)):
+        made = cart_case(d, madeup_out, str(drawn(tmp_path / f"{number}.pdf", crop)), number)     # one flag, on a drawn PDF
+        cited(made, None, (1, 2))
+        view = load_case_view(made)
+        assert len(view.doc_pages) == 1 and [mark.page for mark in view.doc_marks] == [1] * marks, crop
+    ten = [(60, 800 - 20 * n) for n in range(10)]
+    for number, places, mediabox, line in (("250205", ten, (0, 20, A4[0], A4[1] + 20), 3),              # the page 20 points up
+                                           ("250206", ten, (20, 30, A4[0] + 20, A4[1] + 30), 3),        # 20 to the right and 30 up
+                                           ("250208", [(60, 920), (60, 700)], (0, 100, A4[0], A4[1] + 100), 1)):   # a line near its top
+        made = cart_case(d, madeup_out, str(printed(tmp_path / f"{number}.pdf", places, mediabox)), number)
+        cited(made, None, (1, line))
+        view = load_case_view(made)
+        [mark] = view.doc_marks
+        bands = ink(view.doc_pages[0])
+        assert len(bands) == len(places), number
+        assert [n for n, (top, bottom, _, _) in enumerate(bands, 1) if top <= mark.box[3] and bottom >= mark.box[1]] == [line], number
+        assert abs(mark.box[0] - bands[line - 1][2]) <= 3 and bands[line - 1][3] <= mark.box[2] + 3, number     # its words, left to right
+    for number, turn in (("250209", 90), ("250210", 180)):         # a turned page, whose image may be as large as the page in points
+        made = cart_case(d, madeup_out, str(printed(tmp_path / f"{number}.pdf", ten, turn=turn)), number)
+        cited(made, None, (1, 3))
+        view = load_case_view(made)
+        assert len(view.doc_pages) == 1 and view.doc_marks == [], turn
+    other, _ = run(d, madeup_out, "MU07", "250107", now=LATER + timedelta(minutes=2))
+
+    def damaged(pdf):
+        raise RuntimeError("a damaged cross-reference table")
+    monkeypatch.setattr(app_module, "line_boxes", damaged)
+    view = load_case_view(other)
+    assert view.doc_pages and view.po_pages and view.flags and view.doc_marks == view.po_marks == []
+
+
+def test_a_line_outside_its_page_is_not_marked_and_the_case_is_still_shown(tmp_path, madeup_out):
+    """Finding 10. The text layer of a page can hold a line that lies outside the page's image, printed above or beside the page as
+    hidden or cut-off text, which extract_lines numbers as any other line and a source can cite: it gets no mark, so that a mark
+    never stands in the wrong place, and show gives its 11 outputs with the page as the view renders it, the message empty. _marked
+    itself draws nothing for a box outside its image, nor for a box that is no number, and raises nothing."""
+    d = deps(tmp_path, madeup_out)
+    pdf = printed(tmp_path / "outside.pdf", [(60, 880), (60, 700), (620, 650)])        # above the page, on it, beside it
+    lines = extract_lines(pdf)
+    assert [line.line for line in lines] == [1, 2, 3] and lines[0].top < 0 and lines[2].x0 > A4[0]
+    made = cart_case(d, madeup_out, str(pdf), "250207")
+    show = handler_of(build_app(d), "show")
+    for line, marks in ((1, 0), (3, 0), (2, 1)):
+        cited(made, None, (1, line))
+        view = load_case_view(made, d.store)
+        shown = show.fn(made.case_id, "nl")
+        assert len(view.doc_marks) == marks and len(shown) == 11 and shown[-1] == "", line
+        if not marks:
+            assert [image.convert("RGB").tobytes() for image in shown[1]] == [
+                Image.open(io.BytesIO(png)).convert("RGB").tobytes() for png in view.doc_pages], line
+    image = Image.open(io.BytesIO(view.doc_pages[0])).convert("RGB")
+    width, height = image.size
+    outside = [(-80.0, -60.0, -20.0, -50.0), (100.0, -40.0, 300.0, -28.0), (width + 10.0, 100.0, width + 90.0, 112.0),
+               (100.0, height + 5.0, 300.0, height + 17.0), (float("nan"), 100.0, 300.0, 112.0), (100.0, 100.0, float("inf"), 112.0)]
+    [drawn_on] = _marked([image], [LineMark(page=1, box=box, item_id="RI1") for box in outside])
+    assert drawn_on.convert("RGB").tobytes() == image.tobytes()
+
+
+def test_the_page_marks_the_cited_lines_on_both_documents_and_changes_nothing_else(tmp_path, madeup_out):
+    """Finding 10. show draws each mark of the view on the page image it shows: the line's box, 3 pixels wider on every side, keeps
+    its ink and takes the tint of attention as its ground, edged with 2 pixels in the mark colour of attention (#FFFBEB and #B45309,
+    the tokens of aid/review/look.py); every pixel outside that box is as the view renders it. show keeps the number and the kind of
+    its outputs, and a case without marks shows its pages as they are."""
+    d = deps(tmp_path, madeup_out)
+    c, _ = run(d, madeup_out, "MU07", "250107")
+    plain, _ = run(d, madeup_out, "MU06", "250106", now=LATER)                  # no difference: no mark
+    page = build_app(d)
+    show = handler_of(page, "show")
+    assert [type(block).__name__ for block in show.outputs] == ["Markdown", "Gallery", "Gallery", "Dataframe", "Dataframe", "Dataframe",
+                                                                "Dropdown", "State", "Markdown", "Markdown", "Markdown"]
+    shown = show.fn(c.case_id, "nl")
+    view = load_case_view(c, d.store)
+    tint, edge = (ImageColor.getrgb(look.TONES["attention"].tint), ImageColor.getrgb(look.TONES["attention"].mark))
+    assert (tint, edge) == ((0xFF, 0xFB, 0xEB), (0xB4, 0x53, 0x09))
+    for images, pages, marks in ((shown[1], view.doc_pages, view.doc_marks), (shown[2], view.po_pages, view.po_marks)):
+        [mark] = marks
+        rendered_page = Image.open(io.BytesIO(pages[0])).convert("RGB")
+        marked = images[0].convert("RGB")
+        left, top = math.floor(mark.box[0]) - 3, math.floor(mark.box[1]) - 3
+        right, bottom = math.ceil(mark.box[2]) + 3, math.ceil(mark.box[3]) + 3
+        assert ImageChops.difference(rendered_page, marked).getbbox() == (left, top, right + 1, bottom + 1)     # nothing outside it
+        assert {marked.getpixel(corner) for corner in ((left, top), (right, bottom), (left + 1, bottom - 1), (right - 1, top + 1))} == {edge}
+        assert rendered_page.getpixel((left + 2, top + 2)) == (255, 255, 255) and marked.getpixel((left + 2, top + 2)) == tint
+        inside = (left + 2, top + 2, right - 1, bottom - 1)
+        assert marked.crop(inside).convert("L").getextrema()[0] < 64                                        # the line's ink stays
+        assert len(images) == len(pages) and marked.size == rendered_page.size
+    shown = show.fn(plain.case_id, "nl")
+    view = load_case_view(plain, d.store)
+    assert [image.convert("RGB").tobytes() for image in shown[1] + shown[2]] == [
+        Image.open(io.BytesIO(page)).convert("RGB").tobytes() for page in view.doc_pages + view.po_pages]
+
+
+def test_the_pages_of_a_document_fill_their_column(tmp_path, madeup_out):
+    """Finding 10. The style rules of the page show each page of a document (class doc-view) at the full width of its column with its
+    own height, no longer in a square cell, the pages one under the other in the gallery's height of 560 px, which scrolls; a click
+    on a page still opens the gallery's larger view, which these rules leave as it is."""
+    css = look.PAGE_CSS
+    for rule in (".block.doc-view .grid-container { grid-template-columns: 1fr; grid-template-rows: none; grid-auto-rows: auto; }",
+                 ".block.doc-view .thumbnail-lg { aspect-ratio: auto; height: auto; }",
+                 ".block.doc-view .thumbnail-lg > img { height: auto; object-fit: contain; }"):
+        assert rule in css, rule
+    assert ".preview" not in css and "thumbnail-small" not in css
+
+
+# --- one decision row per review item (chunk 3 of the redesign, spec 2.1.1) ---
+
+from aid.review import hand_list  # noqa: E402
+
+
+def bare(block):
+    """A component of a row itself, out of the form that the page library puts around an input component in a row or a column."""
+    return block.children[0] if isinstance(block, gradio.layouts.Form) else block
+
+
+def decision_rows(page, state: dict, language: str = "nl") -> dict[str, SimpleNamespace]:
+    """The decision rows that the review tab renders for the case of `state` in the language, by item id: the row, the column on its
+    left with the Markdown of what is decided, the column on its right with the radio and under it the tick and the row's note, and
+    the saves bound to the radio's and to the tick's input (gr.render, which a test can only reach through the page's own render
+    function)."""
+    from gradio.context import LocalContext
+    [renderable] = page.default_config.renderables
+    token = LocalContext.blocks_config.set(page.default_config)
+    try:
+        renderable.apply(state, language)
+    finally:
+        LocalContext.blocks_config.reset(token)
+    saves = [f for f in page.default_config.fns.values() if getattr(f, "rendered_in", None) is renderable]
+    found = {}
+    for row in page.default_config.blocks[renderable.container_id].children:
+        left, right = row.children
+        [what] = left.children
+        radio, foot = bare(right.children[0]), right.children[1]
+        tick, note = bare(foot.children[0]), foot.children[1]
+        [radio_save] = [f for f in saves if f.targets == [(radio._id, "input")]]
+        [tick_save] = [f for f in saves if f.targets == [(tick._id, "input")]]
+        found[str(radio.key).rsplit("-", 1)[1]] = SimpleNamespace(row=row, left=left, what=what, right=right, radio=radio, foot=foot,
+                                                                  tick=tick, note=note, radio_save=radio_save, tick_save=tick_save)
+    return found
+
+
+def noted(*sentences: str, refused: bool = False) -> dict:
+    """The update a save gives the row's note: the sentences, and the classes of the note, "refused" for a refusal."""
+    return {"__type__": "update", "value": " ".join(sentences), "elem_classes": ["row-note", "refused"] if refused else ["row-note"]}
+
+
+def test_a_decision_answers_in_its_own_row_with_what_is_left(tmp_path, madeup_out):
+    """B3.3 of the redesign (spec 2.1.1). A decision answers in its own row: the save of the radio and of the tick gives its first
+    output to the row's note, a Markdown keyed note-<case>-<item> under the radio beside the tick, and no longer to the status line;
+    the hint stays the second output, and the save shows no progress. Once decision_text saved it, the note says "Opgeslagen." and
+    what is left to decide on the case: "Nog 1 punt te besluiten.", "Nog 2 punten te besluiten." or "Alles is besloten: u kunt de
+    zaak afsluiten."; "Onopgelost laten" first says that the item stays open, and the case in review with it. A decision that stands
+    when the case is shown again shows "Opgeslagen." in its note, in the page's language, and none of the note's last answer stays
+    across a render. A refusal says decision_text's own sentence, as a refusal, and writes nothing: "Leverancier vragen" on a
+    try-out."""
+    from aid.decider import NoDecider
+    from aid.pipeline import Deps
+    from aid.tests.test_tryout import NOW as MADE, OPEN, give, results, runner_pass, tryout_settings
+
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    d = deps(tmp_path, madeup_out)
+    two, _ = run(d, madeup_out, "MU12", "250112")                  # two items without values: a price and a quantity
+    three, _ = run(d, madeup_out, "MU06", "250106", now=LATER)      # three items
+    page = build_app(d)
+    hint = handler_of(page, "show").outputs[8]
+    status = handler_of(page, "close").outputs[0]
+    assert hint.elem_id == "review-hint" and "answer" in status.elem_classes
+    rows = decision_rows(page, shown_state(page, two))
+    assert sorted(rows) == ["RI1", "RI2"]
+    for item, row in rows.items():
+        assert row.note.key == f"note-{two.case_id}-{item}" and row.note.elem_classes == ["row-note"] and row.note.value == ""
+        assert isinstance(row.note, gradio.Markdown) and [bare(child) for child in row.foot.children] == [row.tick, row.note]
+        assert row.note.preserved_by_key == [] and len(row.right.children) == 2
+        for save in (row.radio_save, row.tick_save):
+            assert save.outputs == [row.note, hint] and status not in save.outputs and save.show_progress == "hidden"
+    assert rows["RI1"].radio_save.fn("keep", False, "nl", shown_state(page, two)) == (noted(nl["row_saved"], nl["row_left_one"]), {
+        "__type__": "update", "value": "", "visible": False})
+    state = shown_state(page, two)
+    assert rows["RI2"].radio_save.fn("confirm", False, "nl", state)[0] == noted(nl["row_saved"], nl["row_all_decided"])
+    assert rows["RI2"].radio_save.fn("unresolved", False, "en", state)[0] == noted(en["row_saved"], en["row_open"], en["row_all_decided"])
+    assert [line["decision"] for line in map(json.loads, (two.root / "decisions.jsonl").read_text(encoding="utf-8").splitlines())] == [
+        "keep", "confirm", "unresolved"]
+    problem = look.TONES["problem"].text                                    # a refusal stands in the colour of a problem, not of done
+    assert f".block.row-note.refused .prose, .block.row-note.refused .prose * {{ color: {problem}; }}" in look.PAGE_CSS
+    assert rows["RI2"].tick_save.fn(None, True, "nl", state) == ({"__type__": "update"}, {"__type__": "update"})    # nothing chosen
+    shown = {language: decision_rows(page, shown_state(page, two, language), language) for language in ("nl", "en")}
+    assert [row.note.value for row in shown["nl"].values()] == [nl["row_saved"]] * 2 == ["Opgeslagen."] * 2
+    assert [row.note.value for row in shown["en"].values()] == ["Saved."] * 2
+    rows = decision_rows(page, shown_state(page, three))
+    assert rows["RI2"].radio_save.fn("keep", False, "nl", shown_state(page, three))[0] == noted("Opgeslagen.", "Nog 2 punten te besluiten.")
+    assert rows["RI3"].radio_save.fn("keep", False, "en", shown_state(page, three))[0] == noted("Saved.", "1 item left to decide.")
+    assert [row.note.value for row in decision_rows(page, shown_state(page, three)).values()] == ["", "Opgeslagen.", "Opgeslagen."]
+    assert (nl["row_left_one"], nl["row_left_many"], nl["row_all_decided"], nl["row_open"]) == (
+        "Nog 1 punt te besluiten.", "Nog {n} punten te besluiten.", "Alles is besloten: u kunt de zaak afsluiten.",
+        "Dit punt blijft open: bij afsluiten blijft de zaak ter beoordeling.")
+    assert (en["row_left_one"], en["row_left_many"], en["row_all_decided"], en["row_open"]) == (
+        "1 item left to decide.", "{n} items left to decide.", "Everything is decided: you can close the case.",
+        "This item stays open: when you close, the case stays for review.")
+    # a price row: the tick saves the decision that stands with it
+    priced, _ = run(d, madeup_out, "MU07", "250107", now=LATER + timedelta(minutes=1))
+    [row] = decision_rows(page, shown_state(page, priced)).values()
+    assert row.tick.visible is True and row.radio_save.fn("confirm", False, "nl", shown_state(page, priced))[0] == noted(
+        "Opgeslagen.", "Alles is besloten: u kunt de zaak afsluiten.")
+    assert row.tick_save.fn("confirm", True, "nl", shown_state(page, priced))[0] == noted("Opgeslagen.", "Alles is besloten: u kunt de zaak afsluiten.")
+    assert json.loads((priced.root / "decisions.jsonl").read_text(encoding="utf-8").splitlines()[-1])["article_update"] is True
+    # a refusal: "Leverancier vragen" on a try-out writes nothing and says why, as a refusal
+    store = deps(tmp_path / "tryout", madeup_out, settings=OPEN).store
+    settings = tryout_settings(tmp_path / "tryout", first_cases_review=5)
+    give(settings, store, "250108", "price_large")
+    runner_pass(settings, store)
+    [made] = results(settings)
+    tried = load_case(settings.cases_root, made.case_id)
+    tryout_page = build_app(Deps(settings=settings, store=store, reader=read_with_parser, decider=NoDecider(),
+                                 writer=PreparedWriter(settings.cases_root / "prepared"), mailer=None, clock=lambda: MADE))
+    [row] = [row for row in decision_rows(tryout_page, shown_state(tryout_page, tried)).values() if "ask" in [v for _, v in row.radio.choices]]
+    assert row.radio_save.fn("ask", False, "nl", shown_state(tryout_page, tried)) == (noted(nl["tryout_nothing_sent"], refused=True),
+                                                                                      {"__type__": "update"})
+    assert not (tried.root / "decisions.jsonl").exists()
+
+
+def test_a_decision_to_ask_says_where_the_question_goes(tmp_path, madeup_out):
+    """B3.4 of the redesign (spec 2.1.1). "Leverancier vragen" saved says in its row where the question goes when the case is
+    closed, from the settings as they are now (a change of the settings file counts without a restart), with the checks the close
+    makes before it sends, in its order, and nothing asked of Microsoft: when the mailer of a close would have no way to send it
+    (its route), why not, with what to do, as the close then says: no mailbox connected (send_via "auto" without a mailbox or an SMTP
+    server, the example settings' own way to send), the mail server's password not set, or the settings file that cannot be read;
+    else for a supplier without an address, that the question does not go until one is filled in under Instellingen, Leveranciers;
+    with sending set to Bestanden, that the question is kept as a file and not sent; and else to the supplier by its name, never by
+    its address. What is left to decide follows."""
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    smtp = {"send_via": "smtp", "smtp_host": "smtp.example.com", "smtp_user": "aid@example.com"}
+    path, d, page, _ = sending_page(tmp_path, madeup_out, environ={PASSWORD_ENV: "made-up"}, **smtp)   # a way to send; S07's address
+    c, _ = run(d, madeup_out, "MU07", "250107")
+    [row] = decision_rows(page, shown_state(page, c)).values()
+    note, hint = row.radio_save.fn("ask", False, "nl", shown_state(page, c))
+    assert note == noted("Opgeslagen.", "Bij afsluiten gaat er een vraag naar S07.", "Alles is besloten: u kunt de zaak afsluiten.")
+    assert SUPPLIER not in str(note) and hint == {"__type__": "update", "value": "", "visible": False}
+    assert row.radio_save.fn("ask", False, "en", shown_state(page, c))[0] == noted(
+        "Saved.", "When you close, a question goes to S07.", "Everything is decided: you can close the case.")
+    changed_on_disk(path, supplier_emails={})                              # the address taken out, with the page running
+    assert row.radio_save.fn("ask", False, "nl", shown_state(page, c))[0] == noted(
+        nl["row_saved"], nl["row_asks_no_address"].format(supplier="S07"), nl["row_all_decided"])
+    assert nl["row_asks_no_address"].format(supplier="S07") == ("Van S07 is geen e-mailadres bekend: vul het in onder Instellingen, "
+                                                                "Leveranciers, anders gaat de vraag niet weg.")
+    assert en["row_asks_no_address"].format(supplier="S07") == ("There is no e-mail address for S07: fill it in under Settings, Suppliers, "
+                                                                "or the question will not go.")
+    changed_on_disk(path, supplier_emails={"S07": SUPPLIER}, send_via="file")
+    assert row.radio_save.fn("ask", False, "en", shown_state(page, c))[0] == noted(
+        en["row_saved"], "Sending is set to Files: the question is kept as a file and not sent.", en["row_all_decided"])
+    assert nl["row_asks_as_file"] == "Verzenden staat op Bestanden: de vraag wordt als bestand bewaard en niet verzonden."
+    assert nl["row_asks"] == "Bij afsluiten gaat er een vraag naar {supplier}." and en["settings_via:file"].startswith("Files")
+    assert [json.loads(line)["decision"] for line in (c.root / "decisions.jsonl").read_text(encoding="utf-8").splitlines()] == ["ask"] * 4
+    assert not list((tmp_path / "cases").rglob("*.eml")) and not (tmp_path / "given").exists()          # a decision sends nothing
+    # no way to send: the note says why, and the close then says the same and keeps the case
+    changed_on_disk(path, send_via="auto", smtp_host=None, smtp_user=None)     # the example settings' way: no mailbox, no server
+    assert row.radio_save.fn("ask", False, "nl", shown_state(page, c))[0] == noted(
+        nl["row_saved"], nl["row_asks_unrouted:no_mailbox"], nl["row_all_decided"])
+    assert nl["row_asks_unrouted:no_mailbox"] == ("Er is geen postvak verbonden: verbind een postvak onder Instellingen, Postvak en AI, "
+                                                  "anders gaat de vraag bij afsluiten niet weg.")
+    assert en["row_asks_unrouted:no_mailbox"] == ("No mailbox is connected: connect a mailbox under Settings, Mailbox and AI, or the "
+                                                  "question will not go when you close.")
+    assert pressed_close(page, c) == (NO_MAILBOX, c.case_id) and not list((tmp_path / "cases").rglob("*.eml"))
+    path.write_text("{", encoding="utf-8")                                 # a settings file that cannot be read: the close sends nothing
+    assert row.radio_save.fn("ask", False, "en", shown_state(page, c))[0] == noted(
+        en["row_saved"], "The settings cannot be read now: the question will not go when you close. Pass this on to the researcher.",
+        en["row_all_decided"])
+    assert nl["row_asks_unrouted:settings"] == ("De instellingen kunnen nu niet worden gelezen: de vraag gaat bij afsluiten niet weg. "
+                                                "Geef dit door aan de onderzoeker.")
+    (tmp_path / "password").mkdir()
+    _, other, unrouted, _ = sending_page(tmp_path / "password", madeup_out, **smtp)          # the server set, its password not
+    asked, _ = run(other, madeup_out, "MU07", "250107")
+    [row] = decision_rows(unrouted, shown_state(unrouted, asked)).values()
+    assert row.radio_save.fn("ask", False, "nl", shown_state(unrouted, asked))[0] == noted(
+        nl["row_saved"], "Het wachtwoord van de mailserver is niet ingesteld: de vraag gaat bij afsluiten niet weg. Geef dit door aan de "
+        "onderzoeker.", nl["row_all_decided"])
+    assert en["row_asks_unrouted:no_password"] == ("The mail server's password is not set: the question will not go when you close. "
+                                                   "Pass this on to the researcher.")
+    assert {key.split(":")[1] for key in nl if key.startswith("row_asks_unrouted:")} == {"no_mailbox", "no_password", "settings",
+                                                                                  "sign_in", "store"}
+
+
+
+@pytest.mark.parametrize("values", [MAILBOX, {"mail_folder": "AAMkADMadeUpFolder0001=", **MAILBOX}],
+                         ids=["microsoft", "microsoft with a folder"])
+def test_a_decision_to_ask_says_the_question_will_not_go_while_nobody_is_signed_in(tmp_path, madeup_out, values):
+    """send_via "microsoft" ("Het postvak van de aanmelding") before the first sign-in or after "Afmelden": nobody is signed in, which
+    the token cache on this PC tells without Microsoft. The note says that the question would not go and what to do, after the
+    supplier's address as the close checks it, and asks Microsoft nothing; the close then sends nothing, says the sign-in is missing
+    and keeps the case in review. A store that is refused is said the same way, with its own sentence."""
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    mailbox, app = graph(), FakeApp(accounts=[USERNAME])
+    path, d, page, account = sending_page(tmp_path, madeup_out, app=app, session=mailbox, send_via="microsoft", **values)
+    assert handler_of(page, "sign_out").fn(TENANT_ID, CLIENT_ID, "nl")[3] == nl["settings_signed_out"]
+    c, _ = run(d, madeup_out, "MU07", "250107")
+    [row] = decision_rows(page, shown_state(page, c)).values()
+    calls = list(app.calls)
+    changed_on_disk(path, supplier_emails={})                     # no address: the close names the address first, and so does the note
+    assert row.radio_save.fn("ask", False, "nl", shown_state(page, c))[0] == noted(
+        nl["row_saved"], nl["row_asks_no_address"].format(supplier="S07"), nl["row_all_decided"])
+    changed_on_disk(path, supplier_emails={"S07": "inkoop@s07.example.com"})
+    note = row.radio_save.fn("ask", False, "nl", shown_state(page, c))[0]
+    assert nl["row_asks"].format(supplier="S07") not in note["value"], note["value"]
+    assert note == noted(nl["row_saved"], nl["row_asks_unrouted:sign_in"], nl["row_all_decided"])
+    assert row.radio_save.fn("ask", False, "en", shown_state(page, c))[0] == noted(
+        en["row_saved"], en["row_asks_unrouted:sign_in"], en["row_all_decided"])
+    assert nl["row_asks_unrouted:sign_in"] == ("U bent niet aangemeld bij Microsoft: meld u aan onder Instellingen, Postvak en AI, "
+                                               "anders gaat de vraag bij afsluiten niet weg.")
+    assert en["row_asks_unrouted:sign_in"] == ("You are not signed in to Microsoft: sign in under Settings, Mailbox and AI, or the "
+                                               "question will not go when you close.")
+    assert app.calls == calls and mailbox.calls == []              # the note asked Microsoft nothing
+    assert pressed_close(page, c) == (LAPSED, c.case_id) and mailbox.calls == []
+
+
+def test_a_row_says_its_difference_once(tmp_path, madeup_out):
+    """B3.5 of the redesign (spec 2.1.1). A decision row is a Row of its own (class decision-row): on its left (a column of scale 2,
+    which the browser widens as it does a column, holding the Markdown of class decision-what) what is decided, each fact once; on
+    its right (a column of scale 3) the radio "Besluit" with its four options in one grammar,
+    in their order, and under it the tick for the article price beside the row's note (class decision-foot). What is decided: the
+    field and the line in bold ("Prijs, regel 1"); the purchase order's value first and the supplier's after it, in the language's
+    form (a decimal comma in Dutch, a day as 16-11-2026), with the reason by its label; and as meta where each value was read, by its
+    page and line in words and the text of that line as it was read, the lines that the documents mark (finding 10). No item id: it
+    stays in the column Punt of the lists. A row without values has no line of values, and a row whose item names no field and no
+    line is headed by its reason."""
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    d = deps(tmp_path, madeup_out)
+    c, _ = run(d, madeup_out, "MU07", "250107")
+    page = build_app(d)
+    state = shown_state(page, c)
+    [row] = state["lists"]["flags"]
+    po_text, doc_text = (hand_list._markdown(source.split(": ", 1)[1]) for source in (row.po_source, row.doc_source))
+    shown = {language: decision_rows(page, state, language)["RI1"] for language in ("nl", "en")}
+    assert shown["nl"].what.value == ("**Prijs, regel 1**\n\nInkooporder 12,50 → leverancier 14,00 · Prijsverschil boven de drempel\n\n"
+                                      f"Gelezen op de inkooporder (pagina 1, tekstregel 8): {po_text}\n\n"
+                                      f"Gelezen bij de leverancier (pagina 1, tekstregel 8): {doc_text}")
+    assert shown["en"].what.value == ("**Price, line 1**\n\nPurchase order 12.50 → supplier 14.00 · Price difference above the threshold\n\n"
+                                      f"Read on the purchase order (page 1, text line 8): {po_text}\n\n"
+                                      f"Read in the supplier's document (page 1, text line 8): {doc_text}")
+    assert "1 KM-0701 Klephuis DN25 3 st 12,50 1 16-11-2026" in shown["nl"].what.value
+    assert all("RI1" not in found.what.value for found in shown.values())
+    view = load_case_view(c, d.store)                                       # the lines the row names are the lines the documents mark
+    po_pdf = Path(c.read_step("po_versions")["versions"][0]["pdf_path"])
+    assert [(mark.page, mark.box) for mark in view.po_marks] == [(1, pytest.approx(boxed(po_pdf, 1, 8)))]
+    assert [(mark.page, mark.box) for mark in view.doc_marks] == [(1, pytest.approx(boxed(c.input_files[0], 1, 8)))]
+    found = shown["nl"]
+    assert found.row.elem_classes == ["decision-row"] and isinstance(found.row, gradio.Row)
+    assert found.what.elem_classes == ["decision-what"] and isinstance(found.what, gradio.Markdown)
+    assert isinstance(found.left, gradio.Column) and found.left.scale == 2 and isinstance(found.right, gradio.Column) and found.right.scale == 3
+    assert found.foot.elem_classes == ["decision-foot"] and isinstance(found.foot, gradio.Row) and found.radio.label == nl["decision"]
+    assert found.radio.choices == [("Waarde van de leverancier overnemen", "confirm"), ("Waarde van de inkooporder houden", "keep"),
+                                   ("Leverancier vragen", "ask"), ("Onopgelost laten", "unresolved")]
+    assert shown["en"].radio.choices == [("Take the supplier's value", "confirm"), ("Keep the purchase order's value", "keep"),
+                                         ("Ask the supplier", "ask"), ("Leave unresolved", "unresolved")]
+    assert (nl["source_po"], nl["source_doc"], nl["source_place"]) == ("Gelezen op de inkooporder", "Gelezen bij de leverancier", "pagina {page}, tekstregel {line}")
+    # a delivery date in the day form of both languages; a row without values; a row of an item about the whole case
+    dated, _ = run(d, madeup_out, "MU15", "250115", now=LATER)
+    for language, words in (("nl", "Inkooporder 16-11-2026 → leverancier 30-11-2026/04-12-2026 · Leverdatum later dan de levertijd plus de marge"),
+                            ("en", "Purchase order 16-11-2026 → supplier 30-11-2026/04-12-2026 · Delivery date later than the lead time plus the margin")):
+        assert decision_rows(page, shown_state(page, dated), language)["RI1"].what.value.split("\n\n")[1] == words
+    bare, _ = run(d, madeup_out, "MU12", "250112", now=LATER + timedelta(minutes=1))
+    rows = decision_rows(page, shown_state(page, bare))
+    assert [row.what.value for row in rows.values()] == ["**Prijs, regel 1**\n\nOmrekening van de eenheid onbekend",
+                                                         "**Aantal, regel 1**\n\nOmrekening van de eenheid onbekend"]
+    new_d = deps(tmp_path / "new", madeup_out, settings=NEW_SUPPLIER)
+    new, _ = run(new_d, madeup_out, "MU01", "250101")
+    new_page = build_app(new_d)
+    assert [row.what.value for row in decision_rows(new_page, shown_state(new_page, new)).values()] == ["**Nieuwe leverancier**"]
+    assert [row.what.value for row in decision_rows(new_page, shown_state(new_page, new, "en"), "en").values()] == ["**New supplier**"]
+
+
+# --- numbers and days in the language's form, and the case list (chunk 3 of the redesign, spec 3.2 and 4.6) ---
+
+from aid.review.page import _case_label, _failed_label, _item_label  # noqa: E402
+
+
+def test_the_lists_show_numbers_and_days_in_the_language_form(tmp_path, madeup_out):
+    """B3.1 of the redesign (spec 3.2). The three lists show a price and a quantity with the decimal mark of the page's language, 12,50
+    in Dutch and 12.50 in English, and a day as 16-11-2026 in both, a range of days as its two days, as the tab "In Exact invoeren"
+    shows them, so that the review tables and that tab say a value alike. A value as printed, which the reader could not read as a
+    value, stays as it was printed; the sources stay as the line was read; the kinds of matched pairs keep their labels."""
+    c, _ = run(deps(tmp_path, madeup_out, writer=RetryingWriter(Down(), PreparedWriter(tmp_path))), madeup_out, "MU08", "250108")
+    view = load_case_view(c)
+    assert page_rows(view.flags, "nl")[0][3:5] == ["12,50", "12,70"] and page_rows(view.flags, "en")[0][3:5] == ["12.50", "12.70"]
+    assert page_rows(view.flags, "nl")[0][6:] == [view.flags[0].po_source, view.flags[0].doc_source]           # as the line was read
+    dated, _ = run(deps(tmp_path, madeup_out), madeup_out, "MU15", "250115", now=LATER)
+    view = load_case_view(dated)
+    for language in ("nl", "en"):
+        assert page_rows(view.flags, language)[0][3:5] == ["16-11-2026", "30-11-2026/04-12-2026"]
+    matches = {language: {(row[1], row[2]): row[3:5] for row in page_rows(view.matches, language)} for language in ("nl", "en")}
+    assert matches["nl"][("Prijs", "1")] == ["980,00", "980,00"] and matches["en"][("Price", "1")] == ["980.00", "980.00"]
+    assert matches["nl"][("Leverdatum", "2")] == matches["en"][("Delivery date", "2")] == ["16-11-2026", "16-11-2026"]
+    assert matches["nl"][("Aantal", "2")] == ["4", "4"] and matches["nl"][("Eenheid", "2")] == ["pc", "pc"]
+    assert matches["nl"][("Regel aanwezig", "2")] == ["aanwezig", "aanwezig"] and matches["en"][("Line present", "2")] == ["present", "present"]
+    printed = FlagRow(item_id="RI1", field="price", line="1", po_value="1.234,50", doc_value="12,50 EUR", po_source="", doc_source="",
+                      thumbnail=None, reason="price above threshold")
+    week = printed.model_copy(update={"field": "delivery_date", "po_value": "2026-W47", "doc_value": "eind november"})
+    for language in ("nl", "en"):
+        assert page_rows([printed], language)[0][3:5] == ["1.234,50", "12,50 EUR"]              # as printed: not read as a value
+    assert page_rows([week], "nl")[0][3:5] == ["week 47 (2026)", "eind november"] and page_rows([week], "en")[0][3] == "week 47 (2026)"
+    assert page_rows([printed.model_copy(update={"field": "quantity", "po_value": "2.5", "doc_value": "-1.25"})], "nl")[0][3:5] == ["2,5", "-1,25"]
+
+
+def test_the_case_list_names_the_order_the_count_and_the_day(tmp_path, madeup_out):
+    """B3.2 of the redesign (spec 2.1 and 4.6). The case list names each case in one grammar: its order and supplier, then what it
+    holds, then the time it was opened as dd-mm-jjjj HH:MM in both languages, as the hand list shows a day: "Inkooporder 250107
+    (S07): 1 punt, 12-11-2026 09:00". A case that is not in review has its status behind it and one made from a try-out
+    "(proefdocument)", as before; a failed case says "mislukt, zelf bekijken" in place of the count, and a document the intake left
+    to the buyer reads "Document MU05_conf.pdf: zelf bekijken, 12-11-2026 09:00", in the same grammar and the same form of the
+    day. A case on screen that left the list keeps its place under the same name, with its status behind it."""
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    path, d, page, _ = sending_page(tmp_path, madeup_out)
+    ids = left_to_the_buyer(d, madeup_out, tmp_path)
+    review, _ = run(d, madeup_out, "MU07", "250107")
+    failed, _ = run(d, madeup_out, "MU05", "250105", now=LATER)
+    made, result = run(d.model_copy(update={"writer": done_writer()}), madeup_out, "MU01", "250101", now=LATER + timedelta(minutes=1))
+    assert result.status == "closed"                                              # offered for the undo of its write
+    dutch = [("Inkooporder 250107 (S07): 1 punt, 12-11-2026 09:00", review.case_id),
+             ("Inkooporder 250101 (S01): 0 punten, 12-11-2026 09:02, afgesloten", made.case_id),
+             ("Inkooporder 250105 (S05): mislukt, zelf bekijken, 12-11-2026 09:01", failed.case_id),
+             (f"Document {SCAN}: zelf bekijken, 12-11-2026 09:00", ids[SCAN]), (f"Document {MANY}: zelf bekijken, 12-11-2026 09:00", ids[MANY]),
+             (f"Document {PHOTO}: zelf bekijken, 12-11-2026 09:01", ids[PHOTO])]
+    english = [("Purchase order 250107 (S07): 1 item, 12-11-2026 09:00", review.case_id),
+               ("Purchase order 250101 (S01): 0 items, 12-11-2026 09:02, closed", made.case_id),
+               ("Purchase order 250105 (S05): failed, look yourself, 12-11-2026 09:01", failed.case_id),
+               (f"Document {SCAN}: look yourself, 12-11-2026 09:00", ids[SCAN]), (f"Document {MANY}: look yourself, 12-11-2026 09:00", ids[MANY]),
+               (f"Document {PHOTO}: look yourself, 12-11-2026 09:01", ids[PHOTO])]
+    assert called(page, "refreshed", "nl", None)["Zaak"]["choices"] == dutch == called(page, "queue_ticked", "nl", None, None)["Zaak"]["choices"]
+    assert called(page, "refreshed", "en", None)["Zaak"]["choices"] == english
+    assert handler_of(page, "opened").fn("nl", SimpleNamespace(query_params={}))[0]["choices"] == dutch
+    assert (nl["case_failed_look"], en["case_failed_look"]) == ("mislukt, zelf bekijken", "failed, look yourself")
+    summary = load_case_view(review).summary
+    assert _case_label(summary.model_copy(update={"tryout": True}), nl) == "Inkooporder 250107 (S07): 1 punt, 12-11-2026 09:00 (proefdocument)"
+    assert _case_label(summary.model_copy(update={"tryout": True, "status": "waiting", "items": 2}), en) == (
+        "Purchase order 250107 (S07): 2 items, 12-11-2026 09:00, waiting for the supplier (try-out document)")
+    assert _case_label(summary.model_copy(update={"opened_at": "onbekend", "po_number": None, "supplier": None}), nl) == "Inkooporder onbekend: 1 punt, onbekend"
+    [line] = [line for line in aid_status.case_lines(d.settings.cases_root, NOW) if line.case_id == failed.case_id]
+    assert _failed_label(line, nl, True) == "Inkooporder 250105 (S05): mislukt, zelf bekijken, 12-11-2026 09:01 (proefdocument)"
+    [item] = [item for item in aid_status.review_items(d.settings.cases_root, NOW) if item.item_id == ids[SCAN]]
+    assert _item_label(item._replace(handled_at=LATER), nl) == f"Document {SCAN}: door u afgehandeld, 12-11-2026 09:00"
+    assert _item_label(item._replace(handled_at=LATER), en) == f"Document {SCAN}: handled by you, 12-11-2026 09:00"
+    decide(review, "RI1", "keep")
+    assert close_case(review, d).status == "closed"                               # closed in another browser tab
+    kept = called(page, "queue_ticked", "nl", review.case_id, None)["Zaak"]["choices"]
+    assert kept[-1] == ("Inkooporder 250107 (S07): 1 punt, 12-11-2026 09:00, afgesloten", review.case_id)

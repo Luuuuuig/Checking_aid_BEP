@@ -122,11 +122,17 @@ def launch_options(page, share: bool) -> dict:
     """What the page is launched with: on 127.0.0.1 only, with a public link or without, rendered in the browser by the Python
     server itself (ssr_mode False: no second server stands before it, so the port of the Host header is the port OwnHost sees),
     and with OwnHost as a middleware of the application gradio makes (app_kwargs). With share the host of the page's public link
-    passes too, read from the page once gradio has made the link."""
+    passes too, read from the page once gradio has made the link. The page has the look of aid/review/look.py: its theme, its
+    style rules and its load script, which gradio takes at the launch and not in gr.Blocks(), and no footer, whose links lead off
+    the PC (footer_links empty)."""
     from starlette.middleware import Middleware             # with gradio, which the page was built with
 
+    from aid.review.look import PAGE_CSS, PAGE_JS, page_theme
+    from aid.review.page import import_gradio
+
     link = (lambda: urlsplit(getattr(page, "share_url", None) or "").hostname) if share else None
-    return {"server_name": "127.0.0.1", "share": share, "ssr_mode": False, "app_kwargs": {"middleware": [Middleware(OwnHost, share_host=link)]}}
+    return {"server_name": "127.0.0.1", "share": share, "ssr_mode": False, "app_kwargs": {"middleware": [Middleware(OwnHost, share_host=link)]},
+            "theme": page_theme(import_gradio()), "css": PAGE_CSS, "js": PAGE_JS, "footer_links": []}
 
 
 def company_values(settings: Settings) -> list[str]:

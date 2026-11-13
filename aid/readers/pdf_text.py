@@ -95,6 +95,37 @@ def extract_lines(pdf: Path) -> list[TextLine]:
     return [row.line for row in extract_rows(pdf)]
 
 
+class LineBoxes(BaseModel):
+    """Where the lines of a PDF stand on its pages (line_boxes), in points, in the coordinates in which extract_lines gives the left
+    edge and the top of a line (pdfplumber's): to the right and down from the top left corner of a page whose MediaBox starts at
+    0 0, and from the corner that `origins` gives for a page whose MediaBox does not."""
+    lines: dict[tuple[int, int], tuple[float, float, float, float]]     # (page, line) -> (x0, top, x1, bottom) of the line's words
+    pages: dict[int, tuple[float, float]]                              # page -> (width, height)
+    origins: dict[int, tuple[float, float]]                            # page -> (x0, top) of its top left corner; (0, 0) for most
+    turns: dict[int, int]                                              # page -> the degrees its /Rotate turns it: 0, 90, 180 or 270
+
+
+def line_boxes(pdf: Path) -> LineBoxes:
+    """The box of every line of the PDF, by its page and its number as extract_lines numbers it: the least left edge and top and
+    the greatest right edge and bottom of the words of the line; and the width and the height of every page, where its top left
+    corner stands in the coordinates of the boxes, and by how many degrees the page is turned. That corner is (0, 0) where the page's
+    MediaBox starts at 0 0; where it does not, pdfplumber keeps the PDF's own coordinates, and the corner is the MediaBox's left edge
+    and minus its bottom edge, so that a box less its page's corner is the line's place from the corner of an upright page, where an
+    image of the page (render_page) starts. The words are taken with the same extract_words call as extract_rows without cut_cells
+    and grouped by the same _group_into_lines, so that the numbering is that of extract_lines, line for line. A PDF without a text
+    layer (a scan) has no boxes, and still its pages."""
+    lines, pages, origins, turns = {}, {}, {}, {}
+    with pdfplumber.open(pdf) as document:
+        for number, page in enumerate(document.pages, 1):
+            pages[number] = (float(page.width), float(page.height))
+            origins[number] = (float(page.bbox[0]), float(page.bbox[1]))
+            turns[number] = int(page.rotation)
+            for line_number, words in enumerate(_group_into_lines(page.extract_words(return_chars=False)), 1):
+                lines[number, line_number] = (min(w["x0"] for w in words), min(w["top"] for w in words),
+                                              max(w["x1"] for w in words), max(w["bottom"] for w in words))
+    return LineBoxes(lines=lines, pages=pages, origins=origins, turns=turns)
+
+
 def page_count(pdf: Path) -> int:
     """The number of pages of the PDF, which Document.pages holds."""
     with pdfplumber.open(pdf) as document:

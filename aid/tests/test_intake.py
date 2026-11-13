@@ -130,15 +130,16 @@ def test_recent_gives_the_newest_first_and_passes_a_damaged_line_over(tmp_path):
 
 
 def test_the_time_is_shown_as_the_page_shows_a_time(tmp_path):
-    """The table shows the time of a line as "2026-11-18 10:32": a time without a zone as it is, the runner's clock being the PC's
-    local time, and a time with a zone in the local time of this PC."""
-    assert intake.when({"time": "2026-11-18T10:32:05"}) == "2026-11-18 10:32"
+    """The table shows the time of a line as "18-11-2026 10:32", the day first as the page shows a day elsewhere (B4.5 of the
+    redesign), in both languages: a time without a zone as it is, the runner's clock being the PC's local time, and a time with a
+    zone in the local time of this PC."""
+    assert intake.when({"time": "2026-11-18T10:32:05"}) == "18-11-2026 10:32"
     aware = datetime(2026, 11, 18, 9, 32, 5).astimezone()
-    assert intake.when({"time": aware.isoformat()}) == "2026-11-18 09:32"
+    assert intake.when({"time": aware.isoformat()}) == "18-11-2026 09:32"
     root = tmp_path / "cases"
     append(root, [("bevestiging.pdf", "case", "250108_20261118T103205")], NOW)
-    assert intake.rows(root, "nl") == [["2026-11-18 10:32", "bevestiging.pdf", "Zaak geopend voor inkooporder 250108"]]
-    assert intake.rows(root, "en") == [["2026-11-18 10:32", "bevestiging.pdf", "Case opened for purchase order 250108"]]
+    assert intake.rows(root, "nl") == [["18-11-2026 10:32", "bevestiging.pdf", "Zaak geopend voor inkooporder 250108"]]
+    assert intake.rows(root, "en") == [["18-11-2026 10:32", "bevestiging.pdf", "Case opened for purchase order 250108"]]
 
 
 LABELS = [  # (outcome, detail, Dutch, English): every outcome, and every reason of a skip the scan gives
@@ -314,8 +315,9 @@ def test_the_table_never_shows_the_text_of_an_error():
 
 
 def test_the_texts_of_the_tab_in_both_languages():
-    """The tab's own texts, word for word (the brief and amendment 1), and the two that the brief does not give: the note of a press
-    without a file, and the label of a reason of a skip the table does not know."""
+    """The tab's own texts, word for word (the brief and amendment 1, the note of a file accepted as the redesign of the page words
+    it), and the two that the brief does not give: the note of a press without a file, and the label of a reason of a skip the
+    table does not know."""
     from aid.review.i18n import STRINGS
     nl, en = STRINGS["nl"], STRINGS["en"]
     texts = {"files_tab": ("Bestanden", "Files"), "files_title": ("Een bestand aan de assistent geven", "Give a file to the assistant"),
@@ -330,8 +332,10 @@ def test_the_texts_of_the_tab_in_both_languages():
                                     "(PDF), an order confirmation (PDF or e-mail) or an export from Exact (Excel or CSV). The assistant "
                                     "handles it at its next pass, within a minute."),
              "files_choose": ("Kies een bestand", "Choose a file"), "files_give": ("Aan de assistent geven", "Give to the assistant"),
-             "files_accepted": ("{name} is aangenomen. Hieronder staat binnen een minuut wat ermee is gedaan.",
-                                "{name} was accepted. Below you see within a minute what was done with it."),
+             "files_accepted": ("{name} is aangenomen. De assistent leest het bij de volgende ronde, binnen een minuut; wat ermee "
+                                "gebeurt, komt dan vanzelf in Laatst verwerkt.",
+                                "{name} was accepted. The assistant reads it at its next pass, within a minute; what happens to it then "
+                                "appears under Handled last by itself."),
              "files_refused:type": ("{name} is niet aangenomen: de assistent leest pdf, png en e-mail (.eml).",
                                     "{name} was not accepted: the assistant reads PDF, PNG and e-mail (.eml)."),
              "files_refused:type_export": ("{name} is niet aangenomen: de assistent leest pdf, png, e-mail (.eml) en een export uit Exact "

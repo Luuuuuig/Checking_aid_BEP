@@ -191,10 +191,10 @@ def shown(event: dict, language: str) -> str:
 
 
 def when(event: dict) -> str:
-    """The time of the line as the page shows a time, "2026-11-18 10:32": a time without a zone as it stands, since the runner's clock
-    is the local time of this PC, and a time with a zone in the local time of this PC."""
+    """The time of the line as the page shows a day and a time, the day first, "18-11-2026 10:32", in both languages: a time without
+    a zone as it stands, since the runner's clock is the local time of this PC, and a time with a zone in the local time of this PC."""
     moment = datetime.fromisoformat(event["time"])
-    return (moment.astimezone() if moment.utcoffset() is not None else moment).strftime("%Y-%m-%d %H:%M")
+    return (moment.astimezone() if moment.utcoffset() is not None else moment).strftime("%d-%m-%Y %H:%M")
 
 
 def rows(cases_root: Path, language: str, limit: int = TABLE_LINES) -> list[list[str]]:

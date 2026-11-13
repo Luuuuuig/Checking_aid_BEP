@@ -562,8 +562,8 @@ def refusal_text(error: ValueError, name: str, language: str, literal: Callable[
 
 
 def when(stored_at: str) -> str:
-    """The time of a stored export as the page shows a time: "2026-11-20 09:15"."""
-    return datetime.fromisoformat(stored_at).strftime("%Y-%m-%d %H:%M")
+    """The time of a stored export as the page shows a time, its day as dd-mm-yyyy in both languages: "20-11-2026 09:15"."""
+    return datetime.fromisoformat(stored_at).strftime("%d-%m-%Y %H:%M")
 
 
 def state_line(supplier: str, stored: StoredPrices | None, language: str) -> str:

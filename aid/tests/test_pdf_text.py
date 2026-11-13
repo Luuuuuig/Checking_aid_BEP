@@ -11,7 +11,7 @@ from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfgen.canvas import Canvas
 
 from aid.madeup.generate import answered_version, load_specs, po_pages, row_positions
-from aid.readers.pdf_text import CELL_GAP, TextLine, extract_lines, extract_rows, find_source, page_count, render_page
+from aid.readers.pdf_text import CELL_GAP, TextLine, extract_lines, extract_rows, find_source, line_boxes, page_count, render_page
 
 SPEC_DIR = Path(__file__).resolve().parents[1] / "madeup" / "spec"
 
@@ -258,3 +258,87 @@ def test_render_page_refuses_a_page_outside_the_document(madeup_out):
 def test_render_page_renders_a_scan(madeup_out):
     image = _a4_png(render_page(madeup_out / "MU05_conf.pdf", 1), 150)
     assert image.convert("L").getextrema()[0] < 128                         # the scan has dark marks
+
+
+# --- the boxes of the lines ---
+
+MADE_UP = sorted((SPEC_DIR.parent).rglob("*.pdf"))         # every made-up PDF in aid/madeup: the set's output and the try-out sample
+
+
+def test_line_boxes_number_the_lines_as_extract_lines_does():
+    """line_boxes gives each line of a PDF, by its page and its number as extract_lines numbers it, the box of its words in points
+    from the top left corner of its page, and the width and the height of each page in points. On every made-up PDF in aid/madeup
+    its lines are those of extract_lines, line for line, with the same left edge and top; a scan without a text layer has no box,
+    and still its page."""
+    assert len(MADE_UP) == 42
+    for pdf in MADE_UP:
+        lines, boxes = extract_lines(pdf), line_boxes(pdf)
+        assert list(boxes.lines) == [(line.page, line.line) for line in lines], pdf.name
+        for line in lines:
+            x0, top, x1, bottom = boxes.lines[line.page, line.line]
+            assert (x0, top) == (line.x0, line.top) and x0 < x1 and top < bottom, (pdf.name, line.page, line.line)
+        assert sorted(boxes.pages) == list(range(1, page_count(pdf) + 1)), pdf.name
+        assert boxes.origins == {number: (0.0, 0.0) for number in boxes.pages}, pdf.name     # every page's box starts at 0 0
+        assert boxes.turns == {number: 0 for number in boxes.pages}, pdf.name                # and stands upright
+    assert line_boxes(SPEC_DIR.parent / "out" / "MU04_po_v1.pdf").pages[2] == pytest.approx((595.28, 841.89), abs=0.01)     # A4
+    for scan in ("MU05_conf.pdf", "MU16_conf.pdf"):
+        boxes = line_boxes(SPEC_DIR.parent / "out" / scan)
+        assert boxes.lines == {} and list(boxes.pages) == [1], scan
+
+
+def test_the_box_of_a_line_holds_every_word_of_it(tmp_path):
+    """The box of a line runs from the left edge of its leftmost word to the right edge of its rightmost one, and from the top of its
+    highest word to the bottom of its lowest one, as pdfplumber gives the words."""
+    import pdfplumber
+    path = tmp_path / "lines.pdf"
+    canvas = Canvas(str(path), pagesize=A4)
+    canvas.setFont("Helvetica", 9)
+    canvas.drawString(50, 700, "one")
+    canvas.drawString(150, 702, "two")                # 2 points above "one": the top of the line
+    canvas.drawString(250, 699.5, "three")            # half a point below "one": the bottom of the line
+    canvas.drawString(50, 680, "below")
+    canvas.save()
+    with pdfplumber.open(path) as document:
+        words = {word["text"]: word for word in document.pages[0].extract_words()}
+    boxes = line_boxes(path)
+    assert list(boxes.lines) == [(1, 1), (1, 2)]
+    assert boxes.lines[1, 1] == (words["one"]["x0"], words["two"]["top"], words["three"]["x1"], words["three"]["bottom"])
+    assert boxes.lines[1, 2] == (words["below"]["x0"], words["below"]["top"], words["below"]["x1"], words["below"]["bottom"])
+    assert words["three"]["x1"] == pytest.approx(250 + stringWidth("three", "Helvetica", 9), abs=0.01)
+
+
+def test_line_boxes_give_the_corner_of_a_page_whose_box_does_not_start_at_zero(tmp_path):
+    """A page whose MediaBox does not start at 0 0 keeps the numbering, the left edge and the top of extract_lines, which are in the
+    coordinates of pdfplumber: there the page's top left corner stands at the MediaBox's left edge and minus its bottom edge, which
+    line_boxes gives for each page (origins). A box less its page's corner is the line's place from that corner, where the page's
+    image starts: the same lines on an A4 page moved 20 points to the right and 30 up by its MediaBox stand 20 points further left
+    and 30 lower on it. A page turned by its /Rotate says by how many degrees (turns)."""
+    import pypdfium2 as pdfium
+    path = tmp_path / "plain.pdf"
+    canvas = Canvas(str(path), pagesize=A4)
+    canvas.setFont("Helvetica", 9)
+    for n in range(3):
+        canvas.drawString(60, 800 - 20 * n, f"Regel {n + 1} KM-070{n + 1} Klephuis DN25")
+    canvas.save()
+    plain = line_boxes(path)
+    moved = tmp_path / "moved.pdf"
+    document = pdfium.PdfDocument(path)
+    document[0].set_mediabox(20, 30, A4[0] + 20, A4[1] + 30)
+    document.save(moved)
+    document.close()
+    lines, boxes = extract_lines(moved), line_boxes(moved)
+    assert list(boxes.lines) == [(line.page, line.line) for line in lines] == [(1, 1), (1, 2), (1, 3)]
+    assert [boxes.lines[line.page, line.line][:2] for line in lines] == [(line.x0, line.top) for line in lines]
+    assert plain.origins == {1: (0.0, 0.0)} and boxes.origins == {1: pytest.approx((20.0, -30.0))}
+    assert boxes.pages == {1: pytest.approx(A4)}
+    (x, y), = boxes.origins.values()
+    for key, (x0, top, x1, bottom) in plain.lines.items():
+        assert (boxes.lines[key][0] - x, boxes.lines[key][1] - y) == pytest.approx((x0 - 20, top + 30)), key
+    assert plain.turns == boxes.turns == {1: 0}
+    for degrees in (90, 180, 270):
+        turned = tmp_path / f"turned{degrees}.pdf"
+        document = pdfium.PdfDocument(path)
+        document[0].set_rotation(degrees)
+        document.save(turned)
+        document.close()
+        assert line_boxes(turned).turns == {1: degrees}, degrees

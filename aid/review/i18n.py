@@ -24,12 +24,21 @@ the columns of its table and "todo:<state>" what the buyer does for a case of th
 whose changes stand on the list In Exact invoeren, "todo:nothing" for one with nothing left to do). "review_pick" and
 "review_pick_none" are the line under the field "Zaak" while no case is chosen, "review_open_oldest" its button and "review_gone"
 the line of a case on screen that left the list ("review_gone_handled" for a failed case noted as handled meanwhile). A failed case
-reads "case_failed_look" in the case list, "failed_notice" above its documents, with its "fail:<reason>", and "handled_go" on its
+reads "case_failed_look" in the case list ("case_failed_handled" once it is noted as handled while it is on screen),
+"failed_notice" above its documents, with its "fail:<reason>", and "handled_go" on its
 button, whose press says "handled_done". A document the intake left to
 the buyer reads "item_label" in the case list ("item_label_handled" once it is noted as handled while it is on screen) and
 "item_name" in the fold, where "todo:look" says what the buyer does, and "chip:look" counts the documents that wait for him on the
 strip; chosen, it shows "item_notice", with its "look:<reason>" and "item_missing" behind it when its file is no longer on this PC,
 and the press of "handled_go" says "item_handled_done"; "item_gone" is the line of such a document on screen that left the list.
+A case chosen on that tab has the headings "documents" and "record" above its documents and its lists, "undo_title" above the part
+to undo a write, and "empty:<list>" in the place of a list without a row. A decision row of it says where its values were read,
+"source_po" and "source_doc" with "source_place", and its note says "row_saved" once the decision is saved, then for "Leverancier
+vragen" where the question goes ("row_asks", "row_asks_no_address" or "row_asks_as_file"), or why it would not go, when the close
+would have no way to send it ("row_asks_unrouted:<cause>", by the cause of a mailer without a route: "no_mailbox", "no_password" or
+"settings"; or, after the supplier's address, "sign_in" for the work mailbox with nobody signed in and "store" for a refused store
+of the sign-in), and for "Onopgelost laten" "row_open", and last what is left to decide ("row_left_one", "row_left_many" or
+"row_all_decided").
 The keys that begin with "settings" are the
 strings of the settings tab, "settings_via:<value>" labelling a value of the setting send_via and "settings_reader:<value>" a value of
 the setting reader; "mail_step:<step>" heads a numbered step of its part "Postvak en AI" (MAIL_STEPS of aid/review/page.py), and
@@ -63,7 +72,8 @@ compared with values entered in Exact, {changes} being those values, each as "en
 "entered_unread" stands in its place on a case that ran while the list of them could not be read. The keys that begin with "files"
 are the strings of the tab "Bestanden"
 (aid/review/intake.py): "files_refused:<reason>" the note of a file it refuses ("type_export" the one of a type while the export's
-columns are set), "files_column:<column>" a column of its table, "files_outcome:<outcome>" the label of an outcome of the intake file
+columns are set), "files_column:<column>" a column of its table, "files_empty" the sentence in the place of that table while it has
+no line, "files_outcome:<outcome>" the label of an outcome of the intake file
 ("export_one" for an export of one purchase order, "case_unknown" for a case without one, "set_aside" with the {n} days a file stayed,
 "unread" for a case opened from a scan that failed at reading, by which the digest names that case too), "files_now" what the case
 of a line that opened one is now, behind its label, with "files_now:<state>" for its state (STATES of aid/review/status.py; a case in
@@ -73,7 +83,8 @@ an error the scan does not tell apart and "files_error:<key>" that of an export 
 store holds from another file ("version"), each by intake.ERRORS. The keys that begin with "hand" are the strings of the
 tab "In Exact invoeren" (aid/review/hand_list.py), "hand_row:<kind>" the row of a change of that kind and "hand_row:article_price_back"
 the row of the undo of an article price whose price before it the aid never read; "hand_tab_unread" is the tab's label while the list
-cannot be read, and "hand_nothing_noted" the note of a press that noted nothing. Under the list: "hand_put_back_row" is a row that puts
+cannot be read, "hand_new_rows_one" and "hand_new_rows_many" the line under its intro of the changes that came in since the list was
+read, and "hand_nothing_noted" the note of a press that noted nothing. Under the list: "hand_put_back_row" is a row that puts
 a change back in Exact and "hand_exact_shows" the note of an open row whose order Exact printed with a third value;
 "hand_tick_ended" and "hand_tick_ended_unfound" are the note of a row whose tick a newer print of its order ended, and
 "hand_list_changed" what the tab says of a list whose file was changed outside the aid; "hand_done*" are
@@ -83,7 +94,8 @@ and what they say ("hand_reopen_not", "hand_reopen_put_back", "hand_put_back_new
 "hand_put_back_cannot" say why a press did nothing, "hand_done_choose_first" that nothing was chosen; "hand_put_back_other" is the
 sentence behind the note of a put-back when the aid knows another value from before the change, {source} one of
 "hand_put_back_source:marks" and "hand_put_back_source:look"), and
-"hand_confirmation*" and "hand_attach_only" the section of the confirmations to attach in Exact. The keys that begin with "exact" are
+"hand_confirmation*" and "hand_attach_only" the section of the confirmations to attach in Exact, "hand_confirmations" its heading and
+"hand_confirmations_one" and "hand_confirmations_many" the line that counts them. The keys that begin with "exact" are
 the strings of the block "Koppeling met Exact" of the settings tab (aid/review/exact_settings.py), one block in each language:
 "exact_save", "exact_export_save" and "exact_articles_save" the saves of its parts 1, 2 and 3, each named after what it saves,
 "exact_field:<field>" the label of a field of its form and "exact_help:<field>" its help, "exact_meaning:<meaning>" what a column of
@@ -110,7 +122,9 @@ workbook with more than one sheet with data has the export reader's sentence, "e
 workbook is given), "pricelist_column:<column>" the field of a column of the
 price list, "pricelist_header:<column>" a column of its table and "pricelist_outcome:<outcome>" what became of a row of the list, by
 its label and never by the import's own reason; a count line is put together from parts, each with a form for a count of one
-("pricelist_articles_one", "pricelist_articles_many"). The keys that begin with "exact_articles" are part 3 of the block
+("pricelist_articles_one", "pricelist_articles_many"); "pricelist_remove_ask" and "pricelist_remove_ask_one" are the question
+that the press "pricelist_remove" asks under the supplier's field, with its two answers "pricelist_remove_yes" and
+"pricelist_remove_no". The keys that begin with "exact_articles" are part 3 of the block
 "Koppeling met Exact", the columns of the export of articles ("exact_part_articles" its title): "exact_articles_field:<field>" a field,
 "exact_articles_left:<reason>" why the trial read left a row out, and "exact_articles_read" its count line, put together from the same
 parts. "hand_pricelist" and "hand_pricelist_entered" are the one press of the tab "In Exact invoeren" for the article prices of one
@@ -119,7 +133,7 @@ price list.
 
 STRINGS: dict[str, dict[str, str]] = {
     "nl": {
-        "title": "Zaken ter beoordeling",
+        "title": "Inkoopassistent",
         "language": "Taal",
         "case": "Zaak",
         "refresh": "Lijst vernieuwen",
@@ -131,10 +145,10 @@ STRINGS: dict[str, dict[str, str]] = {
         "uncompared": "Niet te vergelijken",
         "decisions": "Besluiten",
         "decision": "Besluit",
-        "confirm": "Bevestigen: waarde van de leverancier overnemen",
+        "confirm": "Waarde van de leverancier overnemen",
         "keep": "Waarde van de inkooporder houden",
         "ask": "Leverancier vragen",
-        "unresolved": "Onopgelost",
+        "unresolved": "Onopgelost laten",
         "article_update": "Ook de artikelprijs bijwerken",
         "banner": "Deze wijziging stuurt de inkooporder opnieuw door de fiattering",
         "close": "Zaak afsluiten",
@@ -195,8 +209,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "hand_tab": "In Exact invoeren",
         "hand_tab_count": "In Exact invoeren ({n})",
         "hand_tab_unread": "In Exact invoeren (?)",
-        "hand_intro": ("De assistent verandert zelf niets in Exact. Hieronder staat wat u in Exact invoert. Vink aan wat u hebt "
-                       "ingevoerd."),
+        "hand_intro": "De assistent verandert zelf niets in Exact. Voer deze wijzigingen in Exact in en vink aan wat u hebt ingevoerd.",
         "hand_nothing": "Er is niets in te voeren.",
         "hand_block_po": "Inkooporder {number} ({supplier})",
         "hand_block_po_alone": "Inkooporder {number}",
@@ -212,8 +225,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "hand_hint": "Let op: na deze wijziging moet de inkooporder opnieuw gefiatteerd worden.",
         "hand_entered": "Aangevinkte regels zijn ingevoerd",
         "hand_dropped": "Aangevinkte regels niet invoeren",
-        "hand_block": "Blok",
-        "hand_block_entered": "Alles van dit blok is ingevoerd",
+        "hand_block": "Inkooporder of artikelprijzen",
+        "hand_block_entered": "Alles hiervan is ingevoerd",
         "hand_pricelist": "Prijslijst",
         "hand_pricelist_entered": "Alle artikelprijzen van deze prijslijst zijn ingevoerd",
         "hand_tick_first": "Vink eerst aan wat u bedoelt.",
@@ -258,8 +271,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "hand_put_back_unknown": "Van dit artikel kent de assistent de oude prijs niet; zet die zelf terug in Exact.",
         "hand_put_back_not_entered": "Deze wijziging is niet ingevoerd; in Exact is er niets terug te draaien.",
         "hand_put_back_cannot": "De assistent kan deze wijziging niet terugdraaien; zet de oude waarde zelf terug in Exact.",
-        "hand_confirmations": ("Bevestigd door de leverancier (laatste 7 dagen): voeg in Exact de bevestiging bij en zet de status op "
-                               "Bevestigd"),
+        "hand_confirmations": "Bevestigingen om bij te voegen",
         "hand_confirmation": "{date}: inkooporder {number} ({supplier}), bestand {file}",
         "hand_confirmation_alone": "{date}: inkooporder {number}, bestand {file}",
         "hand_attach_only": "alleen bijvoegen: er staat nog iets open",
@@ -285,7 +297,8 @@ STRINGS: dict[str, dict[str, str]] = {
                                "volgende ronde, binnen een minuut."),
         "files_choose": "Kies een bestand",
         "files_give": "Aan de assistent geven",
-        "files_accepted": "{name} is aangenomen. Hieronder staat binnen een minuut wat ermee is gedaan.",
+        "files_accepted": ("{name} is aangenomen. De assistent leest het bij de volgende ronde, binnen een minuut; wat ermee gebeurt, komt "
+                           "dan vanzelf in Laatst verwerkt."),
         "files_refused:type": "{name} is niet aangenomen: de assistent leest pdf, png en e-mail (.eml).",
         "files_refused:type_export": ("{name} is niet aangenomen: de assistent leest pdf, png, e-mail (.eml) en een export uit Exact (Excel "
                                       "of csv)."),
@@ -343,7 +356,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "review_gone": "Inkooporder {po} staat niet meer op de lijst: de zaak is intussen afgesloten of vervangen. Kies een andere zaak.",
         "review_gone_handled": ("Inkooporder {po} staat niet meer op de lijst: de zaak is intussen als afgehandeld genoteerd. Kies een "
                                 "andere zaak."),
-        "case_failed_look": "mislukt: zelf bekijken",
+        "case_failed_look": "mislukt, zelf bekijken",
+        "case_failed_handled": "mislukt, door u afgehandeld",
         "failed_notice": ("**De assistent kon deze zaak niet afmaken:** {reason}. Bekijk het document van de leverancier en handel de "
                           "bevestiging zelf af in Exact. Druk daarna op Als afgehandeld noteren; de zaak gaat dan van de lijst."),
         "handled_go": "Als afgehandeld noteren",
@@ -351,8 +365,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "chip:look": "Zelf bekijken: {n}",
         "todo:look": "Kies het document bij Zaak, bekijk het en handel het zelf af.",
         "item_name": "Document {file}",
-        "item_label": "Document {file}, {time}, zelf bekijken",
-        "item_label_handled": "Document {file}, {time}, door u afgehandeld",
+        "item_label": "Document {file}: zelf bekijken, {time}",
+        "item_label_handled": "Document {file}: door u afgehandeld, {time}",
         "item_notice": ("**De assistent kon dit document niet plaatsen:** {reason}. Bekijk het document en handel het zelf af in Exact. "
                         "Druk daarna op Als afgehandeld noteren; het document gaat dan van de lijst."),
         "item_missing": "Het document staat niet meer op deze pc: zoek het in uw postvak, in de e-mail van {time}.",
@@ -366,6 +380,34 @@ STRINGS: dict[str, dict[str, str]] = {
         "files_now:closed_by_you": "door u afgesloten",
         "files_now:copilot_wait": "wacht op Copilot",
         "files_now:reading": "wordt gelezen",
+        "documents": "Documenten",
+        "record": "Vergelijking",
+        "undo_title": "Een schrijfactie ongedaan maken",
+        "empty:flags": "Geen afwijkingen in deze zaak.",
+        "empty:uncompared": "Alles in deze zaak kon worden vergeleken.",
+        "empty:matches": "Geen overeenkomsten in deze zaak.",
+        "source_po": "Gelezen op de inkooporder",
+        "source_doc": "Gelezen bij de leverancier",
+        "source_place": "pagina {page}, tekstregel {line}",
+        "row_saved": "Opgeslagen.",
+        "row_left_one": "Nog 1 punt te besluiten.",
+        "row_left_many": "Nog {n} punten te besluiten.",
+        "row_all_decided": "Alles is besloten: u kunt de zaak afsluiten.",
+        "row_open": "Dit punt blijft open: bij afsluiten blijft de zaak ter beoordeling.",
+        "row_asks": "Bij afsluiten gaat er een vraag naar {supplier}.",
+        "row_asks_no_address": ("Van {supplier} is geen e-mailadres bekend: vul het in onder Instellingen, Leveranciers, anders gaat de "
+                                "vraag niet weg."),
+        "row_asks_as_file": "Verzenden staat op Bestanden: de vraag wordt als bestand bewaard en niet verzonden.",
+        "row_asks_unrouted:no_mailbox": ("Er is geen postvak verbonden: verbind een postvak onder Instellingen, Postvak en AI, anders gaat "
+                                         "de vraag bij afsluiten niet weg."),
+        "row_asks_unrouted:no_password": ("Het wachtwoord van de mailserver is niet ingesteld: de vraag gaat bij afsluiten niet weg. Geef "
+                                          "dit door aan de onderzoeker."),
+        "row_asks_unrouted:settings": ("De instellingen kunnen nu niet worden gelezen: de vraag gaat bij afsluiten niet weg. Geef dit door "
+                                       "aan de onderzoeker."),
+        "row_asks_unrouted:sign_in": ("U bent niet aangemeld bij Microsoft: meld u aan onder Instellingen, Postvak en AI, anders gaat de "
+                                      "vraag bij afsluiten niet weg."),
+        "row_asks_unrouted:store": ("De beveiligde opslag van de aanmelding op deze pc is geweigerd: de vraag gaat bij afsluiten niet weg. "
+                                    "Onder Instellingen, Postvak en AI, staat waarom en wat u kunt doen."),
         "files_outcome:po": "Inkooporder {number} opgenomen (versie {version})",
         "files_outcome:export": "Export uit Exact opgenomen: {n} inkooporders, waarvan {m} nieuw of gewijzigd",
         "files_outcome:export_one": "Export uit Exact opgenomen: 1 inkooporder, waarvan {m} nieuw of gewijzigd",
@@ -490,8 +532,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "settings_tab": "Instellingen",
         "settings_share": "Niet beschikbaar op een openbare link",
         "settings_no_file": "Niet beschikbaar: de pagina is gestart zonder instellingenbestand",
-        "settings_intro": ("Met een aanmelding bij Microsoft leest de controle zelf een map van het postvak en verstuurt zij haar e-mails "
-                           "vanuit dat postvak. Zonder aanmelding werkt zij zoals voorheen met de bewaakte map."),
+        "settings_intro": ("Met een aanmelding bij Microsoft leest de assistent zelf een map van het postvak en verstuurt hij zijn e-mails "
+                           "vanuit dat postvak. Zonder aanmelding werkt hij met de bewaakte map."),
         "settings_tenant": "Map-id (tenant)",
         "settings_client": "Toepassings-id (client)",
         "settings_sign_in": "Aanmelden bij Microsoft",
@@ -507,6 +549,17 @@ STRINGS: dict[str, dict[str, str]] = {
         "settings_not_signed_in": "Niet aangemeld",
         "settings_lapsed": "Aanmelding van {account} verlopen: meld u opnieuw aan",
         "settings_store_refused": "De beveiligde opslag op deze pc is geweigerd",
+        "hand_new_rows_one": "Er is 1 nieuwe wijziging bijgekomen: druk op Lijst vernieuwen.",
+        "hand_new_rows_many": "Er zijn {n} nieuwe wijzigingen bijgekomen: druk op Lijst vernieuwen.",
+        "hand_confirmations_one": "1 bevestiging van de laatste 7 dagen: voeg haar in Exact bij en zet de status op Bevestigd.",
+        "hand_confirmations_many": "{n} bevestigingen van de laatste 7 dagen: voeg ze in Exact bij en zet de status op Bevestigd.",
+        "pricelist_remove_ask": ("De {n} opgeslagen inkoopprijzen van {supplier} worden weggehaald. De lijst In Exact invoeren blijft zoals "
+                                 "hij is."),
+        "pricelist_remove_ask_one": ("De opgeslagen inkoopprijs van {supplier} wordt weggehaald. De lijst In Exact invoeren blijft zoals hij "
+                                     "is."),
+        "pricelist_remove_yes": "Ja, weghalen",
+        "pricelist_remove_no": "Niet weghalen",
+        "files_empty": "Nog geen bestanden verwerkt. Wat de assistent met een bestand doet, komt hier vanzelf.",
         "mail_step:ids": "1. Gegevens van de app-registratie",
         "mail_step:sign_in": "2. Aanmelden bij Microsoft",
         "mail_step:mailbox": "3. Map van het postvak",
@@ -587,8 +640,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "settings_save": "Postvak opslaan",
         "settings_not_saved": "Niet opgeslagen: controleer {fields}.",
         "settings_trigger": "Stand van het postvak",
-        "settings_trigger_off": "De controle leest geen postvak: zij werkt met de bewaakte map.",
-        "settings_trigger_pending": "Nog niet verbonden: de controle maakt de verbinding bij de volgende ronde.",
+        "settings_trigger_off": "De assistent leest geen postvak: hij werkt met de bewaakte map.",
+        "settings_trigger_pending": "Nog niet verbonden: de assistent maakt de verbinding bij de volgende ronde.",
         "settings_trigger_on": "Verbonden sinds {since}; laatst gelezen: {last}; opgeslagen berichten: {saved}.",
         "settings_trigger_unread": "Verbonden sinds {since}; nog niet gelezen.",
         "settings_ai": "Microsoft 365 Copilot",
@@ -1106,7 +1159,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "reason:other": "Andere reden",
     },
     "en": {
-        "title": "Cases to review",
+        "title": "Inkoopassistent",
         "language": "Language",
         "case": "Case",
         "refresh": "Refresh the list",
@@ -1118,10 +1171,10 @@ STRINGS: dict[str, dict[str, str]] = {
         "uncompared": "Could not compare",
         "decisions": "Decisions",
         "decision": "Decision",
-        "confirm": "Confirm: take the supplier's value",
+        "confirm": "Take the supplier's value",
         "keep": "Keep the purchase order's value",
         "ask": "Ask the supplier",
-        "unresolved": "Unresolved",
+        "unresolved": "Leave unresolved",
         "article_update": "Also update the article price",
         "banner": "This change sends the purchase order through approval again",
         "close": "Close the case",
@@ -1178,7 +1231,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "hand_tab": "Enter in Exact",
         "hand_tab_count": "Enter in Exact ({n})",
         "hand_tab_unread": "Enter in Exact (?)",
-        "hand_intro": "The assistant changes nothing in Exact itself. Below is what you enter in Exact. Tick what you have entered.",
+        "hand_intro": "The assistant changes nothing in Exact itself. Enter these changes in Exact and tick what you have entered.",
         "hand_nothing": "There is nothing to enter.",
         "hand_block_po": "Purchase order {number} ({supplier})",
         "hand_block_po_alone": "Purchase order {number}",
@@ -1194,8 +1247,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "hand_hint": "Note: after this change the purchase order must be approved again.",
         "hand_entered": "The ticked rows have been entered",
         "hand_dropped": "Do not enter the ticked rows",
-        "hand_block": "Block",
-        "hand_block_entered": "Everything of this block has been entered",
+        "hand_block": "Purchase order or article prices",
+        "hand_block_entered": "All of this has been entered",
         "hand_pricelist": "Price list",
         "hand_pricelist_entered": "All article prices of this price list have been entered",
         "hand_tick_first": "Tick what you mean first.",
@@ -1236,7 +1289,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "hand_put_back_unknown": "The assistant does not know the old price of this article; put it back in Exact yourself.",
         "hand_put_back_not_entered": "This change was not entered; there is nothing to put back in Exact.",
         "hand_put_back_cannot": "The assistant cannot put this change back; put the old value back in Exact yourself.",
-        "hand_confirmations": "Confirmed by the supplier (last 7 days): attach the confirmation in Exact and set the status to Bevestigd",
+        "hand_confirmations": "Confirmations to attach",
         "hand_confirmation": "{date}: purchase order {number} ({supplier}), file {file}",
         "hand_confirmation_alone": "{date}: purchase order {number}, file {file}",
         "hand_attach_only": "attach only: something is still open",
@@ -1262,7 +1315,8 @@ STRINGS: dict[str, dict[str, str]] = {
                                "its next pass, within a minute."),
         "files_choose": "Choose a file",
         "files_give": "Give to the assistant",
-        "files_accepted": "{name} was accepted. Below you see within a minute what was done with it.",
+        "files_accepted": ("{name} was accepted. The assistant reads it at its next pass, within a minute; what happens to it then appears "
+                           "under Handled last by itself."),
         "files_refused:type": "{name} was not accepted: the assistant reads PDF, PNG and e-mail (.eml).",
         "files_refused:type_export": "{name} was not accepted: the assistant reads PDF, PNG, e-mail (.eml) and an export from Exact (Excel or CSV).",
         "files_refused:empty": "{name} was not accepted: the file is empty.",
@@ -1318,7 +1372,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "review_open_oldest": "Open the oldest case",
         "review_gone": "Purchase order {po} is no longer on the list: the case was closed or replaced meanwhile. Choose another case.",
         "review_gone_handled": "Purchase order {po} is no longer on the list: it was noted as handled meanwhile. Choose another case.",
-        "case_failed_look": "failed: look yourself",
+        "case_failed_look": "failed, look yourself",
+        "case_failed_handled": "failed, handled by you",
         "failed_notice": ("**The assistant could not finish this case:** {reason}. Look at the supplier's document and handle the confirmation "
                           "yourself in Exact. Then press Mark as handled; the case then leaves the list."),
         "handled_go": "Mark as handled",
@@ -1326,8 +1381,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "chip:look": "To look at: {n}",
         "todo:look": "Choose the document under Case, look at it and handle it yourself.",
         "item_name": "Document {file}",
-        "item_label": "Document {file}, {time}, look yourself",
-        "item_label_handled": "Document {file}, {time}, handled by you",
+        "item_label": "Document {file}: look yourself, {time}",
+        "item_label_handled": "Document {file}: handled by you, {time}",
         "item_notice": ("**The assistant could not place this document:** {reason}. Look at the document and handle it yourself in Exact. "
                         "Then press Mark as handled; the document then leaves the list."),
         "item_missing": "The document is no longer on this PC: look for it in your mailbox, in the e-mail of {time}.",
@@ -1341,6 +1396,33 @@ STRINGS: dict[str, dict[str, str]] = {
         "files_now:closed_by_you": "closed by you",
         "files_now:copilot_wait": "waits for Copilot",
         "files_now:reading": "being read",
+        "documents": "Documents",
+        "record": "Comparison",
+        "undo_title": "Undo a write",
+        "empty:flags": "No differences in this case.",
+        "empty:uncompared": "Everything in this case could be compared.",
+        "empty:matches": "No matches in this case.",
+        "source_po": "Read on the purchase order",
+        "source_doc": "Read in the supplier's document",
+        "source_place": "page {page}, text line {line}",
+        "row_saved": "Saved.",
+        "row_left_one": "1 item left to decide.",
+        "row_left_many": "{n} items left to decide.",
+        "row_all_decided": "Everything is decided: you can close the case.",
+        "row_open": "This item stays open: when you close, the case stays for review.",
+        "row_asks": "When you close, a question goes to {supplier}.",
+        "row_asks_no_address": "There is no e-mail address for {supplier}: fill it in under Settings, Suppliers, or the question will not go.",
+        "row_asks_as_file": "Sending is set to Files: the question is kept as a file and not sent.",
+        "row_asks_unrouted:no_mailbox": ("No mailbox is connected: connect a mailbox under Settings, Mailbox and AI, or the question will "
+                                         "not go when you close."),
+        "row_asks_unrouted:no_password": ("The mail server's password is not set: the question will not go when you close. Pass this on to "
+                                          "the researcher."),
+        "row_asks_unrouted:settings": ("The settings cannot be read now: the question will not go when you close. Pass this on to the "
+                                       "researcher."),
+        "row_asks_unrouted:sign_in": ("You are not signed in to Microsoft: sign in under Settings, Mailbox and AI, or the question will not "
+                                      "go when you close."),
+        "row_asks_unrouted:store": ("The protected store of the sign-in on this PC was refused: the question will not go when you close. "
+                                    "Settings, Mailbox and AI, says why and what you can do."),
         "files_outcome:po": "Purchase order {number} filed (version {version})",
         "files_outcome:export": "Export from Exact filed: {n} purchase orders, of which {m} new or changed",
         "files_outcome:export_one": "Export from Exact filed: 1 purchase order, of which {m} new or changed",
@@ -1462,8 +1544,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "settings_tab": "Settings",
         "settings_share": "Not available on a public link",
         "settings_no_file": "Not available: the page was started without a settings file",
-        "settings_intro": ("With a Microsoft sign-in the check reads a folder of the mailbox itself and sends its e-mails from that "
-                           "mailbox. Without a sign-in it works as before, from the watched folder."),
+        "settings_intro": ("With a Microsoft sign-in the assistant reads a folder of the mailbox itself and sends its e-mails from that "
+                           "mailbox. Without a sign-in it works from the watched folder."),
         "settings_tenant": "Directory (tenant) ID",
         "settings_client": "Application (client) ID",
         "settings_sign_in": "Sign in with Microsoft",
@@ -1478,6 +1560,15 @@ STRINGS: dict[str, dict[str, str]] = {
         "settings_not_signed_in": "Not signed in",
         "settings_lapsed": "The sign-in of {account} has lapsed: sign in again",
         "settings_store_refused": "The protected store on this PC was refused",
+        "hand_new_rows_one": "1 new change came in: press Refresh the list.",
+        "hand_new_rows_many": "{n} new changes came in: press Refresh the list.",
+        "hand_confirmations_one": "1 confirmation of the last 7 days: attach it in Exact and set the status to Bevestigd.",
+        "hand_confirmations_many": "{n} confirmations of the last 7 days: attach them in Exact and set the status to Bevestigd.",
+        "pricelist_remove_ask": "The {n} stored purchase prices of {supplier} will be taken away. The list Enter in Exact stays as it is.",
+        "pricelist_remove_ask_one": "The stored purchase price of {supplier} will be taken away. The list Enter in Exact stays as it is.",
+        "pricelist_remove_yes": "Yes, take them away",
+        "pricelist_remove_no": "Keep them",
+        "files_empty": "No files handled yet. What the assistant does with a file appears here by itself.",
         "mail_step:ids": "1. The app registration",
         "mail_step:sign_in": "2. Sign in with Microsoft",
         "mail_step:mailbox": "3. The mailbox folder",
@@ -1558,8 +1649,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "settings_save": "Save the mailbox",
         "settings_not_saved": "Not saved: check {fields}.",
         "settings_trigger": "State of the mailbox",
-        "settings_trigger_off": "The check reads no mailbox: it works from the watched folder.",
-        "settings_trigger_pending": "Not connected yet: the check connects at its next pass.",
+        "settings_trigger_off": "The assistant reads no mailbox: it works from the watched folder.",
+        "settings_trigger_pending": "Not connected yet: the assistant connects at its next pass.",
         "settings_trigger_on": "Connected since {since}; last read: {last}; messages saved: {saved}.",
         "settings_trigger_unread": "Connected since {since}; not read yet.",
         "settings_ai": "Microsoft 365 Copilot",

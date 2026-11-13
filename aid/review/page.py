@@ -13,32 +13,66 @@ the system and is not offered for undo, as the digest gives it no undo link. The
 (selection_from_query): ?case=<case id>, the link of the digest, selects that case when the page offers it, and &undo=<entry id>,
 the digest's undo link, also selects that write in the list of writes to undo. Opening a link undoes nothing: the buyer undoes the
 write with the undo button. A case the page does not offer, or a write it does not offer for undo, selects nothing. A case that waits
-for its PO (waiting_for_po of aid/review/close.py, a case with a PO number of its own) shows a hint above its documents that names
+for its PO (waiting_for_po of aid/review/close.py, a case with a PO number of its own) shows a hint above its decisions that names
 the PO, or the version of it that the confirmation quotes ("Inkooporder 250101 kent de assistent nog niet. ..."), which the
 language switch relabels; the runner checks such a case again by itself once that PO comes in, and a case it replaced is closed, so
 the page no longer offers it. A decision saved on the case hides the hint at once, since the runner then no longer checks the case
 again, and so does "Lijst vernieuwen" for a decision saved in another browser tab or a case replaced meanwhile. A case that was
 compared with values entered in Exact (step 03_entered of aid/pipeline.py: the buyer entered and ticked them, or the aid saw them
-in a newer print, after the selected version was filed) names them in one line above its lists (entered_text), "Sinds deze
+in a newer print, after the selected version was filed) names them in one line above its decisions (entered_text), "Sinds deze
 inkooporder is opgenomen, is in Exact ingevoerd: regel 1: prijs 12,70. De assistent vergelijkt met deze waarden.", since the order
 shown beside the document is the version as it was filed; a case that ran while the list of those values could not be read says
 that in the line's place. The language switch relabels the line. All this is on the tab "Beoordelen".
 
-The case list of that tab ("Zaak") offers, after the cases offered_cases gives, the cases that failed and that the buyer has not
-noted as handled, oldest first, each as "PO 250105 (S05), 2026-11-12 17:03, mislukt: zelf bekijken"; offered_cases itself, and so
-the digest's links and the undo, do not change. A failed case chosen shows its supplier's document, and above the documents why it
-failed in words, never by its error (fail_text of aid/review/status.py), with what to do ("De assistent kon deze zaak niet afmaken:
-de assistent herkent de opmaak van dit document niet. Bekijk het document van de leverancier en handel de bevestiging zelf af in
-Exact. ...", which the language switch relabels: failed_relabel); "Als afgehandeld noteren" stands in place of "Zaak afsluiten",
-and the title of the decisions goes, as such a case has none (case_framed, bound beside show to the change of the case list).
+A case chosen on that tab stands in three parts, top to bottom, in the order of the work. First what the buyer decides (the column
+review-case): the banner, the hint and the line of the values entered in Exact, the notice of a failed case, "Besluiten" and a row
+per review item. Then the close (review-close): "Zaak afsluiten", shown with a case in review only, or "Als afgehandeld noteren",
+the status line under them, which holds the answer of a close, of that press and of an undo, and the part to undo a write
+(review-undo), shown while the case has a write made in Exact and not undone, so with the prepared writer never. Last what the
+decisions rest on (review-evidence): under "Documenten" the purchase order on the left and the supplier's document on the right,
+each page at the full width of its column (the style rules of aid/review/look.py), with the lines that the differences were read
+from marked on both (the marks of the view, aid/review/app.py, which _marked draws: the line's ground in the tint of attention
+inside an edge in its mark colour, nothing else of a page changed), then under "Vergelijking" the lists "Afwijkingen", "Niet te
+vergelijken" and "Overeenkomsten", each its table or, while it has no row, one sentence in its place ("Geen afwijkingen in deze
+zaak."); a case that was not compared, such as one that failed before the comparison, and a document left to the buyer show no
+comparison, rather than sentences that are not true of them. The first and the last part show while a case is chosen (case_framed);
+the close's part always stands, so that what a close said stays on the screen once the case has left the review and its parts have
+closed. record_shown, on the change of the state of the view and on the language switch, gives each list its table or its sentence
+and the undo part its visibility, from the case's write log as it is then, as undo_shown does after each undo, so that the part
+closes once its last write is undone, and review_texts gives the headings of these parts their language.
+
+A decision row (spec 2.1.1) says on its left what is decided, each fact once (_describe): the field and the line ("Prijs, regel 1"),
+the purchase order's value first and the supplier's after it, in the form of the page's language (a decimal comma in Dutch, a day as
+16-11-2026), with the reason, and where each value was read, by its page and line in words and the text of that line as it was read
+("Gelezen op de inkooporder (pagina 1, regel 8): ..."), the lines whose marks the documents show; no item id. On its right stand the
+four decisions, "Waarde van de leverancier overnemen", "Waarde van de inkooporder houden", "Leverancier vragen" and "Onopgelost
+laten", and under them the tick of the article price beside the row's note, where a decision answers once it is saved (row_note):
+"Opgeslagen.", for "Leverancier vragen" where the question goes when the case is closed ("Bij afsluiten gaat er een vraag naar S07.",
+or that no address of the supplier is known, or that sending is set to Bestanden), or why it would not go when the close would have
+no way to send it ("Er is geen postvak verbonden: ...", the mail server's password, the settings file), judged as the close judges
+it, by the settings as they are then (_asked_text), for "Onopgelost laten" that the item stays open, and last what is left to decide
+("Nog 1 punt te besluiten.", "Alles is besloten: u kunt de zaak afsluiten."). A decision that is not saved says why there, in the colour of a problem. When the rows are rendered again (the
+language switch, the case shown again), a decision that stands says "Opgeslagen." in its note. The status line answers the close,
+"Als afgehandeld noteren" and an undo, and no decision.
+
+The case list of that tab ("Zaak") names each case in one grammar, its order and supplier, what it holds and the time it was
+opened, "Inkooporder 250107 (S07): 1 punt, 12-11-2026 09:00" (_case_label), and offers, after the cases offered_cases gives, the
+cases that failed and that the buyer has not noted as handled, oldest first, each as "Inkooporder 250105 (S05): mislukt, zelf
+bekijken, 12-11-2026 17:03"; offered_cases itself, and so the digest's links and the undo, do not change. A failed case chosen
+shows its supplier's document, and above it, in the place of the decisions, why it failed in words, never by its error (fail_text
+of aid/review/status.py), with what to do ("De assistent kon deze zaak niet afmaken: de assistent herkent de opmaak van dit
+document niet. Bekijk het document van de leverancier en handel de bevestiging zelf af in Exact. ...", which the language switch
+relabels: failed_relabel); "Als afgehandeld noteren" stands in place of "Zaak afsluiten", and the title of the decisions goes, as
+such a case has none (case_framed, bound beside show to the change of the case list).
 That press (handled_marked) writes <case folder>/handled_by_hand.json, {"at": <the time of the clock of the page's Deps>}, the one
 file it writes, and only into a case that failed: the case then leaves the list and the counts, and a mark written before, from
 another browser tab, stays as it was. A case on screen that leaves the list meanwhile (closed in another browser tab, replaced by the
-runner, noted as handled) keeps its place in it, named as _case_label names it now, wherever the list is sent again ("Lijst
-vernieuwen", the language switch, the timer), until another case is chosen, and a line under the field says so and why
-("Inkooporder 250107 staat niet meer op de lijst: de zaak is intussen afgesloten of vervangen. Kies een andere zaak.", or "... als
-afgehandeld genoteerd. ..." for a failed case, whose notice the language switch then hides rather than leave it in the language it
-was shown in): the page library refuses a value that is not among a dropdown's choices. While no case is chosen, a line under the
+runner, noted as handled) keeps its place in it, named as the list names it now (_kept_label: a failed case noted as handled as
+"Inkooporder 250105 (S05): mislukt, door u afgehandeld, 12-11-2026 17:03"), wherever the list is sent again ("Lijst vernieuwen",
+the language switch, the timer), until another case is chosen, and a line under the field says so and why ("Inkooporder 250107
+staat niet meer op de lijst: de zaak is intussen afgesloten of vervangen. Kies een andere zaak.", or "... als afgehandeld
+genoteerd. ..." for a failed case, whose notice and button the language switch then hide rather than leave the notice in the
+language it was shown in): the page library refuses a value that is not among a dropdown's choices. While no case is chosen, a line under the
 field says to choose one ("Kies een zaak bij Zaak, of open de oudste.") or that none waits for the buyer, with "Oudste zaak openen"
 while one does, which chooses the oldest case in review, else the oldest failed one, else the oldest document left to the buyer
 (below), and sends the case list with it, so that the case is among its choices (oldest_opened). The row of that line and that
@@ -48,7 +82,7 @@ sent before a case was chosen.
 After the failed cases the list offers the documents the intake left to the buyer to look at himself, which open no case: a scan
 that nobody could class, a confirmation that names more than one purchase order (the scan's lines of <cases_root>/review_items.jsonl,
 aid/sources/mailbox.py, as review_items of aid/review/status.py reads them), those that wait for him, oldest first, each as "Document
-MU05_conf.pdf, 2026-11-12 17:03, zelf bekijken" (_item_label), its file as the list of skipped items names it and the time of the
+MU05_conf.pdf: zelf bekijken, 12-11-2026 17:03" (_item_label), its file as the list of skipped items names it and the time of the
 scan, with its id as the value (ITEM_PREFIX and twelve hex digits: no case id begins so). The strip counts them ("Zelf bekijken: 3"),
 the tab's label counts them with the cases that wait for the buyer, and the fold lists them among the cases by their time, those that
 wait first, and those he noted as handled for 7 days ("Door u afgehandeld"). A document chosen shows why the intake left it to the
@@ -83,20 +117,35 @@ public share link, and without a settings file, the strip holds the chips alone 
 de laatste 7 dagen (22)" holds a table of every case that is not done and of every case done in the last 7 days (case_lines), those
 that wait for the buyer first, each with the time it came in, its order, its state and what the buyer does: mostly "Niets te doen.",
 and for a closed case whose changes stand on the list "In Exact invoeren" to enter them there. Every name in the two goes through
-html.escape, and their style rules, scoped to them, take the colours of aid/review/look.py. The label of the tab counts the cases that
-wait for the buyer, "Beoordelen (3)" (review_label: in review, or failed and not noted as handled, and the documents left to him that
-wait for him), and has no number while none waits.
+html.escape. Their style rules stand among the page's own (PAGE_CSS of aid/review/look.py), under the ids of the two, and the page
+library's own style of an HTML block (apply_default_css), which rules a table's rows in the text colour, is left off them; on a page
+launched without that look (the Colab notebook) they show their words alone. The label of the tab counts the cases that wait for
+the buyer, "Beoordelen (3)" (review_label: in review, or failed and not noted as handled, and the documents left to him that wait
+for him), and has no number while none waits.
 
 The strip, the fold, the tab's label, the line under the case list and the case list are read again when the page loads, with
 "Lijst vernieuwen", at the language switch and every TICK_SECONDS seconds, by one gr.Timer at the top level of the page, through
 two handlers of their own (strip_ticked and queue_ticked), which never call Microsoft. Neither sets the value of "Zaak" nor reaches
-the view of the case chosen, and the list of the tab "In Exact invoeren", whose read empties the buyer's ticks, is not on the timer.
+the view of the case chosen, and the list of the tab "In Exact invoeren", whose read empties the buyer's ticks, is not on the timer:
+the timer gives that tab its label and a line of the changes that came in, and nothing else (hand_label_ticked, below). It also
+reads the table of the tab "Bestanden" again, and nothing else of that tab (files_ticked, below).
 A tick reads again only the case folders whose files changed since it read them: through the cache of aid/review/status.py for the
 states, and through offered_cases' own for the cases offered.
 queue_ticked sends the case list only when it differs from the one it sent last, which a gr.State keeps, so that an open dropdown
 is not closed for nothing; a list that another handler sent meanwhile (a close, "Lijst vernieuwen", the language switch) and that
 differs from the kept one is sent once more at the next tick, the same list, which changes nothing on the screen. At a language switch the relabel of the tabs names the tab "Beoordelen" by
 review_label as queue_ticked does, so that the label is the same whichever runs last.
+The page library's client (gradio 6.31.0) runs the listeners of one click, change, select or tick one after another, each to its end
+(those of the page load and of a State's change it starts together), and a listener on the queue costs a round trip of the queue, a
+quarter of a second in the browser: the language switch, which some thirty listeners share, is as slow as their number. So the five
+handlers that the redesign added to it after its first part (record_shown, review_texts, hand_new_cleared, removal_relabelled,
+files_ticked), each a read of a few files or none, skip the queue, which costs a few hundredths of a second, and the switch takes
+about as long as before them.
+
+Above the tabs, the head of the page (the Row page-head) names the tool, "Inkoopassistent" in both languages, as the page's one h1
+(its class page-title) and as the title of the browser's tab, and holds the language switch (its class language-switch), which the
+style rules of aid/review/look.py show on the right as the pair "Nederlands" and "English". The switch keeps its label "Taal" for a
+screen reader, which reads it, but the page does not show it.
 
 The page has five tabs in one gr.Tabs (its class page-tabs), each with an id: "Beoordelen" (REVIEW_TAB, "beoordelen"), "In Exact
 invoeren" (hand_list.TAB, "invoeren"), "Prijslijst" (pricelist_page.TAB, "prijslijst"), "Bestanden" (FILES_TAB, "bestanden") and
@@ -111,19 +160,26 @@ open, and "In Exact invoeren (?)" while the list cannot be read. Its controls ar
 button outside the rows, so that each handler is one of the page's functions (the tests find them by name): the intro, with under it
 the line of the test mode while the setting test_mode is true ("Proefstand: voer deze wijzigingen alleen in het test-Exact in."), the
 hint of each order above the authorization, "Er is niets in te voeren." when nothing is open and how many lines of the list could not
-be read, and "Lijst vernieuwen" beside it; "Aangevinkte regels zijn ingevoerd" and "Aangevinkte regels niet invoeren", which mark
-the ticked changes as entered or as dropped (changes_entered, changes_dropped), both above the rows and again below them, so that
-they stay in reach of a long list; one group of tick boxes with every open change, one under the other (a style rule given to the
-page in the head of an HTML block, for the group's class "hand-rows"), so that the rows of one order stand together; the dropdown
-"Blok" with "Alles van dit blok is ingevoerd" (block_entered), which marks the changes of the block chosen as the page showed them
-when the list was last read (kept per block in a gr.State that each read fills, with the dropdown's choices), each only while it is
-open, so that a change prepared after that read stays on the list; under it, shown only while a price list has article prices to
-enter, the dropdown "Prijslijst" with those price lists, the newest first (hand_list.price_lists), and "Alle artikelprijzen van deze
-prijslijst zijn ingevoerd" (pricelist_entered), which marks the article prices of the list chosen as the page showed them when its
-price lists were last read (pricelists_opened, which reads them when the list is read and after each press of the tab), each only
-while it is open; and a note of what a press did ("Vink eerst aan wat u bedoelt." when nothing is ticked or chosen, and "Er is niets
-genoteerd: ..." when no ticked row was still open; either way nothing is written).
+be read, and "Lijst vernieuwen" beside it; "Aangevinkte regels zijn ingevoerd", the one filled button of the tab, and "Aangevinkte
+regels niet invoeren", which mark the ticked changes as entered or as dropped (changes_entered, changes_dropped), with right under
+them the note of what a press of the list did ("Vink eerst aan wat u bedoelt." when nothing is ticked or chosen, and "Er is niets
+genoteerd: ..." when no ticked row was still open; either way nothing is written), in one column (hand-actions) that the page's style
+keeps at the top of the window while the list scrolls; one group of tick boxes with every open change, one under the other (a style
+rule given to the page in the head of an HTML block, for the group's class "hand-rows"), so that the rows of one order stand together;
+the two buttons again under the rows, small, so that they stay in reach of a long list; the dropdown "Inkooporder of artikelprijzen"
+with "Alles hiervan is ingevoerd" (block_entered), which marks the changes of the block chosen as the page showed them when the list
+was last read (kept per block in a gr.State that each read fills, with the dropdown's choices), each only while it is open, so that a
+change prepared after that read stays on the list; and under it, shown only while a price list has article prices to enter, the
+dropdown "Prijslijst" with those price lists, the newest first (hand_list.price_lists), and "Alle artikelprijzen van deze prijslijst
+zijn ingevoerd" (pricelist_entered), which marks the article prices of the list chosen as the page showed them when its price lists
+were last read (pricelists_opened, which reads them when the list is read and after each press of the tab), each only while it is
+open.
 The list is read again (list_opened) when the page loads, when the tab is selected and with "Lijst vernieuwen", and after each press.
+The page's timer gives the tab its label again every TICK_SECONDS seconds (hand_label_ticked), from a read of the list that writes
+nothing and gives neither the rows, the note nor the blocks, so that what the buyer ticked stays as it is; when changes came in that
+the list on screen does not hold (none of their entry ids stands in a row the last read showed), a line under the intro says how
+many ("Er zijn 2 nieuwe wijzigingen bijgekomen: druk op Lijst vernieuwen."), which goes when the list on screen is read again: the
+tab selected, "Lijst vernieuwen", the language switch and each press of the tab (hand_new_cleared).
 A mark is a line of <cases_root>/prepared/marks.jsonl, at the time of the clock of the page's Deps; nothing else is written, so a
 case's result, its write log, its dispositions and prepared_changes.csv stay as they are. A list that cannot be read (another program
 holds a file of it, or any other error) leaves the rows as they were, with the label "In Exact invoeren (?)" and the note "Dit is niet
@@ -134,17 +190,19 @@ nothing, as the settings tab does. The review tab's own list of writes to undo i
 An undo of such a write that the page's writer only prepares is not undone in Exact: the page then says, as the tab does for a
 put-back (below), "Nog niet teruggedraaid in Exact. Op de lijst staat nu: ...", never "Ongedaan gemaakt".
 
-Under the list the tab has two sections, fixed controls as well (aid/review/hand_list.py makes what they show). "Afgehandeld in de
-laatste 14 dagen" lists the changes entered, seen or dropped in that time, the newest first, each with how the aid knows it ("(door u
-afgevinkt op 18-11-2026)", "(gezien in versie 2 van de inkooporder)", "(gezien in een export uit Exact)", "(niet ingevoerd, op
-18-11-2026)"); under it the dropdown "Afgehandelde wijziging" with the same changes, "Weer op de lijst zetten" (change_reopened),
-which takes back a tick or a drop of the buyer's own (the mark reopened) but not a change the aid saw, nor one that was put back
-("Deze wijziging is teruggedraaid; zij komt niet terug op de lijst."), and "Terugdraaien in Exact" (change_put_back), which prepares
-the old value as a change to enter (hand_list.take_back), and a note of what a press did; with nothing chosen either button says
-"Kies eerst een wijziging bij Afgehandelde wijziging." and writes nothing. "Bevestigd door de leverancier (laatste 7 dagen)"
-lists the confirmations to attach in Exact, with whether the status is to be set to Bevestigd as well; it shows nothing when there
-is none. Both sections are read again (done_opened) when the page loads, when the tab is selected, with "Lijst vernieuwen", when the
-language switches and after each press of the list's buttons; the two buttons show the list and the sections again.
+Under the list the tab has two sections, fixed controls as well (aid/review/hand_list.py makes what they show). First, a task of
+every day, "Bevestigingen om bij te voegen" lists the confirmations to attach in Exact, under a line that counts them and says what to
+do ("2 bevestigingen van de laatste 7 dagen: voeg ze in Exact bij en zet de status op Bevestigd."), each with whether the status is to
+be set to Bevestigd as well; it shows nothing when there is none. Last, "Afgehandeld in de laatste 14 dagen" lists the changes
+entered, seen or dropped in that time, the newest first, each with how the aid knows it ("(door u afgevinkt op 18-11-2026)",
+"(gezien in versie 2 van de inkooporder)", "(gezien in een export uit Exact)", "(niet ingevoerd, op 18-11-2026)"); under it the
+dropdown "Afgehandelde wijziging" with the same changes, "Weer op de lijst zetten" (change_reopened), which takes back a tick or a
+drop of the buyer's own (the mark reopened) but not a change the aid saw, nor one that was put back ("Deze wijziging is
+teruggedraaid; zij komt niet terug op de lijst."), and "Terugdraaien in Exact" (change_put_back), which prepares the old value as a
+change to enter (hand_list.take_back), and a note of what a press did; with nothing chosen either button says "Kies eerst een
+wijziging bij Afgehandelde wijziging." and writes nothing. Both sections are read again (done_opened) when the page loads, when the
+tab is selected, with "Lijst vernieuwen", when the language switches and after each press of the list's buttons; the two buttons
+show the list and the sections again.
 
 The tab "Prijslijst" (_pricelist_tab; aid/review/pricelist_page.py has what it shows and writes, aid/pricelist.py the article prices)
 compares a supplier's price list with the purchase prices that Exact holds, and puts what changes on the list "In Exact invoeren"; the
@@ -152,9 +210,13 @@ aid changes nothing in Exact. Its controls are fixed. While the columns of the e
 article_columns, read as the settings file is now), it shows one sentence and nothing else: "De kolommen van de export van de
 artikelen zijn nog niet ingesteld. ...". Else, top to bottom: the introduction; "Leverancier", a dropdown of the suppliers with stored
 prices in which a new name can be typed (a name is taken without the spaces around it, and one that differs from a stored name in
-capitals or spaces only is that supplier), with "Inkoopprijzen van deze leverancier weghalen" beside it (prices_removed), which
-takes the stored prices and the kept columns of that supplier away, whole or not at all, and no row of the list (a supplier given
-under two spellings); the state of the supplier's stored prices ("Inkoopprijzen van S01 opgenomen op ... uit
+capitals or spaces only is that supplier), with "Inkoopprijzen van deze leverancier weghalen" beside it, small, which only asks
+(remove_asked): right under that row a question says how many stored prices of which supplier go ("De 12 opgeslagen inkoopprijzen
+van S08 worden weggehaald. De lijst In Exact invoeren blijft zoals hij is."), with "Ja, weghalen" (prices_removed), which takes the
+stored prices and the kept columns of that supplier away, whole or not at all, and no row of the list (a supplier given under two
+spellings), and "Niet weghalen" (remove_kept), which closes the question as another supplier chosen does; the answer of a removal
+stands under that row (removal_shown), never with the note of the export far lower; the state of the supplier's stored prices
+("Inkoopprijzen van S01 opgenomen op ... uit
 ...: 12 artikelen.", that none are filed yet, or "Kies eerst een leverancier."); the field "Export van de artikelen uit Exact (Excel
 of csv)" with "Inkoopprijzen opnemen" (prices_filed), active only while a file is chosen, which stores the export's prices for its
 supplier (store_current: the supplier the export's supplier column names, else the supplier chosen, without whom nothing is stored)
@@ -162,8 +224,9 @@ and leaves every other supplier's prices as they are, and a note of what was sto
 with stored prices, the price list: the field "Prijslijst (Excel of csv)", five column fields that offer the titles of the list's
 first row and are filled from the columns kept for the supplier, else from the titles that equal the aid's own (pricelist_file_chosen),
 under them one line that says to point out the column for what a price is per when the list has one, "Bekijken"
-(pricelist_shown), the table of the list's rows with their outcomes, the count line, and "Op de lijst In Exact invoeren zetten"
-(pricelist_carried_out). "Bekijken" writes nothing anywhere: it compares the list with the supplier's current prices
+(pricelist_shown), the table of the list's rows with their outcomes, at most 320 px high, the count line, and "Op de lijst In
+Exact invoeren zetten" (pricelist_carried_out), which a step of the browser after "Bekijken" brings into view with the count line.
+"Bekijken" writes nothing anywhere: it compares the list with the supplier's current prices
 (current_prices: the stored prices with every article price entered or seen on the list since) and keeps what it showed in a
 gr.State. The press is active only after a view, and a change of the list's file, of the supplier or of a column field ends the
 view. It carries out the view the page showed: the changes are prepared through the prepared writer into <cases_root>/prepared and
@@ -182,8 +245,8 @@ price that the buyer took off the list. So what the view shows as changing, the 
 list leaves an older price of the same supplier's earlier list on the list, the count line and the note name its article
 (pricelist_page.older_asked). A change that the list holds as entered from before the supplier's newer export is asked again by
 the press (pricelist_page.ask_again). A supplier's name of more than 100 characters, or with a line
-break or a control character, is refused wherever the tab takes one. Both file fields take any file, so that the page library
-refuses none in its own words: a file of another type, an empty file, a workbook with more than one visible sheet with data (one
+break or a control character, is refused wherever the tab takes one. Both file fields, 140 px high, take any file, so that the page
+library refuses none in its own words: a file of another type, an empty file, a workbook with more than one visible sheet with data (one
 sheet is read, the one the buyer sees), a CSV file with a row that holds more cells than its row of titles, a price list with a
 heading above its titles, an export whose columns are not those set, an export that gave no article and a file that cannot be
 read are each named by a sentence, the file's name shown as it is (_literal), and one press stores one export, as one press of the tab
@@ -195,21 +258,26 @@ and the view. On a public share link and without a settings file the tab offers 
 The tab "Bestanden" (_files_tab; aid/review/intake.py has what it shows and writes) takes a file that does not come in by itself: the
 title "Een bestand aan de assistent geven", an intro that names the export from Exact only while the export's columns are set
 (export_columns, read as the settings file is now), the upload field "Kies een bestand", which takes any file, so that the page library
-refuses none in its own words, and "Aan de assistent geven" (file_given), active only while a file is chosen (file_chosen), which puts
-the file into the watched folder of the settings through intake.accept, the only file it writes, and says so ("... is aangenomen.
-Hieronder staat binnen een minuut wat ermee is gedaan.") or why not, in a sentence of its own for a type the scan does not read, a
-spreadsheet while the export's columns are not set and an empty file, with the file's name shown as it is (_literal: no mark of it is
-read as Markdown or HTML); the field is emptied after each press. One press gives one file: a second press with the same upload (a
-double click) or with the field the press before it emptied changes nothing, its note included; a press without a file when none came
-before it says "Kies eerst een bestand.". What the tab keeps for the session (a gr.State) is the upload given last and whether the note
-says that the list failed. Under it, "Laatst verwerkt" with "Lijst vernieuwen" and a table of the last lines of
-<cases_root>/intake.jsonl, the newest first: the time, the file and what the runner did with it, each outcome by its fixed label and
-never an error's text, and behind a line that opened a case what the case is now ("Zaak geopend voor inkooporder 250105. Nu:
-mislukt.", intake.rows), read again (files_opened) when the page loads, when the tab is selected and with "Lijst vernieuwen", and after
-each press. An intake file that cannot be read leaves the table as it was, with "Dit is niet gelukt (<the class of the error>).", which
-the next read that succeeds clears. The language switch relabels the tab (files_relabel) and clears the note; while the intake file
-cannot be read the table stays as it was, in the language it was read in, and the note says so. On a public share link and without a
-settings file the tab offers nothing, as the settings tab does.
+refuses none in its own words (its drop zone 140 px high), and "Aan de assistent geven" (file_given), active only while a file is
+chosen (file_chosen), which puts the file into the watched folder of the settings through intake.accept, the only file it writes, and
+says so ("... is aangenomen. De assistent leest het bij de volgende ronde, binnen een minuut; wat ermee gebeurt, komt dan vanzelf in
+Laatst verwerkt.") or why not, in a sentence of its own for a type the scan does not read, a spreadsheet while the export's columns
+are not set and an empty file, with the file's name shown as it is (_literal: no mark of it is read as Markdown or HTML); the field
+is emptied after each press. One press gives one file: a second press with the same upload (a double click) or with the field the
+press before it emptied changes nothing, its note included; a press without a file when none came before it says "Kies eerst een
+bestand.". What the tab keeps for the session (a gr.State) is the upload given last and whether the note says that the list failed.
+Under it, "Laatst verwerkt" with "Lijst vernieuwen" and a table of the last lines of <cases_root>/intake.jsonl, the newest first: the
+time ("12-11-2026 18:48"), the file and what the runner did with it, each outcome by its fixed label and never an error's text, and
+behind a line that opened a case what the case is now ("Zaak geopend voor inkooporder 250105. Nu: mislukt.", intake.rows), read again
+(files_opened) when the page loads, when the tab is selected and with "Lijst vernieuwen", and after each press. The page's timer reads
+the table again every TICK_SECONDS seconds (files_ticked), so that what the runner did with a file shows without a press; that
+handler runs with every other read of the table as well, and shows the table while it has a line and in its place a sentence while
+it has none ("Nog geen bestanden verwerkt. Wat de assistent met een bestand doet, komt hier vanzelf."). It gives neither the field,
+the note nor what the tab keeps, and writes nothing. An intake file that cannot be read leaves the table as it was, with "Dit is niet
+gelukt (<the class of the error>).", which the next read of files_opened that succeeds clears. The language switch relabels the tab
+(files_relabel) and clears the note; while the intake file cannot be read the table stays as it was, in the language it was read in,
+and the note says so. On a public share link and without a settings file the tab offers nothing, as the settings tab does, and
+nothing of it is on the timer.
 
 The settings tab ("Instellingen") holds, under the line of a settings file that cannot be read (below), its five sections in a gr.Tabs
 of its own (settings-sections), the buyer's things first and the installer's after (finding 7 of the owner's test): "Uw regels" (its
@@ -453,6 +521,7 @@ import asyncio
 import hashlib
 import io
 import json
+import math
 import re
 import tempfile
 import threading
@@ -475,8 +544,8 @@ from aid.execution.writer import LOG_FILE as WRITE_LOG
 from aid.execution.writer import WriteLog, WriteLogEntry, WriterError, read_before
 from aid.messaging import FileMailer, Mailer, NoRoute
 from aid.messaging import _append_line           # a line appended in one write, a line a crash cut off ended first
-from aid.messaging.microsoft_mailer import mailer_of
-from aid.pipeline import LOOKS, NOT_SENT, RESULT_FILE, SENT, CaseResult, Deps, asked_by_the_run
+from aid.messaging.microsoft_mailer import MicrosoftMailer, mailer_of
+from aid.pipeline import LOOKS, NOT_SENT, RESULT_FILE, SENT, UNADDRESSED, UNSENT, CaseResult, Deps, asked_by_the_run
 from aid.po_store import PoStore
 from aid.pricelist import (NameRefused, NoArticle, also_held, current_prices, is_supplier_name, keep_columns, kept_columns, others_asking,
                            remove_stored, store_current, stored_prices, supplier_named, with_others)
@@ -485,8 +554,8 @@ from aid.readers.llm_client import ReaderError
 from aid.readers.po_export import ExportRefused
 from aid.review import hand_list, intake, pricelist_page
 from aid.review import status as aid_status      # the module: the page has a status line of its own
-from aid.review.app import (CAPTURE_FILE, DECISIONS_FILE, CaseSummary, Decision, EnteredValue, FlagRow, NothingAsked, _pages, _saved_result,
-                            _summary, decide, load_case_view, marked_replaced)
+from aid.review.app import (CAPTURE_FILE, DECISIONS_FILE, CaseSummary, Decision, EnteredValue, FlagRow, LineMark, NothingAsked, _context,
+                            _pages, _saved_result, _summary, decide, load_case_view, marked_replaced)
 from aid.review.buyer_settings import (BUYER_FIELDS, SUPPLIER_FIELDS, changed_fields, parse, shown, supplier_changes, supplier_names,
                                        supplier_rows, supplier_shown, supplier_update, without_supplier)
 from aid.review.close import _records, close_case, standing_decisions, undo, waiting_for_po
@@ -499,7 +568,7 @@ from aid.review.exact_settings import (ARTICLE_FORM, EXPORT_FORM, MEANINGS, NO_C
                                        refusal_text, sample_head, saved_articles, saved_export, saved_values, senders_from, state_lines,
                                        title_words, trial, typed_words)
 from aid.review.i18n import STRINGS, reason_label
-from aid.review.look import LINE, LINE_STRONG, MUTED, SURFACE, TONES
+from aid.review.look import TONES
 from aid.settings import Settings, SettingsInvalid, WriteRouteSet, is_client_id, is_tenant_id, load_settings, read_settings, update_settings_file
 from aid.sources.dropin import drop
 from aid.sources.mailbox import PROCESSED_FOLDER, attachment_of
@@ -515,6 +584,9 @@ _ONE_PER_LINE = ".hand-rows .wrap { flex-direction: column; align-items: flex-st
 # The two tables of part 2 of the block "Koppeling met Exact": a column title breaks between its words only, never inside one ("Rij" stays
 # whole), so that a table wider than the block scrolls sideways inside it, as the page library's table does when it is wider.
 _WHOLE_TITLES = "#export-head th, #export-head th *, #export-lines th, #export-lines th * { word-break: normal; overflow-wrap: normal; }"
+# The step of the browser after "Bekijken" on the tab "Prijslijst": once the view is drawn, the count line under the table stands in the
+# middle of the window, with "Op de lijst In Exact invoeren zetten" right under it. It runs in the page alone and names no address.
+_COUNT_INTO_VIEW = '() => { requestAnimationFrame(() => document.getElementById("pricelist-note")?.scrollIntoView({block: "center"})); }'
 SEND_VIA = get_args(Settings.model_fields["send_via"].annotation)     # the values of send_via, in the order the tab offers them
 READERS = get_args(Settings.model_fields["reader"].annotation)        # the values of reader: "llm" (Copilot) and "parser"
 COPILOT_TEST = "Answer with the word OK only."                         # the message of "Copilot testen"
@@ -545,14 +617,19 @@ BUYER_GROUPS = (("handled", ("price_pct", "price_abs", "lead_time_tolerance_days
 _COLUMNS = ("item", "field", "line", "po_value", "doc_value", "reason", "po_source", "doc_source")
 # The width of each column of the three lists, in whole percents that make 100 together, so that a list fits the page and its cells
 # wrap inside their columns: a long reason (the guess's) never pushes the two sources out of view.
-_WIDTHS = {"item": 5, "field": 9, "line": 5, "po_value": 9, "doc_value": 9, "reason": 25, "po_source": 19, "doc_source": 19}
+_WIDTHS = {"item": 5, "field": 9, "line": 6, "po_value": 10, "doc_value": 10, "reason": 24, "po_source": 18, "doc_source": 18}
 COLUMN_WIDTHS = [f"{_WIDTHS[column]}%" for column in _COLUMNS]
 _ENTERED = {field: kind for kind, field in FIELDS.items()}        # the kind of change of each field of an entered value, for its form
+_NUMBER = re.compile(r"-?[0-9]+(\.[0-9]+)?")       # a number in normal form (aid/schema.py), which a row shows with the language's mark
+_SOURCE = re.compile(r"p([0-9]+) r([0-9]+): ")     # the page and the line at the head of a source, as the view cites it (aid/review/app.py)
+# The fields of "Uw regels" that hold a number or a time, which the style rules of aid/review/look.py keep short (short-field).
+_SHORT_FIELDS = ("price_pct", "price_abs", "lead_time_tolerance_days", "first_cases_review", "ask_wait_working_days", "digest_time")
 # The strip of the tab "Beoordelen" (see the module docstring): the states it counts, in their order, each with the tone of its chip
-# (TONES of aid/review/look.py), "look" for the documents the intake left to the buyer that wait for him; the tone of each state in the
-# fold's table, a document's two states among them; the place that handles each problem of the assistant (aid/review/status.py),
-# which names the strip's button ("act:<place>"); and the section of the settings tab that is that place, which the button opens: the
-# id of its gr.Tab in settings-sections (_settings_tab, _assistant_section).
+# (a key of TONES of aid/review/look.py, whose style rules give each tone's class its colours), "look" for the documents the intake
+# left to the buyer that wait for him; the tone of each state in the fold's table, a document's two states among them; the place
+# that handles each problem of the assistant (aid/review/status.py), which names the strip's button ("act:<place>"); and the section
+# of the settings tab that is that place, which the button opens: the id of its gr.Tab in settings-sections (_settings_tab,
+# _assistant_section).
 _CHIPS = (("review", "attention"), ("failed", "problem"), ("look", "attention"), ("copilot_wait", "waiting"), ("waiting", "waiting"),
           ("closed_itself", "done"))
 _TONE = {"review": "attention", "waiting_po": "waiting", "failed": "problem", "handled": "done", "copilot_wait": "waiting",
@@ -562,38 +639,27 @@ _PLACES = {"stopped": "assistant", "given_up": "assistant", "no_pass_ever": "ass
 _SECTIONS = {"assistant": "assistent", "connections": "koppelingen"}
 _CLOSED = ("closed_itself", "closed_by_you")
 TICK_SECONDS = 30                                # how often the page reads the strip, the count and the case list again
-WHEN_FORM = "%Y-%m-%d %H:%M"                     # a time of the mailbox on the tab "Postvak en AI" (_when)
-DAY_FORM = "%d-%m-%Y %H:%M"                      # a time in the section "Stand van de assistent" (_day_time), the mailbox's too
+# A line of a document that a difference was read from, as the page marks it (_marked): its box this many pixels wider on every side,
+# and an edge this many pixels wide.
+MARK_PAD, MARK_EDGE = 3, 2
+WHEN_FORM = "%d-%m-%Y %H:%M"                     # a time of the mailbox on the tab "Postvak en AI" (_when), the day first as below
+DAY_FORM = "%d-%m-%Y %H:%M"                      # a time in the section "Stand van de assistent" (_day_time), the mailbox's too, and
+                                                 # the time of a case or a document in the case list of "Beoordelen" (_day)
 # The files of a case folder whose offer offered_cases tells by (case.json first), and what it read of each folder at its last call,
 # by cases root, by folder: the stamp of each of those files (_stamp), and the case as offered then (None: not offered); the folders
 # of the last aid_status.CACHED_ROOTS cases roots are kept.
 _OFFER_FILES = ("case.json", f"steps/{RESULT_FILE}", WRITE_LOG, CAPTURE_FILE)
 _OFFERED: dict[Path, dict[str, tuple[tuple, CaseSummary | None]]] = {}
 _OFFERED_LOCK = threading.Lock()                 # the page reads in threads of its own
-# A chip: 24 px high, a dot of 6 px before its word, in the colours of its tone, so that a colour never says something alone.
-_CHIP_RULES = (".chip { display: inline-flex; align-items: center; gap: 6px; min-height: 24px; padding: 0 8px; border-radius: 4px; "
-               "font-size: 13px; line-height: 18px; font-weight: 600; font-variant-numeric: tabular-nums; } "
-               '.chip::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 3px; } '
-               + " ".join(f".chip.{name} {{ color: {tone.text}; background: {tone.tint}; }} .chip.{name}::before {{ background: {tone.mark}; }}"
-                          for name, tone in TONES.items()))
-# The style of the strip and of the fold's table, scoped to their gr.HTML (its css_template), so that the page's own look is untouched;
-# the page library's own style of an HTML block (apply_default_css), which rules a table's rows in the text colour, is left off them.
-_STRIP_CSS = (f".strip {{ display: flex; flex-direction: column; gap: 8px; padding: 12px 16px; background: {SURFACE}; border: 1px solid {LINE}; "
-              "border-radius: 6px; } .chips { display: flex; flex-wrap: wrap; gap: 8px; } "
-              f".meta {{ font-size: 13px; line-height: 18px; color: {MUTED}; }} {_CHIP_RULES}")
-_ALL_CSS = ("table { width: 100%; margin: 0; border: 0; border-collapse: collapse; font-size: 14px; line-height: 20px; "
-            "font-variant-numeric: tabular-nums; } tr { border: 0; } "
-            f"th, td {{ text-align: left; vertical-align: top; padding: 10px; border: 0; border-bottom: 1px solid {LINE}; background: none; }} "
-            f"th {{ font-weight: 600; color: {MUTED}; border-bottom-color: {LINE_STRONG}; }} td:first-child {{ white-space: nowrap; }} "
-            f".empty {{ color: {MUTED}; }} {_CHIP_RULES}")
 
 
 def page_rows(rows: list[FlagRow], language: str) -> list[list[str]]:
     """The rows of a list as the page shows them in the language: the item, the field, the line, the two values, the reason and the
     two sources. Fields, reasons and the kinds of matched pairs are shown by their labels in i18n.STRINGS, never as their text, which
-    may carry a rule code; a reason without a label shows as "other reason"."""
+    may carry a rule code; a reason without a label shows as "other reason". The values stand in the form of the language (_value),
+    a price as 12,50 in Dutch and a day as 16-11-2026, as on the tab "In Exact invoeren"; the sources as the line was read."""
     strings = STRINGS[language]
-    return [[row.item_id, _field(strings, row.field), row.line, _value(strings, row, row.po_value), _value(strings, row, row.doc_value),
+    return [[row.item_id, _field(strings, row.field), row.line, _value(row, row.po_value, language), _value(row, row.doc_value, language),
              _reason(strings, row.reason), row.po_source, row.doc_source] for row in rows]
 
 
@@ -615,9 +681,12 @@ def _field(strings: dict[str, str], field: str) -> str:
     return strings.get(f"field:{field}", strings["reason:other"]) if field else ""
 
 
-def _value(strings: dict[str, str], row: FlagRow, value: str) -> str:
-    """A value; the kind of a matched pair (matched, split, merged) by its label."""
-    return strings.get(f"pair:{value}", value) if row.field == "line_presence" else value
+def _value(row: FlagRow, value: str, language: str) -> str:
+    """A value of a row as the page shows it in the language: the kind of a matched pair (matched, split, merged) by its label, and
+    any other value in the form of the language (_formed)."""
+    if row.field == "line_presence":
+        return STRINGS[language].get(f"pair:{value}", value)
+    return _formed(value, row.field, language)
 
 
 def _reason(strings: dict[str, str], reason: str) -> str:
@@ -637,39 +706,61 @@ def _write_words(op: WriteOp, strings: dict[str, str]) -> str:
 
 
 def _case_label(summary: CaseSummary, strings: dict[str, str]) -> str:
-    """A case in the dropdown: its PO, supplier, time of opening and number of items, and its status when it is not in review; a case
-    made from a try-out has "(proefdocument)" behind it (hand_tryout, the mark of the list "In Exact invoeren"), so that it never
-    looks like a supplier's confirmation of the same order opened in the same minute."""
+    """A case in the dropdown, in one grammar (spec 4.6): its order and supplier, its number of items and the time it was opened
+    (_day), "Inkooporder 250107 (S07): 1 punt, 12-11-2026 09:00", then its status when it is not in review; a case made from a
+    try-out has "(proefdocument)" behind it (hand_tryout, the mark of the list "In Exact invoeren"), so that it never looks like a
+    supplier's confirmation of the same order opened in the same minute."""
     supplier = f" ({summary.supplier})" if summary.supplier else ""
     items = strings["item_one"] if summary.items == 1 else strings["items_many"].format(n=summary.items)
     status = "" if summary.status == "review" else f", {strings[f'status:{summary.status}']}"
     mark = f" {strings['hand_tryout']}" if summary.tryout else ""
-    return f"PO {summary.po_number or strings['unknown_po']}{supplier}, {summary.opened_at[:16].replace('T', ' ')}, {items}{status}{mark}"
+    return f"{strings['po_document']} {summary.po_number or strings['unknown_po']}{supplier}: {items}, {_day(summary.opened_at)}{status}{mark}"
 
 
-def _failed_label(line: aid_status.CaseLine, strings: dict[str, str], tryout: bool) -> str:
-    """A failed case in the dropdown, which the buyer has not noted as handled: its PO, supplier and time of opening as _case_label
-    names them, then "mislukt: zelf bekijken" in place of the number of items, and the mark of a try-out."""
+def _day(opened_at: str) -> str:
+    """The time a case was opened, as its case.json holds it, as the case list shows it: dd-mm-yyyy HH:MM in both languages
+    (DAY_FORM), as the hand list shows a day; a text that is no time, as it is."""
+    try:
+        return datetime.fromisoformat(opened_at).strftime(DAY_FORM)
+    except ValueError:
+        return opened_at
+
+
+def _failed_label(line: aid_status.CaseLine, strings: dict[str, str], tryout: bool, handled: bool = False) -> str:
+    """A failed case in the dropdown, which the buyer has not noted as handled, as _case_label names a case, with "mislukt, zelf
+    bekijken" in place of the number of items: "Inkooporder 250105 (S05): mislukt, zelf bekijken, 12-11-2026 17:03", and the mark
+    of a try-out; once he noted it as handled (it stays on screen until another case is chosen), "mislukt, door u afgehandeld" in
+    place of "mislukt, zelf bekijken"."""
     supplier = f" ({line.supplier})" if line.supplier else ""
     mark = f" {strings['hand_tryout']}" if tryout else ""
-    return f"PO {line.po_number or strings['unknown_po']}{supplier}, {line.opened_at:%Y-%m-%d %H:%M}, {strings['case_failed_look']}{mark}"
+    return (f"{strings['po_document']} {line.po_number or strings['unknown_po']}{supplier}: "
+            f"{strings['case_failed_handled' if handled else 'case_failed_look']}, {line.opened_at.strftime(DAY_FORM)}{mark}")
 
 
 def _kept_label(cases_root: Path, case_id: str, strings: dict[str, str]) -> str:
     """A case on screen that left the list (closed in another browser tab, replaced by the runner, a failed case noted as handled),
-    as _case_label names it now, its status saying why it left; its id when its folder can no longer be read."""
+    named as the list names it now, with the mark of a try-out: as _case_label names a case, its status saying why it left, and a
+    failed case as _failed_label names one, as handled once its mark (status.HANDLED_FILE) stands; its id when its folder can no
+    longer be read."""
     try:
         meta = json.loads((Path(cases_root) / case_id / "case.json").read_text(encoding="utf-8"))
-        return _case_label(_summary(case_id, meta, _saved_result(load_case(cases_root, case_id))), strings)
+        summary = _summary(case_id, meta, _saved_result(load_case(cases_root, case_id)))
+        tryout = case_is_tryout(cases_root, case_id)
+        if summary.status != "failed":
+            return _case_label(summary.model_copy(update={"tryout": tryout}), strings)
+        opened = _local(datetime.fromisoformat(summary.opened_at))       # as the status module reads it for the list (case_lines)
+        line = aid_status.CaseLine(case_id, summary.po_number, summary.supplier, opened, "failed", None)
+        return _failed_label(line, strings, tryout, handled=(Path(cases_root) / case_id / aid_status.HANDLED_FILE).exists())
     except (OSError, ValueError, KeyError):
         return case_id
 
 
 def _item_label(item: aid_status.LookItem, strings: dict[str, str]) -> str:
-    """A document the intake left to the buyer in the dropdown: "Document MU05_conf.pdf, 2026-11-12 17:03, zelf bekijken", its file
-    as the list of skipped items names it and the time of the scan that left it, written as _failed_label writes a time; once the
-    buyer noted it as handled (it stays on screen until another case is chosen), "door u afgehandeld" in place of "zelf bekijken"."""
-    return strings["item_label" if item.state == "look" else "item_label_handled"].format(file=item.file, time=f"{item.time:%Y-%m-%d %H:%M}")
+    """A document the intake left to the buyer in the dropdown, in the grammar of _case_label: "Document MU05_conf.pdf: zelf bekijken,
+    12-11-2026 17:03", its file as the list of skipped items names it and the time of the scan that left it, written as
+    _failed_label writes a time; once the buyer noted it as handled (it stays on screen until another case is chosen), "door u
+    afgehandeld" in place of "zelf bekijken"."""
+    return strings["item_label" if item.state == "look" else "item_label_handled"].format(file=item.file, time=item.time.strftime(DAY_FORM))
 
 
 class _Found(NamedTuple):
@@ -843,18 +934,48 @@ def _local(moment: datetime) -> datetime:
     return moment.astimezone().replace(tzinfo=None) if moment.utcoffset() is not None else moment
 
 
-def _describe(row: FlagRow, strings: dict[str, str]) -> str:
-    """A review item in one line, above its decision."""
-    parts = [f"**{row.item_id}**"]
-    if row.field:
-        parts.append(_field(strings, row.field))
-    if row.line:
-        parts.append(f"{strings['line_word']} {row.line}")
-    if row.po_value or row.doc_value:
-        parts.append(f"{strings['po_value']} {_value(strings, row, row.po_value) or '-'}, {strings['doc_value']} {_value(strings, row, row.doc_value) or '-'}")
-    if row.reason:
-        parts.append(_reason(strings, row.reason))
-    return " | ".join(parts)
+def _formed(value: str, field: str, language: str) -> str:
+    """A value of a row in the form of the language, as the tab "In Exact invoeren" shows a value (hand_list._value): a price or a
+    quantity in normal form (aid/schema.py) with the decimal mark of the language, 12,50 in Dutch and 12.50 in English, and a day, a
+    week or a range of days as 16-11-2026, "week 47 (2026)" or its two days joined by "/", in both languages; a value that is not in
+    normal form (the text as printed, where the reader could not read a value) and a value of any other field, as it is."""
+    if field in ("price", "quantity") and _NUMBER.fullmatch(value):
+        return hand_list._value(value, "po_line_price", language)
+    return hand_list._value(value, "po_line_date", language) if field == "delivery_date" else value
+
+
+def _place(source: str, strings: dict[str, str]) -> str:
+    """Where a value was read, as a decision row says it after "Gelezen op de inkooporder" or "Gelezen bij de leverancier": its page
+    and line in words and the text of that line as it was read, " (pagina 1, regel 8): 1 KM-0701 ...", from a source as the view
+    cites it ("p1 r8: <text>", aid/review/app.py); a source in another form as it is. The text is escaped for Markdown."""
+    found = _SOURCE.match(source)
+    if found is None:
+        return f": {hand_list._markdown(source)}"
+    text = hand_list._markdown(source[found.end():])
+    return f" ({strings['source_place'].format(page=found[1], line=found[2])})" + (f": {text}" if text else "")
+
+
+def _describe(row: FlagRow, language: str) -> str:
+    """The left of the decision row of a review item (spec 2.1.1), as Markdown in the language, each fact once: the field and the line
+    in bold ("Prijs, regel 1"); the purchase order's value first and the supplier's after it, in the form of the language (_formed),
+    with the reason by its label ("Inkooporder 12,50 → leverancier 14,00 · Prijsverschil boven de drempel"); and as meta, a paragraph
+    each, where each value was read (_place), the lines whose marks the documents show. A row without values has no line of values,
+    and one whose item names no field and no line (an item about the whole case) is headed by its reason, which is then not said
+    again. No item id: the column Punt of the lists has it."""
+    strings = STRINGS[language]
+    line = f"{strings['line_word']} {hand_list._markdown(row.line)}" if row.line else ""
+    head, reason = ", ".join(part for part in (_field(strings, row.field), line) if part), _reason(strings, row.reason)
+    po, doc = (hand_list._markdown(_value(row, value, language)) for value in (row.po_value, row.doc_value))
+    supplier = strings["doc_value"]
+    if po:
+        values = f"{strings['po_value']} {po}" + (f" → {supplier[:1].lower()}{supplier[1:]} {doc}" if doc else "")
+    else:
+        values = f"{supplier} {doc}" if doc else ""
+    title = head or reason
+    paragraphs = [f"**{title}**" if title else "", " · ".join(part for part in (values, reason if head else "") if part)]
+    paragraphs += [f"{strings[key]}{_place(source, strings)}" for key, source in (("source_po", row.po_source), ("source_doc", row.doc_source))
+                   if source]
+    return "\n\n".join(paragraph for paragraph in paragraphs if paragraph)
 
 
 def _decision_choices(row: FlagRow, kind: str, strings: dict[str, str], again: bool = False) -> list[tuple[str, str]]:
@@ -863,6 +984,39 @@ def _decision_choices(row: FlagRow, kind: str, strings: dict[str, str], again: b
     item that asks for a look in Exact after a write of the aid (see decide)."""
     asked = (bool(row.field) or again) and kind != "cart" and row.reason not in LOOKS
     return [(strings[decision], decision) for decision in get_args(Decision) if decision != "ask" or asked]
+
+
+def _marked(images: list, marks: list[LineMark]) -> list:
+    """The page images of a document with the marks of the view drawn on them (see the module docstring): the box of each mark,
+    MARK_PAD pixels wider on every side, keeps the line's ink and takes the tint of attention as its ground, multiplied in as a marker
+    does, inside an edge of MARK_EDGE pixels in the mark colour of attention (TONES of aid/review/look.py); nothing else of an image
+    changes. A line that two rows cite is marked once, and a page without a mark is its image as it was. A box that does not lie on
+    its image, which the view never gives (aid/review/app.py), is not drawn, nor is one that is no box of numbers, so that drawing a
+    mark never raises into the page."""
+    from PIL import Image, ImageChops, ImageDraw
+
+    tone = TONES["attention"]
+    boxes: dict[int, dict] = {}
+    for found in marks:
+        boxes.setdefault(found.page, {})[found.box] = None        # each line once, in the order of the rows
+    shown = []
+    for number, image in enumerate(images, 1):
+        if number not in boxes:
+            shown.append(image)
+            continue
+        image = image.convert("RGB")
+        draw = ImageDraw.Draw(image)
+        for box in boxes[number]:
+            if not (all(math.isfinite(value) for value in box) and box[0] < box[2] and box[1] < box[3]
+                    and box[0] < image.width and box[2] > 0 and box[1] < image.height and box[3] > 0):
+                continue                         # not on the image: nothing of it to draw
+            left, top = max(0, math.floor(box[0]) - MARK_PAD), max(0, math.floor(box[1]) - MARK_PAD)
+            right, bottom = min(image.width - 1, math.ceil(box[2]) + MARK_PAD), min(image.height - 1, math.ceil(box[3]) + MARK_PAD)
+            area = (left, top, right + 1, bottom + 1)
+            image.paste(ImageChops.multiply(image.crop(area), Image.new("RGB", (right + 1 - left, bottom + 1 - top), tone.tint)), area[:2])
+            draw.rectangle((left, top, right, bottom), outline=tone.mark, width=MARK_EDGE)
+        shown.append(image)
+    return shown
 
 
 def _undoable(case: Case) -> list[WriteLogEntry]:
@@ -1022,6 +1176,60 @@ def _files_folder(deps: Deps) -> str | None:
         return None
     cases, out = Path(deps.settings.cases_root).resolve(), mailer.out_dir.resolve()
     return f"{cases.name}/{out.relative_to(cases).as_posix()}" if out.is_relative_to(cases) and out != cases else out.name
+
+
+def _unrouted(deps: Deps) -> str | None:
+    """Why the mailer of `deps` (the Deps of a close, _Live.sending) would send a message of the close nowhere at this moment, as the
+    close judges the route of each message before it sends it (aid/review/close.py): the `unrouted` of the mailer a message would go
+    through now, "no_mailbox" or "no_password" (mailer_of of aid/messaging/microsoft_mailer.py) or "settings" (the settings file
+    cannot be read); None for a mailer with a way to send, and for a page without a mailer (the made-up set's), whose close records
+    the question as asked. Asks Microsoft nothing: the mailer of send_via "auto" looks at the token cache on this PC. A mailer of the
+    work mailbox with nobody signed in is told by _signed_out, after the supplier's address, where the close meets it."""
+    mailer = deps.mailer
+    if mailer is None:
+        return None
+    route = mailer.current() if hasattr(mailer, "current") else mailer
+    return getattr(route, "unrouted", None)
+
+
+def _signed_out(deps: Deps) -> str | None:
+    """Why a message of the close would not go through the work mailbox at this moment, as the close meets it when it sends, after the
+    supplier's address (aid/review/close.py, MicrosoftMailer.send): "sign_in" when the mailer a message would go through now is that
+    of the work mailbox (send_via "microsoft") and nobody is signed in, before the first sign-in or after "Afmelden"; "store" when the
+    store of the sign-in is refused (StoreRefused); None otherwise. Reads the token cache on this PC only, as "auto" does, and asks
+    Microsoft nothing: a sign-in that Microsoft no longer accepts is found at the close. A cache that cannot be read says nothing
+    here, and the close says what happened."""
+    mailer = deps.mailer
+    route = mailer.current() if mailer is not None and hasattr(mailer, "current") else mailer
+    if not isinstance(route, MicrosoftMailer):
+        return None
+    try:
+        return "sign_in" if route.account.account() is None else None
+    except StoreRefused:
+        return "store"
+    except Exception:  # a token cache that cannot be read: the close says what happened
+        return None
+
+
+def _asked_text(case: Case, result: CaseResult, deps: Deps, strings: dict[str, str]) -> str:
+    """Where the question of "Leverancier vragen" on the case goes when the case is closed, as the close would send it with `deps`,
+    the Deps of a close as they would be now (spec 2.1.1): with the checks the close makes before it sends, in its order. A mailer
+    that would have no way to send it says why not and what to do ("row_asks_unrouted:<cause>", _unrouted); a supplier without an
+    address (of the case's routing context, as close.py takes it), that the question does not go until one is filled in; the work
+    mailbox with nobody signed in or its store refused, that the question would not go and what to do (_signed_out); a mailer that
+    writes files by the settings' choice (_files_folder), that the question is kept as a file; and else that it goes to the
+    supplier, named and never by its address."""
+    supplier = _context(case, result).supplier
+    named = _literal(supplier) if supplier else strings["unknown_po"]
+    if (cause := _unrouted(deps)) is not None:
+        return strings[f"row_asks_unrouted:{cause}"]
+    if not deps.settings.supplier_emails.get(supplier):
+        return strings["row_asks_no_address"].format(supplier=named)
+    if (cause := _signed_out(deps)) is not None:
+        return strings[f"row_asks_unrouted:{cause}"]
+    if _files_folder(deps) is not None:
+        return strings["row_asks_as_file"]
+    return strings["row_asks"].format(supplier=named)
 
 
 def decision_text(case: Case, item_id: str, decision: str, article_update: bool, language: str) -> tuple[str, bool]:
@@ -1189,12 +1397,12 @@ def build_app(deps: Deps, settings_file: Path | None = None, share: bool = False
     the fold of every case of the last 7 days, read again every TICK_SECONDS seconds (see the module docstring); a dropdown of the
     cases offered (offered_cases), of the failed cases not noted as handled and of the documents the intake left to the buyer that
     wait for him, with the case and the write of the address's query selected when the page opens (selection_from_query), and under
-    it, while no case is chosen, "Oudste zaak openen"; the supplier's document, or the document left to the buyer, and the PO version
-    as image galleries; the three lists as tables, with the four decisions on each review item and the tick for the article price on
-    a price; the banner when a change sends the PO through approval again; the hint on a case that waits for its PO, and the notice of
-    a failed case or of a document left to the buyer; above the lists, the line of the values entered in Exact that the case was
-    compared with; the close button, or for a failed case and a document "Als afgehandeld noteren", and the undo buttons. On "In Exact invoeren",
-    selected when the query holds tab=invoeren: the
+    it, while no case is chosen, "Oudste zaak openen"; then the case chosen in three parts (see the module docstring): the banner when
+    a change sends the PO through approval again, the hint on a case that waits for its PO, the line of the values entered in Exact
+    that the case was compared with and the notice of a failed case or of a document left to the buyer, above the four decisions on
+    each review item and the tick for the article price on a price; the close button, or for a failed case and a document "Als
+    afgehandeld noteren", and the undo buttons; and the PO version and the supplier's document, or the document left to the buyer, as
+    image galleries, with the three lists as tables. On "In Exact invoeren", selected when the query holds tab=invoeren: the
     list of the changes to enter in Exact, to tick as entered or as not to enter, and under it the changes handled in the last 14 days,
     to put on the list again or to put back in Exact, and the confirmations to attach in Exact (see the module docstring). On
     "Prijslijst": a supplier's price list compared with the article prices of an export from Exact, and its changes put on that list
@@ -1356,13 +1564,13 @@ def _page(gr, deps: Deps, tab: _Tab):
         return gr.update(value=text, visible=bool(text))
 
     def show(case_id: str | None, language: str, wanted: str | None = None) -> tuple:
-        """The case chosen: the banner, the documents, the lists, the writes to undo (with the write wanted selected when it is among
-        them), the state the decisions are shown from (those that stand: standing_decisions), the hint of a case that waits for its
-        PO, the line of the values entered in Exact, and a message ("" when there is none). With no case chosen the status line is
-        left as it is: a close that takes its case out of the review empties the case list, and what the close said must stay on
-        the screen. A decisions file that cannot be read empties the view and says so. A document the intake left to the buyer shows
-        its pages in the place of the supplier's document (_item_pages), from where the scan put it, and nothing else of a case: no
-        list, no write to undo and no state, so no decision."""
+        """The case chosen: the banner, the documents with the lines a difference was read from marked (_marked), the lists, the writes
+        to undo (with the write wanted selected when it is among them), the state the decisions are shown from (those that stand:
+        standing_decisions), the hint of a case that waits for its PO, the line of the values entered in Exact, and a message (""
+        when there is none). With no case chosen the status line is left as it is: a close that takes its case out of the review
+        empties the case list, and what the close said must stay on the screen. A decisions file that cannot be read empties the view
+        and says so. A document the intake left to the buyer shows its pages in the place of the supplier's document (_item_pages),
+        from where the scan put it, and nothing else of a case: no list, no write to undo and no state, so no decision."""
         nothing = (gr.update(visible=False), [], [], *tables(empty, language), gr.update(choices=[], value=None), None, hint_of(None, language),
                    entered_of([], False, language))
         now = live.now()
@@ -1380,8 +1588,9 @@ def _page(gr, deps: Deps, tab: _Tab):
             return (*nothing, STRINGS[language]["decisions_damaged"].format(file=DECISIONS_FILE))
         lists = {"flags": view.flags, "matches": view.matches, "uncompared": view.uncompared}
         state = {"case_id": case_id, "kind": case.kind, "lists": lists, "decisions": standing, "articles": _article_items(case),
-                 "entered": (view.entered, view.entered_unread), "again": _asked_again(case)}
-        images = [[Image.open(io.BytesIO(page)) for page in pages] for pages in (view.doc_pages, view.po_pages)]
+                 "entered": (view.entered, view.entered_unread), "again": _asked_again(case), "compared": view.compared}
+        images = [_marked([Image.open(io.BytesIO(page)) for page in pages], marks)
+                  for pages, marks in ((view.doc_pages, view.doc_marks), (view.po_pages, view.po_marks))]
         undo_choices = _undo_choices(case, STRINGS[language])
         selected = wanted if wanted in [entry_id for _, entry_id in undo_choices] else None
         return (gr.update(visible=view.reapproval_banner), *images, *tables(lists, language),
@@ -1395,30 +1604,57 @@ def _page(gr, deps: Deps, tab: _Tab):
         undo_choices = _undo_choices(case, strings) if case is not None else []
         return (f"# {strings['title']}", gr.update(label=strings["language"]),
                 gr.update(label=strings["case"], choices=choices(language, keep=case_id)), gr.update(value=strings["refresh"]), f"**{strings['banner']}**", gr.update(label=strings["document"]),
-                gr.update(label=strings["po_document"]), f"### {strings['flags']}", flags, f"### {strings['decisions']}",
+                gr.update(label=strings["po_document"]), f"### {strings['flags']}", flags, f"## {strings['decisions']}",
                 f"### {strings['matches']}", matches, f"### {strings['uncompared']}", uncompared, gr.update(value=strings["close"]),
                 gr.update(label=strings["undo_choice"], choices=undo_choices, value=None), gr.update(value=strings["undo"]),
                 hint_of(case, language), entered_of(*(state or {}).get("entered", ([], False)), language))
 
     def saver(case_id: str, item_id: str) -> Callable:
         def save(decision: str | None, article: bool, language: str, current: dict | None) -> tuple:
-            """A decision saved at once: the status line, and the hint of the case as it is now, which a decision hides, since the
-            runner no longer checks the case again."""
+            """A decision saved at once: the note of its row (row_note), and the hint of the case as it is now, which a decision
+            hides, since the runner no longer checks the case again. A decision that is not saved says why in the note, as a
+            refusal (class refused): decision_text's own sentence."""
             if not decision:
                 return gr.update(), gr.update()
             if aid_status.is_item(case_id):      # a document left to the buyer has no decision
-                return STRINGS[language]["refused"], gr.update()
+                return noted(STRINGS[language]["refused"], refused=True), gr.update()
             try:
                 case = load_case(cases_root, case_id)
             except ValueError:
-                return STRINGS[language]["refused"], gr.update()
+                return noted(STRINGS[language]["refused"], refused=True), gr.update()
             text, saved = decision_text(case, item_id, decision, bool(article), language)
             if not saved:
-                return text, gr.update()
+                return noted(text, refused=True), gr.update()
             if current and current["case_id"] == case_id:      # the state the radios are shown from follows the decision
                 current["decisions"][item_id] = {"item_id": item_id, "decision": decision, "article_update": bool(article)}
-            return text, hint_of(case, language)
+            return noted(row_note(case, decision, language)), hint_of(case, language)
         return save
+
+    def noted(text: str, refused: bool = False) -> dict:
+        """The note of a decision row with the text, in the colour of done, or of a problem for a refusal (the class refused)."""
+        return gr.update(value=text, elem_classes=["row-note", "refused"] if refused else ["row-note"])
+
+    def row_note(case: Case, decision: str, language: str) -> str:
+        """The note of a decision row once decision_text saved its decision (spec 2.1.1): "Opgeslagen."; for "Leverancier vragen"
+        where the question goes when the case is closed, or why it would not go, judged with the Deps of a close as they would be
+        now (_asked_text); for "Onopgelost laten" that the item stays open; and last what is left to decide on the case: its review
+        items without a decision that stands (standing_decisions), but the item of a message not sent, which needs no choice of its
+        own, since the next close sends that message again. A case whose files cannot be read at that moment leaves out what is
+        left."""
+        strings = STRINGS[language]
+        now = live.sending() if decision == "ask" else live.now()     # for a question, the mailer a close would have now
+        parts = [strings["row_saved"], *([strings["row_open"]] if decision == "unresolved" else [])]
+        try:
+            result = _saved_result(case)
+            if decision == "ask":
+                parts.append(_asked_text(case, result, now, strings))
+            standing = standing_decisions(case, now.settings.ask_wait_working_days)
+        except (OSError, ValueError, KeyError):  # files that cannot be read at this moment: the note leaves out what it cannot tell
+            return " ".join(parts)
+        left = sum(1 for item in result.review_items if not item.settled and item.reason not in (UNSENT, UNADDRESSED)
+                   and item.item_id not in standing)
+        return " ".join([*parts, strings["row_all_decided"] if not left else strings["row_left_one"] if left == 1
+                         else strings["row_left_many"].format(n=left)])
 
     def refreshed(language: str, case_id: str | None) -> tuple:
         """"Lijst vernieuwen": the case list as it is now, the case chosen kept in it when it left the list, and the hint of the case
@@ -1498,41 +1734,74 @@ def _page(gr, deps: Deps, tab: _Tab):
 
     def case_framed(case_id: str | None, language_now: str) -> tuple:
         """The case chosen, or none after a close that took it out of the review: the line and the button under "Zaak" shown while no
-        case is chosen, the line of a case that left the list hidden, and for a failed case its notice, with "Als afgehandeld
-        noteren" in place of "Zaak afsluiten" and of the title of the decisions; for a document the intake left to the buyer, while it
-        waits for him, its notice (item_text) in the same place, with the same button, and neither "Zaak afsluiten" nor the title."""
+        case is chosen, the line of a case that left the list hidden, the case's parts review-case and review-evidence shown while one
+        is chosen (the close's part review-close always stands), and "Zaak afsluiten" with a case in review only; for a failed case
+        its notice, with "Als afgehandeld noteren" in place of "Zaak afsluiten" and of the title of the decisions; for a document the
+        intake left to the buyer, while it waits for him, its notice (item_text) in the same place, with the same button, and neither
+        "Zaak afsluiten" nor the title. A case offered for the undo of its write alone, not in review, keeps the title of its
+        decisions."""
         strings = STRINGS[language_now]
         try:
             lines, items = lines_now(), items_now()
         except (OSError, ValueError):
-            return (gr.update(),) * 8
+            return (gr.update(),) * 10
         if aid_status.is_item(case_id):
             item = aid_status.look_item(cases_root, case_id)
-            closable, handling = False, item is not None and item.state == "look"
+            closable, titled, handling = False, False, item is not None and item.state == "look"
             notice = gr.update(value=item_text(item, language_now), visible=True) if handling else gr.update(value="", visible=False)
         else:
             line = next((line for line in lines if line.case_id == case_id), None) if case_id else None
             state = line.state if line is not None else None
-            closable, handling = state not in ("failed", "handled"), state == "failed"
+            closable, titled, handling = state in ("review", "waiting_po"), state not in ("failed", "handled"), state == "failed"
             notice = gr.update(value=failed_text(line, language_now), visible=True) if handling else gr.update(value="", visible=False)
+        chosen = gr.update(visible=bool(case_id))
         return (gr.update(visible=not case_id), pick_text(lines, items, strings),
                 gr.update(value=strings["review_open_oldest"], visible=waits(lines, items)), gr.update(value="", visible=False), notice,
-                gr.update(visible=closable), gr.update(visible=handling), gr.update(visible=closable))
+                gr.update(visible=closable), gr.update(visible=handling), gr.update(visible=titled), chosen, chosen)
+
+    def record_shown(current: dict | None, language_now: str) -> tuple:
+        """The state of the view changed (show), or the language switched: the comparison of the case chosen, each of its three lists
+        as its table or, while it has no row, one sentence in its place ("empty:<list>"), and the part to undo a write, shown while the
+        case has a write made in Exact and not undone, as its write log is now (one that cannot be read offers none). A case that was
+        not compared (its state says so), a document the intake left to the buyer and no case (no state) show no comparison: no
+        table and no sentence, which would not be true of them."""
+        strings = STRINGS[language_now]
+        compared = bool(current) and current.get("compared", True)
+        parts = []
+        for name in ("flags", "uncompared", "matches"):
+            rows = compared and bool(current["lists"][name])
+            parts += [gr.update(visible=rows), gr.update(value=strings[f"empty:{name}"], visible=compared and not rows)]
+        undoable = bool(current) and bool(_readable_undoable(Path(cases_root) / current["case_id"]))
+        return (gr.update(visible=compared), *parts, gr.update(visible=undoable))
+
+    def undo_shown(case_id: str | None) -> dict:
+        """"Ongedaan maken" pressed: the part to undo a write shown while the case chosen still has a write made in Exact and not
+        undone, as record_shown shows it (its write log as it is now; one that cannot be read offers none), so that the part closes
+        once its last write is undone; no case, and a document left to the buyer, has none."""
+        undoable = bool(case_id) and not aid_status.is_item(case_id) and bool(_readable_undoable(Path(cases_root) / case_id))
+        return gr.update(visible=undoable)
+
+    def review_texts(language_now: str) -> tuple:
+        """The language switched: the headings of the documents, of the comparison and of the part to undo a write."""
+        strings = STRINGS[language_now]
+        return f"## {strings['documents']}", f"## {strings['record']}", f"### {strings['undo_title']}"
 
     def failed_relabel(language_now: str, case_id: str | None) -> tuple:
         """The language switched: the words of the notice of a failed case on screen, or of a document left to the buyer that waits
-        for him, and of "Als afgehandeld noteren"; the notice hidden, as choosing the case now would (case_framed), when the case or
-        the document no longer waits for the buyer (noted as handled in another browser tab meanwhile), so that no notice stays in
-        the language it was shown in. A file that cannot be read leaves the notice as it is."""
-        go, hidden = gr.update(value=STRINGS[language_now]["handled_go"]), gr.update(value="", visible=False)
+        for him, and of "Als afgehandeld noteren"; the notice and that button hidden, as choosing the case now would (case_framed),
+        when the case or the document no longer waits for the buyer (noted as handled in another browser tab meanwhile), so that no
+        notice stays in the language it was shown in and no button for what needs it no more. A file that cannot be read leaves the
+        notice as it is."""
+        words = STRINGS[language_now]["handled_go"]
+        go, gone = gr.update(value=words), (gr.update(value="", visible=False), gr.update(value=words, visible=False))
         if aid_status.is_item(case_id):
             item = aid_status.look_item(cases_root, case_id)
-            return (gr.update(value=item_text(item, language_now)) if item is not None and item.state == "look" else hidden), go
+            return (gr.update(value=item_text(item, language_now)), go) if item is not None and item.state == "look" else gone
         try:
             line = next((line for line in lines_now() if line.case_id == case_id), None) if case_id else None
         except (OSError, ValueError):
             return gr.update(), go
-        return (gr.update(value=failed_text(line, language_now)) if line is not None and line.state == "failed" else hidden), go
+        return (gr.update(value=failed_text(line, language_now)), go) if line is not None and line.state == "failed" else gone
 
     def oldest_opened(language_now: str) -> dict:
         """"Oudste zaak openen": the oldest case in review, else the oldest failed one, else the oldest document the intake left to
@@ -1622,20 +1891,20 @@ def _page(gr, deps: Deps, tab: _Tab):
         wanted = gr.State(None)                      # the write of the query to undo, selected when its case is shown
         listed = gr.State(None)                      # the case list as queue_ticked sent it last
         ticker = gr.Timer(TICK_SECONDS)              # the strip, the count and the case list read again (see the module docstring)
-        with gr.Row():
-            title = gr.Markdown(f"# {first['title']}")
-            language = gr.Radio(choices=[("Nederlands", "nl"), ("English", "en")], value="nl", label=first["language"])
+        with gr.Row(elem_id="page-head"):            # the tool's name, and the language switch on its right (see the module docstring)
+            title = gr.Markdown(f"# {first['title']}", elem_classes=["page-title"])
+            language = gr.Radio(choices=[("Nederlands", "nl"), ("English", "en")], value="nl", label=first["language"], show_label=False,
+                                scale=0, elem_classes=["language-switch"])
         with gr.Tabs(elem_classes=["page-tabs"]) as tabs:            # the page's five tabs; the settings tab has a gr.Tabs of its own
             with gr.Tab(first["review_tab"], id=REVIEW_TAB) as review_tab:
                 with gr.Row(elem_id="review-strip-row"):
-                    strip = gr.HTML(first_strip.html, css_template=_STRIP_CSS, apply_default_css=False, container=False, padding=False,
-                                    js_on_load=None, elem_id="review-strip")
+                    strip = gr.HTML(first_strip.html, apply_default_css=False, container=False, padding=False, js_on_load=None,
+                                    elem_id="review-strip")
                     if acting:
                         strip_action = gr.Button(first_strip.action or "", visible=first_strip.action is not None, size="sm", scale=0,
                                                  min_width=240, elem_id="review-strip-action")
                 with gr.Accordion(first_strip.fold, open=False, elem_id="review-all") as fold:
-                    fold_table = gr.HTML(first_strip.table, css_template=_ALL_CSS, apply_default_css=False, js_on_load=None,
-                                         elem_id="review-all-table")
+                    fold_table = gr.HTML(first_strip.table, apply_default_css=False, js_on_load=None, elem_id="review-all-table")
                 with gr.Row():
                     case_choice = gr.Dropdown(choices=choices("nl", first_lines, first_items), value=None, label=first["case"], scale=4)
                     refresh = gr.Button(first["refresh"], scale=1)
@@ -1643,55 +1912,80 @@ def _page(gr, deps: Deps, tab: _Tab):
                 with gr.Row(elem_id="review-pick-row") as pick_row:
                     pick = gr.Markdown(pick_text(first_lines, first_items, first), elem_id="review-pick", elem_classes=["notice"])
                     oldest = gr.Button(first["review_open_oldest"], visible=waits(first_lines, first_items), scale=0, min_width=200, elem_id="review-oldest")
-                banner = gr.Markdown(f"**{first['banner']}**", visible=False)
-                hint = gr.Markdown("", visible=False, elem_id="review-hint")
-                failed_notice = gr.Markdown("", visible=False, elem_id="review-failed", elem_classes=["notice", "attention"])
-                with gr.Row():
-                    doc_gallery = gr.Gallery(label=first["document"], columns=1, height=700, object_fit="contain")
-                    po_gallery = gr.Gallery(label=first["po_document"], columns=1, height=700, object_fit="contain")
-                entered_line = gr.Markdown("", visible=False, elem_id="review-entered")
-                flags_title = gr.Markdown(f"### {first['flags']}")
-                flags_table = gr.Dataframe(value=tables(empty, "nl")[0], interactive=False, wrap=True, column_widths=COLUMN_WIDTHS)
-                decisions_title = gr.Markdown(f"### {first['decisions']}")
+                # A case in three parts, in the order of the work (see the module docstring): what the buyer decides, the close with
+                # its answer, and what the decisions rest on. The first and the last show while a case is chosen (case_framed); the
+                # close's part always stands, so that the answer of a close stays on the screen once the case's parts have closed.
+                with gr.Column(visible=False, elem_id="review-case") as case_part:
+                    banner = gr.Markdown(f"**{first['banner']}**", visible=False, elem_classes=["notice", "attention"])
+                    hint = gr.Markdown("", visible=False, elem_id="review-hint", elem_classes=["notice"])
+                    entered_line = gr.Markdown("", visible=False, elem_id="review-entered", elem_classes=["notice"])
+                    failed_notice = gr.Markdown("", visible=False, elem_id="review-failed", elem_classes=["notice", "attention"])
+                    decisions_title = gr.Markdown(f"## {first['decisions']}")
 
-                @gr.render(inputs=[state, language])
-                def decision_rows(current: dict | None, language_now: str):
-                    if not current:
-                        return
-                    strings = STRINGS[language_now]
-                    rows = [row for name in ("flags", "uncompared") for row in current["lists"][name] if _REVIEW_ITEM.fullmatch(row.item_id)]
-                    for row in sorted(rows, key=lambda row: int(row.item_id[2:])):
-                        chosen = current["decisions"].get(row.item_id, {})
+                    @gr.render(inputs=[state, language])
+                    def decision_rows(current: dict | None, language_now: str):
+                        if not current:
+                            return
+                        strings = STRINGS[language_now]
+                        rows = [row for name in ("flags", "uncompared") for row in current["lists"][name] if _REVIEW_ITEM.fullmatch(row.item_id)]
+                        for row in sorted(rows, key=lambda row: int(row.item_id[2:])):
+                            chosen = current["decisions"].get(row.item_id, {})
+                            # one row per item (spec 2.1.1): what is decided on the left, the choice on the right, and under the
+                            # choice the tick of the article price beside the row's note, which answers the choice in the row; the
+                            # left is a column of its own, as the browser widens a column by its scale and a Markdown by none
+                            with gr.Row(elem_classes=["decision-row"]):
+                                with gr.Column(scale=2):
+                                    gr.Markdown(_describe(row, language_now), elem_classes=["decision-what"])
+                                again = row.item_id in current.get("again", ())
+                                with gr.Column(scale=3):
+                                    # interactive given: the browser takes a rendered component that holds a value, and whose listener
+                                    # it does not know yet, for a display only, and greys out a row on which a choice stands
+                                    radio = gr.Radio(choices=_decision_choices(row, current["kind"], strings, again), value=chosen.get("decision"),
+                                                     label=strings["decision"], key=f"decision-{current['case_id']}-{row.item_id}", interactive=True)
+                                    with gr.Row(elem_classes=["decision-foot"]):
+                                        tick = gr.Checkbox(value=chosen.get("article_update", row.item_id in current["articles"]), label=strings["article_update"], visible=row.field == "price",
+                                                           key=f"article-{current['case_id']}-{row.item_id}", interactive=True)
+                                        # its key begins with "note-", and it keeps none of its last answer when the rows are
+                                        # rendered again (the language switch, the case shown again): a decision that stands says
+                                        # "Opgeslagen." in the language of the page
+                                        note = gr.Markdown(strings["row_saved"] if chosen.get("decision") else "", elem_classes=["row-note"],
+                                                           key=f"note-{current['case_id']}-{row.item_id}", preserved_by_key=None)
+                            save = saver(current["case_id"], row.item_id)
+                            radio.input(save, inputs=[radio, tick, language, state], outputs=[note, hint], show_progress="hidden")
+                            tick.input(save, inputs=[radio, tick, language, state], outputs=[note, hint], show_progress="hidden")
+                with gr.Column(elem_id="review-close"):
+                    with gr.Row():                   # a failed case has the second in place of the first
+                        close_button = gr.Button(first["close"], variant="primary", visible=False)
+                        handled = gr.Button(first["handled_go"], visible=False, elem_id="review-handled")
+                    status = gr.Markdown("", elem_classes=["answer"])
+                    with gr.Column(visible=False, elem_id="review-undo") as undo_part:     # its answer is the status line, above it
+                        undo_title = gr.Markdown(f"### {first['undo_title']}")
                         with gr.Row():
-                            gr.Markdown(_describe(row, strings))
-                            again = row.item_id in current.get("again", ())
-                            # interactive given: the browser takes a rendered component that holds a value, and whose listener
-                            # it does not know yet, for a display only, and greys out a row on which a choice stands
-                            radio = gr.Radio(choices=_decision_choices(row, current["kind"], strings, again), value=chosen.get("decision"),
-                                             label=strings["decision"], key=f"decision-{current['case_id']}-{row.item_id}", interactive=True)
-                            tick = gr.Checkbox(value=chosen.get("article_update", row.item_id in current["articles"]), label=strings["article_update"], visible=row.field == "price",
-                                               key=f"article-{current['case_id']}-{row.item_id}", interactive=True)
-                        save = saver(current["case_id"], row.item_id)
-                        radio.input(save, inputs=[radio, tick, language, state], outputs=[status, hint])
-                        tick.input(save, inputs=[radio, tick, language, state], outputs=[status, hint])
-
-                matches_title = gr.Markdown(f"### {first['matches']}")
-                matches_table = gr.Dataframe(value=tables(empty, "nl")[1], interactive=False, wrap=True, column_widths=COLUMN_WIDTHS)
-                uncompared_title = gr.Markdown(f"### {first['uncompared']}")
-                uncompared_table = gr.Dataframe(value=tables(empty, "nl")[2], interactive=False, wrap=True, column_widths=COLUMN_WIDTHS)
-                with gr.Row():                       # a failed case has the second in place of the first
-                    close_button = gr.Button(first["close"], variant="primary")
-                    handled = gr.Button(first["handled_go"], visible=False, elem_id="review-handled")
-                status = gr.Markdown("")
-                with gr.Row():
-                    undo_choice = gr.Dropdown(choices=[], value=None, label=first["undo_choice"], scale=4)
-                    undo_button = gr.Button(first["undo"], scale=1)
+                            undo_choice = gr.Dropdown(choices=[], value=None, label=first["undo_choice"], scale=4)
+                            undo_button = gr.Button(first["undo"], scale=1)
+                with gr.Column(visible=False, elem_id="review-evidence") as evidence_part:
+                    documents_title = gr.Markdown(f"## {first['documents']}")
+                    with gr.Row(elem_id="review-documents"):           # the purchase order on the left, the supplier's document right
+                        po_gallery = gr.Gallery(label=first["po_document"], columns=1, height=560, object_fit="contain", elem_classes=["doc-view"])
+                        doc_gallery = gr.Gallery(label=first["document"], columns=1, height=560, object_fit="contain", elem_classes=["doc-view"])
+                    with gr.Column(elem_id="review-record") as record_part:          # each list, or one sentence in its place
+                        record_title = gr.Markdown(f"## {first['record']}")
+                        flags_title = gr.Markdown(f"### {first['flags']}")
+                        flags_empty = gr.Markdown("", visible=False, elem_id="review-flags-empty", elem_classes=["empty-line"])
+                        flags_table = gr.Dataframe(value=tables(empty, "nl")[0], interactive=False, wrap=True, column_widths=COLUMN_WIDTHS)
+                        uncompared_title = gr.Markdown(f"### {first['uncompared']}")
+                        uncompared_empty = gr.Markdown("", visible=False, elem_id="review-uncompared-empty", elem_classes=["empty-line"])
+                        uncompared_table = gr.Dataframe(value=tables(empty, "nl")[2], interactive=False, wrap=True, column_widths=COLUMN_WIDTHS)
+                        matches_title = gr.Markdown(f"### {first['matches']}")
+                        matches_empty = gr.Markdown("", visible=False, elem_id="review-matches-empty", elem_classes=["empty-line"])
+                        matches_table = gr.Dataframe(value=tables(empty, "nl")[1], interactive=False, wrap=True, column_widths=COLUMN_WIDTHS,
+                                                     max_height=360)
             with gr.Tab(first["hand_tab"], id=hand_list.TAB) as hand_tab:
-                _hand_tab(gr, app, language, hand_tab, live, tab, cases_root)
+                _hand_tab(gr, app, language, hand_tab, live, tab, cases_root, ticker)
             with gr.Tab(first["pricelist_tab"], id=pricelist_page.TAB) as pricelist_tab:
                 _pricelist_tab(gr, app, language, pricelist_tab, live, tab, cases_root)
             with gr.Tab(first["files_tab"], id=FILES_TAB) as files_tab:
-                _files_tab(gr, app, language, files_tab, live, tab, cases_root)
+                _files_tab(gr, app, language, files_tab, live, tab, cases_root, ticker)
             with gr.Tab(first["settings_tab"], id=SETTINGS_TAB) as settings_tab:
                 # its five sections (None on a public link and without a settings file), which an action on another tab can select
                 sections = _settings_tab(gr, app, language, settings_tab, live, tab, accounts)
@@ -1706,7 +2000,8 @@ def _page(gr, deps: Deps, tab: _Tab):
                                  hint, entered_line])
         close_button.click(close, inputs=[case_choice, language], outputs=[status, case_choice]).then(
             lambda case_id, language_now: show(case_id, language_now)[:-1], inputs=[case_choice, language], outputs=view)
-        undo_button.click(do_undo, inputs=[case_choice, undo_choice, language], outputs=[status, undo_choice])
+        undo_button.click(do_undo, inputs=[case_choice, undo_choice, language], outputs=[status, undo_choice]).then(
+            undo_shown, inputs=case_choice, outputs=undo_part, show_progress="hidden")       # the part closes with the last write
         language.change(lambda language_now: (gr.update(label=review_label(lines_now(), language_now, items_now())),
                                                gr.update(label=STRINGS[language_now]["settings_tab"])),
                         inputs=language, outputs=[review_tab, settings_tab])
@@ -1717,10 +2012,16 @@ def _page(gr, deps: Deps, tab: _Tab):
         gr.on(triggers=every, fn=queue_ticked, inputs=[language, case_choice, listed],
               outputs=[review_tab, case_choice, pick_row, pick, oldest, gone, listed], show_progress="hidden")
         case_choice.change(case_framed, inputs=[case_choice, language],
-                           outputs=[pick_row, pick, oldest, gone, failed_notice, close_button, handled, decisions_title], show_progress="hidden")
+                           outputs=[pick_row, pick, oldest, gone, failed_notice, close_button, handled, decisions_title, case_part, evidence_part],
+                           show_progress="hidden")
         language.change(failed_relabel, inputs=[language, case_choice], outputs=[failed_notice, handled], show_progress="hidden")
         oldest.click(oldest_opened, inputs=language, outputs=case_choice, show_progress="hidden")
         handled.click(handled_marked, inputs=[case_choice, language], outputs=[status, case_choice], show_progress="hidden")
+        # the lists of the case, each its table or its sentence, and the part to undo a write; the headings of the new parts
+        gr.on(triggers=[state.change, language.change], fn=record_shown, inputs=[state, language],
+              outputs=[record_part, flags_table, flags_empty, uncompared_table, uncompared_empty, matches_table, matches_empty, undo_part],
+              show_progress="hidden", queue=False)
+        language.change(review_texts, inputs=language, outputs=[documents_title, record_title, undo_title], show_progress="hidden", queue=False)
         if acting:              # bound once all tabs are made, as its outputs are the page's Tabs and the sections of Instellingen
             sections.read_after(strip_action.click(strip_acted, inputs=language, outputs=[tabs, sections.tabs], show_progress="hidden"))
     return app
@@ -1728,17 +2029,20 @@ def _page(gr, deps: Deps, tab: _Tab):
 
 # --- the tab "In Exact invoeren" ---
 
-def _hand_tab(gr, app, language, hand_tab, live: _Live, tab: _Tab, cases_root: Path) -> None:
+def _hand_tab(gr, app, language, hand_tab, live: _Live, tab: _Tab, cases_root: Path, ticker) -> None:
     """The content of the tab "In Exact invoeren" and its events, inside the tab (see the module docstring): the intro with the lines
-    under it and "Lijst vernieuwen", the two buttons for the ticked rows, one group of tick boxes with every open change, one under the
-    other, the two buttons again, the dropdown of the blocks with its button, the dropdown of the price lists with its button (shown
-    while a price list has article prices to enter), and a note; under them the section of the handled changes (its text, the dropdown
-    "Afgehandelde wijziging" with its two buttons, a note) and the section of the confirmations to attach in Exact. hand_tab is the
-    tab itself, whose label counts the open changes and whose selection reads the list again. The list is read from
+    under it and "Lijst vernieuwen", the line of the changes that came in since the list was read (hand-new, hidden until the timer
+    finds one), the two buttons for the ticked rows with the note that answers every press of the list right under them (hand-actions,
+    which the page's style keeps at the top of the window while the list scrolls), one group of tick boxes with every open change, one
+    under the other, the two buttons again, small, the dropdown of the blocks with its button, the dropdown of the price lists with its
+    button (shown while a price list has article prices to enter), the section of the confirmations to attach in Exact, and last the
+    section of the handled changes (its text, the dropdown "Afgehandelde wijziging" with its two buttons, a note). hand_tab is the tab
+    itself, whose label counts the open changes and whose selection reads the list again; ticker is the page's gr.Timer, whose tick
+    gives the label and the line of new changes (hand_label_ticked) and never reads the rows again. The list is read from
     <cases_root>/prepared (aid/execution/by_hand.py) and shown as aid/review/hand_list.py makes it; the rows of each block, and of
     each price list, as the last read showed them are kept in two gr.States, for the block's and the price list's button. A mark
     carries the time of the clock of the page's Deps. On a public share link and without a settings file the tab says only that it
-    is not available, as the settings tab does, and offers nothing."""
+    is not available, as the settings tab does, and offers nothing, nor is anything of it on the timer."""
     first = STRINGS["nl"]
     if tab.share or tab.file is None:
         key = "settings_share" if tab.share else "settings_no_file"
@@ -1814,7 +2118,7 @@ def _hand_tab(gr, app, language, hand_tab, live: _Live, tab: _Tab, cases_root: P
             return unread(error, language_now)
 
     def block_entered(chosen: str | None, seen: dict[str, list[str]] | None, language_now: str) -> tuple:
-        """"Alles van dit blok is ingevoerd": the changes of the chosen block as the page showed them when the list was last read
+        """"Alles hiervan is ingevoerd": the changes of the chosen block as the page showed them when the list was last read
         (seen) marked as entered, each only while it is open, so that a change prepared after that read stays on the list; with no
         block chosen nothing is written."""
         try:
@@ -1928,32 +2232,60 @@ def _hand_tab(gr, app, language, hand_tab, live: _Live, tab: _Tab, cases_root: P
         deps = live.now()
         return pressed(chosen, language_now, lambda change, language_then: hand_list.take_back(deps, change, deps.clock(), language_then))
 
+    def hand_label_ticked(language_now: str, seen: dict[str, list[str]] | None) -> tuple:
+        """The page's timer ticked: (the tab's label with the number of open changes, as a read of the list gives it; the line under
+        the intro that says how many open changes came in that the list on screen does not hold, hidden while none did). A change is
+        held when one of its entry ids stands in a row of `seen`, the rows of each block as the last read of the list showed them, so
+        that a change a second case asked too is not new, and a newer value of a row is. It reads the list and writes nothing, and
+        gives neither the rows, the note nor the blocks, so that what the buyer ticked stays as it is; a list that cannot be read
+        leaves the label and the line as they are."""
+        strings = STRINGS[language_now]
+        try:
+            open_ = [change for change in changes(prepared)[0] if change.state == "open"]
+        except Exception:
+            return gr.update(), gr.update()
+        held = {entry_id for values in (seen or {}).values() for value in values for entry_id in hand_list.ids_of(value)}
+        new = sum(1 for change in open_ if not held & set(change.ids))
+        label = strings["hand_tab_count"].format(n=len(open_)) if open_ else strings["hand_tab"]
+        if not new:
+            return gr.update(label=label), gr.update(value="", visible=False)
+        line = strings["hand_new_rows_one"] if new == 1 else strings["hand_new_rows_many"].format(n=new)
+        return gr.update(label=label), gr.update(value=line, visible=True)
+
+    def hand_new_cleared() -> dict:
+        """The list on screen read again (the tab selected, "Lijst vernieuwen", the language switch, a press of the tab): the line of
+        the changes that came in hidden, as the list now holds them."""
+        return gr.update(value="", visible=False)
+
     with gr.Row():                                   # in columns, whose scale a row keeps, as it does not keep a Markdown's
         with gr.Column(scale=4):
             intro = gr.Markdown(first["hand_intro"], elem_id="hand-intro")
         with gr.Column(scale=1, min_width=160):
             refresh = gr.Button(first["refresh"])
-    with gr.Row():
-        entered_above = gr.Button(first["hand_entered"], variant="primary")
-        dropped_above = gr.Button(first["hand_dropped"])
+    # shown by the timer while changes came in that the list does not show, in the look of every standing message
+    new_rows = gr.Markdown("", visible=False, elem_id="hand-new", elem_classes=["notice"])
+    with gr.Column(elem_id="hand-actions"):          # the pair and its answer, which the page's style keeps in view while the list scrolls
+        with gr.Row():
+            entered_above = gr.Button(first["hand_entered"], variant="primary")          # the one filled button of the tab
+            dropped_above = gr.Button(first["hand_dropped"])
+        note = gr.Markdown("", elem_id="hand-note", elem_classes=["answer"])           # the answer of every press of the list
     rows = gr.CheckboxGroup(choices=[], value=[], show_label=False, elem_id="hand-rows", elem_classes=["hand-rows"])
-    with gr.Row():
-        entered = gr.Button(first["hand_entered"], variant="primary")
-        dropped = gr.Button(first["hand_dropped"])
+    with gr.Row():                                   # the same pair under a long list, small
+        entered = gr.Button(first["hand_entered"], size="sm")
+        dropped = gr.Button(first["hand_dropped"], size="sm")
     with gr.Row():
         block = gr.Dropdown(choices=[], value=None, label=first["hand_block"], scale=4)
         block_button = gr.Button(first["hand_block_entered"], scale=1)
     with gr.Row(visible=False, elem_id="hand-pricelists") as pricelist_row:       # shown while a price list has article prices to enter
         pricelist = gr.Dropdown(choices=[], value=None, label=first["hand_pricelist"], scale=4)
         pricelist_button = gr.Button(first["hand_pricelist_entered"], scale=1)
-    note = gr.Markdown("", elem_id="hand-note")
-    done = gr.Markdown(f"**{first['hand_done']}**", elem_id="hand-done")               # the two sections under the list
+    confirmations = gr.Markdown("", elem_id="hand-confirmations")         # a task of every day, before the handled changes
+    done = gr.Markdown(f"**{first['hand_done']}**", elem_id="hand-done")
     with gr.Row():
         done_choice = gr.Dropdown(choices=[], value=None, label=first["hand_done_choice"], scale=4)
         reopen_button = gr.Button(first["hand_reopen"], scale=1)
         put_back_button = gr.Button(first["hand_put_back"], scale=1)
     done_note = gr.Markdown("", elem_id="hand-done-note")
-    confirmations = gr.Markdown("", elem_id="hand-confirmations")
     gr.HTML("", head=f"<style>{_ONE_PER_LINE}</style>", container=False, padding=False, js_on_load=None)   # last, so its space shows nowhere
     seen = gr.State({})                              # {block id: [the values of its rows]} as the last read of the list showed them
     listed_prices = gr.State({})                     # {the case id of a price list: [the values of its rows]} as last read
@@ -1976,6 +2308,11 @@ def _hand_tab(gr, app, language, hand_tab, live: _Live, tab: _Tab, cases_root: P
                 put_back_button.click(change_put_back, inputs=[done_choice, language], outputs=[*listed, *under])]
     for press in presses:                            # any press may take a price list's last row off the list, or put one back
         press.then(pricelists_opened, inputs=[language, pricelist], outputs=lists)
+    # the label on the page's timer, never the rows (see hand_label_ticked), and its line of new changes gone once the list is read again
+    ticker.tick(hand_label_ticked, inputs=[language, seen], outputs=[hand_tab, new_rows], show_progress="hidden")
+    gr.on(triggers=[hand_tab.select, refresh.click, language.change, entered_above.click, entered.click, dropped_above.click, dropped.click,
+                    block_button.click, pricelist_button.click, reopen_button.click, put_back_button.click],
+          fn=hand_new_cleared, outputs=new_rows, show_progress="hidden", queue=False)
 
 
 # --- the tab "Prijslijst" ---
@@ -1983,13 +2320,16 @@ def _hand_tab(gr, app, language, hand_tab, live: _Live, tab: _Tab, cases_root: P
 def _pricelist_tab(gr, app, language, pricelist_tab, live: _Live, tab: _Tab, cases_root: Path) -> None:
     """The content of the tab "Prijslijst" and its events, inside the tab (see the module docstring; aid/review/pricelist_page.py has
     what it shows and writes, aid/pricelist.py the stored article prices): a notice, and under it, shown only while the columns of the
-    export of articles are set, the introduction, the supplier with the state of its stored prices, the export of articles with
-    "Inkoopprijzen opnemen" and a note, and, shown only for a supplier with stored prices, the price list with its five column fields,
-    "Bekijken", the table, a note and "Op de lijst In Exact invoeren zetten". pricelist_tab is the tab itself. The settings are those
-    of the page's own actions as they are now (live), and a time is the clock's of its Deps. Two states of the page keep the upload
-    of the export stored last (so that one press stores one export) and what the last view showed (so that the press carries out
-    that view, or nothing). On a public share link and without a settings file the tab says only that it is not available, as the
-    settings tab does, and offers nothing."""
+    export of articles are set, the introduction, the supplier with the small press that asks to take its stored prices away, the row
+    of that question with "Ja, weghalen" and "Niet weghalen" (shown by the press), the answer of a removal and the state of the
+    supplier's stored prices, the export of articles with "Inkoopprijzen opnemen" and a note, and, shown only for a supplier with
+    stored prices, the price list with its five column fields, "Bekijken", the table, a note and "Op de lijst In Exact invoeren
+    zetten"; after "Bekijken" the browser brings that note, the count line, into view (_COUNT_INTO_VIEW). The two file fields are
+    140 px high and the table at most 320 px, so that a view and its press fit the window. pricelist_tab is the tab itself. The
+    settings are those of the page's own actions as they are now (live), and a time is the clock's of its Deps. Two states of the
+    page keep the upload of the export stored last (so that one press stores one export) and what the last view showed (so that the
+    press carries out that view, or nothing). On a public share link and without a settings file the tab says only that it is not
+    available, as the settings tab does, and offers nothing."""
     first = STRINGS["nl"]
     if tab.share or tab.file is None:
         key = "settings_share" if tab.share else "settings_no_file"
@@ -2118,12 +2458,14 @@ def _pricelist_tab(gr, app, language, pricelist_tab, live: _Live, tab: _Tab, cas
                 gr.update(visible=name in stored), key, notice_of(readable, strings) if columns else gr.update())
 
     def prices_removed(supplier_now: str | None, language_now: str) -> tuple:
-        """"Inkoopprijzen van deze leverancier weghalen": the stored article prices of the supplier chosen or typed and the columns
-        kept for its price list taken away (remove_stored), whole or not at all, and nothing else: no row of the list "In Exact
-        invoeren" changes. It gives (the note, the supplier, the state of its stored prices, the part of the price list, the table
-        emptied, the list's note, the press inactive, no view kept, the notice): after a removal no supplier is chosen, and the
-        note names the supplier removed as it was stored. For no name, a name that is none and a name the aid holds no prices of,
-        the note is the tab's own sentence for that and nothing else changes; an error says so in the note."""
+        """"Ja, weghalen", under the question that "Inkoopprijzen van deze leverancier weghalen" asks (remove_asked): the stored
+        article prices of the supplier chosen or typed and the columns kept for its price list taken away (remove_stored), whole or
+        not at all, and nothing else: no row of the list "In Exact invoeren" changes. It gives (the note, the supplier, the state of
+        its stored prices, the part of the price list, the table emptied, the list's note, the press inactive, no view kept, the
+        notice): after a removal no supplier is chosen, and the note names the supplier removed as it was stored. For no name, a name
+        that is none and a name the aid holds no prices of, the note is the tab's own sentence for that and nothing else changes; an
+        error says so in the note. The note is that of the export, as before the question was asked; removal_shown, chained after
+        this press, moves it right under the supplier's row."""
         strings = STRINGS[language_now]
         typed = (supplier_now or "").strip()
         try:
@@ -2135,6 +2477,44 @@ def _pricelist_tab(gr, app, language, pricelist_tab, live: _Live, tab: _Tab, cas
         stored, readable = stored_now()
         return (strings["pricelist_removed"].format(supplier=_literal(name)), gr.update(choices=list(stored), value=None),
                 state_of("", stored, language_now), gr.update(visible=False), *unviewed(language_now), notice_of(readable, strings))
+
+    def remove_asked(supplier_now: str | None, language_now: str) -> tuple:
+        """"Inkoopprijzen van deze leverancier weghalen": nothing is taken away yet, the tab only asks: (the row of the question right
+        under the supplier's field, shown; the question, which says how many stored prices of which supplier go, by its stored name;
+        the answer under that row, emptied). For no name, a name that is none and a name the aid holds no prices of, the row stays
+        closed and the answer is the tab's own sentence for that, as prices_removed gives it; stored prices that cannot be read are
+        named as such. Nothing is written."""
+        strings = STRINGS[language_now]
+        typed = (supplier_now or "").strip()
+        try:
+            stored = stored_prices(cases_root) if typed and is_supplier_name(typed) else {}
+        except (OSError, ValueError):
+            return gr.update(visible=False), "", strings["pricelist_stored_unreadable"]
+        name = supplier_named(typed, stored)
+        if name not in stored:
+            return gr.update(visible=False), "", state_of(typed, {}, language_now)
+        count = len(stored[name].prices)
+        question = (strings["pricelist_remove_ask_one"].format(supplier=_literal(name)) if count == 1
+                    else strings["pricelist_remove_ask"].format(n=count, supplier=_literal(name)))
+        return gr.update(visible=True), question, ""
+
+    def remove_kept() -> dict:
+        """"Niet weghalen", or another supplier chosen or typed: the row of the question closed, so that "Ja, weghalen" never takes away
+        the prices of another supplier than the question named. Nothing is taken away, and the answer under the row stays."""
+        return gr.update(visible=False)
+
+    def removal_shown(note: str | None) -> tuple:
+        """After "Ja, weghalen" (prices_removed, which gives its sentence as the note of the export, as it always did): (the row of the
+        question closed; that sentence right under the supplier's row, where the buyer pressed; the note of the export, far lower on
+        the tab, emptied)."""
+        return gr.update(visible=False), note or "", ""
+
+    def removal_relabelled(language_now: str) -> tuple:
+        """The page's language switched: the row of the question closed, the question and the answer under the row emptied, as
+        pricelist_relabel empties the tab's notes, and "Ja, weghalen" and "Niet weghalen" in that language."""
+        strings = STRINGS[language_now]
+        return (gr.update(visible=False), "", gr.update(value=strings["pricelist_remove_yes"]), gr.update(value=strings["pricelist_remove_no"]),
+                "")
 
     def pricelist_file_chosen(list_now: str | None, supplier_now: str | None, language_now: str) -> tuple:
         """A price list chosen, or taken away: (the five column fields filled for it, the table emptied, the note, the press inactive,
@@ -2261,22 +2641,29 @@ def _pricelist_tab(gr, app, language, pricelist_tab, live: _Live, tab: _Tab, cas
     notice = gr.Markdown("", visible=False, elem_id="pricelist-notice")
     with gr.Column(visible=False, elem_id="pricelist-body") as body:
         intro = gr.Markdown(first["pricelist_intro"], elem_id="pricelist-intro")
-        with gr.Row():                               # the press that takes a supplier's stored prices away, beside its field
+        with gr.Row():                               # the press that asks to take a supplier's stored prices away, beside its field
             supplier = gr.Dropdown(choices=[], value=None, label=first["pricelist_supplier"], info=first["pricelist_supplier_help"],
                                    allow_custom_value=True, elem_id="pricelist-supplier", scale=4)
-            remove = gr.Button(first["pricelist_remove"], elem_id="pricelist-remove", scale=1)
+            # small, at the width of its words (scale 0 and the page's style), level with the field
+            remove = gr.Button(first["pricelist_remove"], elem_id="pricelist-remove", scale=0, variant="stop", size="sm")
+        with gr.Row(visible=False, elem_id="pricelist-remove-confirm") as confirm:      # its question, shown by the press, and the answers
+            with gr.Column(scale=4):
+                ask = gr.Markdown("", elem_id="pricelist-remove-ask", latex_delimiters=[])                    # a name as it is
+            yes_button = gr.Button(first["pricelist_remove_yes"], variant="stop", elem_id="pricelist-remove-yes", scale=1)
+            no_button = gr.Button(first["pricelist_remove_no"], elem_id="pricelist-remove-no", scale=1)
+        remove_note = gr.Markdown("", elem_id="pricelist-remove-note", elem_classes=["answer"], latex_delimiters=[])   # what a removal did
         state = gr.Markdown(first["pricelist_choose_supplier"], elem_id="pricelist-state", latex_delimiters=[])   # a name as it is
-        export = gr.File(label=first["pricelist_export"], type="filepath", elem_id="pricelist-export")    # any file: the tab names another type
+        export = gr.File(label=first["pricelist_export"], type="filepath", elem_id="pricelist-export", height=140)  # any file: the tab names another type
         file_button = gr.Button(first["pricelist_file_prices"], interactive=False, elem_id="pricelist-file-prices")
         export_note = gr.Markdown("", elem_id="pricelist-export-note", latex_delimiters=[])
         with gr.Column(visible=False, elem_id="pricelist-list-part") as list_part:
-            list_file = gr.File(label=first["pricelist_list"], type="filepath", elem_id="pricelist-list")   # any file, as the export's field
+            list_file = gr.File(label=first["pricelist_list"], type="filepath", elem_id="pricelist-list", height=140)   # any file, as the export's
             with gr.Row():
                 chosen = [gr.Dropdown(choices=offered([], first), value="", label=first[f"pricelist_column:{column}"],
                                       elem_id=f"pricelist-column-{column}") for column in columns_of]
             hint = gr.Markdown(first["pricelist_columns_hint"], elem_id="pricelist-columns-hint")
             view = gr.Button(first["pricelist_view"], elem_id="pricelist-view")
-            table = gr.Dataframe(value=table_of([], "nl"), interactive=False, wrap=True, elem_id="pricelist-table")
+            table = gr.Dataframe(value=table_of([], "nl"), interactive=False, wrap=True, elem_id="pricelist-table", max_height=320)
             note = gr.Markdown("", elem_id="pricelist-note", latex_delimiters=[])
             carry = gr.Button(first["pricelist_carry_out"], variant="primary", interactive=False, elem_id="pricelist-carry-out")
     given = gr.State(None)                           # the upload of the export stored last: one press stores one export
@@ -2289,25 +2676,34 @@ def _pricelist_tab(gr, app, language, pricelist_tab, live: _Live, tab: _Tab, cas
     export.change(pricelist_export_chosen, inputs=export, outputs=file_button)
     file_button.click(prices_filed, inputs=[export, supplier, language, given],
                       outputs=[export_note, export, supplier, state, list_part, given, notice])
-    remove.click(prices_removed, inputs=[supplier, language],
-                 outputs=[export_note, supplier, state, list_part, table, note, carry, viewed, notice])
+    # the press beside the supplier's field asks only; "Ja, weghalen" takes the prices away, and its sentence stands under the row
+    remove.click(remove_asked, inputs=[supplier, language], outputs=[confirm, ask, remove_note], show_progress="hidden")
+    yes_button.click(prices_removed, inputs=[supplier, language],
+                     outputs=[export_note, supplier, state, list_part, table, note, carry, viewed, notice]).then(
+        removal_shown, inputs=export_note, outputs=[confirm, remove_note, export_note], show_progress="hidden")
+    gr.on(triggers=[no_button.click, supplier.change], fn=remove_kept, outputs=confirm, show_progress="hidden")
     list_file.change(pricelist_file_chosen, inputs=[list_file, supplier, language], outputs=[*chosen, table, note, carry, viewed])
     gr.on(triggers=[field.input for field in chosen], fn=pricelist_column_chosen, outputs=[carry, viewed])
-    view.click(pricelist_shown, inputs=[list_file, supplier, *chosen, language], outputs=[table, note, carry, viewed])
+    view.click(pricelist_shown, inputs=[list_file, supplier, *chosen, language], outputs=[table, note, carry, viewed]).then(
+        None, js=_COUNT_INTO_VIEW, show_progress="hidden")                     # the count line and the press under it into view
     carry.click(pricelist_carried_out, inputs=[list_file, supplier, *chosen, viewed, language], outputs=[table, note, carry, viewed])
     language.change(pricelist_relabel, inputs=[language, supplier, list_file],
                     outputs=[pricelist_tab, notice, intro, supplier, remove, state, export, file_button, export_note, list_file, *chosen, hint, view,
                              table, note, carry, viewed])
+    language.change(removal_relabelled, inputs=language, outputs=[confirm, ask, yes_button, no_button, remove_note], show_progress="hidden",
+                    queue=False)
 
 
 # --- the tab "Bestanden" ---
 
-def _files_tab(gr, app, language, files_tab, live: _Live, tab: _Tab, cases_root: Path) -> None:
+def _files_tab(gr, app, language, files_tab, live: _Live, tab: _Tab, cases_root: Path, ticker) -> None:
     """The content of the tab "Bestanden" and its events, inside the tab (see the module docstring): the title, the intro, the upload
     field with "Aan de assistent geven" and a note, then the heading "Laatst verwerkt" with "Lijst vernieuwen" and the table of what the
-    runner did with the last files (aid/review/intake.py). files_tab is the tab itself. A file given goes into the watched folder of the
-    settings as the page's own actions have them now (live), through intake.accept; nothing else is written. On a public share link
-    and without a settings file the tab says only that it is not available, as the settings tab does, and offers nothing."""
+    runner did with the last files (aid/review/intake.py), with a sentence in its place while it has no line (files-empty). files_tab
+    is the tab itself; ticker is the page's gr.Timer, whose tick reads the table again (files_ticked) and gives nothing else. A file
+    given goes into the watched folder of the settings as the page's own actions have them now (live), through intake.accept; nothing
+    else is written. On a public share link and without a settings file the tab says only that it is not available, as the settings
+    tab does, and offers nothing, nor is anything of it on the timer."""
     first = STRINGS["nl"]
     if tab.share or tab.file is None:
         key = "settings_share" if tab.share else "settings_no_file"
@@ -2372,6 +2768,20 @@ def _files_tab(gr, app, language, files_tab, live: _Live, tab: _Tab, cases_root:
         """The field changed: "Aan de assistent geven" is active while a file is chosen, and only then."""
         return gr.update(interactive=bool(upload))
 
+    def files_ticked(language_now: str) -> tuple:
+        """The page's timer ticked, or the table is read again otherwise (the page loaded, the tab selected, "Lijst vernieuwen" or
+        "Aan de assistent geven" pressed, the language switched): (the table as files_opened reads it, shown while it has a line; the
+        sentence in its place, shown while it has none). So what the runner did with a file shows without a press, and the table and
+        the sentence never stand together. It gives neither the field, the note nor what the tab keeps, and writes nothing; an intake
+        file that cannot be read leaves both as they are."""
+        try:
+            listed_now = table(language_now)
+        except Exception:
+            return gr.update(), gr.update()
+        lines = bool(listed_now["data"])
+        return (gr.update(value=listed_now, visible=lines),
+                gr.update(value=STRINGS[language_now]["files_empty"], visible=not lines))
+
     def files_relabel(language_now: str, kept: dict) -> tuple:
         """The page's language switched: the tab in that language, the table read again in it, and the note cleared. When the intake
         file cannot be read the table stays as it was, its headers and its lines in the language it was read in, and the note says so
@@ -2381,22 +2791,25 @@ def _files_tab(gr, app, language, files_tab, live: _Live, tab: _Tab, cases_root:
             listed, note, failed = table(language_now), "", False
         except Exception as error:
             listed, note, failed = gr.update(), strings["settings_failed"].format(code=type(error).__name__), True
-        return (gr.update(label=strings["files_tab"]), f"### {strings['files_title']}", intro(language_now),
-                gr.update(label=strings["files_choose"]), gr.update(value=strings["files_give"]), note, f"### {strings['files_done']}",
+        return (gr.update(label=strings["files_tab"]), f"## {strings['files_title']}", intro(language_now),
+                gr.update(label=strings["files_choose"]), gr.update(value=strings["files_give"]), note, f"## {strings['files_done']}",
                 gr.update(value=strings["refresh"]), listed, {**kept, "failed": failed})
 
-    title = gr.Markdown(f"### {first['files_title']}", elem_id="files-title")
+    title = gr.Markdown(f"## {first['files_title']}", elem_id="files-title")
     intro_text = gr.Markdown(first["files_intro"], elem_id="files-intro")
-    upload = gr.File(label=first["files_choose"], type="filepath", elem_id="files-upload")    # any file: the tab names another type itself
+    # any file: the tab names another type itself
+    upload = gr.File(label=first["files_choose"], type="filepath", height=140, elem_id="files-upload")
     give = gr.Button(first["files_give"], variant="primary", elem_id="files-give", interactive=False)
     note = gr.Markdown("", elem_id="files-note", latex_delimiters=[])          # a name is shown as it is: no formula either
     with gr.Row():                                   # in columns, whose scale a row keeps, as it does not keep a Markdown's
         with gr.Column(scale=4):
-            done = gr.Markdown(f"### {first['files_done']}", elem_id="files-done")
+            done = gr.Markdown(f"## {first['files_done']}", elem_id="files-done")
         with gr.Column(scale=1, min_width=160):
             refresh = gr.Button(first["refresh"], elem_id="files-refresh")
     listed = gr.Dataframe(value={"headers": headers("nl"), "data": []}, interactive=False, wrap=True, elem_id="files-table",
                           column_widths=["18%", "32%", "50%"])
+    # in the table's place while it has no line; files_ticked shows the one or the other from the page's load on
+    empty = gr.Markdown(first["files_empty"], visible=False, elem_id="files-empty", elem_classes=["empty-line"])
     kept = gr.State({"last": None, "failed": False})      # for the session: the upload given last, and whether the note says the list failed
 
     gr.on(triggers=[app.load, files_tab.select, refresh.click], fn=files_opened, inputs=[language, kept],
@@ -2405,6 +2818,9 @@ def _files_tab(gr, app, language, files_tab, live: _Live, tab: _Tab, cases_root:
     upload.change(file_chosen, inputs=upload, outputs=give)
     language.change(files_relabel, inputs=[language, kept],
                     outputs=[files_tab, title, intro_text, upload, give, note, done, refresh, listed, kept])
+    # the table on the page's timer, and with every other read of it, never the field, the note or what the tab keeps
+    gr.on(triggers=[app.load, ticker.tick, files_tab.select, refresh.click, give.click, language.change], fn=files_ticked, inputs=language,
+          outputs=[listed, empty], show_progress="hidden", queue=False)
 
 
 def _upload_key(upload: str) -> tuple | None:
@@ -2994,7 +3410,7 @@ def _buyer_section(gr, app, language, settings_tab, file_line, read: Callable[[d
             fields.append(gr.update(**update))
         relabelled = gr.update(label=strings["settings_supplier_choice"], choices=choices(settings, strings),
                                value=dropdown(settings, strings, choice_now)[1])
-        return (top(line), *[f"### {strings[f'settings_group:{group}']}" for group, _ in BUYER_GROUPS], *fields, strings["settings_limit"],
+        return (top(line), *[f"## {strings[f'settings_group:{group}']}" for group, _ in BUYER_GROUPS], *fields, strings["settings_limit"],
                 gr.update(value=strings["settings_buyer_save"]), "", f"### {strings['settings_suppliers']}",
                 strings["settings_suppliers_help"], table(settings, strings), relabelled,
                 gr.update(label=strings["settings_supplier_name"]), gr.update(label=strings["settings_supplier_email"]),
@@ -3005,7 +3421,7 @@ def _buyer_section(gr, app, language, settings_tab, file_line, read: Callable[[d
     with gr.Tab(first["settings_section:rules"], id="regels") as rules_section:
         headings, fields = [], {}
         for group, names in BUYER_GROUPS:
-            headings.append(gr.Markdown(f"### {first[f'settings_group:{group}']}"))
+            headings.append(gr.Markdown(f"## {first[f'settings_group:{group}']}"))
             for field in names:
                 label, info = first[f"settings_field:{field}"], first[f"settings_help:{field}"]
                 if field == "digest":
@@ -3013,7 +3429,7 @@ def _buyer_section(gr, app, language, settings_tab, file_line, read: Callable[[d
                 elif field == "language":
                     fields[field] = gr.Radio(choices=_language_choices(first), value=None, label=label, info=info)
                 else:
-                    fields[field] = gr.Textbox(label=label, info=info)
+                    fields[field] = gr.Textbox(label=label, info=info, elem_classes=["short-field"] if field in _SHORT_FIELDS else None)
         limit = gr.Markdown(first["settings_limit"])
         save_button = gr.Button(first["settings_buyer_save"], variant="primary")
         note = gr.Markdown("", elem_id="settings-buyer-note")
@@ -4445,7 +4861,7 @@ def _reader_choices(strings: dict[str, str]) -> list[tuple[str, str]]:
 
 
 def _when(moment: datetime | str, form: str = WHEN_FORM) -> str:
-    """A time of the mailbox as the tab shows it, in the local time of this PC: "2026-11-12 09:00", or in another form; a time
+    """A time of the mailbox as the tab shows it, in the local time of this PC: "12-11-2026 09:00", or in another form; a time
     without a zone is UTC."""
     moment = datetime.fromisoformat(moment) if isinstance(moment, str) else moment
     moment = moment.replace(tzinfo=timezone.utc) if moment.utcoffset() is None else moment

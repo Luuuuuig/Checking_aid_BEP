@@ -247,8 +247,8 @@ def test_the_lines_of_the_stored_prices_count_one_in_the_singular(tmp_path):
     store_current(root, articles(tmp_path / "artikelen.xlsx", [["KM-1001", "Slang", 12.5], ["KM-1002", "Klem", 8]]), ARTICLE_COLUMNS, False,
                   STORED, "S01")
     stored = stored_prices(root)["S01"]
-    assert state_line("S01", stored, "nl") == "Inkoopprijzen van S01 opgenomen op 2026-11-20 09:15 uit artikelen.xlsx: 2 artikelen."
-    assert state_line("S01", stored, "en") == "Purchase prices of S01 filed on 2026-11-20 09:15 from artikelen.xlsx: 2 articles."
+    assert state_line("S01", stored, "nl") == "Inkoopprijzen van S01 opgenomen op 20-11-2026 09:15 uit artikelen.xlsx: 2 artikelen."
+    assert state_line("S01", stored, "en") == "Purchase prices of S01 filed on 20-11-2026 09:15 from artikelen.xlsx: 2 articles."
     assert state_line("S01", stored._replace(prices={"KM-1001": "12.5"}), "nl").endswith(": 1 artikel.")
     assert state_line("S02", None, "nl") == ("Van S02 zijn nog geen inkoopprijzen opgenomen. Geef eerst de export van de artikelen van deze "
                                              "leverancier uit Exact.")
@@ -308,14 +308,14 @@ def test_two_suppliers_exports_one_after_the_other_keep_each_others_prices(tmp_p
     second = filed(page, tmp_path, "S02", "s02.xlsx", [["KM-2001", "Bout", 3.2], ["KM-2002", "Moer", "0,10"], ["KM-2003", "Pen", None]])
     assert second["export_note"] == "Inkoopprijzen van S02 opgenomen: 2 artikelen; 1 rij overgeslagen."
     assert (second["supplier"]["choices"], second["supplier"]["value"]) == (["S01", "S02"], "S02")
-    assert second["state"] == "Inkoopprijzen van S02 opgenomen op 2026-11-20 09:20 uit s02\\.xlsx: 2 artikelen."
+    assert second["state"] == "Inkoopprijzen van S02 opgenomen op 20-11-2026 09:20 uit s02\\.xlsx: 2 artikelen."
     assert current_prices(root, "S01") == ({"KM-1001": "12.50", "KM-1002": "8.00"}, "2026-11-20T09:15:00")       # as they were
     assert current_prices(root, "S02") == ({"KM-2001": "3.2", "KM-2002": "0.10"}, "2026-11-20T09:20:00")
     chosen = called(page, "pricelist_supplier_chosen", SUPPLIER_CHOSEN, "s01", None, "nl")
-    assert chosen["state"] == "Inkoopprijzen van S01 opgenomen op 2026-11-20 09:15 uit artikelen\\.csv: 2 artikelen." and chosen["list_part"] == SHOWN_PART
+    assert chosen["state"] == "Inkoopprijzen van S01 opgenomen op 20-11-2026 09:15 uit artikelen\\.csv: 2 artikelen." and chosen["list_part"] == SHOWN_PART
     opened = called(page, "pricelist_opened", PRICELIST_OPENED, " s 01", "en")
     assert (opened["supplier"]["choices"], opened["supplier"]["value"]) == (["S01", "S02"], "S01")                # the stored name
-    assert opened["state"] == "Purchase prices of S01 filed on 2026-11-20 09:15 from artikelen\\.csv: 2 articles."
+    assert opened["state"] == "Purchase prices of S01 filed on 20-11-2026 09:15 from artikelen\\.csv: 2 articles."
     clock.later(5)
     newer = filed(page, tmp_path, " s01 ", "nieuw.csv", [["KM-1001", "Slang", "12,90"]], language="en")
     assert newer["export_note"] == "Purchase prices of S01 filed: 1 article; 0 rows passed over." and newer["supplier"]["value"] == "S01"
@@ -372,7 +372,7 @@ def test_each_refusal_of_the_export_is_a_sentence_and_stores_nothing(tmp_path, m
     status = Path(upload).stat()
     os.utime(upload, ns=(status.st_atime_ns, status.st_mtime_ns + 1_000_000_000))           # chosen again: a new upload
     assert called(page, "prices_filed", PRICES_FILED, upload, "S01", "nl", first["given"])["state"].startswith(
-        "Inkoopprijzen van S01 opgenomen op 2026-11-20 09:18 uit")
+        "Inkoopprijzen van S01 opgenomen op 20-11-2026 09:18 uit")
     # a stored file that cannot be opened: the press says so by the class of the error, and nothing is written
     (root / "exact" / "article_prices.json").unlink()
     (root / "exact" / "article_prices.json").mkdir()
@@ -399,7 +399,7 @@ def test_an_export_with_a_supplier_column_needs_no_supplier_chosen(tmp_path, mad
     one = filed(page, tmp_path, "S03", "s04.csv", [["KM-4001", "S04", "7,00"]], titles=titles)   # an export of one supplier's articles
     assert one["export_note"] == "Inkoopprijzen van S04 opgenomen: 1 artikel; 0 rijen overgeslagen."
     assert (one["supplier"]["choices"], one["supplier"]["value"]) == (["S01", "S03", "S04"], "S04")
-    assert one["state"] == "Inkoopprijzen van S04 opgenomen op 2026-11-20 09:25 uit s04\\.csv: 1 artikel."
+    assert one["state"] == "Inkoopprijzen van S04 opgenomen op 20-11-2026 09:25 uit s04\\.csv: 1 artikel."
     assert stored_prices(d.settings.cases_root)["S01"].prices == {"KM-1001": "12.50"}
     before = (d.settings.cases_root / "exact" / "article_prices.json").read_bytes()
     assert filed(page, tmp_path, None, "leeg.csv", [], titles=titles)["export_note"] == NL["pricelist_refused:no_article"]     # ruling Z11
@@ -610,10 +610,10 @@ def test_the_tab_offers_nothing_on_a_share_link(tmp_path, madeup_out):
 
 def test_the_tab_is_wired_as_the_page_shows_it(tmp_path, madeup_out):
     """The tab stands between 'In Exact invoeren' and 'Bestanden' (amendment 4), with fixed controls only, top to bottom: the notice;
-    the introduction, the supplier with the press that takes its stored prices away beside it (ruling Z19), its state, the export
-    with its button and note; and the price list with its five column fields,
-    'Bekijken', the table, the note and the press. Each handler is one of the page's functions with its trigger, inputs and outputs,
-    and the language switch relabels everything."""
+    the introduction, the supplier with the press that asks to take its stored prices away beside it (ruling Z19), the row of that
+    question with its two presses and the answer of a removal (the redesign's B4.3), its state, the export with its button and note;
+    and the price list with its five column fields, 'Bekijken', the table, the note and the press. Each handler is one of the page's
+    functions with its trigger, inputs and outputs, and the language switch relabels everything."""
     gr = import_gradio()
     page, d, clock = pricelist_page(tmp_path, madeup_out)
     tab = pricelist_tab(page)
@@ -642,7 +642,8 @@ def test_the_tab_is_wired_as_the_page_shows_it(tmp_path, madeup_out):
 
     columns = [f"pricelist-column-{column}" for column in LIST_COLUMNS]
     order = [name(block) for block in inside(tab) if isinstance(block, (gr.Markdown, gr.Button, gr.File, gr.Dataframe, gr.Dropdown))]
-    assert order == ["pricelist-notice", "pricelist-intro", "pricelist-supplier", "pricelist-remove", "pricelist-state", "pricelist-export", "pricelist-file-prices",
+    assert order == ["pricelist-notice", "pricelist-intro", "pricelist-supplier", "pricelist-remove", "pricelist-remove-ask", "pricelist-remove-yes",
+                     "pricelist-remove-no", "pricelist-remove-note", "pricelist-state", "pricelist-export", "pricelist-file-prices",
                      "pricelist-export-note", "pricelist-list", *columns, "pricelist-columns-hint", "pricelist-view", "pricelist-table",
                      "pricelist-note", "pricelist-carry-out"]
     assert bound("pricelist_opened") == ([("page", "load"), ("tab", "select")], ["pricelist-supplier", "language"],
@@ -654,7 +655,7 @@ def test_the_tab_is_wired_as_the_page_shows_it(tmp_path, madeup_out):
     assert bound("prices_filed") == ([("pricelist-file-prices", "click")], ["pricelist-export", "pricelist-supplier", "language", "given"],
                                      ["pricelist-export-note", "pricelist-export", "pricelist-supplier", "pricelist-state", "pricelist-list-part",
                                       "given", "pricelist-notice"])
-    assert bound("prices_removed") == ([("pricelist-remove", "click")], ["pricelist-supplier", "language"],
+    assert bound("prices_removed") == ([("pricelist-remove-yes", "click")], ["pricelist-supplier", "language"],
                                        ["pricelist-export-note", "pricelist-supplier", "pricelist-state", "pricelist-list-part", *after_view,
                                         "pricelist-notice"])
     beside = by_id["pricelist-remove"].parent                                         # one row holds the supplier's field and the press
@@ -691,7 +692,7 @@ def test_the_tab_is_wired_as_the_page_shows_it(tmp_path, madeup_out):
     listed = price_list(tmp_path, "prijslijst.csv", LISTED)
     english = called(page, "pricelist_relabel", PRICELIST_RELABEL, "en", "S01", listed)
     assert english["tab"] == {"__type__": "update", "label": "Price list"} and english["notice"] == {"__type__": "update", "value": "", "visible": False}
-    assert english["intro"] == EN["pricelist_intro"] and english["state"].startswith("Purchase prices of S01 filed on 2026-11-20 09:15 from")
+    assert english["intro"] == EN["pricelist_intro"] and english["state"].startswith("Purchase prices of S01 filed on 20-11-2026 09:15 from")
     assert english["supplier"] == {"__type__": "update", "label": "Supplier", "info": "Choose the supplier, or type the name for a new supplier."}
     assert (english["export"]["label"], english["list"]["label"]) == ("Export of the articles from Exact (Excel or CSV)", "Price list (Excel or CSV)")
     assert (english["file_button"]["value"], english["view"]["value"]) == ("File purchase prices", "View")
@@ -1388,7 +1389,7 @@ def test_a_suppliers_name_with_marks_is_shown_as_text(tmp_path, madeup_out):
     assert shown_name != name and "\\*S01\\*" in shown_name and "\\<b\\>" in shown_name
     stored = filed(page, tmp_path, name)
     assert stored["export_note"] == f"Inkoopprijzen van {shown_name} opgenomen: 2 artikelen; 0 rijen overgeslagen."
-    assert stored["state"] == f"Inkoopprijzen van {shown_name} opgenomen op 2026-11-20 09:15 uit artikelen\\.csv: 2 artikelen."
+    assert stored["state"] == f"Inkoopprijzen van {shown_name} opgenomen op 20-11-2026 09:15 uit artikelen\\.csv: 2 artikelen."
     assert stored["supplier"]["value"] == name                                                  # the dropdown holds the name itself
     for language in ("nl", "en"):
         opened = called(page, "pricelist_opened", PRICELIST_OPENED, name, language)
@@ -1619,15 +1620,17 @@ def test_a_shared_row_names_the_other_supplier(tmp_path, madeup_out):
 
 
 def removed(page, supplier: str | None, language: str = "nl") -> dict:
-    """What "Inkoopprijzen van deze leverancier weghalen" gives for the supplier chosen or typed."""
+    """What "Ja, weghalen" gives for the supplier chosen or typed (prices_removed, after the question of "Inkoopprijzen van deze
+    leverancier weghalen")."""
     return called(page, "prices_removed", PRICES_REMOVED, supplier, language)
 
 
 def test_a_supplier_filed_under_another_spelling_can_be_taken_away(tmp_path, madeup_out, monkeypatch):
     """Ruling Z19 (b), the check's probe typo.py: a supplier given twice under two spellings shares every article with itself, so
-    no row of its price list goes on the list. The press beside the supplier's field takes the stored prices and the kept columns
-    of one name away, whole or not at all, and nothing else: no row of the list In Exact invoeren changes. After that the rows of
-    the list read "prijs verandert" and the press puts them on the list."""
+    no row of its price list goes on the list. "Ja, weghalen", under the question that the press beside the supplier's field asks
+    (the redesign's B4.3), takes the stored prices and the kept columns of one name away, whole or not at all, and nothing else: no
+    row of the list In Exact invoeren changes. After that the rows of the list read "prijs verandert" and the press puts them on the
+    list."""
     import aid.pricelist as module
     page, d, clock = pricelist_page(tmp_path, madeup_out)
     root = d.settings.cases_root
@@ -2187,17 +2190,30 @@ RULED_AGAIN = {
                                  "the file again."),
 }
 
+# The texts of the redesign of the page (its B4.3), word for word: the question that the press beside the supplier's field asks, in
+# the plural and for one price, and its two answers.
+REDESIGN = {
+    "pricelist_remove_ask": ("De {n} opgeslagen inkoopprijzen van {supplier} worden weggehaald. De lijst In Exact invoeren blijft zoals hij is.",
+                             "The {n} stored purchase prices of {supplier} will be taken away. The list Enter in Exact stays as it is."),
+    "pricelist_remove_ask_one": ("De opgeslagen inkoopprijs van {supplier} wordt weggehaald. De lijst In Exact invoeren blijft zoals hij is.",
+                                 "The stored purchase price of {supplier} will be taken away. The list Enter in Exact stays as it is."),
+    "pricelist_remove_yes": ("Ja, weghalen", "Yes, take them away"),
+    "pricelist_remove_no": ("Niet weghalen", "Keep them"),
+}
+
 
 def test_every_text_of_the_brief_and_the_amendments_stands_in_the_strings():
     """Amendment 6: every Dutch and English text of the brief and of its amendments stands in the page's strings word for word; a
     sentence with counts is put together from parts that give the brief's sentence for any count but one; what the amendments took out
-    of the brief is not on the page. The texts of the rulings of the two review rounds stand there the same way."""
+    of the brief is not on the page. The texts of the rulings of the two review rounds, and those of the redesign, stand there the
+    same way."""
     assert {key: (NL[key], EN[key]) for key in TEXTS} == TEXTS
     assert {key: (NL[key], EN[key]) for key in BEYOND} == BEYOND
     assert {key: (NL[key], EN[key]) for key in RULED} == RULED
     assert {key: (NL[key], EN[key]) for key in RULED_AGAIN} == RULED_AGAIN
+    assert {key: (NL[key], EN[key]) for key in REDESIGN} == REDESIGN
     mine = {key for key in NL if key.startswith(("pricelist", "exact_articles", "exact_part_articles", "hand_pricelist"))}
-    assert mine == {key for key in (*TEXTS, *BEYOND, *RULED, *RULED_AGAIN)
+    assert mine == {key for key in (*TEXTS, *BEYOND, *RULED, *RULED_AGAIN, *REDESIGN)
                     if key.startswith(("pricelist", "exact_articles", "exact_part_articles", "hand_pricelist"))}
     for gone in ("ook bij een andere leverancier", "also with another supplier", "De wijzigingen staan op de lijst.", "Niet op de lijst gezet ("):
         assert not any(gone in text for text in (*NL.values(), *EN.values())), gone              # what the second round replaced
@@ -2262,7 +2278,7 @@ def test_the_documents_say_what_the_price_list_tab_does(tmp_path):
                 *[f"pricelist_header:{column}" for column in ("article", "current", "list", "outcome")]):
         assert f"\"{NL[key]}\"" in tab, key
     for quote in (state_line("S01", None, "nl"), filed_line(["S01"], 12, 3, "nl"), filed_line(["S01", "S02"], 12, 3, "nl"),
-                  "Inkoopprijzen van S01 opgenomen op 2026-11-20 09:15 uit artikelen S01.csv: 12 artikelen.",
+                  "Inkoopprijzen van S01 opgenomen op 20-11-2026 09:15 uit artikelen S01.csv: 12 artikelen.",
                   "2 prijzen veranderen, 1 blijft gelijk, 3 rijen overgeslagen.", carried_line(2, "nl"), carried_line(0, "nl"),
                   NL["pricelist_refused:type"].format(name="artikelen.xls"), NL["files_refused:empty"].format(name="artikelen.csv"),
                   NL["pricelist_row"].format(n=7), NL["settings_failed"].format(code="PermissionError")):
@@ -2369,7 +2385,8 @@ def test_the_documents_say_what_the_price_list_tab_does(tmp_path):
         assert f"\"{NL[key]}\"" in walk, key
     assert "checks A15 and A16" in walk and "python3 -m aid.demo --out live --prepare-only" in walk
     # 2.6: the press; 4.9: an article price is ticked by hand, and what is not built; 3.1 and 3.2: the file and the settings
-    assert f"\"{NL['hand_pricelist_entered']}\"" in press and "\"S01 (20-11-2026 09:30)\"" in press and "under \"Blok\"" in press
+    assert f"\"{NL['hand_pricelist_entered']}\"" in press and "\"S01 (20-11-2026 09:30)\"" in press
+    assert "under \"Inkooporder of artikelprijzen\"" in press
     assert "A row \"Terugzetten:\" that puts a price of that list back is no row of the list" in press
     assert "says to enter that price in Exact yourself (section 4.3)" in press
     limits = manual["4.9"]
@@ -2404,3 +2421,125 @@ def test_the_documents_say_what_the_price_list_tab_does(tmp_path):
     assert "Its tab \"Prijslijst\" compares a supplier's price list" in readme and "`article_columns` and `article_decimal_comma` describe" in readme
     assert "cases/exact/article_prices.json" in readme and "in `cases/exact/pricelist_columns.json`" in readme
     assert "`pricelist_columns`" not in readme and "no press of the tab changes the settings file" in readme
+
+
+# --- the redesign of the page (chunk 4): the removal of a supplier's prices asks first, the fields stay low ---
+
+def test_taking_the_prices_away_asks_first_and_answers_under_the_row(tmp_path, madeup_out):
+    """B4.3 of the redesign: "Inkoopprijzen van deze leverancier weghalen", small and in the colour of a press that takes something
+    away, still beside the supplier's field, only asks (remove_asked): in a row right under the field it says how many stored prices
+    of which supplier go, with "Ja, weghalen" and "Niet weghalen", and it writes nothing. prices_removed, with its inputs and outputs
+    as they were, is the press of "Ja, weghalen"; after it (removal_shown) the row of the question closes, the sentence of the removal
+    stands right under the supplier's row (pricelist-remove-note) and the note of the export, far lower on the tab, is empty. "Niet
+    weghalen" closes the row and changes nothing (remove_kept), and so does another supplier chosen, so that "Ja, weghalen" never takes
+    away another supplier than the question names. The language switch closes the row as well and puts its presses in the language
+    (removal_relabelled). None of it is on a page opened on a public share link or without a settings file."""
+    gr = import_gradio()
+    page, d, clock = pricelist_page(tmp_path, madeup_out)
+    root = d.settings.cases_root
+    tab = pricelist_tab(page)
+    language = [block for block in page.blocks.values() if isinstance(block, gr.Radio) and block.label == NL["language"]][0]
+    by_id = {block.elem_id: block for block in inside(tab) if getattr(block, "elem_id", None)}
+    remove, confirm, ask, yes, no, answer = (by_id[f"pricelist-remove{part}"] for part in ("", "-confirm", "-ask", "-yes", "-no", "-note"))
+    supplier, export_note, body = by_id["pricelist-supplier"], by_id["pricelist-export-note"], by_id["pricelist-body"]
+    # the small press beside the field; right under that row the question, closed until a press, then the answer, then the state
+    beside = remove.parent
+    assert isinstance(beside, gr.Row) and supplier in inside(beside) and (remove.variant, remove.size) == ("stop", "sm")
+    at = body.children.index
+    assert at(confirm) == at(beside) + 1 and at(answer) == at(confirm) + 1 and at(by_id["pricelist-state"]) == at(answer) + 1
+    assert isinstance(confirm, gr.Row) and confirm.visible is False
+    assert [block for block in inside(confirm) if isinstance(block, (gr.Markdown, gr.Button))] == [ask, yes, no]
+    assert [(button.value, button.variant) for button in (yes, no)] == [(NL["pricelist_remove_yes"], "stop"), (NL["pricelist_remove_no"], "secondary")]
+    assert (ask.value, answer.value, answer.elem_classes) == ("", "", ["answer"]) and ask.latex_delimiters == answer.latex_delimiters == []
+    # the press only asks, naming the supplier by its stored name, and writes nothing
+    filed(page, tmp_path, "S08", "s08.csv", [["KM-0801", "Koppeling", "12,50"], ["KM-0802", "Ring", "1,00"], ["KM-0803", "Bout", "0,20"]])
+    filed(page, tmp_path, "S07 <b>x</b>", "s07.csv", [["KM-0701", "Klephuis", "3,10"]])
+    before = files_of(root)
+    [asked] = [f for f in page.fns.values() if (remove._id, "click") in f.targets]
+    assert getattr(asked.fn, "__name__", "") == "remove_asked" and asked.targets == [(remove._id, "click")]
+    assert asked.inputs == [supplier, language] and asked.outputs == [confirm, ask, answer] and asked.show_progress == "hidden"
+    opened, closed = {"__type__": "update", "visible": True}, {"__type__": "update", "visible": False}
+    assert asked.fn(" s08 ", "nl") == (opened, "De 3 opgeslagen inkoopprijzen van S08 worden weggehaald. De lijst In Exact invoeren blijft zoals hij "
+                                               "is.", "")
+    assert asked.fn("S08", "en") == (opened, "The 3 stored purchase prices of S08 will be taken away. The list Enter in Exact stays as it is.", "")
+    marked = _literal("S07 <b>x</b>")
+    assert asked.fn("S07 <b>x</b>", "nl") == (opened, f"De opgeslagen inkoopprijs van {marked} wordt weggehaald. De lijst In Exact invoeren "
+                                                      "blijft zoals hij is.", "")
+    # with nothing to take away the question stays closed, and the tab's own sentence answers under the row
+    for typed, sentence in ((None, NL["pricelist_choose_supplier"]), (" ", NL["pricelist_choose_supplier"]),
+                            ("S09", NL["pricelist_state_none"].format(supplier="S09")), ("L" * 101, NL["pricelist_refused:name"])):
+        assert asked.fn(typed, "nl") == (closed, "", sentence), typed
+    assert files_of(root) == before
+    # "Niet weghalen", and another supplier chosen, close the question; nothing is taken away
+    [kept] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == "remove_kept"]
+    assert sorted(kept.targets) == sorted([(no._id, "click"), (supplier._id, "change")]) and kept.inputs == [] and kept.outputs == [confirm]
+    assert kept.fn() == closed and kept.show_progress == "hidden"
+    assert files_of(root) == before and list(stored_prices(root)) == ["S08", "S07 <b>x</b>"]
+    # "Ja, weghalen": prices_removed as it was, then its sentence moved under the supplier's row and the export's note emptied
+    [(index, taken)] = [(index, f) for index, f in page.fns.items() if getattr(f.fn, "__name__", "") == "prices_removed"]
+    assert taken.targets == [(yes._id, "click")] and taken.inputs == [supplier, language] and taken.outputs[0] is export_note
+    assert len(taken.outputs) == len(PRICES_REMOVED)
+    [after] = [f for f in page.fns.values() if f.trigger_after == index]
+    assert getattr(after.fn, "__name__", "") == "removal_shown" and after.inputs == [export_note] and after.outputs == [confirm, answer, export_note]
+    out = removed(page, "S08")
+    assert out["export_note"] == "De opgenomen inkoopprijzen van S08 zijn weggehaald. Wat al op de lijst In Exact invoeren staat, blijft staan."
+    assert after.fn(out["export_note"]) == (closed, out["export_note"], "") and list(stored_prices(root)) == ["S07 <b>x</b>"]
+    assert after.fn(removed(page, "S08")["export_note"]) == (closed, NL["pricelist_state_none"].format(supplier="S08"), "")    # gone already
+    assert after.show_progress == "hidden"
+    # the language switch closes the question and empties the answer, with the two presses in the language
+    [relabelled] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == "removal_relabelled"]
+    assert relabelled.targets == [(language._id, "change")] and relabelled.inputs == [language]
+    assert relabelled.outputs == [confirm, ask, yes, no, answer]
+    assert relabelled.fn("en") == (closed, "", {"__type__": "update", "value": "Yes, take them away"}, {"__type__": "update", "value": "Keep them"},
+                                   "")
+    # none of it on a public share link nor without a settings file
+    for share, file, key in ((True, True, "settings_share"), (False, False, "settings_no_file")):
+        other = tab_page(tmp_path / key, madeup_out, cases=(), share=share, file=file, article_columns=ARTICLE_COLUMNS)[0]
+        names = {getattr(f.fn, "__name__", "") for f in other.fns.values()}
+        assert not names & {"remove_asked", "remove_kept", "removal_shown", "removal_relabelled"}, key
+    assert {key: (NL[key], EN[key]) for key in REDESIGN} == REDESIGN                         # the texts, word for word
+    # the manual, its Dutch guide and the README say that the tab asks first
+    manual = hand.manual_sections()
+    assert f"\"{NL['pricelist_remove_ask'].format(n=12, supplier='S01 B.V.')}\"" in manual["4.3"]
+    assert f"\"{NL['pricelist_remove_yes']}\"" in manual["4.3"] and f"\"{NL['pricelist_remove_no']}\"" in manual["4.3"]
+    assert f"druk op \"{NL['pricelist_remove']}\" en daarna op \"{NL['pricelist_remove_yes']}\"" in manual["7"]
+    readme = Path("aid/README.md").read_text(encoding="utf-8")
+    assert "One press beside the supplier's field" not in readme and f"once the buyer confirms it with \"{NL['pricelist_remove_yes']}\"" in readme
+
+
+def test_the_tab_keeps_its_fields_low_and_brings_the_count_of_a_view_into_view(tmp_path, madeup_out):
+    """2.3 of the redesign: the two drop zones are 140 px high and the table of a view at most 320 px, so that a view and its press
+    fit the window; after "Bekijken" the page brings the count line under the table into view, with "Op de lijst In Exact invoeren
+    zetten" right under it. That is a step of the browser alone, chained after pricelist_shown, which names no address. The manual
+    says so."""
+    page, d, clock = pricelist_page(tmp_path, madeup_out)
+    tab = pricelist_tab(page)
+    by_id = {block.elem_id: block for block in inside(tab) if getattr(block, "elem_id", None)}
+    assert (by_id["pricelist-export"].height, by_id["pricelist-list"].height, by_id["pricelist-table"].max_height) == (140, 140, 320)
+    [(index, view)] = [(index, f) for index, f in page.fns.items() if getattr(f.fn, "__name__", "") == "pricelist_shown"]
+    [scroll] = [f for f in page.fns.values() if f.trigger_after == index]
+    assert scroll.fn is None and (scroll.inputs, scroll.outputs) == ([], [])
+    assert "getElementById(\"pricelist-note\")" in scroll.js and "scrollIntoView" in scroll.js and not re.search(r"https?:|//", scroll.js)
+    assert "brings the count line into view" in hand.manual_sections()["4.3"]
+
+
+def test_the_small_press_keeps_its_words_on_one_line_and_its_question_reads_as_a_notice(tmp_path, madeup_out):
+    """The style rules of aid/review/look.py for the removal (spec 2.3 and 3.5): the small press beside the supplier's field has the
+    width of its words, on one line (its scale is 0, so that the page library gives it no share of the row, and the rule gives it its
+    own width), and stands level with the field, as every button beside a field does, rather than with the field's label and help
+    line; the row of its question, with "Ja, weghalen" and "Niet weghalen", is one standing message in the look of a notice (the
+    second surface with a bar of 4 px on the left), its words and its two presses centred on one line."""
+    from aid.review import look
+    gr = import_gradio()
+    page, d, clock = pricelist_page(tmp_path, madeup_out)
+    by_id = {block.elem_id: block for block in inside(pricelist_tab(page)) if getattr(block, "elem_id", None)}
+    remove, confirm = by_id["pricelist-remove"], by_id["pricelist-remove-confirm"]
+    assert (remove.scale, remove.variant, remove.size) == (0, "stop", "sm")
+    form, button = remove.parent.children                    # the supplier's field in a form block of its own, then the press
+    assert type(form).__name__ == "Form" and form.children == [by_id["pricelist-supplier"]] and button is remove
+    assert isinstance(confirm, gr.Row)
+    css = look.PAGE_CSS
+    for rule in ("#pricelist-remove { flex: 0 0 auto; width: auto; }", ".row > .form ~ button { align-self: flex-end; }",
+                 f"#pricelist-remove-confirm {{ align-items: center; background: {look.SURFACE_2}; border-left: 4px solid {look.CONTROL}; "
+                 "border-radius: 6px; padding: 12px 16px; }"):
+        assert rule in css, rule

@@ -379,3 +379,26 @@ def cases_for_the_count(cases_root: Path, madeup_out: Path, full) -> list[str]:
     numberless, _ = ran("MU01", None, 6, empty)
     assert closed.status == "closed" and other.status == "review" and other.version.version is not None and numberless.po_number is None
     return [case.case_id for case in waiting]
+
+
+def shown_headings(block) -> list[str]:
+    """The headings a block of the review page shows, top to bottom, each as its line of Markdown ("## Laatst verwerkt"): the lines
+    that begin with one to six # and a space, of every Markdown inside the block, and none of a Markdown that is hidden or that
+    stands inside a hidden block."""
+    if getattr(block, "visible", True) in (False, "hidden"):
+        return []
+    own = str(block.value or "").splitlines() if type(block).__name__ == "Markdown" else []
+    return ([line for line in own if re.match(r"#{1,6} ", line)]
+            + [found for child in getattr(block, "children", []) for found in shown_headings(child)])
+
+
+def skipped_headings(headings: list[str]) -> list[str]:
+    """Those of these headings (as shown_headings gives them) that skip a level, the page's one h1 standing before the first: an h3
+    right after the h1, an h4 right after an h2, and so on; and a second h1."""
+    skipped, level = [], 1
+    for heading in headings:
+        depth = len(heading) - len(heading.lstrip("#"))
+        if depth == 1 or depth > level + 1:
+            skipped.append(heading)
+        level = depth
+    return skipped

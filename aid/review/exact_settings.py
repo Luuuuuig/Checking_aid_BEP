@@ -1039,11 +1039,11 @@ def state_lines(settings: Settings, store: PoStore, now: datetime, language: str
     else:
         number, version, moment = last
         lines.append(strings["exact_state_known" if version is not None else "exact_state_known_export"].format(
-            count=count, number=number, version=version, time=moment.astimezone().strftime("%Y-%m-%d %H:%M")))
+            count=count, number=number, version=version, time=moment.astimezone().strftime("%d-%m-%Y %H:%M")))
     lines.append(strings["exact_state_columns_set" if settings.export_columns else "exact_state_columns_unset"])
     filed = last_export(store)
     lines.append(strings["exact_state_no_export"] if filed is None else
-                 strings["exact_state_export"].format(time=filed.astimezone().strftime("%Y-%m-%d %H:%M")))
+                 strings["exact_state_export"].format(time=filed.astimezone().strftime("%d-%m-%Y %H:%M")))
     lines.append(strings["exact_state_unread"].format(n=unread(settings.watched_folder, now)))
     lines.append(strings["exact_state_waiting"].format(n=len(cases_waiting_for_po(settings.cases_root))))
     lines.append(_to_enter_line(settings, strings))
