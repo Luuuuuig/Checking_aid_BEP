@@ -512,14 +512,14 @@ def confirmations(prepared: Path, now: datetime, days: int = CONFIRMATION_DAYS) 
 def confirmation_lines(found: list[dict], cases_root: Path, language: str) -> list[str]:
     """The confirmations as the section shows them: the day, the order with its supplier as its case's result names it, and the file,
     with "alleen bijvoegen: er staat nog iets open" after it when the status is not to be set yet, and "(proefdocument: niet
-    bijvoegen)" behind the confirmation of a try-out, which is made up: nothing of it is to be done in the real Exact."""
+    bijvoegen)" behind the confirmation of a try-out instead, which is made up: nothing of it is to be done in the real Exact."""
     strings = STRINGS[language]
     lines = []
     for item in found:
         day, supplier = _day_or_week(item["date"], language), _case_supplier(item["case_id"], cases_root)
         line = (strings["hand_confirmation"].format(date=day, number=item["po_number"], supplier=supplier, file=item["file"]) if supplier
                 else strings["hand_confirmation_alone"].format(date=day, number=item["po_number"], file=item["file"]))
-        line = line if item["set_status"] else f"{line} ({strings['hand_attach_only']})"
+        line = line if item["set_status"] or item.get("tryout") else f"{line} ({strings['hand_attach_only']})"
         lines.append(f"{line} {strings['hand_confirmation_tryout']}" if item.get("tryout") else line)
     return lines
 

@@ -162,7 +162,8 @@ files_relabel; buyer_relabel; and of "Koppeling met Exact" exact_relabel, exact_
 tryout_relabel and tryout_cart_relabel. A listener is bound once, so strip_ticked, queue_ticked, done_opened and pricelists_opened
 skip the queue on their other triggers as well (the page load, the timer, the tab selected, "Lijst vernieuwen"); the read of
 done_opened after a press of the tab keeps it. The clear of the answer of a close (close_answer_cleared), added on 16 November
-so that the answer does not keep the language it was given in, skips it too. Seven of the thirty-one stay on the queue: the
+so that the answer does not keep the language it was given in, skips it too; it is bound first of the switch's listeners that
+skip the queue, so that a close pressed during a switch is not answered before the clear and then wiped by it. Seven of the thirty-one stay on the queue: the
 rendering of the decision rows, which the page library binds itself, the settings tab's own three (settings_relabel, sections_relabelled, the name of "Postvak en AI") and
 the three of that section (reader_shown, ai_relabel, extension_code_relabel). A listener that skips the queue is answered in one
 request, in about a hundredth of a second; after each answer the browser takes its own time before it sends the next request,
@@ -2069,6 +2070,10 @@ def _page(gr, deps: Deps, tab: _Tab):
                         close_button = gr.Button(first["close"], variant="primary", visible=False)
                         handled = gr.Button(first["handled_go"], visible=False, elem_id="review-handled")
                     status = gr.Markdown("", elem_classes=["answer"])
+                    # the clear of its answer on a switch, bound here, before every other listener of the switch that skips the
+                    # queue: the browser sends a switch's requests in the order of their binding, a few at a time, and a close
+                    # pressed during the switch must not have its fresh answer wiped by a clear answered after it
+                    language.change(close_answer_cleared, inputs=language, outputs=status, show_progress="hidden", queue=False)
                     with gr.Column(visible=False, elem_id="review-undo") as undo_part:     # its answer is the status line, above it
                         undo_title = gr.Markdown(f"### {first['undo_title']}")
                         with gr.Row():
@@ -2150,7 +2155,6 @@ def _page(gr, deps: Deps, tab: _Tab):
               outputs=[record_part, flags_table, flags_empty, uncompared_table, uncompared_empty, matches_table, matches_empty, undo_part],
               show_progress="hidden", queue=False)
         language.change(review_texts, inputs=language, outputs=[documents_title, record_title, undo_title], show_progress="hidden", queue=False)
-        language.change(close_answer_cleared, inputs=language, outputs=status, show_progress="hidden", queue=False)
         if acting:              # bound once all tabs are made, as its outputs are the page's Tabs and the sections of Instellingen
             sections.read_after(strip_action.click(strip_acted, inputs=language, outputs=[tabs, sections.tabs], show_progress="hidden"))
     return app

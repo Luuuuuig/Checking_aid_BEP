@@ -6,7 +6,7 @@ How to use the aid day to day, run it on the company side, maintain it and solve
 
 ## Install and test
 
-Python 3.11 or newer (developed on 3.13; the suite also passes on 3.11). From the repository root:
+Python 3.11 or newer (developed on 3.13). The job `Tests` of the aid's own repository runs the suite on Linux and on Windows, each with Python 3.13.17 and with 3.11. On 16 November 2026 it passed on Linux with both; on Windows 24 tests failed with 3.13.17 and 25 with 3.11, each for a reason of the test and none for a wrong result of the aid ([record](../reviews/2026-11-16_first-test-run-on-windows/README.md)). From the repository root:
 
 ```bash
 python3 -m pip install -r aid/requirements.txt -r aid/requirements-dev.txt

@@ -99,9 +99,9 @@ Graph marks removed, is skipped without a mark. Each other message goes through 
    aid/sources/mailbox.py), is classed from its bytes by is_po_pdf of that module: by the layout of the settings, or without one by the
    title words of the made-up purchase orders, never by the decider and never by the sender, since every message of Sent Items is the
    mailbox's own. Only its first page is read, so that a long PDF holds the sync for a moment only. A PDF whose first page cannot be
-   read is no purchase order, and nothing of it is said; a purchase order whose later page cannot be read is taken, and the PO store,
-   which reads the whole PDF, refuses it, so that it stays in the watched folder as an error. A message without a purchase order is
-   known and skipped, and nothing else of it is kept.
+   read, or whose list of pages cannot be read, is no purchase order, and nothing of it is said; a purchase order whose later page
+   cannot be read is taken, and the scan, whose reading of the first page reads the whole PDF, cannot read it, so that it stays in the
+   watched folder as an error. A message without a purchase order is known and skipped, and nothing else of it is kept.
 6. Each purchase order is written into the watched folder as <time>_<mark>_<code>.order.pdf (order_file_name: the time of the
    message as YYYYmmddTHHMMSS, the mark of its id, and the first 8 hex digits of the sha256 of the PDF, so that two attachments with
    the same bytes give one file), first under that name with a dot before it and ".part" after it and then renamed, so that the scan

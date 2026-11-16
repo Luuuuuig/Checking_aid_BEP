@@ -190,7 +190,8 @@ def _made_up(address: str) -> bool:
 def page_temporary_folder(cases_root: Path, environ: MutableMapping[str, str] = os.environ) -> Path | None:
     """Give the page library <cases_root>/tmp for its temporary files, in GRADIO_TEMP_DIR of environ, emptied first except its
     folder work (the runner's and the Copilot reader's, which may be at work): to be called before gradio is imported, which reads
-    it then (see the module docstring). None, and nothing changed, when environ names a folder already."""
+    it then (see the module docstring). None, and nothing changed, when environ names a folder already. A file that cannot be
+    removed now (on Windows one that another program holds) stays for the next start: the start of the page does not end on it."""
     if environ.get("GRADIO_TEMP_DIR"):
         return None
     folder = Path(cases_root) / TEMPORARY
@@ -201,7 +202,10 @@ def page_temporary_folder(cases_root: Path, environ: MutableMapping[str, str] = 
             if path.is_dir() and not path.is_symlink():
                 shutil.rmtree(path, ignore_errors=True)
             else:
-                path.unlink(missing_ok=True)
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:                  # held by another program: left for the next start, as a folder is (ignore_errors)
+                    pass
     folder.mkdir(parents=True, exist_ok=True)
     environ["GRADIO_TEMP_DIR"] = str(folder)
     return folder

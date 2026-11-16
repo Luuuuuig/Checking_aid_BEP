@@ -1092,6 +1092,27 @@ print(json.dumps(seen))
 """
 
 
+def test_a_temporary_file_that_cannot_be_removed_does_not_end_the_start_of_the_page(tmp_path, monkeypatch):
+    """The page empties its temporary folder when it starts. On Windows a file that another program holds (a virus scanner, a second
+    page) cannot be removed: the start goes on, the file stays for the next start, and the folder is still the page's."""
+    from aid.review.__main__ import page_temporary_folder
+    folder = tmp_path / "cases" / "tmp"
+    held, free = folder / "tmp_held", folder / "tmp_free"
+    folder.mkdir(parents=True)
+    held.write_bytes(b"")
+    free.write_bytes(b"")
+    unlink = Path.unlink
+
+    def refuse_the_held_file(self, *args, **kwargs):
+        if self == held:
+            raise PermissionError(13, "made-up: the file is in use by another program")
+        return unlink(self, *args, **kwargs)
+    monkeypatch.setattr(Path, "unlink", refuse_the_held_file)
+    environment = {}
+    assert page_temporary_folder(tmp_path / "cases", environment) == folder and environment == {"GRADIO_TEMP_DIR": str(folder)}
+    assert held.is_file() and not free.exists()
+
+
 def test_the_page_keeps_its_temporary_files_under_the_cases_root(tmp_path, madeup_out):
     """The page library keeps an uploaded file and the page images of a document in its temporary folder: <cases_root>/tmp, named
     in GRADIO_TEMP_DIR before the library is imported and emptied when the page starts, unless the environment names a folder
@@ -3617,6 +3638,17 @@ def test_a_language_switch_clears_the_answer_of_a_close(tmp_path, madeup_out):
     text, _ = pressed_close(page, case)
     assert text.startswith("De zaak is nu: afgesloten.")
     assert cleared.fn("en") == cleared.fn("nl") == ""
+
+
+def test_the_clear_of_the_answer_of_a_close_is_the_first_request_of_a_language_switch(tmp_path, madeup_out):
+    """A second reader's finding on R5: a close pressed while a switch was still being answered showed its answer in the new language,
+    which the clear, then one of the last of the switch's requests, wiped a few seconds later. The browser sends the requests of a
+    switch in the order of their binding, a few at a time: the clear is bound before every other listener of the switch that skips
+    the queue, so that it is answered before the buyer can press "Zaak afsluiten"."""
+    path, d, page, _ = sending_page(tmp_path, madeup_out)
+    language = handler_of(page, "review_texts").inputs[0]
+    unqueued = [getattr(f.fn, "__name__", "") for f in page.fns.values() if (language._id, "change") in f.targets and not f.queue]
+    assert unqueued[0] == "close_answer_cleared" and len(unqueued) == 24
 
 
 def test_a_close_and_the_tab_beoordelen_read_the_counts_again_at_once(tmp_path, madeup_out):

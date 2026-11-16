@@ -106,9 +106,10 @@ a file with a time and two codes of hex digits. is_po_pdf classes the bytes of a
 settings.po_layout, a first page that fits the layout and whose header names no confirmation (fits, titled_confirmation); without
 one, the keywords (_by_keywords gives po_pdf: a title line among the first three that begins with a word of a PO, and no word of a
 confirmation on the page). It never asks the decider. It reads the first page alone, so that a long PDF holds the folder for a moment
-only; a purchase order whose later page cannot be read is therefore taken, and the store, which reads the whole PDF, refuses it, so
-that it stays in the folder as an error. A scan, a PDF without text and a PDF whose first page cannot be read are none, and nothing of
-such a PDF is said: the exception of the reading is not kept, and while it reads, the loggers of the PDF reader, whose lines can quote
+only; a purchase order whose later page cannot be read is therefore taken, and the scan, whose reading of the first page reads the
+whole PDF, cannot read it, so that it stays in the folder as an error. A scan, a PDF without text, a PDF whose first page cannot be
+read and a PDF whose list of pages cannot be read (a broken page object on any page) are none, as before, and nothing of such a PDF is
+said: the exception of the reading is not kept, and while it reads, the loggers of the PDF reader, whose lines can quote
 a PDF's own objects, hold their lines back (_pdf_logs_held). The reading of every other PDF logs as before.
 
 What happens to a document, by class:
@@ -386,10 +387,11 @@ def is_po_pdf(data: bytes, settings: Settings) -> bool:
     word of a confirmation on the page). The first page is read as the scan reads it from a file, with the cells cut apart for the
     layout (extract_rows of a binary stream of the bytes), so the PDF is read from memory and nothing is written. Only that page is
     read (pages=[1]), so that a long PDF (a price list, a catalogue) holds the folder for a moment only. A scan, a PDF without text and
-    a PDF whose first page cannot be read (any exception of the reading) are none. A purchase order whose first page reads and a later
-    page does not is taken, and the store's reading of the whole PDF then refuses it, so that it stays in the watched folder as an
-    error. Nothing of a PDF that is none is said anywhere: the exception is not kept, and while it reads, the loggers of the PDF reader
-    hold their lines back (_pdf_logs_held)."""
+    a PDF whose first page cannot be read (any exception of the reading) are none, and so is a PDF whose list of pages cannot be read (a
+    broken page object on any page). A purchase order whose first page reads and a later page does not is taken, and the scan, whose
+    reading of the first page reads the whole PDF, cannot read it, so that it stays in the watched folder as an error. Nothing of a
+    PDF that is none is said anywhere: the exception is not kept, and while it reads, the loggers of the PDF reader hold their lines
+    back (_pdf_logs_held)."""
     layout = settings.po_layout
     try:
         with _pdf_logs_held():

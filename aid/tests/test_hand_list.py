@@ -555,6 +555,9 @@ def test_the_count_of_the_confirmations_leaves_the_try_outs_out(tmp_path):
         assert confirmations_text([real, real], cases, language).split("\n\n")[1] == strings["hand_confirmations_many"].format(n=2)
         alone = confirmations_text(tried, cases, language).split("\n\n")
         assert alone[1] == strings["hand_confirmations_tryouts_only"] and len(alone[2].split("\n")) == 2, language
+        waiting = {**tried[0], "set_status": False}             # a try-out whose status may not be set yet: one mark, not two
+        [line] = confirmations_text([waiting], cases, language).split("\n\n")[2].split("\n")
+        assert line.endswith(f" {strings['hand_confirmation_tryout']}") and strings["hand_attach_only"] not in line, language
     assert confirmations_text([], cases, "nl") == ""
     texts = {"hand_confirmation_tryout": ("(proefdocument: niet bijvoegen)", "(try-out document: do not attach)"),
              "hand_confirmations_tryouts_only": ("Er is niets om bij te voegen: hieronder staan alleen proefdocumenten.",

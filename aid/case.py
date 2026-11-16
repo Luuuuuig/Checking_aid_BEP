@@ -88,7 +88,9 @@ def open_case(cases_root: Path, kind: str, files: list[Path], po_number: str | N
     Nothing is created when the call is refused. It raises ValueError for a kind that does not exist,
     a PO number that cannot be part of a folder name, or two files with the same name; FileNotFoundError
     for a file that is missing; and FileExistsError when a case with this id exists, which happens when
-    the same PO number is opened twice in the same second. An existing case is never touched.
+    the same PO number is opened twice in the same second. An existing case is never touched. A file that
+    cannot be copied, or a case.json that cannot be written, raises its own error, and the folder made for
+    the case is removed again first.
     """
     if kind not in get_args(CaseKind):
         raise ValueError(f"unknown case kind {kind!r}, expected one of {get_args(CaseKind)}")
@@ -105,16 +107,22 @@ def open_case(cases_root: Path, kind: str, files: list[Path], po_number: str | N
 
     root = Path(cases_root) / case_id
     root.mkdir(parents=True)                       # FileExistsError if the case exists
-    for sub in ("input", "steps", "messages"):
-        (root / sub).mkdir()
-    entries = []
-    for f in files:
-        copy = root / "input" / f.name
-        shutil.copy2(f, copy)                      # copy2 keeps the modification time, the capture date of a saved cart page
-        entries.append({"name": copy.name, "sha256": sha256_file(copy), "bytes": copy.stat().st_size})
-    meta = {"case_id": case_id, "kind": kind, "po_number": po_number,
-            "opened_at": now.isoformat(), "files": entries} | ({"po_found_by": found_by} if found_by is not None else {})
-    _write_json(root / "case.json", meta)         # last: a folder without a case.json is not a case
+    try:
+        for sub in ("input", "steps", "messages"):
+            (root / sub).mkdir()
+        entries = []
+        for f in files:
+            copy = root / "input" / f.name
+            shutil.copy2(f, copy)                  # copy2 keeps the modification time, the capture date of a saved cart page
+            entries.append({"name": copy.name, "sha256": sha256_file(copy), "bytes": copy.stat().st_size})
+        meta = {"case_id": case_id, "kind": kind, "po_number": po_number,
+                "opened_at": now.isoformat(), "files": entries} | ({"po_found_by": found_by} if found_by is not None else {})
+        _write_json(root / "case.json", meta)     # last: a folder without a case.json is not a case
+    except BaseException:
+        # Refused halfway (a path longer than Windows takes, a full disk, a file that went in between): the folder this call made
+        # goes again, so that nothing is created, and the runner's next pass does not leave one more.
+        shutil.rmtree(root, ignore_errors=True)
+        raise
     return _case_from_meta(root, meta)
 
 

@@ -128,6 +128,32 @@ def test_open_case_with_a_missing_file_creates_nothing(tmp_path):
     assert not (tmp_path / "cases").exists()
 
 
+@pytest.mark.parametrize("failing", ["shutil.copy2", "_write_json"])
+def test_open_case_leaves_no_folder_when_a_copy_or_case_json_cannot_be_written(tmp_path, monkeypatch, failing):
+    """Nothing is created when the call is refused, also when it is refused halfway: a file that cannot be copied (on Windows a path
+    longer than the system takes, on any system a full disk or a file removed in between) or a case.json that cannot be written
+    leaves no folder of the case behind, where each pass of the runner would otherwise leave one more. The error is raised as it
+    was, and a case that exists already is never touched by a later call that fails."""
+    import aid.case as case_module
+    document = tmp_path / "conf.pdf"
+    document.write_bytes(b"%PDF-1.4 made up")
+    kept = open_case(tmp_path / "cases", "confirmation", [document], "250123", NOW)
+    before = sorted(path.relative_to(tmp_path) for path in (tmp_path / "cases").rglob("*"))
+
+    def refuse(*args, **kwargs):
+        raise OSError(36, "made-up: the name of the file is too long")
+    target = case_module.shutil if failing == "shutil.copy2" else case_module
+    monkeypatch.setattr(target, failing.rpartition(".")[2], refuse)
+    with pytest.raises(OSError, match="too long"):
+        open_case(tmp_path / "cases", "confirmation", [document], "250124", NOW)
+    assert sorted(path.relative_to(tmp_path) for path in (tmp_path / "cases").rglob("*")) == before      # no folder 250124_...
+    monkeypatch.undo()
+    assert load_case(tmp_path / "cases", kept.case_id).input_files == kept.input_files
+    with pytest.raises(FileExistsError):                                    # the case that exists: refused before anything is made,
+        open_case(tmp_path / "cases", "confirmation", [document], "250123", NOW)
+    assert sorted(path.relative_to(tmp_path) for path in (tmp_path / "cases").rglob("*")) == before      # and left as it is
+
+
 def test_open_case_keeps_the_modification_time_of_a_file(tmp_path):
     f = put(tmp_path, "cart.html", b"<html></html>")
     os.utime(f, (1_700_000_000, 1_700_000_000))        # a saved cart page is dated by its modification time
