@@ -27,6 +27,14 @@ of a run keeps the default, "auto", with nothing connected: its runner and its r
 to send one, and give it to the buyer as "Bericht niet verzonden" (the page says so after a close); only the runner's digest is
 written as a file (give the folder a prepared one's send_via "file" to see the questions as files).
 
+--demonstration, which the demonstration start of the folder version runs (python -m aid.portable --demo, aid/MANUAL.md section
+3.16), runs the batch as above and then gives the folder the settings of the page and the runner of the demonstration
+(demonstration_settings): the test mode on, with no authorization limit, so that the settings tab offers a try-out and the watched
+folder takes one; send_via "file", so that a question asked on the page is written to cases/outbox without any mailbox; a made-up
+address on example.com for each made-up supplier, so that a question has an address; and the buyer's address and those of the
+suppliers as the own addresses of the test mode, so that its guard lets such a question be written. The batch's own run keeps the
+settings above, so that its cases are those of every other run.
+
 After the run: python3 -m aid.review --settings <out>/settings.json opens the review page on 127.0.0.1:7860, and
 python3 -m aid.runner --settings <out>/settings.json --poll-seconds 5 --max-passes 3 runs the loop over <out>/inbox. Nothing is
 sent and nothing is written to any system: the writer prepares changes, and no mailer sends anything. The settings hold a made-up
@@ -89,7 +97,11 @@ def main(argv: list[str] | None = None) -> int:
     else:
         batch_argv += ["--reader", args.reader] + (["--recorded-dir", str(RECORDED_DIR)] if args.reader == "recorded" else [])
         batch.main(batch_argv)
+    if args.demonstration:
+        demonstration_settings(settings_path)
     print(summary_text(out, args.reader))
+    if args.demonstration:
+        print("Settings of the demonstration: the test mode on, questions written as files to cases/outbox, made-up supplier addresses")
     return 0
 
 
@@ -123,6 +135,19 @@ def write_settings(out: Path, files_only: bool = False) -> Path:
     if files_only:
         data["send_via"] = "file"
     path = out / "settings.json"
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    load_settings(path)
+    return path
+
+
+def demonstration_settings(path: Path) -> Path:
+    """The settings file of a folder whose batch has run, made those of the demonstration start of the folder version (see the module
+    docstring): test_mode true (authorization_limit stays null), send_via "file", supplier_emails with a made-up address on
+    example.com for each made-up supplier, and own_addresses holding those and buyer_email. Read back through load_settings."""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    suppliers = {spec.po.supplier: f"{spec.po.supplier.lower()}@example.com" for spec in load_specs(SPEC_DIR)}
+    data.update({"test_mode": True, "send_via": "file", "supplier_emails": suppliers,
+                 "own_addresses": [data["buyer_email"], *sorted(set(suppliers.values()))]})
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
     load_settings(path)
     return path
@@ -190,6 +215,9 @@ def _arguments(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--prepare-only", action="store_true",
                         help="write the settings and the case list and file the purchase orders, but run no case: the folder for "
                              "watching the loop work by itself (a document the folder has seen once counts as a duplicate afterwards)")
+    parser.add_argument("--demonstration", action="store_true",
+                        help="after the run, the settings of the demonstration start of the folder version: the test mode on, "
+                             "questions written as files, made-up supplier addresses")
     return parser.parse_args(argv)
 
 

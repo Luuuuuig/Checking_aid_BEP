@@ -92,3 +92,29 @@ def test_a_prepared_folder_lets_the_loop_open_a_case_by_itself(tmp_path, capsys)
     assert (out / "inbox" / "processed" / "MU03_conf.pdf").exists()
     folders = [p.name for p in settings.cases_root.iterdir() if p.name.startswith("250103_")]
     assert len(folders) == 1 and (settings.cases_root / folders[0] / "steps" / "08_result.json").exists()
+
+
+def test_the_folder_of_the_demonstration_start_offers_the_try_out_and_writes_questions_as_files(tmp_path, capsys):
+    """--demonstration, which the demonstration start of the folder version runs: the batch runs on the settings of every other run,
+    and then the folder's settings are those of the page and the runner of the demonstration: the test mode on and no authorization
+    limit, so that the settings tab offers a try-out and the watched folder takes one; every message written as a file
+    (send_via "file"); a made-up address on example.com for each made-up supplier, so that a question can be asked; and those
+    addresses and the buyer's as the own addresses of the test mode, so that its guard lets the question be written."""
+    from aid.messaging import Message
+    from aid.tryout_mark import offers_tryouts
+    out = tmp_path / "demo"
+    assert main(["--out", str(out), "--demonstration"]) == 0
+    expected = PARSER_STATUS | {"CART02": "review"}
+    assert {row["case_id"]: row["status"] for row in read_csv(out / "summary.csv")} == expected      # the run as without the option
+    settings = load_settings(out / "settings.json")
+    assert settings.test_mode and settings.authorization_limit is None and offers_tryouts(settings)
+    assert settings.send_via == "file" and settings.reader == "parser"
+    assert settings.supplier_emails["S03"] == "s03@example.com" and len(settings.supplier_emails) == len(settings.supplier_lead_times)
+    assert all(address.endswith("@example.com") for address in settings.supplier_emails.values())
+    assert set(settings.own_addresses) == {settings.buyer_email, *settings.supplier_emails.values()}
+    mailer = build_deps(settings, {}).mailer
+    assert type(mailer).__name__ == "FileMailer" and mailer.unrouted is None and mailer.guard is not None
+    mailer.send(Message(to=["s03@example.com"], cc=[], subject="Made-up question", body="Made-up body", template="question",
+                        case_id="made-up"))
+    assert len(list((out / "cases" / "outbox").glob("*.eml"))) == 1
+    assert "demonstration" in capsys.readouterr().out

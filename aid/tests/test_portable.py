@@ -3,6 +3,7 @@ the start files, the first start, and the start, the stop and the end of the sta
 fake message boxes. No test reaches the network, runs pip or reaches Windows, on any PC: the Windows calls are the fakes of these
 tests, the fixture no_real_build makes the PC look like no Windows to a build with its defaults, whose real download and real pip
 fail the test, and the fixture no_real_box fails a test that reaches the message boxes of Windows."""
+import contextlib
 import hashlib
 import inspect
 import io
@@ -31,7 +32,8 @@ URL = "https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip"
 PAGE, CAPTURE = "http://127.0.0.1:7860/", "http://127.0.0.1:7870/health"
 CMD_FILES = {"Inkoopassistent starten.cmd": "--start", "Inkoopassistent stoppen.cmd": "--stop",
              "Inkoopassistent niet meer vanzelf starten.cmd": "--no-autostart"}
-FOLDER = sorted([*CMD_FILES, "LEESMIJ.txt", "python", "app"])
+DEMO_FILES = {"Demonstratie starten.cmd": "--demo", "Demonstratie stoppen.cmd": "--demo-stop"}
+FOLDER = sorted([*CMD_FILES, *DEMO_FILES, "LEESMIJ.txt", "python", "app"])
 ORIGINAL_PTH = b"python311.zip\r\n.\r\n\r\n# Uncomment to run site.main() automatically\r\n#import site\r\n"
 LEESMIJ = ("Deze map is de inkoopassistent. Buiten deze map zet de assistent alleen een snelkoppeling in de map Opstarten en, als u "
            "zich aanmeldt bij Microsoft, de aanmelding in uw eigen profiel. Komt de assistent als zip-bestand van internet, ook een "
@@ -45,7 +47,11 @@ LEESMIJ = ("Deze map is de inkoopassistent. Buiten deze map zet de assistent all
            "Dubbelklikt u nog eens terwijl de assistent start, dan gebeurt er niets: de eerste start opent de pagina. Hebt u zich "
            "afgemeld of is de pc opnieuw opgestart terwijl de assistent startte, dan doet een dubbelklik tot acht minuten na de eerste "
            "dubbelklik niets: dubbelklik daarna opnieuw. "
-           "Stoppen: dubbelklik op Inkoopassistent stoppen; de assistent blijft uit tot u hem weer start. In de map "
+           "Stoppen: dubbelklik op Inkoopassistent stoppen; de assistent blijft uit tot u hem weer start. "
+           "Demonstratie: dubbelklik op Demonstratie starten om de assistent te laten zien met 22 verzonnen zaken, zonder AI en "
+           "zonder verbinding. Alles in de map demo is verzonnen, en de map data wordt er niet voor gebruikt. Elke start begint "
+           "opnieuw: de vorige map demo wordt vervangen. De assistent en de demonstratie draaien niet tegelijk: stop eerst de "
+           "assistent met Inkoopassistent stoppen. Stoppen: dubbelklik op Demonstratie stoppen. In de map "
            "data staan de instellingen en alle documenten die de assistent verwerkt: kopieer of verstuur die map niet. Zet deze map op "
            "de eigen schijf van de pc, niet in een map die met OneDrive wordt gesynchroniseerd; verplaatst u de map, dubbelklik dan "
            "opnieuw op Inkoopassistent starten. Bijwerken: stop de assistent, verwijder in deze map alles behalve de map data, zet "
@@ -56,6 +62,7 @@ LEESMIJ = ("Deze map is de inkoopassistent. Buiten deze map zet de assistent all
            "assistent en verwijder deze map.")
 # The start file: pythonw.exe, which has no console, started through "start", so that the file's own window ends at once.
 START_LINE = '@start "" "%~dp0python\\pythonw.exe" -I -X utf8 -m aid.portable --start "%~dp0data"\r\n'
+DEMO_START_LINE = '@start "" "%~dp0python\\pythonw.exe" -I -X utf8 -m aid.portable --demo "%~dp0demo"\r\n'
 OLD_START_LINE = '@"%~dp0python\\python.exe" -I -X utf8 -m aid.portable --start "%~dp0data" || pause\r\n'   # of the earlier versions
 STARTING = "De inkoopassistent start. Even geduld: de pagina opent vanzelf in uw browser."
 STARTING_BOX = ("De inkoopassistent start. Even geduld: de pagina opent vanzelf in uw browser. De eerste keer kan dat een paar minuten "
@@ -334,7 +341,7 @@ def test_the_pth_file_names_the_library_the_site_folder_and_the_app():
 
 def test_the_start_files_call_the_python_of_their_own_folder_and_hold_no_absolute_path():
     files = portable.start_files()
-    assert sorted(files) == sorted([*CMD_FILES, "LEESMIJ.txt"])
+    assert sorted(files) == sorted([*CMD_FILES, *DEMO_FILES, "LEESMIJ.txt"])
     for name, option in CMD_FILES.items():
         text = files[name]
         line = text.removesuffix("\r\n")
@@ -348,6 +355,9 @@ def test_the_start_files_call_the_python_of_their_own_folder_and_hold_no_absolut
     for name in ("Inkoopassistent stoppen.cmd", "Inkoopassistent niet meer vanzelf starten.cmd"):
         assert files[name].startswith(f'@"%~dp0python\\python.exe" -I -X utf8 -m aid.portable {CMD_FILES[name]} "%~dp0data"'), name
         assert files[name].endswith(" & pause\r\n"), name
+    # the demonstration: the same Pythons and windows, on the folder demo beside data
+    assert files["Demonstratie starten.cmd"] == DEMO_START_LINE and "data" not in DEMO_START_LINE
+    assert files["Demonstratie stoppen.cmd"] == '@"%~dp0python\\python.exe" -I -X utf8 -m aid.portable --demo-stop "%~dp0demo" & pause\r\n'
     readme = files["LEESMIJ.txt"]
     assert " ".join(readme.split()) == LEESMIJ and readme.isascii() and "\r\n" in readme and "\n" not in readme.replace("\r\n", "")
 
@@ -461,6 +471,8 @@ def test_build_makes_the_folder_and_a_second_build_keeps_data(tmp_path, capsys):
     (out / "data" / "cases" / "250101_20261110T090000").mkdir(parents=True)
     (out / "data" / "settings.json").write_text('{"made": "up"}', encoding="utf-8")
     (out / "data" / "STOP").write_text("", encoding="utf-8")
+    (out / "demo" / "cases").mkdir(parents=True)                                         # a demonstration was started
+    (out / "demo" / "DEMONSTRATIE.txt").write_text(portable.DEMO_MARKER_TEXT, encoding="utf-8")
     (out / "app" / "aid" / "left_from_the_first_build.py").write_text("", encoding="utf-8")
     (out / "Inkoopassistent starten.cmd").write_bytes(OLD_START_LINE.encode("ascii"))       # the start file of an earlier version
     data_before = files_of(out / "data")
@@ -471,7 +483,7 @@ def test_build_makes_the_folder_and_a_second_build_keeps_data(tmp_path, capsys):
     assert (out / "Inkoopassistent starten.cmd").read_bytes() == START_LINE.encode("ascii")
     assert (site / "other_package").is_dir() and not (site / "made_up_package").exists()
     assert not (out / "app" / "aid" / "left_from_the_first_build.py").exists() and (out / "app" / "aid" / "portable.py").is_file()
-    assert sorted(path.name for path in out.iterdir()) == sorted([*FOLDER, "data"])
+    assert sorted(path.name for path in out.iterdir()) == sorted([*FOLDER, "data", "demo"]) and (out / "demo" / "cases").is_dir()
     assert sorted(path.name for path in tmp_path.iterdir()) == ["Inkoopassistent"]
 
 
@@ -624,7 +636,7 @@ def test_the_build_copies_the_program_only_and_names_what_it_leaves_out(tmp_path
     files and the files the code reads; in a git repository the files git tracks. Either way every other file is named, and only
     the tests, the cache folders and hidden files are left out without a word."""
     program = ["start.py", "portable.py", "review/page.py", "requirements.txt", "settings.example.json", "README.md", "MANUAL.md",
-               "madeup/out/MU01_conf.pdf", "madeup/tryout/EXPORT_nl.csv", "extension/manifest.json", "readers/templates/table_nl.json",
+               "madeup/out/MU01_conf.pdf", "madeup/spec/MU01.json", "madeup/tryout/EXPORT_nl.csv", "extension/manifest.json", "readers/templates/table_nl.json",
                "readers/prompts/decide.md", "messaging/templates/nl/question.txt"]
     silent = ["tests/test_start.py", "tests/fixtures/recorded/x.json", "__pycache__/start.cpython-311.pyc", "review/__pycache__/page.pyc",
               ".pytest_cache/v/x", "colab/.ipynb_checkpoints/x.ipynb", "review/old.pyc"]
@@ -1452,14 +1464,17 @@ def test_the_stop_says_it_stopped_only_when_the_launcher_has_ended(tmp_path, cap
 
 def test_the_command_hands_each_option_to_its_function(tmp_path, monkeypatch):
     seen = []
-    for name in ("build", "start", "stop", "no_autostart"):
+    for name in ("build", "start", "stop", "no_autostart", "demo_start", "demo_stop"):
         monkeypatch.setattr(portable, name, lambda *args, name=name, **kwargs: seen.append((name, args, kwargs)) or 0)
     assert portable.main(["--build", str(tmp_path / "out"), "--python-zip", str(tmp_path / "python.zip")]) == 0
     assert portable.main(["--start", str(tmp_path / "data")]) == 0
     assert portable.main(["--stop", str(tmp_path / "data")]) == 0
     assert portable.main(["--no-autostart", str(tmp_path / "data")]) == 0
+    assert portable.main(["--demo", str(tmp_path / "demo")]) == 0
+    assert portable.main(["--demo-stop", str(tmp_path / "demo")]) == 0
     assert seen == [("build", (tmp_path / "out",), {"python_zip": tmp_path / "python.zip"}), ("start", (tmp_path / "data",), {}),
-                    ("stop", (tmp_path / "data",), {}), ("no_autostart", (tmp_path / "data",), {})]
+                    ("stop", (tmp_path / "data",), {}), ("no_autostart", (tmp_path / "data",), {}),
+                    ("demo_start", (tmp_path / "demo",), {}), ("demo_stop", (tmp_path / "demo",), {})]
     with pytest.raises(SystemExit):
         portable.main(["--start", str(tmp_path / "data"), "--stop", str(tmp_path / "data")])
 
@@ -1472,3 +1487,381 @@ def test_the_module_imports_with_the_standard_library_only():
     done = subprocess.run([sys.executable, "-B", "-c", script], cwd=REPO_ROOT, capture_output=True, text=True, timeout=120)
     assert done.returncode == 0 and done.stdout == "ok\n", done.stderr
     assert dict(portable.ADDRESSES) == dict(__import__("aid.start").start.ADDRESSES)
+
+
+
+# --- the demonstration start ---
+
+DEMO_STARTING = "De demonstratie van de inkoopassistent start, met verzonnen documenten. Even geduld: de pagina opent vanzelf in uw browser."
+DEMO_STARTING_BOX = DEMO_STARTING + " Dat kan een paar minuten duren."
+DEMO_ALREADY_RUNNING = "De demonstratie draait al. De pagina wordt geopend."
+DEMO_NOT_STARTED = "De demonstratie kon niet starten. De reden staat in de map demo, in logs, in het bestand start.log."
+DEMO_FOREIGN = ("Er staat al een map demo die Demonstratie starten niet heeft gemaakt. Er is niets verwijderd en niets gestart: geef die "
+                "map een andere naam of zet hem ergens anders, en dubbelklik dan opnieuw op Demonstratie starten.")
+REAL_RUNS = ("De inkoopassistent zelf draait. De demonstratie kan pas starten als die stilstaat: dubbelklik eerst op Inkoopassistent "
+             "stoppen en daarna opnieuw op Demonstratie starten.")
+PORT_TAKEN = ("Er antwoordt al iets anders op het adres van de pagina (http://127.0.0.1:7860 of 7870). Sluit dat eerst en dubbelklik "
+              "dan opnieuw op Demonstratie starten.")
+DEMO_RUNS = ("De demonstratie draait nog. Dubbelklik eerst op Demonstratie stoppen en daarna opnieuw op Inkoopassistent starten.")
+DEMO_STOPPING = "De demonstratie stopt. Dit duurt hoogstens anderhalve minuut."
+DEMO_STOPPED = "De demonstratie is gestopt. Dubbelklik op Demonstratie starten om haar opnieuw te beginnen."
+DEMO_STILL_STOPPING = "De demonstratie stopt nog. Wacht een minuut voordat u haar opnieuw start."
+DEMO_LAUNCH = ("--testshop", "--poll-seconds", "10", "--background")
+
+
+class Folders:
+    """A fake subprocess.run for the demonstration start: the launcher's commands answered per folder of the settings ("data" or
+    "demo") and options, as Launcher answers them; and the filling of the demonstration folder (python -m aid.demo), run here
+    through aid.demo itself, so that the folder holds what the real command gives it. Every command is kept in its order."""
+
+    def __init__(self, codes: dict[tuple, int | list[int]], effects: dict | None = None, fill_code: int | None = None):
+        self.codes = {key: list(code) if isinstance(code, list) else [code] for key, code in codes.items()}
+        self.effects, self.fill_code, self.calls = effects or {}, fill_code, []
+
+    def __call__(self, cmd, **kwargs):
+        self.calls.append((cmd, kwargs))
+        assert cmd[:4] == [sys.executable, "-I", "-X", "utf8"] and kwargs["stdin"] == subprocess.DEVNULL and kwargs["capture_output"]
+        if cmd[4:6] == ["-m", "aid.demo"]:
+            if self.fill_code is not None:
+                return subprocess.CompletedProcess(cmd, self.fill_code, "", "made-up error of the filling\n")
+            from aid import demo
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = demo.main(cmd[6:])
+            return subprocess.CompletedProcess(cmd, code, out.getvalue(), "")
+        settings = Path(cmd[cmd.index("--settings") + 1])
+        key = (settings.parent.name, *cmd[cmd.index("--settings") + 2:])
+        if key in self.effects:
+            self.effects[key]()
+        codes = self.codes[key]
+        code = codes.pop(0) if len(codes) > 1 else codes[0]
+        return subprocess.CompletedProcess(cmd, code, f"made-up line of {' '.join(key)}\n", "")
+
+    def asked(self) -> list[tuple]:
+        return [("fill",) if cmd[4:6] == ["-m", "aid.demo"] else (Path(cmd[cmd.index("--settings") + 1]).parent.name,
+                                                                  *cmd[cmd.index("--settings") + 2:]) for cmd, _ in self.calls]
+
+
+def demo_folder(tmp_path: Path) -> Path:
+    """The folder of the folder version as the build makes it, with its folder data started once: the demonstration's folder
+    demo beside it does not exist yet."""
+    root = tmp_path / "Inkoopassistent"
+    portable.first_start(root / "data")
+    return root / "demo"
+
+
+def test_the_demonstration_start_fills_its_own_folder_and_opens_the_page_on_it(tmp_path, capsys, quick):
+    """One double click: a folder demo of its own beside data, marked as the demonstration start's, filled as python -m aid.demo
+    --out fills one (the 22 made-up cases, the parser, no AI) with the settings of the demonstration (the test mode on, questions
+    written as files), the launcher started on it in the background with the runner's short poll and the test shop, never the start
+    at logon, and the page opened. The folder data is not changed, and its settings are never handed to a command but --status."""
+    demo = demo_folder(tmp_path)
+    data = demo.parent / "data"
+    data_before = files_of(data)
+    folders = Folders({("data", "--status"): 1, ("demo", "--status"): 0, ("demo", *DEMO_LAUNCH): 0})
+    page, browser = Page(False, False, True), Browser()
+    assert portable.demo_start(demo, run=folders, answers=page, open_page=browser, wait_seconds=30) == 0
+    assert folders.asked() == [("data", "--status"), ("fill",), ("demo", *DEMO_LAUNCH), ("demo", "--status")]
+    assert not [cmd for cmd, _ in folders.calls if "--install-autostart" in cmd]                   # no start at logon
+    [fill] = [cmd for cmd, _ in folders.calls if cmd[4:6] == ["-m", "aid.demo"]]
+    assert fill[6:] == ["--out", str(demo.resolve()), "--force", "--demonstration"]
+    assert page.asked == [PAGE, CAPTURE, PAGE] and browser.opened == [PAGE]
+    assert said(capsys) == [DEMO_STARTING]
+    assert files_of(data) == data_before                                                         # data untouched
+    assert (demo / "DEMONSTRATIE.txt").read_text(encoding="utf-8") == portable.DEMO_MARKER_TEXT
+    settings = load_settings(demo / "settings.json")
+    assert settings.test_mode and settings.send_via == "file" and settings.cases_root == demo.resolve() / "cases"
+    assert len([case for case in settings.cases_root.iterdir() if case.name[:1].isdigit()]) == 22
+    lines = log(demo)
+    assert lines[0] == "demonstration start: --status ended with exit code 1 on the settings of the folder data: made-up line of data --status"
+    assert lines[1].startswith("demonstration start: the made-up cases were written into the folder demo (python -m aid.demo ended "
+                               "with exit code 0: ")
+    assert "22 made-up cases run with the parser reader" in lines[1] and "Settings of the demonstration" in lines[1]
+    assert lines[2:] == [f"demonstration start: {' '.join(DEMO_LAUNCH)} ended with exit code 0: made-up line of demo {' '.join(DEMO_LAUNCH)}",
+                         "demonstration start: --status ended with exit code 0: made-up line of demo --status",
+                         "demonstration start: the page answers and was opened in the browser"]
+    assert not (demo / "start.lock").exists()
+    # a second start begins fresh: what the first left (a case made with a try-out, a part's output, a STOP) is gone, the marker and
+    # start.log stay
+    (settings.cases_root / "250103_20261117T101500").mkdir()
+    (demo / "logs" / "runner.out").write_text("made-up output", encoding="utf-8")
+    (demo / "STOP").write_text("", encoding="utf-8")
+    folders = Folders({("data", "--status"): 1, ("demo", "--status"): [1, 0], ("demo", *DEMO_LAUNCH): 0})
+    assert portable.demo_start(demo, run=folders, answers=Page(False, False, True), open_page=browser, wait_seconds=30) == 0
+    assert folders.asked() == [("demo", "--status"), ("data", "--status"), ("fill",), ("demo", *DEMO_LAUNCH), ("demo", "--status")]
+    assert not (settings.cases_root / "250103_20261117T101500").exists() and not (demo / "STOP").exists()
+    assert not (demo / "logs" / "runner.out").exists() and len(log(demo)) == 11
+    assert len([case for case in settings.cases_root.iterdir() if case.name[:1].isdigit()]) == 22
+    assert files_of(data) == data_before and said(capsys) == [DEMO_STARTING]
+
+
+def test_a_folder_demo_the_demonstration_start_did_not_make_is_refused_and_left_as_it_is(tmp_path, capsys, quick, windowless):
+    """The previous demonstration is removed only when it carries the marker that the demonstration start wrote, with its text:
+    a folder demo without it, or with another text in it, is refused with one warning box and left as it is, and nothing is
+    started; and neither is anything written into it, not even a log."""
+    windowless()
+    demo = demo_folder(tmp_path)
+    demo.mkdir()
+    (demo / "mine.txt").write_text("the owner's own notes", encoding="utf-8")
+    for marker in (None, "something else"):
+        if marker is not None:
+            (demo / "DEMONSTRATIE.txt").write_text(marker, encoding="utf-8")
+        before, boxes, folders = files_of(demo), Boxes(), Folders({})
+        assert portable.demo_start(demo, run=folders, answers=Page(False), open_page=Browser(), wait_seconds=30, box=boxes) == 1
+        assert boxes.events == [("warning", DEMO_FOREIGN)] and folders.calls == []
+        assert files_of(demo) == before
+    # a file named demo is refused as well
+    (tmp_path / "other").mkdir()
+    (tmp_path / "other" / "demo").write_text("x", encoding="utf-8")
+    boxes = Boxes()
+    assert portable.demo_start(tmp_path / "other" / "demo", run=Folders({}), answers=Page(False), open_page=Browser(), box=boxes) == 1
+    assert boxes.events == [("warning", DEMO_FOREIGN)]
+
+
+def test_the_demonstration_start_refuses_while_the_real_aid_or_anything_else_answers(tmp_path, quick, windowless):
+    """The real aid and the demonstration use the same two addresses: while the aid of this folder runs (its launcher's --status on
+    data's settings), or anything else answers at either address, the demonstration start says so in a warning box and ends, before
+    it removes or fills anything."""
+    windowless()
+    demo = demo_folder(tmp_path)
+    data = demo.parent / "data"
+    data_before = files_of(data)
+    # the real aid runs
+    boxes, folders = Boxes(), Folders({("data", "--status"): 0})
+    assert portable.demo_start(demo, run=folders, answers=Page(True), open_page=Browser(), wait_seconds=30, box=boxes) == 1
+    assert folders.asked() == [("data", "--status")]
+    assert boxes.events == [("information", DEMO_STARTING_BOX), ("closed", DEMO_STARTING_BOX), ("warning", REAL_RUNS)]
+    assert log(demo)[-1] == ("demonstration start: the aid of this folder runs (--status on the settings of the folder data): the aid "
+                             "and the demonstration use the same addresses; stop the aid first; nothing started")
+    assert not (demo / "settings.json").exists() and files_of(data) == data_before
+    # something else answers at the page's address
+    boxes, folders = Boxes(), Folders({("data", "--status"): 1})
+    assert portable.demo_start(demo, run=folders, answers=lambda url: url == PAGE, open_page=Browser(), wait_seconds=30, box=boxes) == 1
+    assert folders.asked() == [("data", "--status")] and boxes.events[-1] == ("warning", PORT_TAKEN)
+    assert log(demo)[-1] == (f"demonstration start: something already answers at {PAGE} while neither the aid of this folder nor its "
+                             "demonstration runs: only one aid runs on a PC; nothing started")
+    # a folder whose data was never started: no --status on it, and still the address is asked
+    fresh = tmp_path / "fresh" / "demo"
+    fresh.parent.mkdir()
+    boxes, folders = Boxes(), Folders({})
+    assert portable.demo_start(fresh, run=folders, answers=Page(True), open_page=Browser(), wait_seconds=30, box=boxes) == 1
+    assert folders.calls == [] and boxes.events[-1] == ("warning", PORT_TAKEN) and not (fresh.parent / "data").exists()
+
+
+def test_a_demonstration_that_runs_is_opened_and_kept(tmp_path, capsys, quick):
+    """A double click while the demonstration runs opens its page, as the real start does, and removes nothing: a try-out case
+    made a moment ago stays. A fresh start comes after Demonstratie stoppen."""
+    demo = demo_folder(tmp_path)
+    folders = Folders({("data", "--status"): 1, ("demo", "--status"): 0, ("demo", *DEMO_LAUNCH): 0})
+    assert portable.demo_start(demo, run=folders, answers=Page(False, False, True), open_page=Browser(), wait_seconds=30) == 0
+    said(capsys)
+    (demo / "cases" / "250103_20261117T101500").mkdir()
+    folders, browser = Folders({("demo", "--status"): 0}), Browser()
+    assert portable.demo_start(demo, run=folders, answers=Page(True), open_page=browser, wait_seconds=30) == 0
+    assert folders.asked() == [("demo", "--status")] and browser.opened == [PAGE] and said(capsys) == [DEMO_ALREADY_RUNNING]
+    assert (demo / "cases" / "250103_20261117T101500").is_dir()
+    assert log(demo)[-2:] == ["demonstration start: a launcher runs on the demonstration's settings: only the page is opened",
+                              "demonstration start: the page answers and was opened in the browser"]
+
+
+@pytest.mark.parametrize("failing", ["fill", "launch", "no launcher"])
+def test_a_demonstration_start_that_fails_shows_its_warning(failing, tmp_path, quick, windowless):
+    windowless()
+    demo = demo_folder(tmp_path)
+    codes = {("data", "--status"): 1, ("demo", "--status"): 0 if failing != "no launcher" else 1,
+             ("demo", *DEMO_LAUNCH): 1 if failing == "launch" else 0}
+    folders, boxes = Folders(codes, fill_code=1 if failing == "fill" else None), Boxes(lock=demo / "start.lock")
+    assert portable.demo_start(demo, run=folders, answers=Page(False), open_page=Browser(), wait_seconds=30, box=boxes) == 1
+    assert boxes.events == [("information", DEMO_STARTING_BOX), ("closed", DEMO_STARTING_BOX), ("warning", DEMO_NOT_STARTED)]
+    assert boxes.lock_stood[-1] is False and (demo / "DEMONSTRATIE.txt").is_file()
+    if failing == "fill":
+        assert log(demo)[-1] == ("demonstration start: the made-up cases could not be written into the folder demo (python -m aid.demo "
+                                 "ended with exit code 1: made-up error of the filling); nothing started")
+        assert ("demo", *DEMO_LAUNCH) not in folders.asked()
+
+
+def test_a_demonstration_start_whose_modules_cannot_be_imported_fills_nothing(tmp_path, quick, monkeypatch, windowless):
+    windowless()
+    monkeypatch.setattr(portable, "self_check", lambda: [portable._Missing.of("PIL", ImportError("made-up"))])
+    demo = demo_folder(tmp_path)
+    folders, boxes = Folders({("data", "--status"): 1}), Boxes()
+    assert portable.demo_start(demo, run=folders, answers=Page(False), open_page=Browser(), wait_seconds=30, box=boxes) == 1
+    assert folders.asked() == [("data", "--status")] and boxes.events[-1] == ("warning", DEMO_NOT_STARTED)
+    assert log(demo)[-2:] == ["demonstration start: PIL cannot be imported (ImportError: made-up)",
+                              "demonstration start: these modules cannot be imported: PIL; nothing started"]
+
+
+def test_a_second_demonstration_start_while_the_first_is_busy_ends_at_once(tmp_path, quick, windowless):
+    windowless()
+    demo = demo_folder(tmp_path)
+    demo.mkdir()
+    (demo / "DEMONSTRATIE.txt").write_text(portable.DEMO_MARKER_TEXT, encoding="utf-8")
+    (demo / "start.lock").write_text(json.dumps({"time": time.time(), "pid": 4242}), encoding="utf-8")
+    folders, boxes = Folders({}), Boxes()
+    assert portable.demo_start(demo, run=folders, answers=Page(False), open_page=Browser(), wait_seconds=30, box=boxes) == 0
+    assert folders.calls == [] and boxes.events == [] and (demo / "start.lock").exists()
+    assert log(demo)[-1].startswith("demonstration start: another start is still busy (start.lock of ")
+
+
+def test_a_demonstration_folder_that_cannot_be_written_says_so(tmp_path, monkeypatch, windowless):
+    windowless()
+    demo = demo_folder(tmp_path)
+    monkeypatch.setattr(portable, "_writable", lambda folder: False)
+    boxes = Boxes()
+    assert portable.demo_start(demo, run=Folders({}), answers=Page(False), open_page=Browser(), wait_seconds=30, box=boxes) == 1
+    assert boxes.events == [("warning", portable.DEMO_UNWRITABLE)] and "demo" in portable.DEMO_UNWRITABLE
+
+
+def test_the_real_start_refuses_while_the_demonstration_runs(tmp_path, quick, windowless):
+    """Likewise the real start: while the demonstration of this folder runs, it says so in a warning box and starts nothing; it asks
+    the demonstration's launcher only when the folder demo carries the marker."""
+    windowless()
+    demo = demo_folder(tmp_path)
+    data = demo.parent / "data"
+    folders = Folders({("data", "--status"): 1, ("demo", "--status"): 0, ("demo", *DEMO_LAUNCH): 0})
+    assert portable.demo_start(demo, run=folders, answers=Page(False, False, True), open_page=Browser(), wait_seconds=30,
+                               box=Boxes()) == 0
+    boxes, folders = Boxes(), Folders({("data", "--status"): 1, ("demo", "--status"): 0})
+    assert portable.start(data, run=folders, answers=Page(True), open_page=Browser(), wait_seconds=30, box=boxes) == 1
+    assert folders.asked() == [("data", "--status"), ("demo", "--status")]
+    assert boxes.events == [("information", STARTING_BOX), ("closed", STARTING_BOX), ("warning", DEMO_RUNS)]
+    assert log(data)[-1] == ("folder start: the demonstration of this folder runs (--status on the settings of the folder demo): the "
+                             "aid and the demonstration use the same addresses; stop the demonstration first; nothing started")
+    # a demonstration that does not run: the real start goes on as before
+    folders = Folders({("data", "--status"): [1, 0], ("demo", "--status"): 1, ("data", "--install-autostart"): 0})
+    assert portable.start(data, run=folders, answers=Page(False, False, True), open_page=Browser(), wait_seconds=30, box=Boxes()) == 0
+    assert folders.asked() == [("data", "--status"), ("demo", "--status"), ("data", "--install-autostart"), ("data", "--status")]
+
+
+def test_the_demonstration_stop_runs_the_launchers_stop_on_the_demonstration(tmp_path, capsys, quick):
+    demo = demo_folder(tmp_path)
+    folders = Folders({("data", "--status"): 1, ("demo", "--status"): 0, ("demo", *DEMO_LAUNCH): 0})
+    assert portable.demo_start(demo, run=folders, answers=Page(False, False, True), open_page=Browser(), wait_seconds=30) == 0
+    said(capsys)
+    state = demo / "start_state.json"
+    state.write_text("{}", encoding="utf-8")
+    folders = Folders({("demo", "--stop"): 0}, effects={("demo", "--stop"): state.unlink})
+    assert portable.demo_stop(demo, run=folders) == 0
+    assert folders.asked() == [("demo", "--stop")] and said(capsys) == [DEMO_STOPPING, DEMO_STOPPED]
+    assert log(demo)[-1] == "demonstration stop: --stop ended with exit code 0: made-up line of demo --stop"
+    state.write_text("{}", encoding="utf-8")
+    assert portable.demo_stop(demo, run=Folders({("demo", "--stop"): 0})) == 0
+    assert said(capsys) == [DEMO_STOPPING, DEMO_STILL_STOPPING]
+    # a folder demo that the demonstration start did not make is not touched; one that does not exist has nothing to stop
+    other = tmp_path / "other" / "demo"
+    other.mkdir(parents=True)
+    (other / "settings.json").write_text("{}", encoding="utf-8")
+    folders = Folders({})
+    assert portable.demo_stop(other, run=folders) == 1 and folders.calls == [] and said(capsys) == [DEMO_STOPPING, DEMO_FOREIGN]
+    assert sorted(path.name for path in other.iterdir()) == ["settings.json"]
+    assert portable.demo_stop(tmp_path / "never" / "demo", run=folders) == 0 and said(capsys) == [DEMO_STOPPING, DEMO_STOPPED]
+    assert not (tmp_path / "never").exists()
+
+
+def started_demo(demo: Path) -> None:
+    """A demonstration started once, whose launcher has since been given STOP (Demonstratie stoppen) and still runs."""
+    folders = Folders({("data", "--status"): 1, ("demo", "--status"): 0, ("demo", *DEMO_LAUNCH): 0})
+    assert portable.demo_start(demo, run=folders, answers=Page(False, False, True), open_page=Browser(), wait_seconds=30,
+                               box=Boxes()) == 0
+
+
+def test_a_demonstration_start_while_the_previous_launcher_is_still_stopping_removes_nothing(tmp_path, quick, windowless):
+    """A double click on Demonstratie starten right after Demonstratie stoppen, while the old launcher still runs with STOP beside
+    its settings: nothing is removed under the live launcher and nothing is started; one warning box says that it is still
+    stopping."""
+    windowless()
+    demo = demo_folder(tmp_path)
+    started_demo(demo)
+    (demo / "STOP").write_text("", encoding="utf-8")
+    (demo / "start_state.json").write_text("{}", encoding="utf-8")
+    before = {name: data for name, data in files_of(demo).items() if name != "logs/start.log"}
+    boxes, folders = Boxes(), Folders({("demo", "--status"): 0})
+    assert portable.demo_start(demo, run=folders, answers=Page(True), open_page=Browser(), wait_seconds=30, box=boxes) == 1
+    assert folders.asked() == [("demo", "--status")]
+    assert boxes.events == [("warning", portable.DEMO_STILL_STOPPING)]
+    assert {name: data for name, data in files_of(demo).items() if name != "logs/start.log"} == before
+    assert log(demo)[-1] == ("demonstration start: the launcher on the demonstration's settings is still stopping (STOP exists): "
+                             "nothing removed and nothing started")
+
+
+def test_each_start_ends_while_the_other_start_holds_its_lock(tmp_path, quick, windowless):
+    """Inkoopassistent starten and Demonstratie starten double-clicked close together: while the one start holds its start lock
+    (younger than its limit), the other says in a warning box that the other runs and starts nothing, before it removes or fills
+    anything; a lock left over by a start that did not end is passed over."""
+    windowless()
+    demo = demo_folder(tmp_path)
+    data = demo.parent / "data"
+    (data / "start.lock").write_text(json.dumps({"time": time.time(), "pid": 4242}), encoding="utf-8")
+    data_before = files_of(data)
+    boxes, folders = Boxes(), Folders({("data", "--status"): 1})
+    assert portable.demo_start(demo, run=folders, answers=Page(False), open_page=Browser(), wait_seconds=30, box=boxes) == 1
+    assert folders.asked() == [] and boxes.events[-1] == ("warning", REAL_RUNS)
+    assert log(demo)[-1].startswith("demonstration start: a start of the aid of this folder is busy (start.lock of ")
+    assert not (demo / "settings.json").exists() and files_of(data) == data_before
+    # the other way round
+    (data / "start.lock").unlink()
+    (demo / "start.lock").write_text(json.dumps({"time": time.time(), "pid": 4243}), encoding="utf-8")
+    boxes, folders = Boxes(), Folders({("data", "--status"): 1})
+    assert portable.start(data, run=folders, answers=Page(False), open_page=Browser(), wait_seconds=30, box=boxes) == 1
+    assert folders.asked() == [("data", "--status")] and boxes.events[-1] == ("warning", DEMO_RUNS)
+    assert log(data)[-1].startswith("folder start: a start of the demonstration of this folder is busy (start.lock of ")
+    # a lock left over long ago counts for nothing
+    (demo / "start.lock").write_text(json.dumps({"time": 1000.0, "pid": 4243}), encoding="utf-8")
+    folders = Folders({("data", "--status"): [1, 0], ("data", "--install-autostart"): 0})
+    assert portable.start(data, run=folders, answers=Page(False, False, True), open_page=Browser(), wait_seconds=30, box=Boxes()) == 0
+
+
+def test_the_clearing_never_walks_through_a_link_that_is_not_a_symlink(tmp_path, quick, monkeypatch):
+    """A folder demo\\logs that is a link Windows does not call a symlink (a directory junction, made by a backup or sync tool):
+    the next start removes the link and never a file in the folder it points to."""
+    demo = demo_folder(tmp_path)
+    started_demo(demo)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "precious.txt").write_text("the owner's own", encoding="utf-8")
+    shutil.rmtree(demo / "logs")
+    (demo / "logs").symlink_to(elsewhere, target_is_directory=True)
+    monkeypatch.setattr(Path, "is_symlink", lambda self: False)              # as for a junction on Windows
+    monkeypatch.setattr(os.path, "islink", lambda path: False)
+    folders = Folders({("data", "--status"): 1, ("demo", "--status"): [1, 0], ("demo", *DEMO_LAUNCH): 0})
+    assert portable.demo_start(demo, run=folders, answers=Page(False, False, True), open_page=Browser(), wait_seconds=30,
+                               box=Boxes()) == 0
+    assert (elsewhere / "precious.txt").read_text(encoding="utf-8") == "the owner's own"
+    assert not os.path.realpath(demo / "logs").startswith(os.path.realpath(elsewhere))
+
+
+@pytest.mark.parametrize("target_marked", [False, True])
+def test_a_folder_demo_that_is_a_link_is_refused_and_never_followed(target_marked, tmp_path, quick, windowless):
+    """A folder demo that is a link (a symlink or a junction) is refused as one the demonstration start did not make, whether what
+    it points to does not exist or carries the marker: nothing is made, filled or asked at the link's target."""
+    windowless()
+    demo = demo_folder(tmp_path)
+    target = tmp_path / "elders" / "demo"
+    target.parent.mkdir()
+    if target_marked:
+        target.mkdir()
+        (target / "DEMONSTRATIE.txt").write_text(portable.DEMO_MARKER_TEXT, encoding="utf-8")
+    demo.symlink_to(target, target_is_directory=True)
+    before = files_of(target.parent)
+    boxes, folders = Boxes(), Folders({})
+    assert portable.demo_start(demo, run=folders, answers=Page(False), open_page=Browser(), wait_seconds=30, box=boxes) == 1
+    assert boxes.events == [("warning", DEMO_FOREIGN)] and folders.calls == []
+    assert files_of(target.parent) == before and target.exists() == target_marked
+    assert portable.demo_stop(demo, run=folders) == 1 and folders.calls == []
+
+
+def test_a_folder_demo_made_a_moment_ago_by_another_start_is_not_called_foreign(tmp_path, monkeypatch):
+    """Two double clicks on a folder that never had a demonstration: the second start can find the folder demo the first just
+    made, before its marker is written. It waits a moment for the marker; an empty folder demo that gets none stays refused."""
+    demo = demo_folder(tmp_path)
+    demo.mkdir()
+    writer = threading.Timer(0.3, lambda: (demo / "DEMONSTRATIE.txt").write_bytes(portable.DEMO_MARKER_TEXT.encode("ascii")))
+    writer.start()
+    try:
+        assert portable._claimed(demo) is True
+    finally:
+        writer.join()
+    other = tmp_path / "other" / "demo"
+    other.mkdir(parents=True)
+    monkeypatch.setattr(portable, "DEMO_MARKER_WAIT", 0.1)
+    assert portable._claimed(other) is False

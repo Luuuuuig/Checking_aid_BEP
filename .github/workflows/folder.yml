@@ -1,5 +1,6 @@
 # Builds the aid as a folder for Windows (python -m aid.portable --build, aid/MANUAL.md section 3.16), starts the unzipped folder
-# once through its own start file and checks that the start opens the page and ends, and on main puts the folder on the Releases
+# once through its own start file and checks that the start opens the page and ends, then, with the aid stopped, starts its
+# demonstration once through "Demonstratie starten.cmd" and checks it the same way, and on main puts the folder on the Releases
 # page as Inkoopassistent.zip, under the one tag "inkoopassistent", so that the download link stays the same for every version.
 name: Folder for Windows
 
@@ -21,7 +22,7 @@ concurrency:
 jobs:
   folder:
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 55
     env:
       PYTHON_VERSION: "3.13.17"   # a release with a Windows package on python.org whose sha256 the build checks (EMBED_SHA256)
       PYTHONUTF8: "1"
@@ -105,6 +106,98 @@ jobs:
           }
           # a start that still waits at a message box
           Get-CimInstance Win32_Process -Filter "Name = 'pythonw.exe'" | Where-Object { $_.CommandLine -like "*aid.portable --start*" } |
+            ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+
+      - name: Start the demonstration through its start file, with the aid stopped
+        shell: pwsh
+        # Above the step's own waits (2 + 10 + 2 + 1.5 + 2 minutes), so that each failure message is reached before the timeout.
+        timeout-minutes: 22
+        run: |
+          $folder = Join-Path $env:RUNNER_TEMP "test folder\Inkoopassistent"
+          $data = Join-Path $folder "data"
+          $demo = Join-Path $folder "demo"
+          $python = Join-Path $folder "python\python.exe"
+          $log = Join-Path $demo "logs\start.log"
+          $startup = [Environment]::GetFolderPath("Startup")
+          $shortcuts = @("Inkoopassistent.lnk", "Inkoopassistent.cmd") | ForEach-Object { Join-Path $startup $_ }
+          # The lines with which the demonstration start of aid/portable.py ends as a start that failed, or tells that a message box
+          # failed; its other lines (the --status on data's settings among them) are no failure.
+          $failed = '^\S+ \S+ demonstration start: (something already answers at |the aid of this folder runs|these modules cannot be imported: |the previous demonstration could not be removed|the made-up cases could not be written|--\S.* could not be run|--testshop --poll-seconds 10 --background ended with exit code [1-9]|no launcher runs on these settings|the page did not answer within|the browser could not be opened|the command failed|the (information|warning) box could not be )'
+          $opened = 'demonstration start: the page answers and was opened in the browser'
+          function Test-Failed { (Test-Path -LiteralPath $log) -and (Select-String -LiteralPath $log -Pattern $failed -Quiet) }
+          function Test-Opened { (Test-Path -LiteralPath $log) -and (Select-String -LiteralPath $log -Pattern $opened -SimpleMatch -Quiet) }
+          function Test-Page { try { (Invoke-WebRequest -Uri "http://127.0.0.1:7860/" -UseBasicParsing -TimeoutSec 5).StatusCode -eq 200 } catch { $false } }
+          function Get-DemoStart { @(Get-CimInstance Win32_Process -Filter "Name = 'pythonw.exe'" | Where-Object { $_.CommandLine -like "*aid.portable --demo *" }) }
+          function Show-DemoLog { if (Test-Path -LiteralPath $log) { "--- demo\logs\start.log:"; Get-Content -LiteralPath $log | Select-Object -Last 60 } }
+          function Get-DataPrint { Get-ChildItem -LiteralPath $data -Recurse -File | Sort-Object FullName | ForEach-Object { "{0} {1}" -f $_.FullName.Substring($data.Length), (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash } }
+          # Before: the aid of the step above is stopped (its page no longer answers), its start at logon is removed, and no
+          # demonstration folder exists yet.
+          if (-not (Test-Path -LiteralPath (Join-Path $data "settings.json"))) { throw "the folder data holds no settings.json: the start of the aid above did not run, so the demonstration's check of a running aid is not tested" }
+          $deadline = (Get-Date).AddMinutes(2)
+          while ((Test-Page) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
+          if (Test-Page) { throw "the page of the aid still answers two minutes after its stop: the demonstration cannot be tested on a free port" }
+          foreach ($shortcut in $shortcuts) {
+            if (Test-Path -LiteralPath $shortcut) { throw "$shortcut is still in the Startup folder after Inkoopassistent niet meer vanzelf starten" }
+          }
+          if (Test-Path -LiteralPath $demo) { throw "the unzipped folder already holds a folder demo: the build must not make one" }
+          $before = (Get-DataPrint) -join "`n"
+          # The double-click.
+          Start-Process -FilePath (Join-Path $folder "Demonstratie starten.cmd") -WorkingDirectory $folder
+          $deadline = (Get-Date).AddMinutes(10)
+          $answered = $false
+          while (-not $answered -and (Get-Date) -lt $deadline) {
+            if (Test-Failed) { Show-DemoLog; throw "the demonstration start failed: demo\logs\start.log holds its line (above)" }
+            $answered = Test-Page
+            if (-not $answered) { Start-Sleep -Seconds 5 }
+          }
+          if (-not $answered) { Show-DemoLog; throw "the page of the demonstration did not answer within 10 minutes of the double-click" }
+          $deadline = (Get-Date).AddMinutes(2)
+          $done = $false
+          while (-not $done -and (Get-Date) -lt $deadline) {
+            if (Test-Failed) { Show-DemoLog; throw "the demonstration start failed after the page answered: demo\logs\start.log holds its line (above)" }
+            $done = (Test-Opened) -and (Get-DemoStart).Count -eq 0
+            if (-not $done) { Start-Sleep -Seconds 2 }
+          }
+          Show-DemoLog
+          if (Test-Failed) { throw "the demonstration start failed: demo\logs\start.log holds its line (above)" }
+          if (-not (Test-Opened)) { throw "the page answers, but demo\logs\start.log does not say that the demonstration start opened it" }
+          if ((Get-DemoStart).Count -ne 0) { throw "the demonstration start still runs two minutes after the page answered: it waits at a message box" }
+          # The page runs on the demonstration's made-up cases: its settings are demo's own, and the review page's own list of the
+          # cases in review, read by the folder's Python, holds the made-up purchase orders.
+          if (-not (Test-Path -LiteralPath (Join-Path $demo "DEMONSTRATIE.txt"))) { throw "the folder demo holds no marker DEMONSTRATIE.txt" }
+          $check = "import sys; from aid.settings import load_settings; from aid.review.app import list_open_cases; s = load_settings(sys.argv[1]); cases = [p for p in s.cases_root.iterdir() if p.name[:1].isdigit()]; open_pos = sorted({c.po_number for c in list_open_cases(s.cases_root)}); print(f'{len(cases)} cases, {len(open_pos)} in review: {open_pos}; test mode {s.test_mode}, send_via {s.send_via}'); sys.exit(0 if len(cases) == 22 and open_pos and all(n.startswith('25') for n in open_pos) and s.test_mode and s.send_via == 'file' else 1)"
+          & $python -I -X utf8 -c $check (Join-Path $demo "settings.json")
+          if ($LASTEXITCODE -ne 0) { throw "the folder demo does not hold the 22 made-up cases with cases in review, the test mode on and send_via file (the line above says what it holds)" }
+          $status = & $python -I -X utf8 -m aid.start --settings (Join-Path $demo "settings.json") --status
+          $status
+          if ($LASTEXITCODE -ne 0) { throw "the launcher's --status says that no launcher runs on the demonstration's settings" }
+          foreach ($shortcut in $shortcuts) {
+            if (Test-Path -LiteralPath $shortcut) { throw "the demonstration start put $shortcut in the Startup folder: it must never start anything at logon" }
+          }
+          $after = (Get-DataPrint) -join "`n"
+          if ($after -ne $before) {
+            Compare-Object ($before -split "`n") ($after -split "`n") | Format-Table -AutoSize | Out-String -Width 300
+            throw "the demonstration changed the folder data (the files that differ are above)"
+          }
+          # The stop.
+          & $python -I -X utf8 -m aid.portable --demo-stop $demo
+          if ($LASTEXITCODE -ne 0) { Show-DemoLog; throw "Demonstratie stoppen ended with exit code $LASTEXITCODE" }
+          $deadline = (Get-Date).AddMinutes(2)
+          while ((Test-Page) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
+          if (Test-Page) { Show-DemoLog; throw "the page of the demonstration still answers two minutes after Demonstratie stoppen" }
+          if (((Get-DataPrint) -join "`n") -ne $before) { throw "the stop of the demonstration changed the folder data" }
+          "the demonstration started through its start file on the made-up cases, opened its page, left data and the Startup folder alone, and stopped"
+
+      - name: Stop the demonstration
+        if: always()
+        shell: pwsh
+        run: |
+          $folder = Join-Path $env:RUNNER_TEMP "test folder\Inkoopassistent"
+          if (Test-Path (Join-Path $folder "demo\settings.json")) {
+            & (Join-Path $folder "python\python.exe") -I -X utf8 -m aid.portable --demo-stop (Join-Path $folder "demo")
+          }
+          # a demonstration start that still waits at a message box
+          Get-CimInstance Win32_Process -Filter "Name = 'pythonw.exe'" | Where-Object { $_.CommandLine -like "*aid.portable --demo *" } |
             ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 
       - name: Put the zip on the Releases page

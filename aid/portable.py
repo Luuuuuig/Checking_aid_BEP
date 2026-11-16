@@ -6,6 +6,8 @@ and at each logon, with nothing installed.
     python -m aid.portable --start <data folder>                  run by "Inkoopassistent starten.cmd" with the folder's pythonw.exe
     python -m aid.portable --stop <data folder>                   run by "Inkoopassistent stoppen.cmd"
     python -m aid.portable --no-autostart <data folder>           run by "Inkoopassistent niet meer vanzelf starten.cmd"
+    python -m aid.portable --demo <demo folder>                   run by "Demonstratie starten.cmd"
+    python -m aid.portable --demo-stop <demo folder>              run by "Demonstratie stoppen.cmd"
 
 The folder that --build makes holds the program only:
 
@@ -15,6 +17,8 @@ The folder that --build makes holds the program only:
     <out>/Inkoopassistent stoppen.cmd                     one line: the python.exe of the folder python, in the same way, with
                                                           --stop, in a window that waits for a key
     <out>/Inkoopassistent niet meer vanzelf starten.cmd   the same with --no-autostart
+    <out>/Demonstratie starten.cmd                        as the start file, with --demo and the folder demo beside it
+    <out>/Demonstratie stoppen.cmd                        as the stop file, with --demo-stop and the folder demo
     <out>/LEESMIJ.txt                                     for the buyer: what the folder is, how a zip of it from the internet is
                                                           unblocked, and how it is started, stopped, updated and removed
     <out>/python/                                         the embeddable Python of python.org, with Lib/site-packages holding the
@@ -23,6 +27,9 @@ The folder that --build makes holds the program only:
                                                           tests (outside git an allow-list of them)
     <out>/data/                                           made at the first start, never by the build: settings.json, inbox/,
                                                           cases/, po_store/, logs/, and start.lock while a start runs
+    <out>/demo/                                           made by the demonstration start, never by the build, and made anew at
+                                                          each start of it: DEMONSTRATIE.txt, its marker, and a folder of
+                                                          python -m aid.demo with its logs/ and start.lock
 
 The build (build) runs on Windows on a 64-bit Intel or AMD PC only, with a 64-bit Python: elsewhere it builds nothing, says in one
 line where to run it and ends with exit code 2. It reads the system, the machine and the version when it is called. It takes
@@ -46,15 +53,15 @@ launcher's parts and its start at logon (aid/start.py gives them -I when the lau
 
 The folder is made in a folder of its own beside <out> and moved into <out> at the end, so that a build that fails leaves nothing
 behind, and an earlier build as it was. A second build into the same folder replaces python and app, writes the start files and
-LEESMIJ.txt anew and leaves data as it is; while the aid runs from the folder, Windows keeps python in use, and the build says so and
-changes nothing. An out folder that holds anything but an earlier build is refused, and so is one inside the package. app/aid holds
-the program only (_program_files): in a git repository the files git tracks under aid/, else an allow-list (the package's .py
-files, the files the code reads: the readers' templates and prompts, the messaging templates, madeup/out, madeup/tryout, extension,
-README.md, MANUAL.md, requirements.txt and settings.example.json), and never the tests, a cache folder or a hidden file. Every other
-file found under aid/ (evaluation results, a run's files, a second settings file) is left out and named in one line of the build's
-output. Exit codes of the build: 0 built; 1 the embeddable package could not be had or used (the download, the file, its sha256,
-its content), the package could not be copied, or python and app could not be replaced; 2 refused (the system, the out folder);
-pip's own exit code when pip fails.
+LEESMIJ.txt anew and leaves data and demo as they are; while the aid runs from the folder, Windows keeps python in use, and the
+build says so and changes nothing. An out folder that holds anything but an earlier build is refused, and so is one inside the
+package. app/aid holds the program only (_program_files): in a git repository the files git tracks under aid/, else an allow-list
+(the package's .py files, the files the code reads: the readers' templates and prompts, the messaging templates, madeup/out,
+madeup/spec (which the demonstration reads), madeup/tryout, extension, README.md, MANUAL.md, requirements.txt and
+settings.example.json), and never the tests, a cache folder or a hidden file. Every other file found under aid/ (evaluation results,
+a run's files, a second settings file) is left out and named in one line of the build's output. Exit codes of the build: 0 built; 1
+the embeddable package could not be had or used (the download, the file, its sha256, its content), the package could not be copied,
+or python and app could not be replaced; 2 refused (the system, the out folder); pip's own exit code when pip fails.
 
 The start (start) runs with the folder's own pythonw.exe, which has no console (_console), so it tells the buyer what it does in
 message boxes of Windows with the title TITLE (box: user32's MessageBoxW, BOX, unless start is given others). It first makes sure
@@ -92,6 +99,27 @@ these lines in the window, STARTING_UP among them and ALREADY_RUNNING when only 
 shows no box. The stop (stop) runs the launcher's --stop: the STOP file keeps the aid off, also at the next logon, until the start
 file is used again; it says that the assistant has stopped only when the launcher's state file is gone, and else that it is still
 stopping. --no-autostart (no_autostart) runs the launcher's --remove-autostart.
+
+The demonstration start (demo_start) shows the aid filled with the made-up cases, in a folder demo of its own beside data, which it
+never touches: of data it asks the launcher's --status only. It tells the buyer what it does as the start does (_Told, with lines of
+its own), and writes its lines to demo/logs/start.log. A folder demo is the demonstration's only while it holds DEMO_MARKER with
+DEMO_MARKER_TEXT, which the demonstration start writes when it makes the folder: a folder demo without it, or a file of that name,
+is refused with a warning box (DEMO_FOREIGN) and left as it is, and nothing is written into it; so is a folder demo that is a link
+(a symlink or a junction), which is never followed, and an empty folder demo gets a second for the marker that another start which
+made it this very moment is about to write. It takes its lock in demo, as the start does in data. When a launcher runs on the
+demonstration's settings, only the page is opened; when it runs but is stopping (STOP exists: Demonstratie stoppen a moment ago),
+the start removes nothing and ends with a warning (DEMO_STILL_STOPPING). Otherwise the information box stands, and the start ends
+with a warning while a start of the aid of this folder holds its lock in data (younger than the limit of a lock), or the aid of
+this folder runs (--status on data's settings, when data holds them: REAL_RUNS), or something answers at either address
+(PORT_TAKEN), since both use the same two addresses; then the self-check; then
+everything in demo is removed but its marker, its lock and logs/start.log, so that each start begins afresh; then python -m aid.demo
+--out demo --force --demonstration fills it (the 22 made-up cases with the parser, and the settings of the demonstration: the test
+mode on, questions written as files; aid/demo.py), its output captured into start.log; then the launcher's --testshop --poll-seconds
+10 --background starts the parts on demo's settings, without a start at logon (never --install-autostart), the runner looking at
+the watched folder every 10 seconds, so that a try-out given to the assistant is a case within a minute; then, as the start does,
+--status until a launcher runs and the wait for the page. The real start, in turn, ends with a warning (DEMO_RUNS) while a
+demonstration start holds its lock in a marked folder demo beside data, or while that folder's launcher runs. The demonstration
+stop (demo_stop) is the stop on demo, with lines of its own; a folder demo without the marker, or that is a link, is not touched.
 
 Each launcher command is started with -I -X utf8 and the Python of the command (pythonw.exe for the start: a program without a
 console, which Windows starts without a window), its output captured: the buyer sees the Dutch lines only, and
@@ -170,6 +198,21 @@ START_CMD = "Inkoopassistent starten.cmd"
 STOP_CMD = "Inkoopassistent stoppen.cmd"
 NO_AUTOSTART_CMD = "Inkoopassistent niet meer vanzelf starten.cmd"
 README = "LEESMIJ.txt"
+DEMO_START_CMD = "Demonstratie starten.cmd"
+DEMO_STOP_CMD = "Demonstratie stoppen.cmd"
+DEMO = "demo"                                    # the folder of the demonstration, beside data, made by the demonstration start
+DEMO_MARKER = "DEMONSTRATIE.txt"                 # in demo: written by the demonstration start, and the only proof that demo is its own
+# The marker's text, in Dutch, ASCII and on one line: this folder is the demonstration of the purchasing assistant, made by
+# Demonstratie starten; everything in it is made up; it is replaced at each start of the demonstration: put nothing of your own in it.
+DEMO_MARKER_TEXT = ("Deze map is de demonstratie van de inkoopassistent, gemaakt door Demonstratie starten. Alles hierin is verzonnen. "
+                    "Bij elke start van de demonstratie wordt deze map vervangen: zet hier niets van uzelf in.")
+# The launcher's options of the demonstration: the test shop of the capture server, the runner's poll of 10 seconds, and a start in
+# the background without a start at logon.
+DEMO_LAUNCH = ("--testshop", "--poll-seconds", "10", "--background")
+DEMO_FILL = ("-m", "aid.demo", "--force", "--demonstration")     # python -m aid.demo --out <demo> and these two options
+# Seconds a start gives a folder demo without its marker to get one: another start that made the folder this very moment writes it
+# just after.
+DEMO_MARKER_WAIT = 1.0
 PROGRAM = ("python", "app")                      # the folders of the program, which a second build replaces
 DATA = "data"                                    # the folder of the settings and of every document, made at the first start
 DATA_FOLDERS = ("inbox", "cases", "po_store", "logs")
@@ -177,7 +220,8 @@ DATA_FOLDERS = ("inbox", "cases", "po_store", "logs")
 # review page), and what the made-up set and the price-list import need.
 SELF_CHECK = ("aid.start", "aid.runner", "aid.capture_server", "aid.review.page", "gradio", "aid.madeup.generate", "aid.pricelist", "PIL")
 # The allow-list of the program, without git: besides the .py files, the files the code reads, by folder and by name.
-PROGRAM_FOLDERS = ("readers/templates/", "readers/prompts/", "messaging/templates/", "madeup/out/", "madeup/tryout/", "extension/")
+PROGRAM_FOLDERS = ("readers/templates/", "readers/prompts/", "messaging/templates/", "madeup/out/", "madeup/spec/", "madeup/tryout/",
+                   "extension/")
 PROGRAM_FILES = ("README.md", "MANUAL.md", "requirements.txt", "settings.example.json")
 # The sha256 of the embeddable package (64-bit) of each version, as python.org's release page of the version gives it under
 # "Windows embeddable package (64-bit)", read from the page beside each value on 10 November 2026. python.org gives a SHA-256
@@ -235,18 +279,54 @@ NOT_STOPPED = "De inkoopassistent kon niet stoppen. De reden staat in de map dat
 NO_AUTOSTART = "De inkoopassistent start niet meer vanzelf wanneer u zich aanmeldt."
 # Starting by itself could not be switched off. The reason is in the folder data, in logs, in the file start.log.
 AUTOSTART_KEPT = "Het vanzelf starten kon niet worden uitgezet. De reden staat in de map data, in logs, in het bestand start.log."
+# The lines of the demonstration start and stop.
+# The demonstration of the purchasing assistant is starting, with made-up documents. One moment: the page opens in your browser by
+# itself. (In the information box:) This can take a few minutes.
+DEMO_STARTING = ("De demonstratie van de inkoopassistent start, met verzonnen documenten. Even geduld: de pagina opent vanzelf in uw "
+                 "browser.")
+DEMO_STARTING_BOX = DEMO_STARTING + " Dat kan een paar minuten duren."
+# The demonstration is already running. The page is being opened.
+DEMO_ALREADY_RUNNING = "De demonstratie draait al. De pagina wordt geopend."
+# The demonstration could not start. The reason is in the folder demo, in logs, in the file start.log.
+DEMO_NOT_STARTED = "De demonstratie kon niet starten. De reden staat in de map demo, in logs, in het bestand start.log."
+# The demonstration cannot write in this folder. Put the folder where you may write, for example in your own Documents folder.
+DEMO_UNWRITABLE = ("De demonstratie kan in deze map niet schrijven: niet in de map demo. Zet de map op een plek waar u mag schrijven, "
+                   "bijvoorbeeld in uw eigen map Documenten.")
+# There is already a folder demo that Demonstratie starten did not make. Nothing was removed and nothing started: rename that folder
+# or put it elsewhere, and then double-click Demonstratie starten again.
+DEMO_FOREIGN = ("Er staat al een map demo die Demonstratie starten niet heeft gemaakt. Er is niets verwijderd en niets gestart: geef die "
+                "map een andere naam of zet hem ergens anders, en dubbelklik dan opnieuw op Demonstratie starten.")
+# The purchasing assistant itself is running. The demonstration can start only once it stands still: first double-click
+# Inkoopassistent stoppen, and then Demonstratie starten again.
+REAL_RUNS = ("De inkoopassistent zelf draait. De demonstratie kan pas starten als die stilstaat: dubbelklik eerst op Inkoopassistent "
+             "stoppen en daarna opnieuw op Demonstratie starten.")
+# Something else already answers at the address of the page (http://127.0.0.1:7860 or 7870). Close that first and then
+# double-click Demonstratie starten again.
+PORT_TAKEN = ("Er antwoordt al iets anders op het adres van de pagina (http://127.0.0.1:7860 of 7870). Sluit dat eerst en dubbelklik "
+              "dan opnieuw op Demonstratie starten.")
+# The demonstration is still running. First double-click Demonstratie stoppen, and then Inkoopassistent starten again.
+DEMO_RUNS = "De demonstratie draait nog. Dubbelklik eerst op Demonstratie stoppen en daarna opnieuw op Inkoopassistent starten."
+# The demonstration is stopping. This takes at most a minute and a half.
+DEMO_STOPPING = "De demonstratie stopt. Dit duurt hoogstens anderhalve minuut."
+# The demonstration has stopped. Double-click Demonstratie starten to begin it afresh.
+DEMO_STOPPED = "De demonstratie is gestopt. Dubbelklik op Demonstratie starten om haar opnieuw te beginnen."
+# The demonstration is still stopping. Wait a minute before you start it again.
+DEMO_STILL_STOPPING = "De demonstratie stopt nog. Wacht een minuut voordat u haar opnieuw start."
+# The demonstration could not stop. The reason is in the folder demo, in logs, in the file start.log.
+DEMO_NOT_STOPPED = "De demonstratie kon niet stoppen. De reden staat in de map demo, in logs, in het bestand start.log."
 # LEESMIJ.txt, a paragraph each, in ASCII (the build writes it so): this folder is the purchasing assistant, and outside it the
 # assistant puts only a shortcut in the Startup folder and, when you sign in to Microsoft, the sign-in in your own profile; a zip
 # file from the internet, also of a new version, is unblocked before it is unpacked (right-click it, Properties, tick Unblock, OK),
-# or Windows can hold the assistant back, and when it was unpacked already: stop the assistant if it runs, delete what was
-# unpacked, but never a folder data, unblock it and unpack it again; start (no window stays open: a message says that it starts and
-# closes when the page opens after about half a minute, the first time a few minutes; then at each logon; a start that fails says
-# in a message what to do; a second double click while it starts does nothing, and after a logoff or a restart during that start a
-# double click does nothing for up to eight minutes after the first); stop; the folder data (do not copy or send it); where to put
-# the folder (not in a folder that OneDrive synchronises; after a move, start again); update (delete everything but data, put
-# everything that is in the folder of the new version in, the files to double-click too, and start again; data stays; the zip of a
-# new version holds a folder Inkoopassistent: unpack it elsewhere first and put what is in that folder in, not the folder itself);
-# remove (sign out of Microsoft on the page, no longer start at logon, stop, delete the folder).
+# or Windows can hold the assistant back, and when it was unpacked already: stop the assistant if it runs, delete what was unpacked,
+# but never a folder data, unblock it and unpack it again; start (no window stays open: a message says that it starts and closes
+# when the page opens after about half a minute, the first time a few minutes; then at each logon; a start that fails says in a
+# message what to do; a second double click while it starts does nothing, and after a logoff or a restart during that start a double
+# click does nothing for up to eight minutes after the first); stop; the demonstration (22 made-up cases, no AI, no connection, all
+# in the folder demo and nothing in data, fresh at each start, not at the same time as the assistant, its stop); the folder data (do
+# not copy or send it); where to put the folder (not in a folder that OneDrive synchronises; after a move, start again); update
+# (delete everything but data, put everything that is in the folder of the new version in, the files to double-click too, and start
+# again; data stays; the zip of a new version holds a folder Inkoopassistent: unpack it elsewhere first and put what is in that
+# folder in, not the folder itself); remove (sign out of Microsoft on the page, no longer start at logon, stop, delete the folder).
 LEESMIJ = ("Deze map is de inkoopassistent. Buiten deze map zet de assistent alleen een snelkoppeling in de map Opstarten en, als u "
            "zich aanmeldt bij Microsoft, de aanmelding in uw eigen profiel.",
            "Komt de assistent als zip-bestand van internet, ook een nieuwe versie, hef dan de blokkering op voordat u het uitpakt: klik "
@@ -260,6 +340,10 @@ LEESMIJ = ("Deze map is de inkoopassistent. Buiten deze map zet de assistent all
            "Hebt u zich afgemeld of is de pc opnieuw opgestart terwijl de assistent startte, dan doet een dubbelklik tot acht minuten "
            "na de eerste dubbelklik niets: dubbelklik daarna opnieuw.",
            "Stoppen: dubbelklik op Inkoopassistent stoppen; de assistent blijft uit tot u hem weer start.",
+           "Demonstratie: dubbelklik op Demonstratie starten om de assistent te laten zien met 22 verzonnen zaken, zonder AI en zonder "
+           "verbinding. Alles in de map demo is verzonnen, en de map data wordt er niet voor gebruikt. Elke start begint opnieuw: de "
+           "vorige map demo wordt vervangen. De assistent en de demonstratie draaien niet tegelijk: stop eerst de assistent met "
+           "Inkoopassistent stoppen. Stoppen: dubbelklik op Demonstratie stoppen.",
            "In de map data staan de instellingen en alle documenten die de assistent verwerkt: kopieer of verstuur die map niet.",
            "Zet deze map op de eigen schijf van de pc, niet in een map die met OneDrive wordt gesynchroniseerd; verplaatst u de map, "
            "dubbelklik dan opnieuw op Inkoopassistent starten.",
@@ -359,9 +443,11 @@ class _Told:
     shown or closed changes nothing of the start, and log (the start's start.log, named as who) gets one line for it: without a
     console that line is all that is left of what the buyer was to read."""
 
-    def __init__(self, box, log: Callable[[str], None] = lambda line: None, who: str = "folder start"):
+    def __init__(self, box, log: Callable[[str], None] = lambda line: None, who: str = "folder start", line: str = STARTING,
+                 box_line: str = STARTING_BOX):
         self.box = None if _console() else box               # None: a console
         self.log, self.who = log, who
+        self.line, self.box_line = line, box_line            # what starting says: in the window, and in the information box
         self.thread: threading.Thread | None = None          # the information box's thread, while it may stand
         self.native: int | None = None                       # that thread's native id, by which its box is found
         self.asking = threading.Event()                      # set by that thread just before it asks for the box
@@ -370,7 +456,7 @@ class _Told:
     def starting(self) -> None:
         """STARTING in the window, or the information box."""
         if self.box is None:
-            _say(STARTING)
+            _say(self.line)
             return
         self.thread = threading.Thread(target=self._inform, name="information box", daemon=True)
         self.thread.start()
@@ -380,7 +466,7 @@ class _Told:
         self.native = threading.get_native_id()
         self.asking.set()
         try:
-            self.box(STARTING_BOX, False)
+            self.box(self.box_line, False)
         except Exception as exc:
             self.log(f"{self.who}: the information box could not be shown ({type(exc).__name__}: {exc})")
 
@@ -441,15 +527,18 @@ def pth_text(version: tuple[int, int]) -> str:
 
 
 def start_files() -> dict[str, str]:
-    """File name -> text of the three .cmd files and of LEESMIJ.txt. Each .cmd file is one line that calls a Python of the folder
+    """File name -> text of the five .cmd files and of LEESMIJ.txt. Each .cmd file is one line that calls a Python of the folder
     python beside it, with -I (see the module docstring), with the folder data beside it, both through %~dp0 (the file's own folder,
-    whatever it is) and in quotes. The start file starts pythonw.exe, which has no console, through start, and ends at once, so that
-    no window stays open: the start tells the buyer what it does in message boxes. The stop and the end of the start at logon run
-    python.exe in their window, which waits for a key, so that their last line is read."""
-    def line(python: str, option: str) -> str:
-        return f'"%~dp0python\\{python}" -I -X utf8 -m aid.portable {option} "%~dp0{DATA}"'
+    whatever it is) and in quotes; the two of the demonstration with the folder demo instead. The start file and the demonstration's
+    start pythonw.exe, which has no console, through start, and end at once, so that no window stays open: the start tells the buyer
+    what it does in message boxes. The stop, the end of the start at logon and the demonstration's stop run python.exe in their
+    window, which waits for a key, so that their last line is read."""
+    def line(python: str, option: str, folder: str = DATA) -> str:
+        return f'"%~dp0python\\{python}" -I -X utf8 -m aid.portable {option} "%~dp0{folder}"'
     return {START_CMD: f'@start "" {line("pythonw.exe", "--start")}\r\n', STOP_CMD: f'@{line("python.exe", "--stop")} & pause\r\n',
-            NO_AUTOSTART_CMD: f'@{line("python.exe", "--no-autostart")} & pause\r\n', README: "\r\n\r\n".join(LEESMIJ) + "\r\n"}
+            NO_AUTOSTART_CMD: f'@{line("python.exe", "--no-autostart")} & pause\r\n',
+            DEMO_START_CMD: f'@start "" {line("pythonw.exe", "--demo", DEMO)}\r\n',
+            DEMO_STOP_CMD: f'@{line("python.exe", "--demo-stop", DEMO)} & pause\r\n', README: "\r\n\r\n".join(LEESMIJ) + "\r\n"}
 
 
 def requirements(text: str) -> str:
@@ -517,7 +606,7 @@ def _refusal(out: Path) -> str | None:
         return None
     if not out.is_dir():
         return f"{out} is a file: choose a folder"
-    known = {name.lower() for name in (*start_files(), *PROGRAM, DATA)}
+    known = {name.lower() for name in (*start_files(), *PROGRAM, DATA, DEMO)}
     other = sorted(path.name for path in out.iterdir() if path.name.lower() not in known)
     if other:
         return f"{out} holds other files than an earlier build of the folder ({', '.join(other)}): choose an empty or a new folder"
@@ -776,7 +865,11 @@ class _Ran(NamedTuple):
 def _launcher(run, data: Path, *options: str) -> _Ran:
     """Run a command of the launcher on the folder's settings with this Python, with -I (see the module docstring) and -X utf8, its
     output captured."""
-    cmd = [sys.executable, "-I", "-X", "utf8", "-m", "aid.start", "--settings", str(data / SETTINGS_FILE), *options]
+    return _ran(run, [sys.executable, "-I", "-X", "utf8", "-m", "aid.start", "--settings", str(data / SETTINGS_FILE), *options])
+
+
+def _ran(run, cmd: list[str]) -> _Ran:
+    """Run a command of the folder's Python from the folder that holds the package, its output captured on one line."""
     try:
         done = run(cmd, cwd=str(PACKAGE.parent), stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8",
                    errors="replace")
@@ -786,12 +879,14 @@ def _launcher(run, data: Path, *options: str) -> _Ran:
     return _Ran(done.returncode, " | ".join(lines))
 
 
-def _logged(who: str, options: tuple[str, ...], ran: _Ran) -> str:
-    """The line of start.log of a launcher command."""
+def _logged(who: str, options: tuple[str, ...], ran: _Ran, folder: str | None = None) -> str:
+    """The line of start.log of a launcher command; with folder, the command ran on the settings of that folder beside the one
+    whose start.log it is."""
     what = " ".join(options)
+    where = f" on the settings of the folder {folder}" if folder is not None else ""
     if ran.code is None:
-        return f"{who}: {what} could not be run ({ran.said})"
-    return f"{who}: {what} ended with exit code {ran.code}" + (f": {ran.said}" if ran.said else "")
+        return f"{who}: {what} could not be run{where} ({ran.said})"
+    return f"{who}: {what} ended with exit code {ran.code}{where}" + (f": {ran.said}" if ran.said else "")
 
 
 def _writable(data: Path) -> bool:
@@ -821,7 +916,7 @@ def _held(lock: Path) -> tuple[float, str] | None:
     return stamp, f"{LOCK_FILE} of {when}, process {pid}"
 
 
-def _locked(data: Path, log: _Log, limit: float) -> str | None:
+def _locked(data: Path, log: _Log, limit: float, who: str = "folder start") -> str | None:
     """Take the start lock: data/start.lock, made with exclusive creation, holding the time and the process id. Its text, which the
     start gives _unlocked at its end; None when another start holds a lock younger than limit seconds: that start is still busy (a
     second double click during a slow first start), and start.log gets one line. An older lock is left by a start that was ended
@@ -845,15 +940,15 @@ def _locked(data: Path, log: _Log, limit: float) -> str | None:
                 continue
             made, named = held
             if abs(time.time() - made) < limit:
-                log(f"folder start: another start is still busy ({named}): this one ends; that one opens the page or says why it "
+                log(f"{who}: another start is still busy ({named}): this one ends; that one opens the page or says why it "
                     "could not")
                 return None
-            log(f"folder start: the start lock ({named}) is older than {limit:g} seconds, left by a start that did not end: taken over")
+            log(f"{who}: the start lock ({named}) is older than {limit:g} seconds, left by a start that did not end: taken over")
             lock.unlink(missing_ok=True)
         except OSError as exc:
             why = f"{type(exc).__name__}: {exc}"
             break
-    log(f"folder start: {LOCK_FILE} could not be made ({why}); the start goes on without it")
+    log(f"{who}: {LOCK_FILE} could not be made ({why}); the start goes on without it")
     return ""
 
 
@@ -868,6 +963,20 @@ def _unlocked(data: Path, text: str) -> None:
         pass
 
 
+def _busy(folder: Path, log: _Log, who: str, other: str, limit: float) -> bool:
+    """Whether the other start (of the aid, or of its demonstration) holds its start lock in folder, younger than limit seconds: it
+    is still busy, and both use the same two addresses, so this start starts nothing; start.log gets one line. A lock that cannot
+    be read counts as none."""
+    try:
+        held = _held(folder / LOCK_FILE)
+    except OSError:
+        return False
+    if held is None or abs(time.time() - held[0]) >= limit:
+        return False
+    log(f"{who}: a start of {other} is busy ({held[1]}): the aid and the demonstration use the same addresses; nothing started")
+    return True
+
+
 def start(data: Path, run=subprocess.run, answers=_answers, open_page=webbrowser.open, wait_seconds: float = 180, box=None) -> int:
     """Start the aid of the folder and open its page (see the module docstring); 0 when the page was opened, or when another start
     is still busy, 1 otherwise. box shows the message boxes of a start without a console: Windows' own (BOX), read when start is
@@ -879,11 +988,12 @@ def start(data: Path, run=subprocess.run, answers=_answers, open_page=webbrowser
         told.failed(UNWRITABLE)
         told.warn()
         return 1
-    lock = _locked(data, log, LAUNCHER_WAIT + wait_seconds + LOCK_MARGIN)
+    limit = LAUNCHER_WAIT + wait_seconds + LOCK_MARGIN
+    lock = _locked(data, log, limit)
     if lock is None:
         return 0
     try:
-        code = _started(data, run, answers, open_page, wait_seconds, log, told)
+        code = _started(data, run, answers, open_page, wait_seconds, log, told, limit)
     finally:
         told.close()
         _unlocked(data, lock)
@@ -891,8 +1001,8 @@ def start(data: Path, run=subprocess.run, answers=_answers, open_page=webbrowser
     return code
 
 
-def _started(data: Path, run, answers, open_page, wait_seconds: float, log: _Log, told: _Told) -> int:
-    """The start under its lock (see start)."""
+def _started(data: Path, run, answers, open_page, wait_seconds: float, log: _Log, told: _Told, limit: float) -> int:
+    """The start under its lock (see start); limit is the age after which a start lock counts as left over."""
     try:
         first_start(data)
     except OSError as exc:
@@ -906,18 +1016,25 @@ def _started(data: Path, run, answers, open_page, wait_seconds: float, log: _Log
         log("folder start: a launcher runs on these settings: only the page is opened")
         return _opened(log, answers, open_page, wait_seconds, told)
     told.starting()
+    demo = data.parent / DEMO
+    if status.code != 0 and _marked(demo) and _busy(demo, log, "folder start", "the demonstration of this folder", limit):
+        told.failed(DEMO_RUNS)
+        return 1
+    if status.code != 0 and _marked(demo) and (demo / SETTINGS_FILE).is_file():
+        shown = _launcher(run, demo, "--status")
+        log(_logged("folder start", ("--status",), shown, DEMO))
+        if shown.code == 0:
+            log("folder start: the demonstration of this folder runs (--status on the settings of the folder demo): the aid and the "
+                "demonstration use the same addresses; stop the demonstration first; nothing started")
+            told.failed(DEMO_RUNS)
+            return 1
     answering = [url for url in ADDRESSES.values() if answers(url)] if status.code != 0 else []
     if answering:
         log(f"folder start: something already answers at {' and '.join(answering)} while no launcher runs on these settings (another "
             "aid on this PC, or a part started by hand): only one aid runs on a PC; stop the other one and start again; nothing started")
         told.failed(NOT_STARTED)
         return 1
-    missing = self_check()
-    if missing:
-        for name in missing:
-            if getattr(name, "reason", ""):
-                log(f"folder start: {name} cannot be imported ({name.reason})")
-        log(f"folder start: these modules cannot be imported: {', '.join(missing)}; nothing started")
+    if not _checked(log, "folder start"):
         told.failed(NOT_STARTED)
         return 1
     for options in (("--install-autostart",), ("--resume", "--background")):
@@ -934,7 +1051,18 @@ def _started(data: Path, run, answers, open_page, wait_seconds: float, log: _Log
     return _opened(log, answers, open_page, wait_seconds, told)
 
 
-def _launcher_runs(run, data: Path, log: _Log) -> bool:
+def _checked(log: _Log, who: str) -> bool:
+    """The self-check: whether every module of SELF_CHECK can be imported; when one cannot, start.log names each with its reason."""
+    missing = self_check()
+    if missing:
+        for name in missing:
+            if getattr(name, "reason", ""):
+                log(f"{who}: {name} cannot be imported ({name.reason})")
+        log(f"{who}: these modules cannot be imported: {', '.join(missing)}; nothing started")
+    return not missing
+
+
+def _launcher_runs(run, data: Path, log: _Log, who: str = "folder start") -> bool:
     """Whether a launcher runs on the folder's settings after its start, as its --status says, asked every WAIT_STEP seconds for at
     most LAUNCHER_WAIT seconds (a launcher started in the background writes its state file a few seconds after its start; on a
     slow first start, while a virus scanner checks the new files, it can take a minute). When the first ask finds none yet, the
@@ -949,20 +1077,20 @@ def _launcher_runs(run, data: Path, log: _Log) -> bool:
             _say(STARTING_UP)
             waiting = True
         time.sleep(min(WAIT_STEP, max(deadline - time.monotonic(), 0.0)))
-    log(_logged("folder start", ("--status",), status))
+    log(_logged(who, ("--status",), status))
     if status.code != 0:
-        log(f"folder start: no launcher runs on these settings {LAUNCHER_WAIT:g} seconds after its start; the launcher's lines above say "
+        log(f"{who}: no launcher runs on these settings {LAUNCHER_WAIT:g} seconds after its start; the launcher's lines above say "
             "why; nothing to wait for")
         return False
     return True
 
 
-def _opened(log: _Log, answers, open_page, wait_seconds: float, told: _Told) -> int:
+def _opened(log: _Log, answers, open_page, wait_seconds: float, told: _Told, who: str = "folder start") -> int:
     """Wait until the page answers, at most wait_seconds, close the information box and open the page in the default browser."""
     deadline = time.monotonic() + wait_seconds
     while not answers(PAGE):
         if time.monotonic() >= deadline:
-            log(f"folder start: the page did not answer within {wait_seconds:g} seconds")
+            log(f"{who}: the page did not answer within {wait_seconds:g} seconds")
             told.failed(NOT_YET)
             return 1
         time.sleep(min(WAIT_STEP, max(deadline - time.monotonic(), 0.0)))
@@ -972,10 +1100,10 @@ def _opened(log: _Log, answers, open_page, wait_seconds: float, told: _Told) -> 
     except Exception:                            # webbrowser gives False when no browser opens; a browser that fails says the same
         opened = False
     if not opened:
-        log("folder start: the browser could not be opened")
+        log(f"{who}: the browser could not be opened")
         told.failed(NOT_OPENED)
         return 1
-    log("folder start: the page answers and was opened in the browser")
+    log(f"{who}: the page answers and was opened in the browser")
     return 0
 
 
@@ -986,20 +1114,26 @@ def stop(data: Path, run=subprocess.run) -> int:
     deleted. A folder that never started has nothing to stop: no data folder is made for it."""
     data = Path(data).resolve()
     _say(STOPPING)
+    return _stopped(data, run, "folder stop", (STOPPED, NOT_STOPPED, STILL_STOPPING))
+
+
+def _stopped(data: Path, run, who: str, lines: tuple[str, str, str]) -> int:
+    """The launcher's --stop on the settings in data, once the first line was said; lines: stopped, not stopped, still stopping."""
+    stopped, not_stopped, still_stopping = lines
     if not (data / SETTINGS_FILE).is_file():
-        _say(STOPPED)
+        _say(stopped)
         return 0
     log = _Log(data)
     ran = _launcher(run, data, "--stop")
-    log(_logged("folder stop", ("--stop",), ran))
+    log(_logged(who, ("--stop",), ran))
     if ran.code != 0:
-        _say(NOT_STOPPED)
+        _say(not_stopped)
         return 1
     if (data / STATE_FILE).exists():
-        log("folder stop: the launcher's state file is still there: the launcher is still stopping its parts")
-        _say(STILL_STOPPING)
+        log(f"{who}: the launcher's state file is still there: the launcher is still stopping its parts")
+        _say(still_stopping)
         return 0
-    _say(STOPPED)
+    _say(stopped)
     return 0
 
 
@@ -1015,6 +1149,199 @@ def no_autostart(data: Path, run=subprocess.run) -> int:
     return 0
 
 
+# --- the demonstration ---
+
+def _linked(path: Path) -> bool:
+    """Whether path is a link of any kind: a symlink, or a directory junction, which Windows does not call a symlink (os.path.islink
+    gives False for one before Python 3.12); so also when the path the system resolves differs from the path itself."""
+    path = Path(os.path.abspath(path))
+    if os.path.islink(path) or getattr(path, "is_junction", lambda: False)():
+        return True
+    if not os.path.lexists(path):
+        return False
+    real = os.path.normcase(os.path.realpath(path))
+    return real != os.path.normcase(os.path.join(os.path.realpath(path.parent), path.name))
+
+
+def _marked(demo: Path) -> bool:
+    """Whether demo is the demonstration's own folder: a folder that holds DEMO_MARKER with DEMO_MARKER_TEXT."""
+    try:
+        return demo.is_dir() and (demo / DEMO_MARKER).read_bytes() == DEMO_MARKER_TEXT.encode("ascii")
+    except OSError:
+        return False
+
+
+def _claimed(demo: Path) -> bool:
+    """Whether demo is the demonstration's own: a marked folder, or one made now with its marker (made first of all, so that a start
+    that fails after it leaves a folder the next start may replace). False when something else stands at that name. An OSError
+    (a folder that cannot be written) reaches the caller."""
+    if not demo.exists() and not demo.is_symlink():
+        try:
+            demo.mkdir()
+        except FileExistsError:                  # made in the same moment by another start
+            return _marked_soon(demo)
+        try:
+            with open(demo / DEMO_MARKER, "xb") as marker:
+                marker.write(DEMO_MARKER_TEXT.encode("ascii"))
+        except OSError:
+            shutil.rmtree(demo, ignore_errors=True)     # made now and holding nothing else: no folder without its marker stays
+            raise
+        return True
+    return _marked_soon(demo)
+
+
+def _marked_soon(demo: Path) -> bool:
+    """_marked, but a folder demo that holds nothing (or only a marker being written) gets DEMO_MARKER_WAIT seconds for its marker:
+    another start may have made it this very moment and be about to write it."""
+    deadline = time.monotonic() + DEMO_MARKER_WAIT
+    while True:
+        if _marked(demo):
+            return True
+        try:
+            fresh = demo.is_dir() and all(child.name == DEMO_MARKER for child in demo.iterdir())
+        except OSError:
+            fresh = False
+        if not fresh or time.monotonic() >= deadline:
+            return False
+        time.sleep(BOX_STEP)
+
+
+def _remove(path: Path) -> None:
+    """Remove a file or a folder with all it holds; a link (a junction too) is removed as a link, never what it points to."""
+    if path.is_dir() and not _linked(path):
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+
+
+def _cleared(demo: Path) -> None:
+    """Empty the demonstration's folder for a fresh start: everything but its marker, its start lock and logs/start.log. An OSError
+    (a file Windows keeps in use) reaches the caller, and the marker stays, so that the next start may try again."""
+    keep = {DEMO_MARKER.lower(), LOCK_FILE.lower()}
+    for child in sorted(demo.iterdir()):
+        if child.name.lower() in keep:
+            continue
+        if child.name.lower() == "logs" and child.is_dir() and not _linked(child):
+            for inner in sorted(child.iterdir()):
+                if inner.name.lower() != "start.log":
+                    _remove(inner)
+            continue
+        _remove(child)
+
+
+def demo_start(demo: Path, run=subprocess.run, answers=_answers, open_page=webbrowser.open, wait_seconds: float = 180,
+               box=None) -> int:
+    """Start the demonstration in the folder demo afresh and open its page (see the module docstring); 0 when the page was opened,
+    or when another start is still busy, 1 otherwise. The parameters are those of start. A folder demo that is a link (a symlink, a
+    junction) is refused as foreign before anything follows it."""
+    linked = _linked(Path(demo))
+    demo = Path(demo).resolve()
+    who = "demonstration start"
+    log = _Log(demo)                             # written only once demo is known to be the demonstration's own
+    told = _Told(box if box is not None else BOX, log, who, DEMO_STARTING, DEMO_STARTING_BOX)
+    try:
+        ours = False if linked else _claimed(demo)
+    except OSError:
+        ours = None
+    if ours is False:
+        told.failed(DEMO_FOREIGN)
+        told.warn()
+        return 1
+    if ours is None or not _writable(demo):
+        told.failed(DEMO_UNWRITABLE)
+        told.warn()
+        return 1
+    limit = LAUNCHER_WAIT + wait_seconds + LOCK_MARGIN
+    lock = _locked(demo, log, limit, who)
+    if lock is None:
+        return 0
+    try:
+        code = _demo_started(demo, run, answers, open_page, wait_seconds, log, told, who, limit)
+    finally:
+        told.close()
+        _unlocked(demo, lock)
+    told.warn()
+    return code
+
+
+def _demo_started(demo: Path, run, answers, open_page, wait_seconds: float, log: _Log, told: _Told, who: str, limit: float) -> int:
+    """The demonstration start under its lock (see demo_start); limit is the age after which a start lock counts as left over."""
+    if (demo / SETTINGS_FILE).is_file():
+        status = _launcher(run, demo, "--status")
+        log(_logged(who, ("--status",), status))
+        if status.code == 0 and not (demo / STOP_FILE).exists():
+            _say(DEMO_ALREADY_RUNNING)
+            log(f"{who}: a launcher runs on the demonstration's settings: only the page is opened")
+            return _opened(log, answers, open_page, wait_seconds, told, who)
+        if status.code == 0:                     # Demonstratie stoppen a moment ago: its launcher and runner still use the folder
+            log(f"{who}: the launcher on the demonstration's settings is still stopping (STOP exists): nothing removed and nothing "
+                "started")
+            told.failed(DEMO_STILL_STOPPING)
+            return 1
+    told.starting()
+    data = demo.parent / DATA
+    if _busy(data, log, who, "the aid of this folder", limit):
+        told.failed(REAL_RUNS)
+        return 1
+    if (data / SETTINGS_FILE).is_file():         # of data, --status only: it reads and writes nothing there
+        real = _launcher(run, data, "--status")
+        log(_logged(who, ("--status",), real, DATA))
+        if real.code == 0:
+            log(f"{who}: the aid of this folder runs (--status on the settings of the folder data): the aid and the demonstration use "
+                "the same addresses; stop the aid first; nothing started")
+            told.failed(REAL_RUNS)
+            return 1
+    answering = [url for url in ADDRESSES.values() if answers(url)]
+    if answering:
+        log(f"{who}: something already answers at {' and '.join(answering)} while neither the aid of this folder nor its "
+            "demonstration runs: only one aid runs on a PC; nothing started")
+        told.failed(PORT_TAKEN)
+        return 1
+    if not _checked(log, who):
+        told.failed(DEMO_NOT_STARTED)
+        return 1
+    try:
+        _cleared(demo)
+    except OSError as exc:
+        log(f"{who}: the previous demonstration could not be removed ({type(exc).__name__}: {exc}); nothing started")
+        told.failed(DEMO_NOT_STARTED)
+        return 1
+    fill = [sys.executable, "-I", "-X", "utf8", *DEMO_FILL[:2], "--out", str(demo), *DEMO_FILL[2:]]
+    filled = _ran(run, fill)
+    said = f": {filled.said}" if filled.said else ""
+    if filled.code != 0:
+        what = (f"python -m aid.demo could not be run ({filled.said})" if filled.code is None
+                else f"python -m aid.demo ended with exit code {filled.code}{said}")
+        log(f"{who}: the made-up cases could not be written into the folder demo ({what}); nothing started")
+        told.failed(DEMO_NOT_STARTED)
+        return 1
+    log(f"{who}: the made-up cases were written into the folder demo (python -m aid.demo ended with exit code 0{said})")
+    ran = _launcher(run, demo, *DEMO_LAUNCH)
+    log(_logged(who, DEMO_LAUNCH, ran))
+    if ran.code != 0 or not _launcher_runs(run, demo, log, who):
+        told.failed(DEMO_NOT_STARTED)
+        return 1
+    return _opened(log, answers, open_page, wait_seconds, told, who)
+
+
+def demo_stop(demo: Path, run=subprocess.run) -> int:
+    """Stop the demonstration with the launcher's --stop on demo's settings, as stop does on data's; a folder demo that the
+    demonstration start did not make, or that is a link, is not touched (1), and one that does not exist has nothing to stop (0)."""
+    linked = _linked(Path(demo))
+    demo = Path(demo).resolve()
+    _say(DEMO_STOPPING)
+    if linked:
+        _say(DEMO_FOREIGN)
+        return 1
+    if not demo.exists():
+        _say(DEMO_STOPPED)
+        return 0
+    if not _marked(demo):
+        _say(DEMO_FOREIGN)
+        return 1
+    return _stopped(demo, run, "demonstration stop", (DEMO_STOPPED, DEMO_NOT_STOPPED, DEMO_STILL_STOPPING))
+
+
 # --- the command ---
 
 def main(argv: list[str] | None = None) -> int:
@@ -1025,21 +1352,25 @@ def main(argv: list[str] | None = None) -> int:
     action.add_argument("--start", type=Path, metavar="DATA", help="start the aid of the folder whose data folder is DATA")
     action.add_argument("--stop", type=Path, metavar="DATA", help="stop it; it stays off, also at the next logon, until --start")
     action.add_argument("--no-autostart", type=Path, metavar="DATA", help="no longer start it at logon")
+    action.add_argument("--demo", type=Path, metavar="DEMO", help="start the demonstration afresh in the folder DEMO, beside data")
+    action.add_argument("--demo-stop", type=Path, metavar="DEMO", help="stop the demonstration of the folder DEMO")
     parser.add_argument("--python-zip", type=Path, help="with --build: the embeddable package of python.org, instead of a download")
     args = parser.parse_args(argv)
     if args.python_zip is not None and args.build is None:
         parser.error("--python-zip goes with --build")
     if args.build is not None:
         return build(args.build, python_zip=args.python_zip)
-    for chosen, function, failed in ((args.start, start, NOT_STARTED), (args.stop, stop, NOT_STOPPED),
-                                     (args.no_autostart, no_autostart, AUTOSTART_KEPT)):
+    for chosen, function, failed, who in ((args.start, start, NOT_STARTED, "folder start"), (args.stop, stop, NOT_STOPPED, "folder stop"),
+                                          (args.no_autostart, no_autostart, AUTOSTART_KEPT, "folder no-autostart"),
+                                          (args.demo, demo_start, DEMO_NOT_STARTED, "demonstration start"),
+                                          (args.demo_stop, demo_stop, DEMO_NOT_STOPPED, "demonstration stop")):
         if chosen is not None:
             try:
                 return function(chosen)
             except KeyboardInterrupt:            # the window is being closed, or Ctrl-C in it
                 return 130
             except Exception as exc:             # a fault: its traceback goes to start.log, which the Dutch line names
-                log, who = _Log(Path(chosen).resolve()), f"folder {function.__name__.replace('_', '-')}"
+                log = _Log(Path(chosen).resolve())
                 log(f"{who}: the command failed ({type(exc).__name__})")
                 for row in traceback.format_exc().splitlines():
                     log(row)
