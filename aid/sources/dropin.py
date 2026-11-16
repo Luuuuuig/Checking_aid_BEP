@@ -2,6 +2,9 @@
 
 drop copies a file into the watched folder (settings.watched_folder) under its own name, made safe as the mailbox makes the name of an
 attachment (safe_name of aid/sources/mailbox.py), with _2, _3 and so on before its extension when the folder holds that name already.
+A name in the form of a purchase order of the folder for orders of the work mailbox (is_order_file of aid/sources/mailbox.py,
+<time>_<mark>_<code>.order.pdf), which the scan files as a purchase order without classing it, loses its ".order": the file is given
+as <time>_<mark>_<code>.pdf, which the scan judges as any bare PDF. So such a name is the aid's own.
 The scan of the watched folder (scan_folder of aid/sources/mailbox.py) leaves alone a file whose name starts with a dot, so the copy is
 written first under such a name of its own in the watched folder and renamed once it is whole: the scan never reads half a file. A
 copy that fails removes its file again, and an empty file is refused before anything is written. From the watched folder on the file
@@ -20,7 +23,8 @@ import tempfile
 import time
 from pathlib import Path
 
-from aid.sources.mailbox import _free_name, safe_name      # _free_name: the rule of _2, _3 by which the scan names a file in processed/
+from aid.sources.mailbox import ORDER_SUFFIX, is_order_file, safe_name
+from aid.sources.mailbox import _free_name      # the rule of _2, _3 by which the scan names a file in processed/
 
 FALLBACK = "file"                                # the name of a file whose given name holds nothing that can be written
 PREFIX, SUFFIX = ".dropin_", ".part"             # the name of drop's copy while it is not whole: the scan reads no name with a dot first
@@ -28,14 +32,17 @@ LEFTOVER_SECONDS = 600                           # how old such a copy is when r
 
 
 def drop(source: Path, name: str, watched_folder: Path) -> Path:
-    """Copy `source` into the watched folder under `name` made safe (with the extension of `source` when it has none), the first free
-    name of _2, _3 when that one is taken, and return the file in the watched folder. The folder is made when it is not there. The copy
+    """Copy `source` into the watched folder under `name` made safe (with the extension of `source` when it has none, and without the
+    ".order" of a name in the form of an order file of the folder for orders), the first free name of _2, _3 when that one is taken,
+    and return the file in the watched folder. The folder is made when it is not there. The copy
     is written under a name that starts with a dot and renamed when it is whole; a copy that fails leaves no file. ValueError for an
     empty file, before anything is written; the error names no file and no value. A source that cannot be read raises its own error."""
     source, folder = Path(source), Path(watched_folder)
     if source.stat().st_size == 0:
         raise ValueError("the file is empty, so it is not given to the assistant")
     wanted = safe_name(name, FALLBACK, source.suffix)
+    if is_order_file(wanted):                    # the aid's own name for a purchase order of the folder for orders
+        wanted = wanted.removesuffix(ORDER_SUFFIX) + ".pdf"
     folder.mkdir(parents=True, exist_ok=True)
     handle, partial = tempfile.mkstemp(prefix=PREFIX, suffix=SUFFIX, dir=folder)
     try:

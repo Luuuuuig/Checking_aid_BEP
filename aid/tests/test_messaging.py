@@ -4,6 +4,8 @@ import json
 import os
 import smtplib
 import ssl
+import subprocess
+import sys
 import uuid
 from datetime import datetime, timedelta
 from email import message_from_bytes, policy
@@ -21,7 +23,7 @@ from aid.messaging import (QUESTIONS, REAPPROVAL, EndedWait, FileMailer, HandOve
                            _templates, bounced, bounced_questions, ended_waits, file_reply, is_auto_reply, is_bounce, kind_of, named_ids,
                            open_questions, pending_asks, record_escalation, record_sent, render, render_reapproval)
 from aid.routing import CaseContext, MessageSpec
-from aid.tests.conftest import SETTINGS
+from aid.tests.conftest import REPO_ROOT, SETTINGS
 
 SENT = datetime(2026, 11, 20, 16, 0)                 # a Friday
 
@@ -1204,3 +1206,79 @@ def test_a_file_mailer_given_for_want_of_a_route_keeps_its_mark_with_the_guard(t
     guard = OwnOnly([OWNER])
     mailer = FileMailer(tmp_path / "out", unrouted="no_mailbox", guard=guard)
     assert (mailer.unrouted, mailer.guard) == ("no_mailbox", guard)
+
+
+# --- the folder for purchase orders: the aid's own messages carry no attachment, and a reply or a forward is told by its subject ---
+
+def test_no_message_of_the_aid_carries_an_attachment():
+    """The folder for purchase orders (sync_orders of aid/sources/microsoft_mail.py) reads Sent Items, where the aid's own messages
+    come back, and takes only the PDF attachments of a message. A question to a supplier, a request to the approver and the digest's
+    message (as send_digest makes it) are each, as an e-mail, one text/plain part with the headers X-Aid-Template and X-Aid-Case, and
+    no attachment, so that the folder never takes anything from them. A change that gave one of them an attachment fails this test,
+    and the rule of the aid's own messages in that folder is then looked at again."""
+    from aid.messaging import _email
+    from aid.notify import Digest, send_digest
+
+    class Kept:
+        """A mailer that keeps the message it is given and sends nothing."""
+        def send(self, msg: Message):
+            self.msg = msg
+
+    kept = Kept()
+    send_digest(Digest(subject="[Inkoopassistent] Dagoverzicht 12-11-2026", text="Geen nieuwe zaken.", html="<p>Geen nieuwe zaken.</p>",
+                       period="2026-11-12"), kept, SETTINGS)
+    question = render(MessageSpec(template="quantity_unit", items=[{"line_id": "1", "item_code": "KM-1001", "po_value": "3 pc",
+                                                                    "doc_value": "5 pc"}]), case_stub("250101"), ctx(), SETTINGS,
+                      "sales@supplier.example.com")
+    for msg in (question, render_reapproval(CHANGES, ctx("250108", "S08"), SETTINGS), kept.msg):
+        mail = message_from_bytes(bytes(_email(msg, "aid@example.com", SENT, uuid.uuid4().hex)), policy=policy.default)
+        assert [part.get_content_type() for part in mail.walk()] == ["text/plain"], msg.template
+        assert list(mail.iter_attachments()) == [] and mail["X-Aid-Template"] == msg.template and mail["X-Aid-Case"] == msg.case_id
+
+
+@pytest.mark.parametrize("subject, answers", [
+    ("FW: Inkooporder 250101", True), ("RE: x", True), ("Doorst: x", True), ("[EXTERN] FW: x", True), ("EXTERN: Fwd: x", True),
+    ("AW: Bestellung", True), ("TR: x", True), ("Re:x", True), ("WG: x", True), ("Antw: y", True),
+    ("Inkooporder 250101", False), ("PO: 250101", False), ("Purchase order 4500123", False), ("Fwd x", False)])
+def test_a_reply_or_forward_subject_is_told_by_its_prefix(subject, answers):
+    """REPLY_OR_FORWARD takes a subject that begins with a reply or forward prefix that kind_of knows, after the tags and the word in
+    capitals that mail programs and gateways put before it; a subject that only names an order, or a word in capitals of its own with
+    a colon ("PO:"), is none. The folder for purchase orders passes over such an e-mail whole (Outlook sets no In-Reply-To on a
+    forward)."""
+    from aid.messaging import REPLY_OR_FORWARD
+    assert bool(REPLY_OR_FORWARD.match(subject)) is answers
+
+
+def test_a_subject_that_begins_with_many_tags_between_stars_is_read_in_a_moment():
+    """A mail gateway may put tags between stars before a subject ("*** SPOED ***"), and REPLY_OR_FORWARD and the patterns of kind_of
+    (BOUNCE_SUBJECT, DELIVERY_NOTICE, AUTO_REPLY) read such tags before the words they look for. Each tag is taken whole, the stars
+    that end it to the last of their run, so that each pattern reads a subject that begins with forty such tags within a second and
+    gives the answer it gives with one tag; read otherwise, the stars between two tags could be split in many ways, and one such
+    subject held the folder for purchase orders for minutes. The patterns read in a child process, which is stopped when a reading
+    does not end in time. Tags separated by a space read as before; of two tags between stars glued to one another, the first takes
+    the whole run of stars between them, so "**EXTERN*****SPAM*** FW: x" is no forward, as its "SPAM***" begins no tag."""
+    from aid.messaging import REPLY_OR_FORWARD
+    script = ("import json, time\n"
+              "from aid.messaging import AUTO_REPLY, BOUNCE_SUBJECT, DELIVERY_NOTICE, REPLY_OR_FORWARD\n"
+              "patterns = {'reply': REPLY_OR_FORWARD, 'bounce': BOUNCE_SUBJECT, 'notice': DELIVERY_NOTICE, 'auto': AUTO_REPLY}\n"
+              "tags = '*** x *** ' * 40\n"
+              "subjects = {'order': tags + 'Inkooporder 250101', 'forward': 'FW: ' + tags + 'Inkooporder 250101',\n"
+              "            'reply': tags + 'RE: Inkooporder 250101', 'bounce': tags + 'Undeliverable: Vraag',\n"
+              "            'notice': tags + 'Delivery Status Notification (Delay)', 'auto': tags + 'Automatic reply: Vraag'}\n"
+              "found = []\n"
+              "for subject, text in subjects.items():\n"
+              "    for name, pattern in patterns.items():\n"
+              "        start = time.perf_counter()\n"
+              "        answer = pattern.match(text) is not None\n"
+              "        found.append([subject, name, answer, time.perf_counter() - start])\n"
+              "print(json.dumps(found))\n")
+    done = subprocess.run([sys.executable, "-B", "-c", script], cwd=REPO_ROOT, capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+    found = json.loads(done.stdout)
+    assert max(seconds for *_, seconds in found) < 1
+    matched = {(subject, name) for subject, name, answer, _ in found if answer}
+    # "Delivery Status Notification" is also a bounce's words; kind_of tells a notice of a delay by DELIVERY_NOTICE first
+    assert matched == {("forward", "reply"), ("reply", "reply"), ("bounce", "bounce"), ("notice", "bounce"), ("notice", "notice"),
+                       ("auto", "auto")}
+    assert REPLY_OR_FORWARD.match("**EXTERN** ***SPAM*** FW: x") and REPLY_OR_FORWARD.match("***SPAM***FW: x")
+    assert REPLY_OR_FORWARD.match("**EXTERN*****SPAM*** FW: x") is None

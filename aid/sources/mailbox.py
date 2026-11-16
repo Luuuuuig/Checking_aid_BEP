@@ -32,9 +32,10 @@ with no copy filed.
 Duplicates. A document whose sha256 is already an input file of a case is skipped as "duplicate", whatever it would have been. The
 cases are searched for it once for each file, before the classification, so that a file that is sent again costs no decision and is a
 duplicate also when the decider cannot be reached. A copy of a confirmation in the same scan, which has no case yet when it is
-classed, is found when its turn comes, by the hashes of the confirmations that this scan has opened a case for. Two kinds of
-document are not searched for: an export of the ERP, which is told apart before the search, and a PDF that the layout of the
-settings makes a PO PDF (see "A PO layout in the settings" below).
+classed, is found when its turn comes, by the hashes of the confirmations that this scan has opened a case for. Three kinds of
+document are not searched for: an export of the ERP, which is told apart before the search, a PDF that the layout of the settings
+makes a PO PDF (see "A PO layout in the settings" below), and a purchase order of the folder for orders, a PO PDF by its name (see "A
+purchase order of the folder for orders" below).
 
 Exports. An export of the ERP, the order lines saved from an overview, gives a cart pre-check its PO side (aid/readers/po_export.py).
 It is filed with PoStore.from_export and the three export settings: each of its POs whose rows differ from those of the PO's latest
@@ -89,6 +90,26 @@ store:
   e-mail without a From address is from nobody on the list. A file that lies in the folder by itself has no sender and passes.
 A PDF that does not fit is classed as without a layout. The store reads every PO PDF with the layout and with nothing else, so a
 PDF that the keywords class as a PO and that does not fit the layout is refused by the store and stays in the folder as an error.
+
+A purchase order of the folder for orders. The folder for purchase orders of the work mailbox (sync_orders of
+aid/sources/microsoft_mail.py) gives the watched folder each PDF attachment of a new e-mail that is_po_pdf takes for a purchase order,
+as a bare file named <time>_<mark>_<code>.order.pdf (order_file_name): the receive time of the e-mail, the mark of Microsoft's id of it
+and the first 8 hex digits of the sha256 of the PDF, a name that holds nothing of the e-mail. A bare file whose name has that form
+(is_order_file) is a PO PDF whatever its page says: it is not searched as a duplicate of a case, as a PDF that fits the layout is not,
+it is never classed again and never given to the decider, and it is filed as any PO PDF, read with the layout of the settings or,
+without one, with the made-up template. One that the store refuses stays in the folder as an error, as a refused PO PDF does, and
+opens no case. So a later change of the settings (a layout removed) cannot turn such a file into a confirmation. An attachment of an
+e-mail under such a name gets nothing of this: it came in a message and is judged as any attachment, the senders of the PO e-mails
+included. Only the folder for orders makes such a name: drop of aid/sources/dropin.py gives a file given on the review page under such
+a name another name, and a mailbox rule that saves an attachment so named into the folder is the one other way in; no supplier names
+a file with a time and two codes of hex digits. is_po_pdf classes the bytes of a PDF from memory and writes nothing: with
+settings.po_layout, a first page that fits the layout and whose header names no confirmation (fits, titled_confirmation); without
+one, the keywords (_by_keywords gives po_pdf: a title line among the first three that begins with a word of a PO, and no word of a
+confirmation on the page). It never asks the decider. It reads the first page alone, so that a long PDF holds the folder for a moment
+only; a purchase order whose later page cannot be read is therefore taken, and the store, which reads the whole PDF, refuses it, so
+that it stays in the folder as an error. A scan, a PDF without text and a PDF whose first page cannot be read are none, and nothing of
+such a PDF is said: the exception of the reading is not kept, and while it reads, the loggers of the PDF reader, whose lines can quote
+a PDF's own objects, hold their lines back (_pdf_logs_held). The reading of every other PDF logs as before.
 
 What happens to a document, by class:
 - an export: filed in the PO store as looks (stored_exports; see "Exports" above).
@@ -174,7 +195,9 @@ file and an e-mail's attachments in their order, as the skipped list is. The out
   list names the failure of the move.
 """
 import hashlib
+import io
 import json
+import logging
 import mimetypes
 import os
 import re
@@ -198,7 +221,7 @@ from aid.messaging import kind_of
 from aid.pipeline import file_answer
 from aid.po_store import PoStore, VersionHeld
 from aid.po_store import _item_codes            # the item codes of a PO's Document, as find_by_lines takes them
-from aid.readers.pdf_text import extract_lines
+from aid.readers.pdf_text import extract_lines, extract_rows
 from aid.readers.po_export import EXPORT_SUFFIXES, ExportRefused, is_export
 from aid.readers.po_layout import PoLayout
 from aid.readers.po_pdf import fits, header_lines, layout_first_page
@@ -243,6 +266,10 @@ _DIGIT = re.compile(r"\d")                       # a digit right after a number 
 FOUND_AMONG_NUMBERS, FOUND_HELD_NUMBER, FOUND_BY_LINES = "held number among the pattern's numbers", "held number", "lines"
 NAME_BYTES = 200                                 # the longest name, in UTF-8 bytes, that an attachment is written under
 RESOURCE_TYPES = ("image", "text", "audio", "video", "font")      # what a multipart/related holds besides its body: its pictures and styles
+ORDER_SUFFIX = ".order.pdf"                      # the end of the name of a purchase order of the folder for orders (order_file_name)
+# The name of such a purchase order: the receive time of its e-mail, the mark of Microsoft's id of the e-mail and the code of the PDF.
+_ORDER_FILE = re.compile(r"[0-9]{8}T[0-9]{6}_[0-9a-f]{12}_[0-9a-f]{8}\.order\.pdf")
+_PDF_LOGGERS = ("pdfminer", "pdfplumber")         # the loggers of the PDF reader, whose lines can quote a PDF's own objects
 
 _OPTIONS_MEAN = {
     "po_pdf": "a purchase order of the buyer's company, as it is sent to a supplier",
@@ -333,6 +360,67 @@ def _first_page_text(path: Path) -> str:
     if path.suffix.lower() != ".pdf":
         return ""
     return "\n".join(line.text for line in extract_lines(path) if line.page == 1)
+
+
+# --- the purchase orders of the folder for orders ---
+
+def is_order_file(name: str) -> bool:
+    """Whether a name is that of a purchase order that the folder for orders gave the watched folder (sync_orders of
+    aid/sources/microsoft_mail.py): <time>_<mark>_<code>.order.pdf, made by the aid from the receive time of the e-mail, the mark of
+    Microsoft's id of it and the first 8 hex digits of the sha256 of the PDF (order_file_name). It holds nothing of the e-mail. A name
+    with a folder in it is none."""
+    return _ORDER_FILE.fullmatch(name) is not None
+
+
+def order_file_name(stem: str, data: bytes) -> str:
+    """The name of the order file of a PDF of the folder for orders: <stem>_<the first 8 hex digits of the sha256 of its bytes>.order.pdf,
+    the stem being <the receive time of the e-mail as YYYYmmddTHHMMSS>_<the mark of Microsoft's id of it>. Two attachments with the same
+    bytes give one name."""
+    return f"{stem}_{hashlib.sha256(data).hexdigest()[:8]}{ORDER_SUFFIX}"
+
+
+def is_po_pdf(data: bytes, settings: Settings) -> bool:
+    """Whether the bytes of a PDF are a purchase order by the aid's own classification, without a sender and without the decider:
+    with settings.po_layout, a first page that fits the layout and whose header names no confirmation (fits, titled_confirmation);
+    without one, the keywords (_by_keywords gives po_pdf: a title line among the first three that begins with a word of a PO, and no
+    word of a confirmation on the page). The first page is read as the scan reads it from a file, with the cells cut apart for the
+    layout (extract_rows of a binary stream of the bytes), so the PDF is read from memory and nothing is written. Only that page is
+    read (pages=[1]), so that a long PDF (a price list, a catalogue) holds the folder for a moment only. A scan, a PDF without text and
+    a PDF whose first page cannot be read (any exception of the reading) are none. A purchase order whose first page reads and a later
+    page does not is taken, and the store's reading of the whole PDF then refuses it, so that it stays in the watched folder as an
+    error. Nothing of a PDF that is none is said anywhere: the exception is not kept, and while it reads, the loggers of the PDF reader
+    hold their lines back (_pdf_logs_held)."""
+    layout = settings.po_layout
+    try:
+        with _pdf_logs_held():
+            rows = extract_rows(io.BytesIO(data), cut_cells=layout is not None, pages=[1])
+        page = "\n".join(row.line.text for row in rows if row.line.page == 1)
+        if layout is not None:
+            return fits(page, layout) and not titled_confirmation(page, layout)
+        return _by_keywords(page) == "po_pdf"
+    except Exception:                                # the PDF's own: it is no purchase order, and its text is not kept
+        return False
+
+
+@contextmanager
+def _pdf_logs_held() -> Iterator[None]:
+    """For the time of the block, the loggers of the PDF reader (_PDF_LOGGERS) hold their lines back: each gets a handler that drops
+    them and stops passing them up, so that the lines of their child loggers ("pdfminer.pdfinterp" and the like), at every level, stop
+    there and never reach the console, runner.out or a log. Disabling a logger, or setting its level, would not hold the lines of its
+    children. Afterwards each has its handlers and its propagation as before, so that the reading of every other PDF logs as it did.
+    The runner reads one PDF at a time in one thread, so no other reading sees the change."""
+    held = []
+    for name in _PDF_LOGGERS:
+        logger, handler = logging.getLogger(name), logging.NullHandler()
+        held.append((logger, handler, logger.propagate))
+        logger.addHandler(handler)
+        logger.propagate = False
+    try:
+        yield
+    finally:
+        for logger, handler, propagate in held:
+            logger.removeHandler(handler)
+            logger.propagate = propagate
 
 
 def _fold(text: str) -> str:
@@ -783,8 +871,9 @@ class _Scan:
         """The documents of a file: the file itself, or the attachments of an e-mail, each classed unless it is a duplicate; none for
         an e-mail filed as an answer to a message of the aid. A file that cannot be opened, and an attachment that cannot be classed,
         stay and are skipped as an error. An export of the ERP is told apart first, before the classes and the duplicate search;
-        then, with a PO layout in the settings, a PDF that fits it is classed by the fit, before the cases are searched (see the
-        module docstring). The attachments of an e-mail are written into `scratch` (see _unpacking)."""
+        then a bare file named as a purchase order of the folder for orders (is_order_file) is a PO PDF by its name, and, with a PO
+        layout in the settings, a PDF that fits it is classed by the fit, both before the cases are searched (see the module
+        docstring). The attachments of an e-mail are written into `scratch` (see _unpacking)."""
         try:
             if path.suffix.lower() == ".eml":
                 if (case_id := file_answer(self.cases_root, path, self.now, language=self.settings.language, own=self.own)) is not None:
@@ -818,7 +907,10 @@ class _Scan:
                     continue
                 digest = sha256_file(file)
                 kind, fitted = None, False
-                if layout is not None and file.suffix.lower() == ".pdf":
+                if file == path and is_order_file(path.name):
+                    # A purchase order of the folder for orders, a bare file: a PO PDF whatever its page says, never classed again.
+                    kind, fitted = "po_pdf", True
+                elif layout is not None and file.suffix.lower() == ".pdf":
                     # With a layout the fit is tested first, on the page as the layout reader reads it: a PDF that fits is a PO PDF,
                     # also when a case holds its bytes, unless its header makes it a confirmation or its e-mail came from another
                     # sender than the PO e-mails do.

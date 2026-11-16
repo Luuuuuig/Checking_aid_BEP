@@ -18,7 +18,18 @@ clock:
   the settings name another mailbox, folder, tenant or client, and the pass goes on with the folder. Such an error leaves a lapse
   as it is: a Microsoft that cannot be reached (MicrosoftUnreachable), or a store of the sign-in that this process may not use
   (StoreRefused), says nothing about the sign-in. While the trigger is off, the stored connection is removed
-  (forget_connection), so that a folder connected again later is read from that moment;
+  (forget_connection), so that a folder connected again later is read from that moment. After that folder, while the settings name a
+  folder for orders as well (orders_on), sync_orders gives the watched folder the purchase orders of that second folder of the
+  mailbox (typically Sent Items, when the ERP sends the purchase orders through the buyer's own Outlook): each PDF attachment of a
+  new e-mail that is a purchase order becomes a bare file <time>_<mark>_<code>.order.pdf, which the scan of the same pass files, so
+  that a case that waits for that order is checked again in that pass; nothing else of that folder is written or named. A lapsed
+  sign-in that it finds is the mailbox's one lapse, as above, which ends only at a pass in which neither folder finds it and the
+  folder reads without an error. At a pass at which the folder of the mailbox finds the sign-in lapsed, the folder for orders is asked
+  nothing, but its connection is recorded all the same (connect_orders), as that of the folder of the mailbox is, so that what comes
+  into it from that pass on is read once the sign-in works again. Any other error of it is logged once in a run of the loop under the
+  stage "order folder", by Graph's text or the class of the error, never naming a message, and the pass goes on; the e-mails of it
+  that could not be read are one line with their number and the class of the failure. While no folder for orders is set, its
+  connection and the marks of the messages the two folders used are removed (forget_orders);
 - scan_folder (aid/sources/mailbox.py) handles the watched folder of the settings, created when it is missing: PO PDFs go into the
   store, a case is opened under cases_root for each confirmation, an e-mail that answers a question of the aid is filed into its case
   (a real reply puts the case in review and is reported in the next digest, a bounce waits for the escalation, and an automatic
@@ -148,7 +159,8 @@ files skipped since then, each pair once, and, once there is one, "captures": th
 while a file stays in the watched folder, "intake": the record of the lines of the intake file written of it, by its name (_intake)}. A case escalated by escalate_pending is reported again, as it now waits for the buyer. In
 the per-case mode a digest is made only when there is something to report; daily, the digest of a day without cases says so. A state
 file that cannot be read, or that lacks a key, starts a fresh state, with a line in the log. An error of one case, of the scan, of
-the escalation, of the digest, of the mailbox ("mailbox") or of a changed settings file ("settings") is written to
+the escalation, of the digest, of the mailbox ("mailbox"), of its folder for orders ("order folder"; an error that is not one of
+Graph's or of the sign-in by its class only) or of a changed settings file ("settings") is written to
 <cases_root>/runner.log with the case id or the stage, and the pass goes on: the digest that failed is made again at the next pass.
 A case that fails is logged once in a run of the loop, and once more when it later succeeds, so that a case that keeps failing does
 not fill the log; so is a file that the scan leaves in the inbox as an error, which is tried again at each pass, and a case folder
@@ -193,7 +205,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from aid.case import TEMPORARY, WORK, Case, _write_json, load_case, sha256_file    # _write_json: the state is rewritten whole or not at all
-from aid.connections.microsoft import SIGN_IN_AGAIN, MicrosoftAccount, SignInNeeded
+from aid.connections.microsoft import SIGN_IN_AGAIN, MicrosoftAccount, MicrosoftUnreachable, SignInNeeded
 from aid.connections.secrets import LazySecretStore, default_secrets_dir
 from aid.decider import LlmDecider, NoDecider
 from aid.execution.by_hand import FOLDER as PREPARED, open_changes, reconcile
@@ -219,7 +231,8 @@ from aid.sources.dropin import remove_leftovers
 from aid.sources.mailbox import (PROCESSED_FOLDER, ScanResult, could_be_po, find_po_numbers, held_pos, open_free, po_without_number,
                                  quick_read, scan_folder, to_processed)
 from aid.sources.mailbox import _first_page_text     # the first page of a document as the scan reads it, for po_without_number
-from aid.sources.microsoft_mail import forget_connection, sync_mailbox, trigger_on
+from aid.sources.microsoft_mail import (GraphError, connect_orders, forget_connection, forget_orders, orders_on, sync_mailbox, sync_orders,
+                                       trigger_on)
 
 LOG_FILE = "runner.log"
 RUNNING_FILE = ".running"                        # in a case folder while the capture server runs the case: {"pid", "started"}
@@ -232,6 +245,7 @@ ALREADY_RUN = "case already run"                 # the start of run_case's Value
 SCAN = "scan"                                    # the stage of the scan, as runner.log names it
 RECHECK = "recheck"                              # the stage of the check again of the cases that wait for their PO
 MAILBOX = "mailbox"                              # the stage of the work mailbox
+ORDERS = "order folder"                          # the stage of the folder for orders of the work mailbox
 SETTINGS = "settings"                            # the stage of a settings file that changed
 SEEN = "list of changes"                         # the stage that compares the open changes with their POs as they stand
 WORK_FOLDER = "work folder"                      # the stage of <cases_root>/tmp/work, emptied at the start of the runner
@@ -350,6 +364,8 @@ class _Loop:
             return
         if _connection(settings) != _connection(self.deps.settings):
             self.failed.discard(MAILBOX)         # another mailbox or folder: its errors are new
+        if _orders_connection(settings) != _orders_connection(self.deps.settings):
+            self.failed.discard(ORDERS)          # another folder for orders, or another mailbox: its errors are new
         self.deps = deps
 
     def account(self, settings: Settings) -> MicrosoftAccount:
@@ -390,6 +406,7 @@ def _pass(loop: _Loop) -> None:
             _save_quietly(root, state, now, failed)
         try:
             forget_connection(root)
+            forget_orders(root, used=True)
         except OSError as exc:
             if MAILBOX not in failed:
                 _log(root, now, MAILBOX, exc)
@@ -554,18 +571,23 @@ def _save_quietly(root: Path, state: dict, now: datetime, failed: set[str]) -> b
 
 
 def _read_mailbox(loop: _Loop, root: Path, state: dict, now: datetime) -> None:
-    """Save what arrived in the folder of the work mailbox into the watched folder (sync_mailbox), before the scan. A lapsed sign-in
-    is noted in the state for the digest and logged at most once in LAPSE_LOG, and the first sync without an error after it ends the
-    lapse, with a line; any other error is logged once in a run of the loop, as a failing case is, and so is the first read after
-    it, and leaves a lapse as it is (see the module docstring)."""
+    """Save what arrived in the folder of the work mailbox into the watched folder (sync_mailbox), then give it the purchase orders of
+    the folder for orders (_read_orders), both before the scan. A lapsed sign-in, which either reading may find, is the mailbox's one
+    lapse: it is noted in the state for the digest and logged at most once in LAPSE_LOG, and it ends, with a line, only at a pass in
+    which neither reading finds it and the folder of the mailbox reads without an error, so that a lapse of the folder for orders
+    alone never alternates with "signed in again". Any other error of the folder of the mailbox is logged once in a run of the loop,
+    as a failing case is, and so is the first read after it, and leaves a lapse as it is (see the module docstring)."""
     settings = loop.deps.settings
+    lapsed = False
     try:
         error = sync_mailbox(loop.account(settings), settings, now, session=loop.session).error
     except SignInNeeded:
-        _lapsed(root, state, now, f"not connected, the Microsoft sign-in has lapsed: {SIGN_IN_AGAIN}")
-        return
+        lapsed, error = True, None
     except Exception as exc:                     # MicrosoftUnreachable, StoreRefused and the like: nothing learnt of the sign-in
         error = f"{type(exc).__name__}: {' '.join(str(exc).split())}"
+    if _read_orders(loop, root, now, lapsed) or lapsed:
+        _lapsed(root, state, now, f"not connected, the Microsoft sign-in has lapsed: {SIGN_IN_AGAIN}")
+        return
     if error:
         if MAILBOX not in loop.failed:
             _log(root, now, MAILBOX, error)
@@ -579,6 +601,60 @@ def _read_mailbox(loop: _Loop, root: Path, state: dict, now: datetime) -> None:
     elif MAILBOX in loop.failed:
         _log(root, now, MAILBOX, "read after an earlier failure")
         loop.failed.discard(MAILBOX)
+
+
+def _read_orders(loop: _Loop, root: Path, now: datetime, lapsed: bool) -> bool:
+    """Give the watched folder the purchase orders of the folder for orders of the work mailbox (sync_orders), after its folder and
+    before the scan, and return True when the sign-in has lapsed (SignInNeeded), which _read_mailbox notes as the mailbox's one lapse.
+    Without a folder for orders (orders_on) its connection and the used marks are removed (forget_orders), an OSError of that logged
+    once in a run of the loop by its class. When the folder of the mailbox found the sign-in lapsed in this pass (`lapsed`), nothing is
+    asked, since the same token would lapse again, but the folder's connection is recorded (connect_orders), as the folder of the
+    mailbox records its own before it asks for the token, so that what comes into it from this pass on is read once the sign-in works
+    again; an OSError of that is logged once in a run of the loop by its class. Any other error is logged once in a run of the loop
+    under the stage ORDERS, as a failing case is, and so is the first read after it: the error that ended the sync (a text of Graph's,
+    or the class of an OSError of the aid's own folders), a Microsoft that cannot be reached or a GraphError with its class and its
+    text, which name no message, and any other exception by its class only, since its text may quote what it was reading. The e-mails
+    that could not be read are one line each time there are any, with their number and the class of the first failure; each is known
+    after it, so its line comes once. Nothing raised here reaches the pass."""
+    settings = loop.deps.settings
+    if not orders_on(settings):
+        try:
+            forget_orders(root, used=True)
+        except OSError as exc:
+            if ORDERS not in loop.failed:
+                _log(root, now, ORDERS, type(exc).__name__)
+                loop.failed.add(ORDERS)
+        return False
+    if lapsed:
+        try:
+            connect_orders(settings, now)
+        except OSError as exc:
+            if ORDERS not in loop.failed:
+                _log(root, now, ORDERS, type(exc).__name__)
+                loop.failed.add(ORDERS)
+        return False
+    done = None
+    try:
+        done = sync_orders(loop.account(settings), settings, now, session=loop.session)
+        error = done.error
+    except SignInNeeded:
+        return True
+    except (MicrosoftUnreachable, GraphError) as exc:
+        error = f"{type(exc).__name__}: {' '.join(str(exc).split())}"
+    except Exception as exc:                     # a fault of the aid's own code: its class only, never its text
+        error = type(exc).__name__
+    if done is not None and done.unread:
+        one = done.unread == 1
+        _log(root, now, ORDERS, f"{done.unread} new e-mail{'' if one else 's'} could not be read and {'was' if one else 'were'} passed "
+                                f"over ({done.unread_kind})")
+    if error:
+        if ORDERS not in loop.failed:
+            _log(root, now, ORDERS, error)
+            loop.failed.add(ORDERS)
+    elif ORDERS in loop.failed:
+        _log(root, now, ORDERS, "read after an earlier failure")
+        loop.failed.discard(ORDERS)
+    return False
 
 
 def _lapsed(root: Path, state: dict, now: datetime, line: str) -> None:
@@ -596,6 +672,11 @@ def _lapsed(root: Path, state: dict, now: datetime, line: str) -> None:
 def _connection(settings: Settings) -> tuple:
     """What names the connection to the work mailbox."""
     return settings.ms_tenant_id, settings.ms_client_id, settings.mailbox, settings.mail_folder
+
+
+def _orders_connection(settings: Settings) -> tuple:
+    """What names the connection to the folder for orders of the work mailbox."""
+    return settings.ms_tenant_id, settings.ms_client_id, settings.mailbox, settings.order_folder
 
 
 def _elapsed(earlier: datetime, now: datetime) -> timedelta:

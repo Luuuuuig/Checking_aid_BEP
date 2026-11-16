@@ -503,7 +503,9 @@ The section "Postvak en AI" (its label names no installation, because a sign-in 
 digest's two lines say) connects the work mailbox through the buyer's own Microsoft sign-in
 (aid/connections/). The part shows its state first: the signed-in account, read from the token cache only, so that opening the tab
 asks Microsoft nothing, and under "Stand van het postvak" the state of the trigger, from mailbox_state.json
-(aid/sources/microsoft_mail.py), its times in the local time of the PC; both are read when the page loads and again each time the
+(aid/sources/microsoft_mail.py), with a sentence of the folder for purchase orders while one is chosen (_orders_text, from
+mailbox_orders_state.json: not connected yet, not read yet, or connected since, last read and the purchase orders fetched), its times in
+the local time of the PC; both are read when the page loads and again each time the
 section is selected (connections_selected). Five numbered steps follow (MAIL_STEPS), each group of buttons with its answer line right under
 it (finding 1 of the owner's test): "1. Gegevens van de app-registratie", the Directory (tenant) ID and the Application (client) ID
 of the app registration; "2. Aanmelden bij Microsoft", where "Aanmelden bij Microsoft" opens Microsoft's sign-in page in a browser
@@ -511,13 +513,21 @@ window on the PC where the page runs, as the tab says, and says that it waits fo
 address and then waits until the code has been entered, and "Afmelden" signs out, the three answering on settings-sign-note; "3. Map
 van het postvak", the mailbox (empty: the account's own; another mailbox signs in with the shared scopes), the folder, chosen from the
 mailbox's folders once signed in ("Mappen ophalen" lists them again, for another mailbox, and a folder listed for another mailbox than
-the one in the field is not saved), and "Verbinding testen", which shows how many messages the folder holds and when the newest
-arrived, never a subject or a sender, or that the sign-in has lapsed (as "Mappen ophalen" does), the two answering on
-settings-folder-note; "4. Verzenden", how the aid sends (send_via), and "Postvak opslaan", the one filled button of the part, which
-validates the six settings and writes them into the settings file with update_settings_file (aid/settings.py), and the runner takes
-them over at its next pass (this part is filled when the page loads, and its save gives all six to update_settings_file, which writes
-those that differ from the file's); a save that turns the trigger off or names another folder removes the stored connection
-(forget_connection), so that a folder connected again later is read from that moment; and "5. Documenten lezen", the AI section below.
+the one in the field is not saved), "Map voor inkooporders", a second folder of the same mailbox that the runner reads for purchase
+orders only (typically Verzonden items, when Exact sends the orders through the buyer's own Outlook; sync_orders of
+aid/sources/microsoft_mail.py), chosen from the same folders, with the sentence under it that says when to choose it and "Geen map voor
+inkooporders" as its first choice, which a sign-out leaves alone, and "Verbinding testen", which shows how many messages the folder
+holds and when the newest arrived, and the same of the folder for purchase orders in a paragraph of its own, never a subject or a
+sender, or that the sign-in has lapsed (as "Mappen ophalen" does), the two answering on settings-folder-note; "4. Verzenden", how the
+aid sends (send_via), and "Postvak opslaan", the one filled button of the part, which validates the eight settings and writes them
+into the settings file with update_settings_file (aid/settings.py), and the runner takes them over at its next pass (this part is
+filled when the page loads, and its save gives update_settings_file the settings of the mailbox, those of the folder for purchase
+orders only when one is chosen or the file holds one, and it writes those that differ from the file's). A folder for purchase orders
+without a folder, or the same folder as it, is refused before anything is written, each with a sentence that names the way out
+("settings_order_alone", "settings_order_same"). A save that turns the trigger off or names another folder removes the stored
+connection (forget_connection), so that a folder connected again later is read from that moment; one that empties the folder for
+purchase orders removes its connection and the marks of the messages the two folders used, and one that names another folder for
+purchase orders or another mailbox removes its connection (forget_orders); and "5. Documenten lezen", the AI section below.
 The tab never shows a token of the sign-in, and an error by its code ("invalid_grant"), its status ("HTTP 404"), its class, a refused
 field by its label and a browser sign-in that timed out by a fixed line. A store of the sign-in that the PC refuses is said in words,
 with what to do (finding 2 of the owner's test, _refusal_text): a store inside a git work tree by the store's folder and the folder that
@@ -535,7 +545,7 @@ The AI section of the settings tab, step 5 of "Postvak en AI", is first the line
 parser or Copilot, and Copilot failing as a whole since when, with its cause by a status code and the cases that wait for it, or
 refusing documents, from the runner's digest state and the case folders (aid/review/status.py), read when the page loads, when the
 section is selected, at the language switch and after each choice. Then "Documenten lezen met", Copilot or "zonder AI (parser)", writes
-the setting reader ("llm" or "parser") into the settings file as soon as it is chosen, as "Postvak opslaan" writes the six settings,
+the setting reader ("llm" or "parser") into the settings file as soon as it is chosen, as "Postvak opslaan" writes the settings of the mailbox,
 and answers on settings-reader-note right under it. Copilot is written only once the tenant and the client are saved, and only once
 Copilot answered the test message of "Copilot testen", sent with them (finding 6 of the owner's test): a refusal writes nothing,
 keeps the reader of the file and says why by the status code with a hint (400: most often no licence or a personal account; 401: sign
@@ -621,7 +631,8 @@ from aid.review.look import TONES
 from aid.settings import Settings, SettingsInvalid, WriteRouteSet, is_client_id, is_tenant_id, load_settings, read_settings, update_settings_file
 from aid.sources.dropin import drop
 from aid.sources.mailbox import PROCESSED_FOLDER, attachment_of
-from aid.sources.microsoft_mail import GraphError, connection_of, folder_summary, forget_connection, list_folders, trigger_on
+from aid.sources.microsoft_mail import (GraphError, connection_of, folder_summary, forget_connection, forget_orders, list_folders, orders_connection_of,
+                                        orders_on, trigger_on)
 from aid.tryout import (CART_CHANGES, CHANGES, TryoutRefused, as_compared, cart_link, checked_cart, checked_confirmation, file_name,
                         known_pos, made_from, write_cart)
 from aid.tryout_mark import TRYOUT_NOT_SENT, case_is_tryout, offers_tryouts
@@ -641,13 +652,14 @@ READERS = get_args(Settings.model_fields["reader"].annotation)        # the valu
 COPILOT_TEST = "Answer with the word OK only."                         # the message of "Copilot testen"
 MAIL_STEPS = ("ids", "sign_in", "mailbox", "send", "read")             # the five numbered steps of "Postvak en AI" ("mail_step:<step>")
 _STATUS_CODE = re.compile(r"\b[1-5][0-9]{2}\b")  # a status code of HTTP in an error of Copilot: three digits, standing on their own
-# The label on the tab of each setting the tab writes, by which a refused field is named, never by its value: the six of the mailbox,
+# The label on the tab of each setting the tab writes, by which a refused field is named, never by its value: the eight of the mailbox,
 # the reader, the twelve of the buyer's form, the four supplier settings by the heading of the suppliers, the three fields of the
 # supplier form (the keys of with_supplier's problems), the layout of the purchase order and its senders of the block "Koppeling met
 # Exact", the three settings of the export of its part 2, the two of the export of articles of its part 3, and the test mode by its
 # switch at the end of that block.
 FIELD_LABELS = {"ms_tenant_id": "settings_tenant", "ms_client_id": "settings_client", "mailbox": "settings_mailbox",
-                "mail_folder": "settings_folder", "mail_folder_name": "settings_folder", "send_via": "settings_send_via",
+                "mail_folder": "settings_folder", "mail_folder_name": "settings_folder", "order_folder": "settings_order_folder",
+                "order_folder_name": "settings_order_folder", "send_via": "settings_send_via",
                 "reader": "settings_ai_reader"} | {field: f"settings_field:{field}" for field in BUYER_FIELDS} | {
                 field: "settings_suppliers" for field in SUPPLIER_FIELDS} | {
                 "supplier_name": "settings_supplier_name", "supplier_email": "settings_supplier_email",
@@ -3178,48 +3190,54 @@ def _settings_tab(gr, app, language, settings_tab, live: _Live, tab: _Tab, accou
         return read(first)[0]
 
     def folders_shown(account: MicrosoftAccount, mailbox: str | None, strings: dict[str, str]) -> tuple:
-        """The folders of the mailbox for the folder list, with the folder saved selected when it is among them: (the list, the
-        folders listed, a note)."""
+        """The folders of the mailbox for the folder list and for the folder for orders, each with the folder saved selected when it is
+        among them: (the list, the folders listed, a note, the folder for orders, whose first choice is "Geen map voor
+        inkooporders")."""
         mailbox = (mailbox or "").strip()
         try:
             listed = list_folders(account, mailbox or None, tab.session)
         except SignInNeeded:
-            return gr.update(), gr.update(), _no_token_text(account, strings)
+            return gr.update(), gr.update(), _no_token_text(account, strings), gr.update()
         except GraphError as error:
-            return gr.update(), gr.update(), strings["settings_graph_failed"].format(code=error)
-        folders, saved = {folder: name for name, folder in listed}, current().mail_folder
-        return (gr.update(choices=listed, value=saved if saved in folders else None), {"mailbox": mailbox, "folders": folders},
-                strings["settings_folders_loaded"].format(count=len(listed)))
+            return gr.update(), gr.update(), strings["settings_graph_failed"].format(code=error), gr.update()
+        folders, saved = {folder: name for name, folder in listed}, current()
+        return (gr.update(choices=listed, value=saved.mail_folder if saved.mail_folder in folders else None),
+                {"mailbox": mailbox, "folders": folders}, strings["settings_folders_loaded"].format(count=len(listed)),
+                gr.update(choices=_order_choices(strings, folders), value=saved.order_folder if saved.order_folder in folders else ""))
 
     def settings_opened(language_now: str) -> tuple:
-        """The tab opened: the six settings of the file, the signed-in account and the state of the trigger."""
+        """The tab opened: the eight settings of the file, the signed-in account and the state of the trigger. The folders listed hold
+        the saved folder and the saved folder for orders, so that a save without "Mappen ophalen" keeps their names; the folder for
+        orders comes last, with its empty choice and the saved one."""
         strings, settings = STRINGS[language_now], current()
         folders = {settings.mail_folder: settings.mail_folder_name or settings.mail_folder} if settings.mail_folder else {}
+        orders = {settings.order_folder: settings.order_folder_name or settings.order_folder} if settings.order_folder else {}
         account = known(settings.ms_tenant_id, settings.ms_client_id)
         return (settings.ms_tenant_id or "", settings.ms_client_id or "", settings.mailbox or "",
                 gr.update(choices=[(name, folder) for folder, name in folders.items()], value=settings.mail_folder), settings.send_via,
                 _account_text(account, strings), _trigger_text(settings, strings),
-                {"mailbox": settings.mailbox or "", "folders": folders})
+                {"mailbox": settings.mailbox or "", "folders": folders | orders},
+                gr.update(choices=_order_choices(strings, orders), value=settings.order_folder or ""))
 
     def sign_in_browser(tenant: str, client: str, mailbox: str, language_now: str):
         """Sign in in the browser of this PC, saying first that the page waits for it, then list the folders: (the account, the
-        folder list, the folders listed, a note)."""
+        folder list, the folders listed, a note, the folder for orders)."""
         strings = STRINGS[language_now]
         account, refused = begin(tenant, client, strings)
         if refused:
-            yield gr.update(), gr.update(), gr.update(), refused
+            yield gr.update(), gr.update(), gr.update(), refused, gr.update()
             return
-        yield gr.update(), gr.update(), gr.update(), strings["settings_waiting"]
+        yield gr.update(), gr.update(), gr.update(), strings["settings_waiting"], gr.update()
         try:
             account.sign_in_browser(mail_scopes((mailbox or "").strip() or None))
         except SignInFailed as error:
-            yield _account_text(account, strings), gr.update(), gr.update(), strings["settings_sign_in_failed"].format(code=error)
+            yield _account_text(account, strings), gr.update(), gr.update(), strings["settings_sign_in_failed"].format(code=error), gr.update()
             return
         except BrowserInteractionTimeoutError:       # nobody signed in within BROWSER_SECONDS, or no window opened
-            yield gr.update(), gr.update(), gr.update(), strings["settings_browser_timeout"]
+            yield gr.update(), gr.update(), gr.update(), strings["settings_browser_timeout"], gr.update()
             return
         except Exception as error:
-            yield gr.update(), gr.update(), gr.update(), strings["settings_failed"].format(code=type(error).__name__)
+            yield gr.update(), gr.update(), gr.update(), strings["settings_failed"].format(code=type(error).__name__), gr.update()
             return
         yield (_account_text(account, strings), *folders_shown(account, mailbox, strings))
 
@@ -3228,75 +3246,107 @@ def _settings_tab(gr, app, language, settings_tab, live: _Live, tab: _Tab, accou
         strings = STRINGS[language_now]
         account, refused = begin(tenant, client, strings)
         if refused:
-            yield gr.update(), gr.update(), gr.update(), refused
+            yield gr.update(), gr.update(), gr.update(), refused, gr.update()
             return
         try:
             flow = account.start_device_sign_in(mail_scopes((mailbox or "").strip() or None))
-            yield gr.update(), gr.update(), gr.update(), strings["settings_code"].format(address=flow["verification_uri"], code=flow["user_code"])
+            yield (gr.update(), gr.update(), gr.update(), strings["settings_code"].format(address=flow["verification_uri"], code=flow["user_code"]),
+                   gr.update())
             account.finish_device_sign_in(flow)
         except SignInFailed as error:
-            yield _account_text(account, strings), gr.update(), gr.update(), strings["settings_sign_in_failed"].format(code=error)
+            yield _account_text(account, strings), gr.update(), gr.update(), strings["settings_sign_in_failed"].format(code=error), gr.update()
             return
         except Exception as error:
-            yield gr.update(), gr.update(), gr.update(), strings["settings_failed"].format(code=type(error).__name__)
+            yield gr.update(), gr.update(), gr.update(), strings["settings_failed"].format(code=type(error).__name__), gr.update()
             return
         yield (_account_text(account, strings), *folders_shown(account, mailbox, strings))
 
     def sign_out(tenant: str, client: str, language_now: str) -> tuple:
-        """Remove the account and its tokens from this PC: (the account, the folder list, the folders listed, a note)."""
+        """Remove the account and its tokens from this PC: (the account, the folder list, the folders listed, a note, the folder for
+        orders, which keeps its empty choice alone)."""
         strings = STRINGS[language_now]
         try:
             account = account_of(tenant, client)
         except Exception as error:
-            return gr.update(), gr.update(), gr.update(), _refusal_text(error, strings)
+            return gr.update(), gr.update(), gr.update(), _refusal_text(error, strings), gr.update()
         try:
             if account is not None:
                 account.sign_out()
         except Exception as error:
-            return gr.update(), gr.update(), gr.update(), strings["settings_failed"].format(code=type(error).__name__)
-        return strings["settings_not_signed_in"], gr.update(choices=[], value=None), {"mailbox": None, "folders": {}}, strings["settings_signed_out"]
+            return gr.update(), gr.update(), gr.update(), strings["settings_failed"].format(code=type(error).__name__), gr.update()
+        return (strings["settings_not_signed_in"], gr.update(choices=[], value=None), {"mailbox": None, "folders": {}}, strings["settings_signed_out"],
+                gr.update(choices=_order_choices(strings, {}), value=""))
 
     def load_folders(tenant: str, client: str, mailbox: str, language_now: str) -> tuple:
-        """List the folders again, of the mailbox now in the field: (the folder list, the folders listed, a note)."""
+        """List the folders again, of the mailbox now in the field: (the folder list, the folders listed, a note, the folder for
+        orders)."""
         strings = STRINGS[language_now]
         account, refused = begin(tenant, client, strings, elsewhere=True)
         if refused:
-            return gr.update(), gr.update(), refused
+            return gr.update(), gr.update(), refused, gr.update()
         return folders_shown(account, mailbox, strings)
 
-    def check_connection(tenant: str, client: str, mailbox: str, folder: str | None, language_now: str) -> str:
-        """How many messages the folder holds and when the newest arrived; never a subject or a sender."""
+    def check_connection(tenant: str, client: str, mailbox: str, folder: str | None, language_now: str, order_folder: str | None = None) -> str:
+        """How many messages the folder holds and when the newest arrived, and, when a folder for orders is chosen, the same of that
+        folder in a paragraph of its own; never a subject or a sender. A sign-in that has lapsed gives its line alone."""
         strings = STRINGS[language_now]
         account, refused = begin(tenant, client, strings, elsewhere=True)
         if refused:
             return refused
         if not folder:
             return strings["settings_folder_needed"]
+        mailbox = (mailbox or "").strip() or None
         try:
-            count, newest = folder_summary(account, (mailbox or "").strip() or None, folder, tab.session)
+            count, newest = folder_summary(account, mailbox, folder, tab.session)
         except SignInNeeded:
             return _no_token_text(account, strings)
         except GraphError as error:
-            return strings["settings_graph_failed"].format(code=error)
-        return strings["settings_tested"].format(count=count, newest=_when(newest)) if newest else strings["settings_tested_empty"]
+            line = strings["settings_graph_failed"].format(code=error)
+        else:
+            line = strings["settings_tested"].format(count=count, newest=_when(newest)) if newest else strings["settings_tested_empty"]
+        if not order_folder:
+            return line
+        try:
+            count, newest = folder_summary(account, mailbox, order_folder, tab.session)
+        except SignInNeeded:
+            return _no_token_text(account, strings)
+        except GraphError as error:
+            orders = strings["settings_order_failed"].format(code=error)
+        else:
+            orders = strings["settings_order_tested"].format(count=count, newest=_when(newest)) if newest else strings["settings_order_tested_empty"]
+        return f"{line}\n\n{orders}"
 
-    def save_settings(tenant: str, client: str, mailbox: str, folder: str | None, send_via: str, listed: dict, language_now: str) -> tuple:
-        """Validate the six settings and write them into the settings file: (a note, the state of the trigger). A folder listed for
-        another mailbox than the one in the field is not saved, and nothing is saved into a file that cannot be read: the note is
-        then the line that says so."""
+    def save_settings(tenant: str, client: str, mailbox: str, folder: str | None, send_via: str, listed: dict, language_now: str,
+                      order_folder: str | None = None) -> tuple:
+        """Validate the eight settings and write them into the settings file: (a note, the state of the trigger). Nothing is saved, and
+        the note says why, for a folder or a folder for orders listed for another mailbox than the one in the field, a folder for
+        orders without a folder ("settings_order_alone") or the same folder as it ("settings_order_same"), and a file that cannot be
+        read. The two settings of the folder for orders are given to update_settings_file only when one is chosen now or the file holds
+        one, so that a file without them keeps its bytes."""
         strings, listed = STRINGS[language_now], listed or {}
         before, line = read(strings)
         if line is not None:
             return line, gr.update()
         given = {"ms_tenant_id": tenant, "ms_client_id": client, "mailbox": mailbox, "mail_folder": folder, "mail_folder_name": None,
-                 "send_via": send_via}
+                 "order_folder": order_folder, "order_folder_name": None, "send_via": send_via}
         values = {key: (value.strip() or None) if isinstance(value, str) else value for key, value in given.items()}
-        if values["mail_folder"] and (listed.get("mailbox") or "").lower() != (values["mailbox"] or "").lower():
+        if (values["mail_folder"] or values["order_folder"]) and (listed.get("mailbox") or "").lower() != (values["mailbox"] or "").lower():
             return strings["settings_folders_first"], gr.update()
-        if values["mail_folder"]:
-            values["mail_folder_name"] = listed.get("folders", {}).get(values["mail_folder"]) or (
-                before.mail_folder_name if before.mail_folder == values["mail_folder"] else None)
-        saved, refused, _ = write(lambda held: values, strings)      # a refused field by its label, never a value
+        if values["order_folder"] and not values["mail_folder"]:
+            return strings["settings_order_alone"], gr.update()
+        if values["order_folder"] and values["order_folder"] == values["mail_folder"]:
+            return strings["settings_order_same"], gr.update()
+        for setting, name in (("mail_folder", "mail_folder_name"), ("order_folder", "order_folder_name")):
+            if values[setting]:
+                values[name] = listed.get("folders", {}).get(values[setting]) or (
+                    getattr(before, name) if getattr(before, setting) == values[setting] else None)
+
+        def build(held: Settings) -> dict:
+            """The values to write: without the two of the folder for orders while neither the save nor the file names one."""
+            if values["order_folder"] or held.order_folder:
+                return values
+            return {key: value for key, value in values.items() if key not in ("order_folder", "order_folder_name")}
+        saved, refused, _ = write(build, strings)                      # a refused field by its label, never a value
         if saved is None:
             return refused, gr.update()
         if not trigger_on(saved) or connection_of(saved) is None:      # the trigger off, or another folder: a later connection
@@ -3304,10 +3354,18 @@ def _settings_tab(gr, app, language, settings_tab, live: _Live, tab: _Tab, accou
                 forget_connection(saved.cases_root)
             except OSError:
                 pass
+        if not orders_on(saved) or orders_connection_of(saved) is None:      # no folder for orders: nothing of it is kept; another
+            try:                                                                # folder for orders or mailbox: a connection of its own
+                forget_orders(saved.cases_root, used=not orders_on(saved))
+            except OSError:
+                pass
         return strings["settings_buyer_saved"], _trigger_text(saved, strings)
 
-    def settings_relabel(language_now: str, tenant_now: str, client_now: str, mailbox_now: str, send_via_now: str) -> tuple:
-        strings = STRINGS[language_now]
+    def settings_relabel(language_now: str, tenant_now: str, client_now: str, mailbox_now: str, send_via_now: str, listed_now: dict | None = None,
+                         order_now: str | None = None) -> tuple:
+        """The language switch: the part's labels and lines in the language; the folder for orders with its label, its sentence, its
+        empty choice in the language and the folders listed, its choice kept; and the answer of "Postvak opslaan" emptied, last."""
+        strings, folders = STRINGS[language_now], (listed_now or {}).get("folders") or {}
         return (strings["settings_intro"], gr.update(label=strings["settings_tenant"]), gr.update(label=strings["settings_client"]),
                 gr.update(value=strings["settings_sign_in"]), gr.update(value=strings["settings_sign_in_code"]),
                 gr.update(value=strings["settings_sign_out"]), strings["settings_browser_note"],
@@ -3315,7 +3373,9 @@ def _settings_tab(gr, app, language, settings_tab, live: _Live, tab: _Tab, accou
                 gr.update(label=strings["settings_folder"]), gr.update(value=strings["settings_folders"]),
                 gr.update(value=strings["settings_test"]),
                 gr.update(label=strings["settings_send_via"], choices=_via_choices(strings), value=send_via_now),
-                gr.update(value=strings["settings_save"]), f"## {strings['settings_trigger']}", _trigger_text(current(), strings), "")
+                gr.update(value=strings["settings_save"]), f"## {strings['settings_trigger']}", _trigger_text(current(), strings),
+                gr.update(label=strings["settings_order_folder"], info=strings["settings_order_folder_help"],
+                          choices=_order_choices(strings, folders), value=order_now if order_now in folders else ""), "")
 
     # The line of a settings file that cannot be read stands above the sections, as the tab's first block; the sections follow in the
     # order of the work, the buyer's things first and the installer's after.
@@ -3343,6 +3403,8 @@ def _settings_tab(gr, app, language, settings_tab, live: _Live, tab: _Tab, accou
             with gr.Row():
                 folder = gr.Dropdown(choices=[], value=None, label=first["settings_folder"], scale=4)
                 folders_button = gr.Button(first["settings_folders"], scale=1)
+            order_folder = gr.Dropdown(choices=_order_choices(first, {}), value="", label=first["settings_order_folder"],
+                                       info=first["settings_order_folder_help"])    # the second folder, read for purchase orders only
             test_button = gr.Button(first["settings_test"])
             folder_note = gr.Markdown("", elem_id="settings-folder-note", elem_classes=["answer"])      # the answer of the two buttons above
             steps.append(gr.Markdown(f"## {first['mail_step:send']}"))
@@ -3352,20 +3414,23 @@ def _settings_tab(gr, app, language, settings_tab, live: _Live, tab: _Tab, accou
             listed = gr.State({})                        # the folders listed and the mailbox they were listed for
             steps.append(gr.Markdown(f"## {first['mail_step:read']}"))
 
-            signed = [account_shown, folder, listed, sign_note]
-            app.load(settings_opened, inputs=language, outputs=[tenant, client, mailbox, folder, send_via, account_shown, trigger_shown, listed])
+            signed = [account_shown, folder, listed, sign_note, order_folder]
+            app.load(settings_opened, inputs=language, outputs=[tenant, client, mailbox, folder, send_via, account_shown, trigger_shown, listed,
+                                                                 order_folder])
             gr.on(triggers=[app.load, connections.select], fn=store_checked, inputs=language, outputs=sign_note, show_progress="hidden")
             connections.select(connections_selected, inputs=[language, tenant, client], outputs=[account_shown, trigger_shown],
                                show_progress="hidden")
             sign_in_button.click(sign_in_browser, inputs=[tenant, client, mailbox, language], outputs=signed)
             code_button.click(sign_in_code, inputs=[tenant, client, mailbox, language], outputs=signed)
             sign_out_button.click(sign_out, inputs=[tenant, client, language], outputs=signed)
-            folders_button.click(load_folders, inputs=[tenant, client, mailbox, language], outputs=[folder, listed, folder_note])
-            test_button.click(check_connection, inputs=[tenant, client, mailbox, folder, language], outputs=folder_note)
-            save_button.click(save_settings, inputs=[tenant, client, mailbox, folder, send_via, listed, language], outputs=[note, trigger_shown])
-            language.change(settings_relabel, inputs=[language, tenant, client, mailbox, send_via],
+            folders_button.click(load_folders, inputs=[tenant, client, mailbox, language], outputs=[folder, listed, folder_note, order_folder])
+            test_button.click(check_connection, inputs=[tenant, client, mailbox, folder, language, order_folder], outputs=folder_note)
+            save_button.click(save_settings, inputs=[tenant, client, mailbox, folder, send_via, listed, language, order_folder],
+                              outputs=[note, trigger_shown])
+            language.change(settings_relabel, inputs=[language, tenant, client, mailbox, send_via, listed, order_folder],
                             outputs=[intro, tenant, client, sign_in_button, code_button, sign_out_button, browser_note, account_shown, mailbox,
-                                     folder, folders_button, test_button, send_via, save_button, trigger_title, trigger_shown, note])
+                                     folder, folders_button, test_button, send_via, save_button, trigger_title, trigger_shown, order_folder,
+                                     note])
             reader_note = _ai_section(gr, app, language, tab, tenant, client, mailbox, account_shown, begin, read, write, connections.select,
                                       local_now)
             _extension_code(gr, app, language, current)
@@ -5024,16 +5089,39 @@ def _no_token_text(account: MicrosoftAccount, strings: dict[str, str]) -> str:
 
 def _trigger_text(settings: Settings, strings: dict[str, str], form: str = WHEN_FORM) -> str:
     """The state of the trigger for the settings, from mailbox_state.json (aid/sources/microsoft_mail.py), its times in `form`: that
-    of the tab "Postvak en AI" (_when), or DAY_FORM in the section "Stand van de assistent", whose other lines show a day so."""
+    of the tab "Postvak en AI" (_when), or DAY_FORM in the section "Stand van de assistent", whose other lines show a day so. While a
+    folder for orders is set (orders_on), the sentence of that folder follows (_orders_text); without one the text is that of before,
+    byte for byte."""
     if not trigger_on(settings):
         return strings["settings_trigger_off"]
     state = connection_of(settings)
     if state is None:
-        return strings["settings_trigger_pending"]
+        text = strings["settings_trigger_pending"]
+    elif not state["last_sync"]:
+        text = strings["settings_trigger_unread"].format(since=_when(state["connected_at"], form))
+    else:
+        text = strings["settings_trigger_on"].format(since=_when(state["connected_at"], form), last=_when(state["last_sync"], form),
+                                                     saved=state["saved"])
+    return f"{text} {_orders_text(settings, strings, form)}" if orders_on(settings) else text
+
+
+def _orders_text(settings: Settings, strings: dict[str, str], form: str = WHEN_FORM) -> str:
+    """The state of the folder for orders, from mailbox_orders_state.json (aid/sources/microsoft_mail.py), its times in `form`: not
+    connected yet, connected and not read yet, or connected since, last read and the number of purchase orders it fetched; never its
+    delta link, a subject or a sender."""
+    state = orders_connection_of(settings)
+    if state is None:
+        return strings["settings_order_pending"]
     if not state["last_sync"]:
-        return strings["settings_trigger_unread"].format(since=_when(state["connected_at"], form))
-    return strings["settings_trigger_on"].format(since=_when(state["connected_at"], form), last=_when(state["last_sync"], form),
-                                                 saved=state["saved"])
+        return strings["settings_order_unread"].format(since=_when(state["connected_at"], form))
+    return strings["settings_order_on"].format(since=_when(state["connected_at"], form), last=_when(state["last_sync"], form),
+                                               saved=state["saved"])
+
+
+def _order_choices(strings: dict[str, str], folders: Mapping[str, str]) -> list[tuple[str, str]]:
+    """The choices of "Map voor inkooporders": "Geen map voor inkooporders" (the value "", saved as null), then the folders listed as
+    (display name, id), in their order."""
+    return [(strings["settings_order_folder_none"], ""), *((name, folder) for folder, name in folders.items())]
 
 
 def _via_choices(strings: dict[str, str]) -> list[tuple[str, str]]:

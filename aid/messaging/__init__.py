@@ -46,6 +46,8 @@ names, and for a delivery report in the standard form the Message-ID of the mess
 case's sent.jsonl; a re-approval request is no question) and files it with file_reply, in the folder of its kind (kind_of). A filed
 reply puts the case's saved result in review, so that the buyer reads it; a bounce ends the wait of its question as below; an
 automatic message and a message of the aid's own side change nothing. An e-mail that names no message of the aid is not filed.
+REPLY_OR_FORWARD tells a subject that begins with a reply or forward prefix, after the same tags and word in capitals: the folder for
+purchase orders of the work mailbox (aid/sources/microsoft_mail.py) takes nothing from such an e-mail.
 
 A reply belongs to its question. A filed reply answers one question of its case: the first of the ids it names that is a question
 of the case, which is the one its In-Reply-To names, else the last one its References names; a bounce belongs to its question in
@@ -102,9 +104,16 @@ SENT_FILE, ESCALATED_FILE, REPLIES, BOUNCES, AUTO, OWN = "sent.jsonl", "escalate
 DECISIONS = "decisions.jsonl"                    # the buyer's decisions in the case folder (aid/review/app.py, DECISIONS_FILE)
 _PREFIX = r"(?:re|fwd?|fw|aw|antw|wg|tr|doorst)\s*:"                            # a reply or forward prefix, as mail programs write it
 # What may stand before the words of a bounce or of an automatic reply: the prefixes, tags in square brackets ("[EXTERN]") and tags between asterisks
-# ("***SPAM***"), as a mail gateway that marks outside mail puts them there, and one word in capitals with a colon ("EXTERN:").
-_TAGS = rf"\s*(?:(?:\[[^\]]*\]|\*+[^*]+\*+|{_PREFIX})\s*)*"
+# ("***SPAM***"), as a mail gateway that marks outside mail puts them there, and one word in capitals with a colon ("EXTERN:"). Each tag
+# is taken whole (an atomic group), a tag between asterisks with the whole run of asterisks that ends it, so that a subject that begins
+# with many tags is read in a moment: otherwise the asterisks between two tags could be split in many ways, and one subject took
+# minutes. Tags separated by a space read as before; of two tags between asterisks glued to one another ("**A****B**"), the first
+# takes the whole run of asterisks between them, and what follows it is no tag.
+_TAGS = rf"\s*(?:(?>\[[^\]]*\]|\*+[^*]+\*+|{_PREFIX})\s*)*"
 _LEAD = rf"{_TAGS}(?:(?-i:[A-Z]{{2,}}):\s*)?{_TAGS}"
+# A subject that begins with a reply or forward prefix, after what mail programs and gateways put before it: the folder for purchase
+# orders (sync_orders of aid/sources/microsoft_mail.py) passes over such an e-mail whole, since Outlook sets no In-Reply-To on a forward.
+REPLY_OR_FORWARD = re.compile(_LEAD + _PREFIX, re.IGNORECASE)
 _NOTICE = r"delivery status notification\s*\(\s*(?:delay|success)"             # a notice of a delay or a success: no bounce (kind_of)
 _BOUNCE_WORDS = (r"mail delivery failed|message undeliverable|undeliverable|undelivered mail|returned mail|failure notice"   # English
                  r"|delivery has failed|delivery status notification|mailer-daemon"

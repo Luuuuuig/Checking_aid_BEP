@@ -432,3 +432,17 @@ def test_a_line_that_opened_a_case_says_what_the_case_is_now(tmp_path, madeup_ou
         "files_now:waiting": "wacht op de leverancier", "files_now:closed_itself": "vanzelf afgesloten",
         "files_now:closed_by_you": "door u afgesloten", "files_now:copilot_wait": "wacht op Copilot", "files_now:reading": "wordt gelezen"}
     assert STRINGS["en"]["files_now"] == "{label}. Now: {state}." and (root / INTAKE_FILE).read_bytes() == written
+
+
+def test_a_purchase_order_of_the_folder_for_orders_is_shown_as_filed_with_the_mark_of_its_folder(tmp_path):
+    """A purchase order that the folder for orders of the work mailbox gave the watched folder is a bare file named
+    <time>_<mark>_<code>.order.pdf: its line on the tab shows that name and nothing else in the file column, and the mark of the
+    folder behind its label, whatever its outcome, in both languages. An attachment of an e-mail under such a name has no mark."""
+    from aid.review.i18n import STRINGS
+    order = "20261112T080030_0123456789ab_89abcdef.order.pdf"
+    append(tmp_path, [(order, "po", "250101 v1"), (f"20261112T080030_0123456789ab.eml/{order}", "po", "250102 v1"), (order, "error", "")], NOW)
+    assert [row[1:] for row in intake.rows(tmp_path, "nl")] == [
+        [order, f"{STRINGS['nl']['files_error']} (uit de map voor inkooporders)"],
+        [f"20261112T080030_0123456789ab.eml/{order}", "Inkooporder 250102 opgenomen (versie 1)"],
+        [order, "Inkooporder 250101 opgenomen (versie 1) (uit de map voor inkooporders)"]]
+    assert intake.rows(tmp_path, "en")[2][2] == "Purchase order 250101 filed (version 1) (from the folder for purchase orders)"

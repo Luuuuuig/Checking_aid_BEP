@@ -111,3 +111,16 @@ def test_the_leftovers_of_a_drop_cut_off_go_after_ten_minutes(tmp_path, monkeypa
     [error] = dropin.remove_leftovers(folder, now)
     assert isinstance(error, PermissionError) and young.exists()
     assert (dropin.PREFIX, dropin.SUFFIX) == (".dropin_", ".part")          # the name drop writes its copy under
+
+
+def test_a_given_file_named_like_an_order_file_gets_another_name_and_is_judged_as_any_file(tmp_path, madeup_out):
+    """A name in the form of an order file of the folder for orders (is_order_file of aid/sources/mailbox.py) is the aid's own: the
+    scan files such a bare file as a purchase order without classing it. So a file given under such a name loses its ".order" and is
+    judged as any bare PDF: a confirmation opens its case. A given name of another form is kept, as before."""
+    inbox = tmp_path / "inbox"
+    given = drop(madeup_out / "MU01_conf.pdf", "20261112T080030_0123456789ab_89abcdef.order.pdf", inbox)
+    assert given == inbox / "20261112T080030_0123456789ab_89abcdef.pdf" and given.read_bytes() == (madeup_out / "MU01_conf.pdf").read_bytes()
+    r = scan_folder(inbox, PoStore(tmp_path / "store"), tmp_path / "cases", SETTINGS, datetime(2026, 11, 16, 8, 0))
+    assert r.new_cases == ["250101_20261116T080000"] and r.stored_pos == []
+    for name in ("x.order.pdf", "20261112T080030_0123456789ab.order.pdf", "20261112T080030_0123456789ab_3.order.pdf"):
+        assert drop(madeup_out / "MU01_conf.pdf", name, inbox).name == name, name

@@ -2411,3 +2411,131 @@ def test_an_export_without_order_lines_is_skipped_with_a_reason_of_its_own(tmp_p
     assert r.events == [("leeg.csv", "skipped", NO_ORDER_LINES)] and r.skipped == [("leeg.csv", NO_ORDER_LINES)]
     assert r.stored_exports == [("leeg.csv", [], [])] and (inbox / "processed" / "leeg.csv").exists() and not (tmp_path / "store").exists()
     assert NO_ORDER_LINES == "export without order lines"
+
+
+# --- the purchase orders of the folder for orders (sync_orders of aid/sources/microsoft_mail.py) ---
+
+ORDER_STEM = "20261112T080030_0123456789ab"            # the time and the mark that sync_orders gives an order file before its code
+MARKER = "MadeUpMarker0001"                            # a made-up word inside the PDFs that must never be said anywhere
+
+
+def code(data: bytes) -> str:
+    """The code of an order file: the first 8 hex digits of the sha256 of the PDF."""
+    return hashlib.sha256(data).hexdigest()[:8]
+
+
+def titled_anders() -> bytes:
+    """The second made-up PO (aid/madeup/tryout) with "Orderbevestiging" as the first line of its page: it fits ANDERS_LAYOUT, and its
+    header holds a word of a confirmation."""
+    from aid.madeup.generate import tryout_po_pages
+    pages = tryout_po_pages()
+    pages[0][0:0] = page_of("Orderbevestiging")
+    return pdf_bytes(pages, "made-up confirmation in the PO's layout")
+
+
+def test_an_order_file_is_filed_as_a_purchase_order_and_never_classed_again(tmp_path, madeup_out):
+    """A bare file named as the folder for orders names one (is_order_file) is a PO PDF whatever its page says: it is never searched
+    as a duplicate of a case, never classed again and never given to the decider, and the store files it as any PO PDF. So a
+    confirmation under such a name opens no case: the store, which reads no PO number from it, refuses it, and it stays in the
+    folder as an error. The same confirmation under its own name opens a case, as before."""
+    inbox, decider = inbox_of(tmp_path), FakeDecider(None, 0.0)
+    po = (madeup_out / "MU01_po_v1.pdf").read_bytes()
+    order = f"{ORDER_STEM}_{code(po)}.order.pdf"
+    (inbox / order).write_bytes(po)
+    r = scan(tmp_path, inbox, decider)
+    assert r.stored_pos == ["250101"] and r.events == [(order, "po", "250101 v1")] and (inbox / "processed" / order).exists()
+    conf = (madeup_out / "MU01_conf.pdf").read_bytes()
+    named = f"{ORDER_STEM}_{code(conf)}.order.pdf"
+    (inbox / named).write_bytes(conf)
+    r = scan(tmp_path, inbox, decider, now=NOW + timedelta(minutes=1))
+    assert r.new_cases == [] and r.stored_pos == [] and r.events == [(named, "error", "")] and (inbox / named).exists()
+    assert case_names(tmp_path) == [] and decider.decisions == []
+    put(inbox, madeup_out / "MU01_conf.pdf")                                     # the control: its own name
+    r = scan(tmp_path, inbox, decider, now=NOW + timedelta(minutes=2))
+    assert r.new_cases == ["250101_20261116T080200"] and decider.decisions == []
+
+
+def test_an_attachment_named_like_an_order_file_is_judged_as_any_attachment(tmp_path, madeup_out):
+    """Only a bare file of the watched folder can be a purchase order of the folder for orders: an attachment of an e-mail under such
+    a name came in a message and is judged as any attachment, the senders of the purchase orders included."""
+    inbox = inbox_of(tmp_path)
+    conf = (madeup_out / "MU01_conf.pdf").read_bytes()
+    write_eml(inbox / "bevestiging.eml", "Orderbevestiging", attachments=[(f"{ORDER_STEM}_{code(conf)}.order.pdf", conf)],
+              sender="s01@example.com")
+    r = scan(tmp_path, inbox)
+    assert r.new_cases == ["250101_20261116T080000"] and r.stored_pos == []
+    anders = ANDERS_PO.read_bytes()
+    other = tmp_path / "other"
+    other.mkdir()
+    write_eml(other / "bestelling.eml", "Bestelling", attachments=[(f"{ORDER_STEM}_{code(anders)}.order.pdf", anders)], sender="s01@example.com")
+    senders = SETTINGS.model_copy(update={"po_layout": ANDERS_LAYOUT, "po_senders": ["inkoop@example.org"]})
+    r = scan_folder(other, PoStore(tmp_path / "store2"), tmp_path / "cases2", senders, NOW)
+    assert r.stored_pos == [] and [outcome for _, outcome, _ in r.events] in (["case"], ["guess"]) and len(r.new_cases) == 1
+
+
+def test_is_po_pdf_follows_the_layout_when_one_is_saved_and_else_the_title_words(tmp_path, madeup_out, monkeypatch):
+    """is_po_pdf classes the bytes of a PDF from memory, as the folder for orders reads them: with the layout of the settings, a first
+    page that fits it and whose header names no confirmation; without one, the title words of the made-up purchase orders. A PDF
+    without text, a damaged PDF and bytes that are no PDF are none, whatever the settings, and nothing is written anywhere. Only the
+    first page is read, so a long PDF holds the folder for a moment only."""
+    from aid.tests.helpers import damaged_encrypt_pdf, damaged_info_pdf, empty_page_pdf
+    layout = SETTINGS.model_copy(update={"po_layout": ANDERS_LAYOUT})
+    po, conf, anders, titled = ((madeup_out / "MU01_po_v1.pdf").read_bytes(), (madeup_out / "MU01_conf.pdf").read_bytes(), ANDERS_PO.read_bytes(),
+                                titled_anders())
+    check = tmp_path / "titled.pdf"
+    check.write_bytes(titled)
+    assert fits(first_page(check), ANDERS_LAYOUT) and titled_confirmation(first_page(check), ANDERS_LAYOUT)
+    check.unlink()
+    table = [(layout, anders, True), (layout, po, False), (SETTINGS, po, True), (SETTINGS, conf, False), (SETTINGS, anders, False),
+             (layout, titled, False)]
+    for settings in (SETTINGS, layout):
+        table += [(settings, data, False) for data in (empty_page_pdf(), damaged_info_pdf(MARKER), damaged_encrypt_pdf(MARKER),
+                                                       b"no PDF at all " + MARKER.encode())]
+    for number, (settings, data, expected) in enumerate(table):
+        assert mailbox.is_po_pdf(data, settings) is expected, number
+    # only the first page is read: a purchase order of thirty pages is classed by the words of page 1 alone
+    import pdfplumber
+    long_order = pdf_bytes([[Row([Text(0, "Inkooporder 250101")]), Row([Text(0, "Artikel 1")])],
+                            *[[Row([Text(0, f"Artikel {number}")])] for number in range(2, 31)]], "made-up order")
+    read, words = [], pdfplumber.page.Page.extract_words
+    monkeypatch.setattr(pdfplumber.page.Page, "extract_words", lambda page, *args, **kwargs: read.append(page.page_number) or words(page, *args,
+                                                                                                                              **kwargs))
+    assert mailbox.is_po_pdf(long_order, SETTINGS) is True and read == [1]
+    monkeypatch.setattr(mailbox, "extract_rows", lambda *args, **kwargs: (_ for _ in ()).throw(OSError("made-up: the reader failed")))
+    assert mailbox.is_po_pdf(po, SETTINGS) is False and mailbox.is_po_pdf(anders, layout) is False
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_is_order_file_takes_the_aids_own_names_only():
+    """An order file is named <time>_<mark>_<code>.order.pdf, as order_file_name makes it: a time, the 12 hex digits of the mark of the
+    message and the 8 hex digits of the code of the PDF, in lower case, and nothing of the e-mail."""
+    assert mailbox.is_order_file("20261112T080030_0123456789ab_89abcdef.order.pdf")
+    for name in ("20261112T080030_0123456789ab_3.order.pdf", "Inkooporder 250101.pdf", "x.order.pdf", "20261112T080030_0123456789ab.eml",
+                 "20261112T080030_0123456789AB_89ABCDEF.order.pdf", "inbox/20261112T080030_0123456789ab_89abcdef.order.pdf",
+                 "20261112T080030_0123456789ab_89abcdef.order.pdf.eml", "x.eml/20261112T080030_0123456789ab_89abcdef.order.pdf"):
+        assert not mailbox.is_order_file(name), name
+    data = b"%PDF-1.4 made-up"
+    assert mailbox.order_file_name(ORDER_STEM, data) == f"{ORDER_STEM}_{code(data)}.order.pdf" and mailbox.ORDER_SUFFIX == ".order.pdf"
+    assert mailbox.is_order_file(mailbox.order_file_name(ORDER_STEM, data))
+
+
+def test_is_po_pdf_keeps_the_pdf_readers_lines_to_itself(tmp_path, caplog):
+    """The reader of PDFs logs what it finds odd in a PDF and can quote the PDF's own objects, a word of its page among them. Read as
+    the scan reads a PDF of the folder (_first_page_text), such a line reaches the log; read by is_po_pdf, none does, and the two
+    loggers of the reader have their handlers and their propagation as before."""
+    import logging
+
+    from aid.tests.helpers import damaged_info_pdf, warning_pdf
+    caplog.set_level(logging.WARNING)
+    warned = warning_pdf(MARKER)
+    path = tmp_path / "warn.pdf"
+    path.write_bytes(warned)
+    mailbox._first_page_text(path)
+    assert any(MARKER in record.getMessage() for record in caplog.records)     # the control: the test sees such lines
+    caplog.clear()
+    loggers = {name: (list(logging.getLogger(name).handlers), logging.getLogger(name).propagate) for name in ("pdfminer", "pdfplumber")}
+    for settings in (SETTINGS, SETTINGS.model_copy(update={"po_layout": ANDERS_LAYOUT})):
+        for data in (warned, damaged_info_pdf(MARKER)):
+            assert mailbox.is_po_pdf(data, settings) is False
+    assert [record.getMessage() for record in caplog.records if MARKER in record.getMessage()] == []
+    assert {name: (list(logging.getLogger(name).handlers), logging.getLogger(name).propagate) for name in loggers} == loggers

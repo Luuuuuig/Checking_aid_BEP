@@ -17,10 +17,12 @@ The file is validated first, values that do not validate are refused with Settin
 temporary file with a name of its own beside it and a rename, so that a runner that reads it meanwhile reads either the old file
 or the new one; a write that fails removes the temporary file and leaves the file as it was.
 
-The six settings of the work mailbox (ms_tenant_id, ms_client_id, mailbox, mail_folder, mail_folder_name, send_via) are optional:
-with them empty or null the aid works as before, from the watched folder. An empty text counts as null. The tenant and the client
-are the IDs of the app registration in Microsoft Entra ID, which are identifiers and no secrets: the client a GUID, the tenant a GUID
-or its domain name. send_via "microsoft" needs both.
+The eight settings of the work mailbox (ms_tenant_id, ms_client_id, mailbox, mail_folder, mail_folder_name, order_folder,
+order_folder_name, send_via) are optional: with them empty or null the aid works as before, from the watched folder. An empty text
+counts as null. The tenant and the client are the IDs of the app registration in Microsoft Entra ID, which are identifiers and no
+secrets: the client a GUID, the tenant a GUID or its domain name. send_via "microsoft" needs both. order_folder is a second folder of
+the same mailbox, read for purchase orders only (typically Sent Items); it needs mail_folder and is another folder than it, and a file
+that holds it otherwise is refused by its field (order_folder), never by the id it holds.
 
 po_layout is the layout of the PO PDF that the ERP e-mails, as words read off its page (PoLayout of aid/readers/po_layout.py): with
 it the aid reads every PO PDF with that layout, and takes a PDF that fits it for a PO. It is validated with the settings, and a
@@ -150,6 +152,10 @@ class Settings(BaseModel):
     mailbox: str | None = None                   # the address of the mailbox read and sent from; None: the signed-in account's own
     mail_folder: str | None = None               # the id of its folder that the runner reads, as Graph gives it; None: no mailbox is read
     mail_folder_name: str | None = None          # the folder's display name, shown on the settings tab
+    # A second folder of the same mailbox, read for purchase orders only (sync_orders of aid/sources/microsoft_mail.py): typically
+    # Sent Items, when the ERP sends the purchase orders through the buyer's own Outlook. None: no second folder is read.
+    order_folder: str | None = None              # its id, as Graph gives it: another folder than mail_folder, and only with it
+    order_folder_name: str | None = None         # its display name, shown on the settings tab
     # auto: microsoft when signed in and mail_folder is set, else smtp when the SMTP settings and the password are there, else file
     send_via: Literal["auto", "file", "smtp", "microsoft"] = "auto"
     # The export of PO lines that gives a cart pre-check its PO side (aid/readers/po_export.py): the aid's field name -> the column
@@ -185,7 +191,8 @@ class Settings(BaseModel):
     # example; the first settings file of the folder version turns it on, and the hand-over switches it off.
     test_mode: bool = False
 
-    @field_validator("ms_tenant_id", "ms_client_id", "mailbox", "mail_folder", "mail_folder_name", mode="before")
+    @field_validator("ms_tenant_id", "ms_client_id", "mailbox", "mail_folder", "mail_folder_name", "order_folder", "order_folder_name",
+                     mode="before")
     @classmethod
     def _empty_is_null(cls, value):
         return value.strip() or None if isinstance(value, str) else value
@@ -209,6 +216,19 @@ class Settings(BaseModel):
     def _mailbox(cls, value: str | None) -> str | None:
         if value is not None and not _ADDRESS.fullmatch(value):
             raise ValueError("must be an e-mail address")
+        return value
+
+    @field_validator("order_folder")
+    @classmethod
+    def _second_folder(cls, value: str | None, info: ValidationInfo) -> str | None:
+        """The folder for purchase orders is a second folder of the mailbox the aid reads: it needs mail_folder, which stands before it
+        in the model, and is another folder than it. The error names the field and never an id."""
+        if value is None:
+            return value
+        if not info.data.get("mail_folder"):
+            raise ValueError("needs mail_folder: the folder for orders is a second folder of the mailbox")
+        if value == info.data["mail_folder"]:
+            raise ValueError("must be another folder than mail_folder")
         return value
 
     @field_validator("send_via")

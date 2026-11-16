@@ -140,15 +140,15 @@ def launch_options(page, share: bool) -> dict:
 
 def company_values(settings: Settings) -> list[str]:
     """What in the settings marks them as the company's, by the names of the settings and never their values; [] for settings of
-    the made-up set. A company value is: exact_base_url, authorization_limit, smtp_host or smtp_user set; ms_tenant_id or
-    mail_folder set, since the cases may then come from the work mailbox; po_layout set, since the layout of the PO PDF is set on
-    the company side from the company's own PO; exact_endpoints, exact_fields or po_senders not empty; export_columns not empty,
-    since the column titles of the export are chosen on the company side from the company's own export (the made-up exports need no
-    map), and for the same reason article_columns, the column titles of the company's export of articles; an address of
-    supplier_emails or of own_addresses, or buyer_email, aid_email or approver_email, outside example.com and example.org (a domain
-    under them counts as theirs). The folders are no mark: the made-up set may be kept anywhere (in Colab, in Drive)."""
+    the made-up set. A company value is: exact_base_url, authorization_limit, smtp_host or smtp_user set; ms_tenant_id, mail_folder
+    or order_folder set, since the cases and the purchase orders may then come from the work mailbox; po_layout set, since the layout
+    of the PO PDF is set on the company side from the company's own PO; exact_endpoints, exact_fields or po_senders not empty;
+    export_columns not empty, since the column titles of the export are chosen on the company side from the company's own export (the
+    made-up exports need no map), and for the same reason article_columns, the column titles of the company's export of articles; an
+    address of supplier_emails or of own_addresses, or buyer_email, aid_email or approver_email, outside example.com and example.org (a
+    domain under them counts as theirs). The folders are no mark: the made-up set may be kept anywhere (in Colab, in Drive)."""
     found = [f"{name} is set" for name in ("exact_base_url", "authorization_limit", "smtp_host", "smtp_user", "ms_tenant_id", "mail_folder",
-                                           "po_layout") if getattr(settings, name) is not None]
+                                           "order_folder", "po_layout") if getattr(settings, name) is not None]
     found += [f"{name} is not empty" for name in ("exact_endpoints", "exact_fields", "po_senders", "export_columns", "article_columns")
               if getattr(settings, name)]
     if not all(_made_up(address) for address in settings.supplier_emails.values()):

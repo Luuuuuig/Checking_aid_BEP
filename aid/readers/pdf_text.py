@@ -17,6 +17,7 @@ which has one gap only. The other readers keep pdfplumber's words.
 import io
 import unicodedata
 from pathlib import Path
+from typing import BinaryIO
 
 import pdfplumber
 import pypdfium2 as pdfium
@@ -46,12 +47,16 @@ class TextRow(BaseModel):
     words: list[TextWord]
 
 
-def extract_rows(pdf: Path, cut_cells: bool = False) -> list[TextRow]:
+def extract_rows(pdf: Path | BinaryIO, cut_cells: bool = False, pages: list[int] | None = None) -> list[TextRow]:
     """The lines of every page with the words they hold, ordered by page and then from the top down. A PDF without a text layer gives [].
-    With cut_cells a word is cut where two cells printed close together meet (see the module docstring)."""
+    With cut_cells a word is cut where two cells printed close together meet (see the module docstring). `pdf` is a PDF file, or a
+    binary stream of one (is_po_pdf of aid/sources/mailbox.py reads the PDFs of the folder for purchase orders from memory), which
+    gives the same rows. With `pages` (numbers from 1) only those pages are read, each with its number in the PDF, and their rows are
+    those of a reading of every page; the words of the other pages are never read."""
     rows = []
-    with pdfplumber.open(pdf) as document:
-        for number, page in enumerate(document.pages, 1):
+    with pdfplumber.open(pdf, pages=pages) as document:
+        for page in document.pages:
+            number = page.page_number
             words = page.extract_words(return_chars=cut_cells)
             if cut_cells:
                 words = [part for word in words for part in _cut(word)]

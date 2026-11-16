@@ -47,6 +47,9 @@ the setting reader; "mail_step:<step>" heads a numbered step of its part "Postva
 "settings_store_refused_git" and "settings_store_refused_kind" say why no sign-in can be made, with the folders of a store of the
 sign-in that the PC refuses and what to do, "settings_store_refused" any other failure to make the account, and
 "settings_store_refused_see" points the buttons of the other steps to the line under the sign-in buttons that says so;
+"settings_order_*" are the strings of the folder for purchase orders of step 3 (the field, its sentence, its empty choice, the two
+refusals of a save, the lines of "Verbinding testen" and the sentences of its state), whose purchase orders the tab "Bestanden" marks
+with "files_from_orders";
 "reader_state:<state>" says what reads the documents now, "copilot_cause:<cause>" why Copilot fails (a status code, a sign-in, a
 Copilot not reached or no usable answer, never its own words), "copilot_hint:<code>" what the buyer can do about a choice of Copilot
 that "Copilot testen" refused, by its status code, and "settings_ai_switched" and "settings_ai_switch_refused" answer that choice.
@@ -77,7 +80,8 @@ are the strings of the tab "Bestanden"
 columns are set), "files_column:<column>" a column of its table, "files_empty" the sentence in the place of that table while it has
 no line, "files_outcome:<outcome>" the label of an outcome of the intake file
 ("export_one" for an export of one purchase order, "case_unknown" for a case without one, "set_aside" with the {n} days a file stayed,
-"unread" for a case opened from a scan that failed at reading, by which the digest names that case too), "files_now" what the case
+"unread" for a case opened from a scan that failed at reading, by which the digest names that case too), "files_from_orders" the
+mark behind the label of a purchase order that the folder for orders of the work mailbox gave, "files_now" what the case
 of a line that opened one is now, behind its label, with "files_now:<state>" for its state (STATES of aid/review/status.py; a case in
 review has none, and keeps its label alone), "files_skipped:<key>" the label of a reason of a skip (intake.SKIPPED; "other" for a
 reason it does not know), "files_error" the label of
@@ -432,6 +436,7 @@ STRINGS: dict[str, dict[str, str]] = {
                                         "eigen adressen: de vraag gaat bij afsluiten niet weg. Is het uw eigen adres, vul het dan in onder "
                                         "Instellingen, Uw regels."),
         "files_outcome:po": "Inkooporder {number} opgenomen (versie {version})",
+        "files_from_orders": "(uit de map voor inkooporders)",
         "files_outcome:export": "Export uit Exact opgenomen: {n} inkooporders, waarvan {m} nieuw of gewijzigd",
         "files_outcome:export_one": "Export uit Exact opgenomen: 1 inkooporder, waarvan {m} nieuw of gewijzigd",
         "files_outcome:case": "Zaak geopend voor inkooporder {number}",
@@ -651,9 +656,20 @@ STRINGS: dict[str, dict[str, str]] = {
         "settings_folders_loaded": "Mappen opgehaald: {count}.",
         "settings_folder_needed": "Kies eerst een map.",
         "settings_folders_first": "Druk eerst op Mappen ophalen voor dit postvak en kies een map.",
+        "settings_order_folder": "Map voor inkooporders",
+        "settings_order_folder_help": "Kies Verzonden items als Exact de inkooporders via uw Outlook verstuurt: de assistent neemt uit deze map "
+                                      "alleen inkooporders.",
+        "settings_order_folder_none": "Geen map voor inkooporders",
+        "settings_order_same": "Niet opgeslagen: bij Map voor inkooporders staat dezelfde map als bij Map. Kies een andere map, of Geen map voor "
+                               "inkooporders.",
+        "settings_order_alone": "Niet opgeslagen: Map voor inkooporders is een tweede map van het postvak. Kies eerst bij Map de map die de "
+                                "assistent leest, of kies Geen map voor inkooporders.",
         "settings_test": "Verbinding testen",
         "settings_tested": "Berichten in de map: {count}; nieuwste ontvangen: {newest}.",
         "settings_tested_empty": "De map is leeg.",
+        "settings_order_tested": "Berichten in de map voor inkooporders: {count}; nieuwste: {newest}.",
+        "settings_order_tested_empty": "De map voor inkooporders is leeg.",
+        "settings_order_failed": "Map voor inkooporders: Microsoft gaf geen bruikbaar antwoord ({code}).",
         "settings_graph_failed": "Microsoft gaf geen bruikbaar antwoord ({code}).",
         "settings_failed": "Dit is niet gelukt ({code}).",
         "settings_send_via": "Verzenden via",
@@ -669,6 +685,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "settings_trigger_pending": "Nog niet verbonden: de assistent maakt de verbinding bij de volgende ronde.",
         "settings_trigger_on": "Verbonden sinds {since}; laatst gelezen: {last}; opgeslagen berichten: {saved}.",
         "settings_trigger_unread": "Verbonden sinds {since}; nog niet gelezen.",
+        "settings_order_pending": "Map voor inkooporders: nog niet verbonden; de assistent maakt de verbinding bij de volgende ronde.",
+        "settings_order_unread": "Map voor inkooporders: verbonden sinds {since}; nog niet gelezen.",
+        "settings_order_on": "Map voor inkooporders: verbonden sinds {since}; laatst gelezen: {last}; opgehaalde inkooporders: {saved}.",
         "settings_ai": "Microsoft 365 Copilot",
         "settings_ai_needs": ("Copilot heeft nodig: een licentie voor Microsoft 365 Copilot op het account; de zeven machtigingen "
                               "Sites.Read.All, Mail.Read, People.Read.All, OnlineMeetingTranscript.Read.All, Chat.Read, "
@@ -1471,6 +1490,7 @@ STRINGS: dict[str, dict[str, str]] = {
                                         "your own addresses: the question will not go when you close. If it is your own address, fill it "
                                         "in under Settings, Your rules."),
         "files_outcome:po": "Purchase order {number} filed (version {version})",
+        "files_from_orders": "(from the folder for purchase orders)",
         "files_outcome:export": "Export from Exact filed: {n} purchase orders, of which {m} new or changed",
         "files_outcome:export_one": "Export from Exact filed: 1 purchase order, of which {m} new or changed",
         "files_outcome:case": "Case opened for purchase order {number}",
@@ -1684,9 +1704,20 @@ STRINGS: dict[str, dict[str, str]] = {
         "settings_folders_loaded": "Folders loaded: {count}.",
         "settings_folder_needed": "Choose a folder first.",
         "settings_folders_first": "Press Load the folders for this mailbox first and choose a folder.",
+        "settings_order_folder": "Folder for purchase orders",
+        "settings_order_folder_help": "Choose Sent Items when Exact sends the purchase orders through your Outlook: the assistant takes only "
+                                      "purchase orders from this folder.",
+        "settings_order_folder_none": "No folder for purchase orders",
+        "settings_order_same": "Not saved: Folder for purchase orders holds the same folder as Folder. Choose another folder, or No folder for "
+                               "purchase orders.",
+        "settings_order_alone": "Not saved: Folder for purchase orders is a second folder of the mailbox. First choose the folder the assistant "
+                                "reads under Folder, or choose No folder for purchase orders.",
         "settings_test": "Test the connection",
         "settings_tested": "Messages in the folder: {count}; newest received: {newest}.",
         "settings_tested_empty": "The folder is empty.",
+        "settings_order_tested": "Messages in the folder for purchase orders: {count}; newest: {newest}.",
+        "settings_order_tested_empty": "The folder for purchase orders is empty.",
+        "settings_order_failed": "Folder for purchase orders: Microsoft gave no usable answer ({code}).",
         "settings_graph_failed": "Microsoft gave no usable answer ({code}).",
         "settings_failed": "This did not work ({code}).",
         "settings_send_via": "Send through",
@@ -1702,6 +1733,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "settings_trigger_pending": "Not connected yet: the assistant connects at its next pass.",
         "settings_trigger_on": "Connected since {since}; last read: {last}; messages saved: {saved}.",
         "settings_trigger_unread": "Connected since {since}; not read yet.",
+        "settings_order_pending": "Folder for purchase orders: not connected yet; the assistant connects at its next pass.",
+        "settings_order_unread": "Folder for purchase orders: connected since {since}; not read yet.",
+        "settings_order_on": "Folder for purchase orders: connected since {since}; last read: {last}; purchase orders fetched: {saved}.",
         "settings_ai": "Microsoft 365 Copilot",
         "settings_ai_needs": ("Copilot needs: a Microsoft 365 Copilot licence on the account; the seven permissions "
                               "Sites.Read.All, Mail.Read, People.Read.All, OnlineMeetingTranscript.Read.All, Chat.Read, "

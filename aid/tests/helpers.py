@@ -402,3 +402,54 @@ def skipped_headings(headings: list[str]) -> list[str]:
             skipped.append(heading)
         level = depth
     return skipped
+
+
+# --- small made-up PDFs built from their bytes, for the folder for orders (is_po_pdf of aid/sources/mailbox.py) ---
+
+def raw_pdf(objects: list[bytes], trailer: bytes | None = None) -> bytes:
+    """A PDF of these objects, numbered 1, 2, 3 in their order, with a table of their places and this trailer (the catalogue as object
+    1 unless given): the bytes of a made-up PDF, built without a library, so that a test can make one that a reader of PDFs refuses."""
+    out, places = b"%PDF-1.4\n", []
+    for number, body in enumerate(objects, 1):
+        places.append(len(out))
+        out += b"%d 0 obj\n" % number + body + b"\nendobj\n"
+    start = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1) + b"".join(b"%010d 00000 n \n" % place for place in places)
+    return out + b"trailer\n" + (trailer or b"<< /Root 1 0 R /Size %d >>" % (len(objects) + 1)) + b"\nstartxref\n%d\n%%%%EOF\n" % start
+
+
+_PAGE = b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R /Resources << /Font << /F1 3 0 R >> >> >>"
+_FONT = b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"
+
+
+def _one_page(content: bytes, *more: bytes, trailer: bytes | None = None) -> bytes:
+    """A made-up PDF of one page with this content stream, and these objects after the page."""
+    stream = b"<< /Length %d >>\nstream\n" % len(content) + content + b"\nendstream"
+    return raw_pdf([b"<< /Type /Catalog /Pages 2 0 R >>", b"<< /Type /Pages /Kids [5 0 R] /Count 1 >>", _FONT, stream, _PAGE, *more],
+                   trailer)
+
+
+def empty_page_pdf() -> bytes:
+    """A made-up PDF of one page without a word on it, as a scan gives a reader of the text layer."""
+    return _one_page(b"")
+
+
+def damaged_info_pdf(marker: str) -> bytes:
+    """A made-up PDF whose document information (its Info dictionary) is broken and names the marker as its title: the reader of PDFs
+    refuses it with an error whose text quotes that title."""
+    return _one_page(b"BT /F1 12 Tf 72 720 Td (Algemene voorwaarden) Tj ET", b"<< /Title (" + marker.encode() + b") /Author >>",
+                     trailer=b"<< /Root 1 0 R /Info 6 0 R /Size 7 >>")
+
+
+def damaged_encrypt_pdf(marker: str) -> bytes:
+    """A made-up PDF that says it is encrypted in a way no reader knows, its Encrypt dictionary holding the marker: the reader of PDFs
+    refuses it with an error whose text can quote that dictionary."""
+    return raw_pdf([b"<< /Type /Catalog /Pages 2 0 R >>", b"<< /Type /Pages /Kids [] /Count 0 >>",
+                    b"<< /Filter /Standard /V 9 /R 9 /O (" + marker.encode() + b") /U (x) /P -4 >>"],
+                   b"<< /Root 1 0 R /Encrypt 3 0 R /ID [(a)(b)] /Size 4 >>")
+
+
+def warning_pdf(marker: str, title: str = "Algemene voorwaarden") -> bytes:
+    """A made-up PDF of one page with this title, whose content stream gives a gray level as a text that holds the marker: the reader
+    of PDFs reads the page and logs a warning that quotes the marker."""
+    return _one_page(b"BT /F1 12 Tf 72 720 Td (" + title.encode() + b") Tj ET (" + marker.encode() + b") g 0 0 m")

@@ -295,8 +295,9 @@ def section(page, tab_id: str):
 
 def test_the_tab_opens_with_the_saved_settings_and_the_signed_in_account(tmp_path, madeup_out):
     path, page, made = tab(tmp_path, madeup_out, app=FakeApp(accounts=[USERNAME]), **SIX)
-    tenant, client, mailbox, folder, send_via, account, trigger, names = handler(page, "settings_opened")("nl")
+    tenant, client, mailbox, folder, send_via, account, trigger, names, orders = handler(page, "settings_opened")("nl")
     assert (tenant, client, mailbox, send_via) == (TENANT_ID, CLIENT_ID, "", "auto")
+    assert (orders["choices"], orders["value"]) == ([(STRINGS["nl"]["settings_order_folder_none"], "")], "")     # no folder for orders
     assert folder["choices"] == [("Orderbevestigingen", FOLDER)] and folder["value"] == FOLDER
     assert names == {"mailbox": "", "folders": {FOLDER: "Orderbevestigingen"}}            # the folders listed, and of which mailbox
     assert account == STRINGS["nl"]["settings_signed_in"].format(account=USERNAME) and made == [(TENANT_ID, CLIENT_ID)]
@@ -408,8 +409,9 @@ def test_the_browser_sign_in_shows_the_account_and_lists_the_folders_and_never_t
     waiting, shown = list(handler(page, "sign_in_browser")(TENANT_ID, CLIENT_ID, "", "nl"))
     assert waiting[3] == STRINGS["nl"]["settings_waiting"]               # said before the browser window opens
     assert STRINGS["nl"]["settings_waiting"].startswith("Er opent nu een venster van Microsoft")
-    account, folders, names, note = shown
+    account, folders, names, note, orders = shown
     assert account == STRINGS["nl"]["settings_signed_in"].format(account=USERNAME)
+    assert orders["choices"] == [(STRINGS["nl"]["settings_order_folder_none"], ""), *folders["choices"]] and orders["value"] == ""
     assert folders["choices"] == [("Postvak IN", "AAMkADInbox="), ("Orderbevestigingen", FOLDER)]
     assert names == {"mailbox": "", "folders": {"AAMkADInbox=": "Postvak IN", FOLDER: "Orderbevestigingen"}}
     assert ACCESS_TOKEN not in repr([waiting, shown]) and session.calls[0]["headers"]["Authorization"] == f"Bearer {ACCESS_TOKEN}"
@@ -542,8 +544,9 @@ def test_the_state_of_the_trigger_comes_from_the_state_file(tmp_path, madeup_out
 def test_sign_out_removes_the_account_and_empties_the_folders(tmp_path, madeup_out):
     app = FakeApp(accounts=[USERNAME])
     path, page, made = tab(tmp_path, madeup_out, app=app)
-    account, folders, names, note = handler(page, "sign_out")(TENANT_ID, CLIENT_ID, "nl")
+    account, folders, names, note, orders = handler(page, "sign_out")(TENANT_ID, CLIENT_ID, "nl")
     assert account == STRINGS["nl"]["settings_not_signed_in"] and folders["choices"] == [] and app.accounts == []
+    assert (orders["choices"], orders["value"]) == ([(STRINGS["nl"]["settings_order_folder_none"], "")], "")
     assert names == {"mailbox": None, "folders": {}}
 
 
@@ -979,8 +982,8 @@ def test_each_group_of_buttons_of_the_connections_answers_right_under_it(tmp_pat
                      steps[0], nl["settings_tenant"], nl["settings_client"],
                      steps[1], nl["settings_browser_note"], f"button {nl['settings_sign_in']}", f"button {nl['settings_sign_in_code']}",
                      f"button {nl['settings_sign_out']}", "settings-sign-note",
-                     steps[2], nl["settings_mailbox"], nl["settings_folder"], f"button {nl['settings_folders']}", f"button {nl['settings_test']}",
-                     "settings-folder-note",
+                     steps[2], nl["settings_mailbox"], nl["settings_folder"], f"button {nl['settings_folders']}", nl["settings_order_folder"],
+                     f"button {nl['settings_test']}", "settings-folder-note",
                      steps[3], nl["settings_send_via"], f"button {nl['settings_save']}", "save note",
                      steps[4], "settings-reader-state", nl["settings_ai_reader"], "settings-reader-note", f"### {nl['settings_ai']}",
                      nl["settings_ai_needs"],
@@ -996,12 +999,20 @@ def test_each_group_of_buttons_of_the_connections_answers_right_under_it(tmp_pat
                                                                                                 "settings_sign_out")]
     assert after(sign_in_row) is lines["settings-sign-note"] and name(after(copilot_row)) == "copilot note"
     for fn_name in ("sign_in_browser", "sign_in_code", "sign_out"):
-        assert [name(output) for output in bound(fn_name).outputs] == ["account", nl["settings_folder"], "State", "settings-sign-note"], fn_name
+        assert [name(output) for output in bound(fn_name).outputs] == ["account", nl["settings_folder"], "State", "settings-sign-note",
+                                                                       nl["settings_order_folder"]], fn_name
     [test_button, save_button] = [block for block in inside(connections) if name(block) in (f"button {nl['settings_test']}", f"button {nl['settings_save']}")]
     assert after(test_button) is lines["settings-folder-note"] and name(after(save_button)) == "save note"
-    assert [name(output) for output in bound("load_folders").outputs] == [nl["settings_folder"], "State", "settings-folder-note"]
+    assert [name(output) for output in bound("load_folders").outputs] == [nl["settings_folder"], "State", "settings-folder-note",
+                                                                          nl["settings_order_folder"]]
     assert [name(output) for output in bound("check_connection").outputs] == ["settings-folder-note"]
     assert [name(output) for output in bound("save_settings").outputs] == ["save note", "trigger"]
+    # the folder for purchase orders goes to the test and the save as their last input, to the language switch after the folders
+    # listed, and the page's load fills it last; a click that lost it would save the folder for orders empty
+    assert [name(block) for block in bound("save_settings").inputs][-1:] == [nl["settings_order_folder"]]
+    assert [name(block) for block in bound("check_connection").inputs][-1:] == [nl["settings_order_folder"]]
+    assert [name(block) for block in bound("settings_relabel").inputs][-2:] == ["State", nl["settings_order_folder"]]
+    assert name(bound("settings_opened").outputs[-1]) == nl["settings_order_folder"]
     [reader] = [block for block in inside(connections) if isinstance(block, gr.Radio) and block.label == nl["settings_ai_reader"]]
     assert after(reader) is lines["settings-reader-note"]
     assert [name(output) for output in bound("save_reader").outputs] == [nl["settings_ai_reader"], "settings-reader-note"]
@@ -1488,7 +1499,8 @@ def test_the_ai_section_says_what_copilot_needs_in_both_languages():
 
 
 @pytest.mark.parametrize("field, value, label", [("send_via", "pigeon-xyz", "settings_send_via"), ("mailbox", "no-address-xyz", "settings_mailbox"),
-                                                 ("ms_client_id", "not-a-guid-xyz", "settings_client")])
+                                                 ("ms_client_id", "not-a-guid-xyz", "settings_client"),
+                                                 ("order_folder", FOLDER, "settings_order_folder")])  # the same folder as mail_folder
 def test_the_reader_is_not_saved_into_a_file_that_does_not_validate_and_the_field_is_named_by_its_label(tmp_path, madeup_out, field, value,
                                                                                                         label):
     path, page, made = tab(tmp_path, madeup_out, **SIX)
@@ -4882,3 +4894,253 @@ def test_the_manual_names_the_guard_as_the_page_does():
     assert "cases/digests/<YYYY-MM-DD>.txt" in manual["3.8"]
     for number in ("3.16", "3.17"):
         assert "lifts the guard" in manual[number], number
+
+
+# --- the folder for purchase orders of step 3 of "Postvak en AI" ---
+
+SENT_ITEMS = "AAMkADInbox="                           # the folder of FOLDERS that these tests choose as the folder for orders
+LISTED = {"mailbox": "", "folders": {"AAMkADInbox=": "Postvak IN", FOLDER: "Orderbevestigingen"}}      # the folders as a sign-in lists them
+NL_HELP = "Kies Verzonden items als Exact de inkooporders via uw Outlook verstuurt: de assistent neemt uit deze map alleen inkooporders."
+EN_HELP = ("Choose Sent Items when Exact sends the purchase orders through your Outlook: the assistant takes only purchase orders from "
+           "this folder.")
+NL_SAME = "Niet opgeslagen: bij Map voor inkooporders staat dezelfde map als bij Map. Kies een andere map, of Geen map voor inkooporders."
+NL_ALONE = ("Niet opgeslagen: Map voor inkooporders is een tweede map van het postvak. Kies eerst bij Map de map die de assistent leest, "
+            "of kies Geen map voor inkooporders.")
+
+
+def connection_blocks(page) -> list:
+    """The blocks of the part "Postvak en AI", top to bottom."""
+    def inside(block) -> list:
+        return [block, *[found for child in getattr(block, "children", []) for found in inside(child)]]
+    return inside(section(page, "koppelingen"))
+
+
+def order_choices(language: str, *folders: tuple[str, str]) -> list[tuple[str, str]]:
+    """The choices of the folder for orders: the empty choice in the language, then the folders as (name, id)."""
+    return [(STRINGS[language]["settings_order_folder_none"], ""), *folders]
+
+
+def test_step_3_offers_the_folder_for_orders_from_the_same_folder_list_with_its_sentence(tmp_path, madeup_out):
+    """Step 3 holds "Map voor inkooporders" between the row of "Map" and "Verbinding testen", with the sentence that says when to choose
+    Sent Items, in both languages. Its first choice is "Geen map voor inkooporders"; its other choices are the folders that "Map" is
+    chosen from, listed by a sign-in or "Mappen ophalen". The tab opens with the saved folder chosen, and the folders listed then hold
+    it, so that a save without "Mappen ophalen" keeps its name."""
+    gr = import_gradio()
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    assert (nl["settings_order_folder"], nl["settings_order_folder_help"], nl["settings_order_folder_none"]) == (
+        "Map voor inkooporders", NL_HELP, "Geen map voor inkooporders")
+    assert (en["settings_order_folder"], en["settings_order_folder_help"], en["settings_order_folder_none"]) == (
+        "Folder for purchase orders", EN_HELP, "No folder for purchase orders")
+    session = FakeSession({("GET", f"{GRAPH}/me/mailFolders?$top=100"): FOLDERS})
+    path, page, made = tab(tmp_path, madeup_out, app=FakeApp(accounts=[USERNAME]), session=session, **SIX, order_folder=SENT_ITEMS,
+                           order_folder_name="Postvak IN")
+    shown = [block.label if isinstance(block, gr.Dropdown) else block.value for block in connection_blocks(page)
+             if isinstance(block, (gr.Dropdown, gr.Button))]
+    at = shown.index(nl["settings_order_folder"])
+    assert shown[at - 2:at + 2] == [nl["settings_folder"], nl["settings_folders"], nl["settings_order_folder"], nl["settings_test"]]
+    [field] = [block for block in connection_blocks(page) if isinstance(block, gr.Dropdown) and block.label == nl["settings_order_folder"]]
+    assert (field.info, field.choices, field.value) == (NL_HELP, order_choices("nl"), "")
+    opened = handler(page, "settings_opened")("nl")
+    assert (opened[-1]["choices"], opened[-1]["value"]) == (order_choices("nl", ("Postvak IN", SENT_ITEMS)), SENT_ITEMS)
+    assert opened[3]["choices"] == [("Orderbevestigingen", FOLDER)] and opened[7] == {"mailbox": "", "folders": {FOLDER: "Orderbevestigingen",
+                                                                                                                  SENT_ITEMS: "Postvak IN"}}
+    waiting, signed = list(handler(page, "sign_in_browser")(TENANT_ID, CLIENT_ID, "", "nl"))
+    assert waiting[-1] == {"__type__": "update"}
+    assert (signed[-1]["choices"], signed[-1]["value"]) == (order_choices("nl", ("Postvak IN", SENT_ITEMS), ("Orderbevestigingen", FOLDER)), SENT_ITEMS)
+    relabelled = handler(page, "settings_relabel")("en", TENANT_ID, CLIENT_ID, "", "auto", LISTED, SENT_ITEMS)
+    assert relabelled[-1] == "" and (relabelled[-2]["label"], relabelled[-2]["info"], relabelled[-2]["value"]) == (
+        en["settings_order_folder"], EN_HELP, SENT_ITEMS)
+    assert relabelled[-2]["choices"] == order_choices("en", ("Postvak IN", SENT_ITEMS), ("Orderbevestigingen", FOLDER))
+
+
+def test_postvak_opslaan_writes_the_folder_for_orders_and_refuses_the_same_folder_by_its_field(tmp_path, madeup_out):
+    """"Postvak opslaan" writes the folder for orders with its display name from the folders listed. The same folder as "Map", a folder
+    for orders without "Map", and a folder listed for another mailbox are refused before anything is written, each with a sentence that
+    names the fields and the way out."""
+    path, page, made = tab(tmp_path, madeup_out, app=FakeApp(accounts=[USERNAME]))
+    save, nl, en = handler(page, "save_settings"), STRINGS["nl"], STRINGS["en"]
+    assert (nl["settings_order_same"], nl["settings_order_alone"]) == (NL_SAME, NL_ALONE)
+    assert save(TENANT_ID, CLIENT_ID, "", FOLDER, "auto", LISTED, "nl", SENT_ITEMS)[0] == nl["settings_buyer_saved"]
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert (saved["mail_folder"], saved["order_folder"], saved["order_folder_name"]) == (FOLDER, SENT_ITEMS, "Postvak IN")
+    before = path.read_bytes()
+    assert save(TENANT_ID, CLIENT_ID, "", FOLDER, "auto", LISTED, "nl", FOLDER)[0] == NL_SAME and path.read_bytes() == before
+    assert save(TENANT_ID, CLIENT_ID, "", None, "auto", LISTED, "nl", SENT_ITEMS)[0] == NL_ALONE and path.read_bytes() == before
+    alone = save(TENANT_ID, CLIENT_ID, "", None, "auto", LISTED, "en", SENT_ITEMS)[0]
+    assert alone == en["settings_order_alone"] and en["settings_order_folder_none"] in alone and path.read_bytes() == before
+    assert save(TENANT_ID, CLIENT_ID, "orders@example.com", None, "auto", LISTED, "nl", SENT_ITEMS)[0] == nl["settings_folders_first"]
+    assert path.read_bytes() == before
+
+
+def test_a_save_without_a_folder_for_orders_writes_the_file_as_before(tmp_path, madeup_out):
+    """A file without the two settings of the folder for orders keeps its bytes, but for the settings saved, exactly as before: a
+    save with no folder for orders chosen adds no key. A file that holds a folder for orders gets it emptied (null) by "Geen map voor
+    inkooporders"."""
+    path, page, made = tab(tmp_path, madeup_out, app=FakeApp(accounts=[USERNAME]))
+    reference = tmp_path / "reference"
+    reference.mkdir()
+    shutil.copy(path, reference / "settings.json")
+    update_settings_file(reference / "settings.json", SIX | {"mail_folder_name": "Orderbevestigingen"})
+    assert handler(page, "save_settings")(TENANT_ID, CLIENT_ID, "", FOLDER, "auto", LISTED, "nl", "")[0] == STRINGS["nl"]["settings_buyer_saved"]
+    assert path.read_bytes() == (reference / "settings.json").read_bytes() and "order_folder" not in path.read_text(encoding="utf-8")
+    handler(page, "save_settings")(TENANT_ID, CLIENT_ID, "", FOLDER, "auto", LISTED, "nl", SENT_ITEMS)
+    handler(page, "save_settings")(TENANT_ID, CLIENT_ID, "", FOLDER, "auto", LISTED, "nl", "")
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert (saved["order_folder"], saved["order_folder_name"]) == (None, None) and saved["mail_folder"] == FOLDER
+
+
+def test_a_save_that_empties_the_folder_for_orders_or_names_another_forgets_its_connection_only(tmp_path, madeup_out):
+    """Emptying the folder for orders removes its connection and the used marks and leaves the main folder's connection; naming another
+    folder for orders, or another mailbox, removes its connection and keeps the used marks; another "Map" with the same folder for
+    orders leaves the files of that folder alone."""
+    path, page, made = tab(tmp_path, madeup_out, app=FakeApp(accounts=[USERNAME]), **SIX)
+    root, save = tmp_path / "cases", handler(page, "save_settings")
+
+    def connect(mailbox: str | None = None) -> None:
+        root.mkdir(exist_ok=True)
+        for name, folder in (("mailbox_state.json", FOLDER), ("mailbox_orders_state.json", SENT_ITEMS)):
+            state = {"mailbox": mailbox, "folder": folder, "connected_at": "2026-11-12T08:00:00Z", "delta_link": f"{GRAPH}/made-up",
+                     "last_sync": "2026-11-12T09:15:00Z", "saved": 1}
+            (root / name).write_text(json.dumps(state), encoding="utf-8")
+        for name in ("mailbox_known.json", "mailbox_orders_known.json"):
+            (root / name).write_text("[]", encoding="utf-8")
+        (root / "mailbox_used.json").write_text(json.dumps({"0123456789ab": "orders"}), encoding="utf-8")
+
+    def stored() -> list[str]:
+        return sorted(p.name for p in root.iterdir() if p.name.startswith("mailbox_"))
+    every = ["mailbox_known.json", "mailbox_orders_known.json", "mailbox_orders_state.json", "mailbox_state.json", "mailbox_used.json"]
+    connect()
+    save(TENANT_ID, CLIENT_ID, "", FOLDER, "auto", LISTED, "nl", SENT_ITEMS)
+    assert stored() == every                                                            # the same folders: both connections stay
+    save(TENANT_ID, CLIENT_ID, "", FOLDER, "auto", LISTED, "nl", "")                    # emptied
+    assert stored() == ["mailbox_known.json", "mailbox_state.json"]
+    connect()
+    save(TENANT_ID, CLIENT_ID, "", FOLDER, "auto", LISTED | {"folders": LISTED["folders"] | {"AAMkADOther=": "Archief"}}, "nl", "AAMkADOther=")
+    assert stored() == ["mailbox_known.json", "mailbox_state.json", "mailbox_used.json"]      # another folder for orders
+    connect()
+    other = {"mailbox": "orders@example.com", "folders": LISTED["folders"]}
+    save(TENANT_ID, CLIENT_ID, "orders@example.com", FOLDER, "auto", other, "nl", SENT_ITEMS)
+    assert stored() == ["mailbox_used.json"]                                            # another mailbox: both connections go
+    connect("orders@example.com")
+    save(TENANT_ID, CLIENT_ID, "orders@example.com", "AAMkADOther=", "auto", other | {"folders": other["folders"] | {"AAMkADOther=": "Archief"}},
+         "nl", SENT_ITEMS)
+    assert stored() == ["mailbox_orders_known.json", "mailbox_orders_state.json", "mailbox_used.json"]     # another "Map" only
+
+
+def test_the_state_lines_name_the_folder_for_orders_by_counts_and_times_only(tmp_path, madeup_out):
+    """Under "Stand van het postvak" and in "Stand van de assistent" the folder for orders has a sentence of its own after the main
+    folder's: not connected yet, connected and not read yet, or connected since, last read and the purchase orders fetched. Without a
+    folder for orders the text is that of before. The state file's delta link never shows."""
+    nl = STRINGS["nl"]
+    path, page, made = tab(tmp_path, madeup_out, **SIX, order_folder=SENT_ITEMS, order_folder_name="Postvak IN")
+    root = tmp_path / "cases"
+    root.mkdir(exist_ok=True)
+    main = {"mailbox": None, "folder": FOLDER, "connected_at": "2026-11-12T08:00:00Z", "delta_link": "made-up-main", "last_sync": "2026-11-12T09:15:00Z",
+            "saved": 3}
+    (root / "mailbox_state.json").write_text(json.dumps(main), encoding="utf-8")
+    first = nl["settings_trigger_on"].format(since=local("2026-11-12T08:00:00+00:00"), last=local("2026-11-12T09:15:00+00:00"), saved=3)
+    assert handler(page, "settings_opened")("nl")[6] == f"{first} {nl['settings_order_pending']}"
+    orders = main | {"folder": SENT_ITEMS, "delta_link": None, "last_sync": None, "saved": 0, "connected_at": "2026-11-12T08:30:00Z"}
+    (root / "mailbox_orders_state.json").write_text(json.dumps(orders), encoding="utf-8")
+    assert handler(page, "settings_opened")("nl")[6] == f"{first} " + nl["settings_order_unread"].format(since=local("2026-11-12T08:30:00+00:00"))
+    orders |= {"delta_link": "made-up-orders", "last_sync": "2026-11-12T09:16:00Z", "saved": 2}
+    (root / "mailbox_orders_state.json").write_text(json.dumps(orders), encoding="utf-8")
+    sentence = nl["settings_order_on"].format(since=local("2026-11-12T08:30:00+00:00"), last=local("2026-11-12T09:16:00+00:00"), saved=2)
+    trigger = handler(page, "settings_opened")("nl")[6]
+    assert trigger == f"{first} {sentence}" and "made-up" not in trigger
+    day = nl["settings_order_on"].format(since=local("2026-11-12T08:30:00+00:00", "%d-%m-%Y %H:%M"),
+                                         last=local("2026-11-12T09:16:00+00:00", "%d-%m-%Y %H:%M"), saved=2)
+    [assistant] = [f.fn for f in page.fns.values() if getattr(f.fn, "__name__", "") == "assistant_shown" and f.trigger_after is None]
+    assert day in assistant("nl")[0] and "made-up" not in assistant("nl")[0]
+    plain_path, plain, _ = tab(tmp_path / "plain", madeup_out, **SIX)
+    (tmp_path / "plain" / "cases").mkdir(exist_ok=True)
+    (tmp_path / "plain" / "cases" / "mailbox_state.json").write_text(json.dumps(main), encoding="utf-8")
+    assert handler(plain, "settings_opened")("nl")[6] == first                         # without a folder for orders: as before
+
+
+def test_verbinding_testen_covers_the_folder_for_orders_with_counts_and_times_only(tmp_path, madeup_out):
+    """"Verbinding testen" gives a paragraph for each folder: the count and the time of the newest message, never a subject or a
+    sender. A folder for orders that is gone has its own failure line beside the main folder's count; a lapsed sign-in gives its line
+    alone."""
+    newest = FakeResponse(json_data={"value": [{"receivedDateTime": "2026-11-12T08:59:00Z", "subject": "Geheim onderwerp",
+                                                "from": {"emailAddress": {"address": "s01@example.com"}}}]})
+    sent_newest = FakeResponse(json_data={"value": [{"receivedDateTime": "2026-11-12T09:30:00Z", "subject": "Geheim onderwerp"}]})
+    order_by = "messages?$top=1&$orderby=receivedDateTime desc&$select=receivedDateTime"
+    session = FakeSession({("GET", f"{GRAPH}/me/mailFolders/{FOLDER}"): FakeResponse(json_data={"id": FOLDER, "totalItemCount": 12}),
+                           ("GET", f"{GRAPH}/me/mailFolders/{FOLDER}/{order_by}"): newest,
+                           ("GET", f"{GRAPH}/me/mailFolders/{SENT_ITEMS}"): FakeResponse(json_data={"id": SENT_ITEMS, "totalItemCount": 7}),
+                           ("GET", f"{GRAPH}/me/mailFolders/{SENT_ITEMS}/{order_by}"): sent_newest})
+    path, page, made = tab(tmp_path, madeup_out, app=FakeApp(accounts=[USERNAME]), session=session)
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    note = handler(page, "check_connection")(TENANT_ID, CLIENT_ID, "", FOLDER, "nl", SENT_ITEMS)
+    assert note == (nl["settings_tested"].format(count=12, newest=local("2026-11-12T08:59:00+00:00")) + "\n\n"
+                    + nl["settings_order_tested"].format(count=7, newest=local("2026-11-12T09:30:00+00:00")))
+    assert "Geheim" not in note and "s01" not in note
+    assert handler(page, "check_connection")(TENANT_ID, CLIENT_ID, "", FOLDER, "nl") == nl["settings_tested"].format(
+        count=12, newest=local("2026-11-12T08:59:00+00:00"))                            # without a folder for orders: as before
+    gone = FakeSession({("GET", f"{GRAPH}/me/mailFolders/{FOLDER}"): FakeResponse(json_data={"id": FOLDER, "totalItemCount": 0}),
+                        ("GET", f"{GRAPH}/me/mailFolders/{FOLDER}/{order_by}"): FakeResponse(json_data={"value": []}),
+                        ("GET", f"{GRAPH}/me/mailFolders/{SENT_ITEMS}"): FakeResponse(404, json_data={"error": {"code": "ErrorItemNotFound"}})})
+    path, page, made = tab(tmp_path / "gone", madeup_out, app=FakeApp(accounts=[USERNAME]), session=gone)
+    assert handler(page, "check_connection")(TENANT_ID, CLIENT_ID, "", FOLDER, "en", SENT_ITEMS) == (
+        en["settings_tested_empty"] + "\n\n" + en["settings_order_failed"].format(code="HTTP 404"))
+    path, page, made = tab(tmp_path / "lapsed", madeup_out, app=FakeApp(accounts=[USERNAME], silent=None), session=FakeSession())
+    assert handler(page, "check_connection")(TENANT_ID, CLIENT_ID, "", FOLDER, "nl", SENT_ITEMS) == nl["settings_lapsed"].format(account=USERNAME)
+
+
+def test_sign_out_and_the_folder_list_fill_the_folder_for_orders_too(tmp_path, madeup_out):
+    """"Afmelden" leaves the folder for orders with its empty choice alone; "Mappen ophalen" and a sign-in give it the empty choice and
+    the folders listed."""
+    session = FakeSession({("GET", f"{GRAPH}/me/mailFolders?$top=100"): FOLDERS})
+    path, page, made = tab(tmp_path, madeup_out, app=FakeApp(accounts=[USERNAME]), session=session)
+    signed_out = handler(page, "sign_out")(TENANT_ID, CLIENT_ID, "nl")
+    assert (signed_out[-1]["choices"], signed_out[-1]["value"]) == (order_choices("nl"), "")
+    path, page, made = tab(tmp_path / "again", madeup_out, app=FakeApp(accounts=[USERNAME]), session=session)
+    loaded = handler(page, "load_folders")(TENANT_ID, CLIENT_ID, "", "en")
+    folders = (("Postvak IN", SENT_ITEMS), ("Orderbevestigingen", FOLDER))
+    assert (loaded[-1]["choices"], loaded[-1]["value"]) == (order_choices("en", *folders), "")
+    signed = list(handler(page, "sign_in_browser")(TENANT_ID, CLIENT_ID, "", "nl"))[-1]
+    assert (signed[-1]["choices"], signed[-1]["value"]) == (order_choices("nl", *folders), "")
+
+
+def test_a_public_link_is_refused_while_the_settings_name_a_folder_for_orders():
+    settings = SETTINGS.model_copy(update={"authorization_limit": None, "order_folder": SENT_ITEMS})
+    assert company_values(settings) == ["order_folder is set"] and SENT_ITEMS not in refuse_share(settings)
+
+
+def test_the_manual_and_the_readme_say_what_the_folder_for_orders_does():
+    """Section 3.14 of the manual quotes the field of the folder for purchase orders, its sentence, its empty choice, the two refusals
+    of a save and the three sentences of its state, word for word (the fixed parts around a time or a count); its test of the folder
+    says that it works only while no layout is saved; it says what the aid keeps of that folder, a mark of 12 characters of each e-mail
+    with an attachment while the folder is connected, that a forward keeps its "FW:", that one without it is a known limit, and that
+    check A4 decides whether the folder is needed; section 3.17 says that the sender field holds your own address when Exact sends
+    through your Outlook. Section 7 and section 2.7 quote the field and the mark of Bestanden, the README names the settings, and check
+    A4 of the try list names the field. No sentence still counts six settings of the mailbox, and no text holds an em dash."""
+    nl, manual = STRINGS["nl"], manual_sections()
+    mailbox = manual["3.14"]
+    for key in ("settings_order_folder", "settings_order_folder_help", "settings_order_folder_none", "settings_order_same",
+                "settings_order_alone", "settings_order_pending"):
+        assert nl[key] in mailbox, key
+    for key in ("settings_order_unread", "settings_order_on"):
+        assert all(part in mailbox for part in re.split(r"\{\w+\}", nl[key])), key
+    test = mailbox[mailbox.index("A test of the folder for purchase orders"):]
+    assert nl["exact_state_unset"].split(". ")[0] + "." in test and "only while no layout is saved" in test
+    assert "a mark of 12 characters" in mailbox and "Keep that \"FW:\"" in mailbox
+    # the four points settled for the build: check A4 decides whether the folder is needed, a forward without its "FW:" is a known
+    # limit, the marks are kept while the folder is connected, and the sender field of part 1 holds your own address
+    assert "check A4 of the try list decides" in mailbox and "while the folder is connected" in mailbox and "This is a known limit" in mailbox
+    assert "that address is your own (check A4): fill it in" in manual["3.17"]
+    assert f"\"{nl['settings_order_folder']}\"" in manual["7"] and nl["files_from_orders"] in manual["7"] and nl["files_from_orders"] in manual["2.7"]
+    readme = Path("aid/README.md").read_text(encoding="utf-8")
+    assert "`order_folder`" in readme and "`order_folder_name`" in readme
+    plan = Path("docs/superpowers/plans/2026-10-26-checking-aid-implementation.md")
+    if plan.exists():                                 # the try list stands beside aid/ in the repository, not in a copy of aid/ alone
+        text = plan.read_text(encoding="utf-8")
+        check = text[text.index("\nA4. "):text.index("\nA5. ")]
+        assert f"\"{nl['settings_order_folder']}\"" in check and "Verzonden items" in check
+    sixes = ("six settings of the work mailbox", "The six settings are written", "validates the six settings", "gives all six", "writes the six settings",
+             "the six of the mailbox", "the six settings of the file", "Validate the six settings")
+    for path in ("aid/MANUAL.md", "aid/README.md", "aid/review/page.py", "aid/settings.py"):
+        text = Path(path).read_text(encoding="utf-8")
+        assert not [phrase for phrase in sixes if phrase in text], path
+        assert "\u2014" not in text, path

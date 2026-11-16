@@ -284,3 +284,39 @@ def test_an_own_address_with_a_colon_is_refused_by_its_place(tmp_path, entry):
     error = str(info.value)
     assert "own_addresses.0" in error and "input_value" not in error and entry not in error.split("s.json is not valid: ", 1)[1], error
     assert not is_own_address(entry)
+
+
+SENT_ITEMS = "AAMkADMadeUpSentItems0001="          # a made-up id of the folder Sent Items, as Graph gives one
+INBOX_FOLDER = "AAMkADMadeUpFolder0001="
+
+
+def test_the_folder_for_orders_is_another_folder_of_the_same_mailbox_and_needs_the_main_folder(tmp_path):
+    """order_folder names a second folder of the mailbox the aid reads, for purchase orders only: it is refused when it is the folder
+    of mail_folder and when mail_folder is empty, by its field and its reason and never by the id it holds. An empty text is null,
+    for it and for its display name."""
+    example = json.loads(Path("aid/settings.example.json").read_text(encoding="utf-8"))
+    path = tmp_path / "settings.json"
+    for values, reason in (({"mail_folder": INBOX_FOLDER, "order_folder": INBOX_FOLDER}, "must be another folder than mail_folder"),
+                           ({"order_folder": SENT_ITEMS}, "needs mail_folder"), ({"mail_folder": " ", "order_folder": SENT_ITEMS}, "needs mail_folder")):
+        path.write_text(json.dumps(example | values), encoding="utf-8")
+        with pytest.raises(SettingsInvalid) as refused:
+            read_settings(path)
+        assert refused.value.fields == ["order_folder"] and reason in str(refused.value), values
+        assert "AAMkADMadeUp" not in str(refused.value)
+    path.write_text(json.dumps(example | {"mail_folder": INBOX_FOLDER, "order_folder": SENT_ITEMS, "order_folder_name": "Verzonden items"}),
+                    encoding="utf-8")
+    settings = load_settings(path)
+    assert (settings.mail_folder, settings.order_folder, settings.order_folder_name) == (INBOX_FOLDER, SENT_ITEMS, "Verzonden items")
+    path.write_text(json.dumps(example | {"mail_folder": INBOX_FOLDER, "order_folder": "", "order_folder_name": " "}), encoding="utf-8")
+    assert (load_settings(path).order_folder, load_settings(path).order_folder_name) == (None, None)
+
+
+def test_the_example_holds_the_folder_for_orders_empty_after_the_folder():
+    """The two settings of the folder for orders stand in the example right after mail_folder_name, null: no second folder is read.
+    test_mode stays the last key."""
+    values = json.loads(Path("aid/settings.example.json").read_text(encoding="utf-8"))
+    names = list(values)
+    assert names[names.index("mail_folder_name"):][:3] == ["mail_folder_name", "order_folder", "order_folder_name"]
+    assert (values["order_folder"], values["order_folder_name"]) == (None, None) and names[-1] == "test_mode"
+    example = load_settings(Path("aid/settings.example.json"))
+    assert (example.order_folder, example.order_folder_name) == (None, None)

@@ -44,7 +44,11 @@ reason of a skip by SKIPPED, an error by ERRORS, its labels never quoting the er
 later version's) is "Overgeslagen: niets gedaan"; an export refused for a reason the table does not know has the label of every other
 reason of EXPORT_REFUSED, and any other detail of an error the label of an error the scan does not tell apart. rows gives the table as
 the tab shows it: the time (when), the file and the label, with the mark of a try-out ("(proefdocument)", hand_tryout) behind the label
-of a case made from a try-out document, as Task 33 marks such a case on the page (case_is_tryout of aid/tryout_mark.py). Behind the
+of a case made from a try-out document, as Task 33 marks such a case on the page (case_is_tryout of aid/tryout_mark.py). A purchase
+order that the folder for orders of the work mailbox gave the watched folder (sync_orders of aid/sources/microsoft_mail.py) is a bare
+file named <time>_<mark>_<code>.order.pdf (is_order_file of aid/sources/mailbox.py), a name the aid makes, which holds nothing of the
+e-mail: its line has the mark "(uit de map voor inkooporders)" ("files_from_orders") behind its label, whatever its outcome, and
+nothing else tells it apart; an attachment of an e-mail under such a name ("<e-mail>/<name>") has none. Behind the
 label of a line that opened a case (OPENED: case, guess and recheck), and behind its mark of a try-out, stands what the case is now,
 "Zaak geopend voor inkooporder 250105. Nu: mislukt." ("files_now"), its state read from the case's folder when the table is read
 (case_states of aid/review/status.py), so that the intake file itself never changes: failed, failed and noted as handled by the
@@ -65,7 +69,7 @@ from aid.review.i18n import STRINGS
 from aid.sources.dropin import FALLBACK, drop
 from aid.sources.mailbox import DOCUMENT_SUFFIXES, NO_ORDER_LINES, NOT_AN_EXPORT
 from aid.sources.mailbox import _append_lines    # JSON lines appended in one write, a line a crash cut off ended first, as review_items.jsonl
-from aid.sources.mailbox import safe_name
+from aid.sources.mailbox import is_order_file, safe_name
 from aid.tryout_mark import TRYOUT_OUTSIDE, case_is_tryout
 
 ACCEPTED = (*DOCUMENT_SUFFIXES, ".eml", *EXPORT_SUFFIXES)       # ".pdf", ".png", ".eml", ".xlsx", ".csv": what the scan reads
@@ -199,14 +203,16 @@ def when(event: dict) -> str:
 
 def rows(cases_root: Path, language: str, limit: int = TABLE_LINES) -> list[list[str]]:
     """The table of the tab as it shows the last lines (recent): the time, the file and the label in the language, with the mark of a
-    try-out behind the label of a case made from a try-out document, and behind the label of a line that opened a case (OPENED) what
-    the case is now (see the module docstring)."""
+    try-out behind the label of a case made from a try-out document, the mark of the folder for orders behind the label of a line of
+    a purchase order that folder gave (a bare file named as is_order_file of aid/sources/mailbox.py names one), and behind the label of
+    a line that opened a case (OPENED) what the case is now (see the module docstring)."""
     strings = STRINGS[language]
     events = recent(cases_root, limit)
     states = aid_status.case_states(Path(cases_root), [event["detail"] for event in events if event["outcome"] in OPENED])
     table = []
     for event in events:
-        label = shown(event, language) + (f" {strings['hand_tryout']}" if _tryout(cases_root, event) else "")
+        label = shown(event, language) + (f" {strings['hand_tryout']}" if _tryout(cases_root, event) else "") \
+            + (f" {strings['files_from_orders']}" if is_order_file(event["file"]) else "")
         key = f"files_now:{states.get(event['detail'])}" if event["outcome"] in OPENED else None      # none for a case in review
         table.append([when(event), event["file"], strings["files_now"].format(label=label, state=strings[key]) if key in strings else label])
     return table

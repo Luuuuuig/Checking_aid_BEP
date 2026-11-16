@@ -342,3 +342,19 @@ def test_line_boxes_give_the_corner_of_a_page_whose_box_does_not_start_at_zero(t
         document.save(turned)
         document.close()
         assert line_boxes(turned).turns == {1: degrees}, degrees
+
+
+@pytest.mark.parametrize("cut_cells", [False, True])
+def test_extract_rows_reads_a_pdf_from_its_bytes_as_from_its_file(madeup_out, cut_cells):
+    """The folder for orders classes a PDF from memory (is_po_pdf of aid/sources/mailbox.py): extract_rows of a binary stream of the
+    bytes gives what extract_rows of the file gives, with and without the cells cut apart. Given the first page alone, as is_po_pdf
+    reads it, it gives the rows of page 1 of the whole PDF; a page given alone keeps its number in the PDF."""
+    from aid.madeup.generate import Row, Text, pdf_bytes
+    from aid.tests.helpers import ANDERS_PO
+    for path in (madeup_out / "MU01_po_v1.pdf", madeup_out / "MU01_conf.pdf", ANDERS_PO):
+        whole = extract_rows(path, cut_cells=cut_cells)
+        assert extract_rows(io.BytesIO(path.read_bytes()), cut_cells=cut_cells) == whole, path.name
+        assert extract_rows(io.BytesIO(path.read_bytes()), cut_cells=cut_cells, pages=[1]) == [row for row in whole if row.line.page == 1]
+    two = pdf_bytes([[Row([Text(0, "Pagina een")])], [Row([Text(0, "Pagina twee")]), Row([Text(0, "Einde")])]], "made-up pages")
+    assert [(row.line.page, row.line.line, row.line.text) for row in extract_rows(io.BytesIO(two), cut_cells=cut_cells, pages=[2])] == [
+        (2, 1, "Pagina twee"), (2, 2, "Einde")]
