@@ -1,7 +1,8 @@
-# Runs the aid's tests (aid/tests) on Windows: once with the Python the folder for Windows carries (the PYTHON_VERSION of
-# folder.yml) and once with Python 3.11, the oldest version the README names. It builds nothing and publishes nothing; the folder
-# is built, started and published by folder.yml, which does not wait for this run.
-name: Tests on Windows
+# Runs the aid's tests (aid/tests) on Windows and on Linux: with the Python the folder for Windows carries (the PYTHON_VERSION of
+# folder.yml) and with Python 3.11, the oldest version the README names. The four runs are four records: Windows against Linux
+# tells a fault of the system from a fault of the Python version. It builds nothing and publishes nothing; the folder is built,
+# started and published by folder.yml, which does not wait for this run.
+name: Tests
 
 on:
   push:
@@ -14,17 +15,18 @@ permissions:
 
 # One run per branch at a time. A newer push ends the run in progress: only the result of the newest commit matters.
 concurrency:
-  group: tests-on-windows-${{ github.ref }}
+  group: tests-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   tests:
-    name: Python ${{ matrix.python }}
-    runs-on: windows-latest
+    name: ${{ matrix.os }}, Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
-      fail-fast: false            # the two versions are two records: one that fails does not end the other
+      fail-fast: false            # each run is a record of its own: one that fails does not end the others
       matrix:
+        os: [windows-latest, ubuntu-latest]
         python: ["3.13.17", "3.11"]
     env:
       PYTHONUTF8: "1"             # as the folder runs its Python (-X utf8, aid/portable.py)
