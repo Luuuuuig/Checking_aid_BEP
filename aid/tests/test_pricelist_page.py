@@ -2540,6 +2540,6 @@ def test_the_small_press_keeps_its_words_on_one_line_and_its_question_reads_as_a
     assert isinstance(confirm, gr.Row)
     css = look.PAGE_CSS
     for rule in ("#pricelist-remove { flex: 0 0 auto; width: auto; }", ".row > .form ~ button { align-self: flex-end; }",
-                 f"#pricelist-remove-confirm {{ align-items: center; background: {look.SURFACE_2}; border-left: 4px solid {look.CONTROL}; "
+                 f"#pricelist-remove-confirm {{ align-items: center; background: {look.TINT}; border-left: 4px solid {look.CONTROL}; "
                  "border-radius: 6px; padding: 12px 16px; }"):
         assert rule in css, rule

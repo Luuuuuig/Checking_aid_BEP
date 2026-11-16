@@ -35,7 +35,10 @@ from marked on both (the marks of the view, aid/review/app.py, which _marked dra
 inside an edge in its mark colour, nothing else of a page changed), then under "Vergelijking" the lists "Afwijkingen", "Niet te
 vergelijken" and "Overeenkomsten", each its table or, while it has no row, one sentence in its place ("Geen afwijkingen in deze
 zaak."); a case that was not compared, such as one that failed before the comparison, and a document left to the buyer show no
-comparison, rather than sentences that are not true of them. The first and the last part show while a case is chosen (case_framed);
+comparison, rather than sentences that are not true of them. The frame of the purchase order shows only while the case has a page of
+one (show, order_pages): a case that failed before its order was chosen, a document left to the buyer and a cart matched against an
+export from Exact have none, and the supplier's document then takes the width of the row, rather than stand beside an empty frame
+560 px high; the next case with pages brings the frame back. The first and the last part show while a case is chosen (case_framed);
 the close's part always stands, so that what a close said stays on the screen once the case has left the review and its parts have
 closed. record_shown, on the change of the state of the view and on the language switch, gives each list its table or its sentence
 and the undo part its visibility, from the case's write log as it is then, as undo_shown does after each undo, so that the part
@@ -72,7 +75,14 @@ runner, noted as handled) keeps its place in it, named as the list names it now 
 the language switch, the timer), until another case is chosen, and a line under the field says so and why ("Inkooporder 250107
 staat niet meer op de lijst: de zaak is intussen afgesloten of vervangen. Kies een andere zaak.", or "... als afgehandeld
 genoteerd. ..." for a failed case, whose notice and button the language switch then hide rather than leave the notice in the
-language it was shown in): the page library refuses a value that is not among a dropdown's choices. While no case is chosen, a line under the
+language it was shown in): the page library refuses a value that is not among a dropdown's choices. It keeps those choices for each
+session and checks every request against them before the handler runs. A close sends the list without its case, and a request that the
+browser put together just before it applied that answer still carries the case (a listener of the language switch, a tick of the
+timer): the library would refuse it in a red box, in English and with the case's id. So the three handlers that the switch and the
+timer give the value of "Zaak" (relabel, queue_ticked, failed_relabel) take what the browser sent without that check
+(preprocess=False) and judge the value themselves (as_sent: the id of a document left to the buyer or one folder name, anything else
+as no case chosen); the case just closed then keeps its place in the list as any case that left it, until the list is read again.
+The handlers of the buyer's own presses keep the library's check. While no case is chosen, a line under the
 field says to choose one ("Kies een zaak bij Zaak, of open de oudste.") or that none waits for the buyer, with "Oudste zaak openen"
 while one does, which chooses the oldest case in review, else the oldest failed one, else the oldest document left to the buyer
 (below), and sends the case list with it, so that the case is among its choices (oldest_opened). The row of that line and that
@@ -93,7 +103,7 @@ stand in the gallery of the supplier's document, rendered as a case's document i
 (_item_document): a file of its own in processed/ of the watched folder, under its own name or with _2, _3 and so on, and an
 attachment inside its e-mail there, of the files of that name the one whose bytes have the sha256 the scan noted, whatever the times
 of the files (of a line written before the scan noted one, the one file of that name, and none of several). When it is no longer
-there, or cannot be told from another document of the same name, the gallery stays empty, and the notice ends with where to look for
+there, or cannot be told from another document of the same name, that gallery stays empty, and the notice ends with where to look for
 it ("Het document staat niet meer op deze pc: zoek het in uw postvak, in de e-mail van 12-11-2026 17:03."), rather than show another
 document of the same name. "Als afgehandeld noteren" on a document (item_marked) appends its mark
 (handled_mark of aid/review/status.py) to <cases_root>/review_items_handled.jsonl in one write, the one file it writes, with the
@@ -123,12 +133,15 @@ launched without that look (the Colab notebook) they show their words alone. The
 the buyer, "Beoordelen (3)" (review_label: in review, or failed and not noted as handled, and the documents left to him that wait
 for him), and has no number while none waits.
 
-The strip, the fold, the tab's label, the line under the case list and the case list are read again when the page loads, with
-"Lijst vernieuwen", at the language switch and every TICK_SECONDS seconds, by one gr.Timer at the top level of the page, through
-two handlers of their own (strip_ticked and queue_ticked), which never call Microsoft. Neither sets the value of "Zaak" nor reaches
-the view of the case chosen, and the list of the tab "In Exact invoeren", whose read empties the buyer's ticks, is not on the timer:
-the timer gives that tab its label and a line of the changes that came in, and nothing else (hand_label_ticked, below). It also
-reads the table of the tab "Bestanden" again, and nothing else of that tab (files_ticked, below).
+The strip, the fold, the tab's label, the line under the case list and the case list are read again when the page loads, when the
+tab is selected, with "Lijst vernieuwen", at the language switch and every TICK_SECONDS seconds, by one gr.Timer at the top level of
+the page, through two handlers of their own (strip_ticked and queue_ticked), which never call Microsoft. After "Zaak afsluiten" and
+"Als afgehandeld noteren" they are read again at once, by two thin handlers that call them (strip_after_close, queue_after_close),
+and the label of the tab "In Exact invoeren" with them (hand_label_read, below), so that each of the two stays bound once.
+Neither sets the value of "Zaak" nor reaches the view of the case chosen, and the list of the tab "In Exact invoeren", whose read
+empties the buyer's ticks, is not on the timer: the timer gives that tab its label and a line of the changes that came in, and
+nothing else (hand_label_ticked, below). It also reads the table of the tab "Bestanden" again, and nothing else of that tab
+(files_ticked, below).
 A tick reads again only the case folders whose files changed since it read them: through the cache of aid/review/status.py for the
 states, and through offered_cases' own for the cases offered.
 queue_ticked sends the case list only when it differs from the one it sent last, which a gr.State keeps, so that an open dropdown
@@ -137,11 +150,28 @@ differs from the kept one is sent once more at the next tick, the same list, whi
 review_label as queue_ticked does, so that the label is the same whichever runs last.
 The page library's client (gradio 6.31.0) runs the listeners of one click, change, select or tick one after another, each to its end
 (those of the page load and of a State's change it starts together), and a listener on the queue costs a round trip of the queue, a
-quarter of a second in the browser: the language switch, which some thirty listeners share, is as slow as their number. So the five
-handlers that the redesign added to it after its first part (record_shown, review_texts, hand_new_cleared, removal_relabelled,
-files_ticked), each a read of a few files or none, skip the queue, which costs a few hundredths of a second, and the switch takes
-about as long as before them. The read of the copy buttons of "In Exact invoeren" (copies_opened), which the switch shares since
+quarter of a second in the browser: the language switch, which thirty-one listeners share on the page of this PC, is as slow as their
+number. So the five handlers that the redesign added to it after its first part (record_shown, review_texts, hand_new_cleared,
+removal_relabelled, files_ticked), each a read of a few files or none, skip the queue (queue=False), and the switch takes about as
+long as before them. The read of the copy buttons of "In Exact invoeren" (copies_opened), which the switch shares since
 16 November, skips it as well.
+Since 16 November seventeen listeners that the switch had before skip the queue too, each a relabel or a read of the aid's own files
+that asks Microsoft nothing: of this tab relabel, the relabel of the names of the tabs "Beoordelen" and "Instellingen", strip_ticked,
+queue_ticked and failed_relabel; of "In Exact invoeren" hand_relabel, done_opened and pricelists_opened; pricelist_relabel;
+files_relabel; buyer_relabel; and of "Koppeling met Exact" exact_relabel, exact_numbers_relabel, export_relabel, articles_relabel,
+tryout_relabel and tryout_cart_relabel. A listener is bound once, so strip_ticked, queue_ticked, done_opened and pricelists_opened
+skip the queue on their other triggers as well (the page load, the timer, the tab selected, "Lijst vernieuwen"); the read of
+done_opened after a press of the tab keeps it. The clear of the answer of a close (close_answer_cleared), added on 16 November
+so that the answer does not keep the language it was given in, skips it too. Seven of the thirty-one stay on the queue: the
+rendering of the decision rows, which the page library binds itself, the settings tab's own three (settings_relabel, sections_relabelled, the name of "Postvak en AI") and
+the three of that section (reader_shown, ai_relabel, extension_code_relabel). A listener that skips the queue is answered in one
+request, in about a hundredth of a second; after each answer the browser takes its own time before it sends the next request,
+about 0.16 seconds, so the switch stays slower than one press should be. Measured on 16 November in headless Chromium, on fresh
+pages of the made-up demo with a case open, five each: the first switch took 8.1 to 8.3 seconds before (the medians of two runs)
+and 6.0 to 6.1 seconds after, a second switch on the same page 11.0 to 11.7 seconds before and 7.8 to 7.9 seconds after; with no
+case chosen the first switch took 5.3 seconds before and 4.5 seconds after. Each further switch on one page takes longer than the
+one before it, before and after alike: four in a row took 7.7, 10.0, 12.0 and 13.3 seconds before and 5.7, 8.3, 10.8 and 11.7
+seconds after.
 
 Above the tabs, the head of the page (the Row page-head) names the tool, "Inkoopassistent" in both languages, as the page's one h1
 (its class page-title) and as the title of the browser's tab, and holds the language switch (its class language-switch), which the
@@ -181,6 +211,8 @@ zijn ingevoerd" (pricelist_entered), which marks the article prices of the list 
 were last read (pricelists_opened, which reads them when the list is read and after each press of the tab), each only while it is
 open.
 The list is read again (list_opened) when the page loads, when the tab is selected and with "Lijst vernieuwen", and after each press.
+After a close on the tab "Beoordelen" and after "Op de lijst In Exact invoeren zetten" of the tab "Prijslijst" the tab's label is
+read again at once, and nothing else of the tab (hand_label_read, which _hand_tab returns for them).
 The page's timer gives the tab its label again every TICK_SECONDS seconds (hand_label_ticked), from a read of the list that writes
 nothing and gives neither the rows, the note nor the blocks, so that what the buyer ticked stays as it is; when changes came in that
 the list on screen does not hold (none of their entry ids stands in a row the last read showed), a line under the intro says how
@@ -449,7 +481,10 @@ so that the file offered is always the one of the choice shown. A purchase order
 its reason, and nothing is written. The part is filled when the page loads, each time the tab is selected and with the block's "Stand
 vernieuwen", which keeps the order chosen while the store knows it; a button pressed with no order chosen fills the dropdown from the
 store first and takes the order filed last. The language switch keeps the note that the store knows no purchase order. A try-out's
-moment of making, which gives it its date, its title and the time in its file's name, is the clock's of the page's Deps.
+moment of making, which gives it its date, its title and the time in its file's name, is the clock's of the page's Deps. The note
+that answers the two buttons stands right under them (tryout-note), outside the column of the controls (tryout-controls), which is
+hidden while the test mode is off, as the note also answers the switch; the download and the cart follow in a second column
+(tryout-cart), shown and hidden with the first.
 
 Under the download the part offers a try-out cart for the pre-check in the browser, with a choice of its own under a question of
 its own, "Wat wijkt af in de proefwinkelwagen?": "Niets" or the price of the first line 1 percent higher (aid/tryout.py's
@@ -549,7 +584,7 @@ from typing import NamedTuple, get_args
 
 from msal.oauth2cli.oauth2 import BrowserInteractionTimeoutError
 
-from aid.case import TEMPORARY, WORK, Case, load_case, sha256_file, work_copy_folder
+from aid.case import TEMPORARY, WORK, Case, load_case, names_a_folder, sha256_file, work_copy_folder
 from aid.connections.microsoft import COPILOT_SCOPES, MicrosoftAccount, SignInFailed, SignInNeeded, mail_scopes
 from aid.connections.secrets import LazySecretStore, SecretStore, StoreRefused, default_secrets_dir, work_tree_refusal
 from aid.execution.by_hand import FIELDS, FOLDER, Change, ListUnread, changes, mark, open_changes, reopen
@@ -1599,9 +1634,11 @@ def _page(gr, deps: Deps, tab: _Tab):
         when there is none). With no case chosen the status line is left as it is: a close that takes its case out of the review
         empties the case list, and what the close said must stay on the screen. A decisions file that cannot be read empties the view
         and says so. A document the intake left to the buyer shows its pages in the place of the supplier's document (_item_pages),
-        from where the scan put it, and nothing else of a case: no list, no write to undo and no state, so no decision."""
-        nothing = (gr.update(visible=False), [], [], *tables(empty, language), gr.update(choices=[], value=None), None, hint_of(None, language),
-                   entered_of([], False, language))
+        from where the scan put it, and nothing else of a case: no list, no write to undo and no state, so no decision. The frame
+        of the purchase order shows only while it has a page (order_pages): a case that failed before its order was chosen, a
+        document left to the buyer and a cart matched against an export have none, and an empty frame would say nothing."""
+        nothing = (gr.update(visible=False), [], order_pages([]), *tables(empty, language), gr.update(choices=[], value=None), None,
+                   hint_of(None, language), entered_of([], False, language))
         now = live.now()
         if not case_id:
             return (*nothing, gr.update())
@@ -1618,18 +1655,35 @@ def _page(gr, deps: Deps, tab: _Tab):
         lists = {"flags": view.flags, "matches": view.matches, "uncompared": view.uncompared}
         state = {"case_id": case_id, "kind": case.kind, "lists": lists, "decisions": standing, "articles": _article_items(case),
                  "entered": (view.entered, view.entered_unread), "again": _asked_again(case), "compared": view.compared}
-        images = [_marked([Image.open(io.BytesIO(page)) for page in pages], marks)
-                  for pages, marks in ((view.doc_pages, view.doc_marks), (view.po_pages, view.po_marks))]
+        document, order = [_marked([Image.open(io.BytesIO(page)) for page in pages], marks)
+                           for pages, marks in ((view.doc_pages, view.doc_marks), (view.po_pages, view.po_marks))]
         undo_choices = _undo_choices(case, STRINGS[language])
         selected = wanted if wanted in [entry_id for _, entry_id in undo_choices] else None
-        return (gr.update(visible=view.reapproval_banner), *images, *tables(lists, language),
+        return (gr.update(visible=view.reapproval_banner), document, order_pages(order), *tables(lists, language),
                 gr.update(choices=undo_choices, value=selected), state, hint_of(case, language),
                 entered_of(view.entered, view.entered_unread, language), "")
 
+    def as_sent(case_id) -> str | None:
+        """The value of "Zaak" for a handler that takes it as the browser sent it, without the page library's check against the
+        list (relabel, queue_ticked and failed_relabel: see the module docstring): the id of a document left to the buyer and one
+        folder name (names_a_folder of aid/case.py) as they are, anything else as no case chosen, so that nothing is looked up for
+        a value that could lead out of the cases folder."""
+        return case_id if isinstance(case_id, str) and (aid_status.is_item(case_id) or names_a_folder(case_id)) else None
+
+    def order_pages(images: list) -> dict:
+        """The frame of the purchase order with these pages, shown only while it has one."""
+        return gr.update(value=images, visible=bool(images))
+
     def relabel(language: str, case_id: str | None, state: dict | None) -> tuple:
-        strings = STRINGS[language]
+        """The language switched: the words of the tab "Beoordelen" and the case list in the language, the case chosen kept in it
+        when it left the list. The case comes as the browser sent it (as_sent); one whose folder is gone or cannot be read has no
+        hint and no write to undo, as with "Lijst vernieuwen" (refreshed)."""
+        strings, case_id = STRINGS[language], as_sent(case_id)
         flags, matches, uncompared = tables(state["lists"] if state else empty, language)
-        case = load_case(cases_root, case_id) if case_id and not aid_status.is_item(case_id) else None     # a document: as no case
+        try:
+            case = load_case(cases_root, case_id) if case_id and not aid_status.is_item(case_id) else None     # a document: as no case
+        except (OSError, ValueError):
+            case = None
         undo_choices = _undo_choices(case, strings) if case is not None else []
         return (f"# {strings['title']}", gr.update(label=strings["language"]),
                 gr.update(label=strings["case"], choices=choices(language, keep=case_id)), gr.update(value=strings["refresh"]), f"**{strings['banner']}**", gr.update(label=strings["document"]),
@@ -1711,8 +1765,8 @@ def _page(gr, deps: Deps, tab: _Tab):
     # once. A file that cannot be read leaves on the screen what it showed.
 
     def strip_ticked(language_now: str) -> tuple:
-        """The page loaded, the timer ticked, "Lijst vernieuwen" or the language switch: the strip, its button (where it has one),
-        the fold's label and its table, as strip_read reads them."""
+        """The page loaded, the timer ticked, "Lijst vernieuwen", the tab selected or the language switch: the strip, its button
+        (where it has one), the fold's label and its table, as strip_read reads them."""
         try:
             read = strip_read(language_now)
         except (OSError, ValueError):
@@ -1721,14 +1775,15 @@ def _page(gr, deps: Deps, tab: _Tab):
         return (read.html, *action, gr.update(label=read.fold), read.table)
 
     def queue_ticked(language_now: str, case_id: str | None, listed: list | None) -> tuple:
-        """The page loaded, the timer ticked, "Lijst vernieuwen" or the language switch: the tab's label with its count, the case
-        list only when it differs from the one this handler sent last (`listed`, given back as its last output), the line and the
-        button under "Zaak", which stand while no case is chosen, and the line of a case on screen that left the list, which keeps
+        """The page loaded, the timer ticked, "Lijst vernieuwen", the tab selected or the language switch: the tab's label with its
+        count, the case list only when it differs from the one this handler sent last (`listed`, given back as its last output), the
+        line and the button under "Zaak", which stand while no case is chosen, and the line of a case on screen that left the list, which keeps
         its place in it (kept), or of a document the buyer noted as handled in another browser tab. Never a value of "Zaak": the case
         chosen stays chosen and its view is not shown again. Nor whether the row of that line and that button shows, which follows
         the value of "Zaak" alone (case_framed): the case this tick was sent with may have been chosen meanwhile, as a page opened
-        from the digest's link chooses its case once it has loaded."""
-        strings = STRINGS[language_now]
+        from the digest's link chooses its case once it has loaded. The case comes as the browser sent it (as_sent): a tick or a
+        switch sent just before a close took the case out of the list is answered, as for a case closed in another browser tab."""
+        strings, case_id = STRINGS[language_now], as_sent(case_id)
         try:
             lines, items = lines_now(), items_now()
             offered = choices(language_now, lines, items)
@@ -1742,6 +1797,21 @@ def _page(gr, deps: Deps, tab: _Tab):
         return (gr.update(label=review_label(lines, language_now, items)), gr.update(choices=offered) if sent != listed else gr.update(),
                 gr.update(), pick_text(lines, items, strings),
                 gr.update(value=strings["review_open_oldest"], visible=waits(lines, items)), gone_line, sent)
+
+    def close_answer_cleared(language_now: str) -> str:
+        """The page's language switched: the line under "Zaak afsluiten" emptied, which holds the answer of the last press in the
+        language it was given in; the next press answers in the new one."""
+        return ""
+
+    def strip_after_close(language_now: str) -> tuple:
+        """A close, or a failed case noted as handled, ended: the strip and the fold read again at once, as strip_ticked reads them.
+        A handler of its own, so that strip_ticked stays bound once, to the page's reads and the timer."""
+        return strip_ticked(language_now)
+
+    def queue_after_close(language_now: str, case_id: str | None, listed: list | None) -> tuple:
+        """A close, or a failed case noted as handled, ended: the label of the tab with its count and the case list read again at
+        once, as queue_ticked reads them, which never sets the case chosen. A handler of its own, as strip_after_close."""
+        return queue_ticked(language_now, case_id, listed)
 
     def gone_text(case_id: str, strings: dict[str, str]) -> str:
         """The line of a case on screen that left the list, by its PO number, saying why: noted as handled meanwhile, for a failed
@@ -1820,8 +1890,8 @@ def _page(gr, deps: Deps, tab: _Tab):
         for him, and of "Als afgehandeld noteren"; the notice and that button hidden, as choosing the case now would (case_framed),
         when the case or the document no longer waits for the buyer (noted as handled in another browser tab meanwhile), so that no
         notice stays in the language it was shown in and no button for what needs it no more. A file that cannot be read leaves the
-        notice as it is."""
-        words = STRINGS[language_now]["handled_go"]
+        notice as it is. The case comes as the browser sent it (as_sent)."""
+        words, case_id = STRINGS[language_now]["handled_go"], as_sent(case_id)
         go, gone = gr.update(value=words), (gr.update(value="", visible=False), gr.update(value=words, visible=False))
         if aid_status.is_item(case_id):
             item = aid_status.look_item(cases_root, case_id)
@@ -2010,9 +2080,9 @@ def _page(gr, deps: Deps, tab: _Tab):
                         matches_table = gr.Dataframe(value=tables(empty, "nl")[1], interactive=False, wrap=True, column_widths=COLUMN_WIDTHS,
                                                      max_height=360)
             with gr.Tab(first["hand_tab"], id=hand_list.TAB) as hand_tab:
-                _hand_tab(gr, app, language, hand_tab, live, tab, cases_root, ticker)
+                hand_label_read = _hand_tab(gr, app, language, hand_tab, live, tab, cases_root, ticker)
             with gr.Tab(first["pricelist_tab"], id=pricelist_page.TAB) as pricelist_tab:
-                _pricelist_tab(gr, app, language, pricelist_tab, live, tab, cases_root)
+                _pricelist_tab(gr, app, language, pricelist_tab, live, tab, cases_root, hand_tab, hand_label_read)
             with gr.Tab(first["files_tab"], id=FILES_TAB) as files_tab:
                 _files_tab(gr, app, language, files_tab, live, tab, cases_root, ticker)
             with gr.Tab(first["settings_tab"], id=SETTINGS_TAB) as settings_tab:
@@ -2023,34 +2093,52 @@ def _page(gr, deps: Deps, tab: _Tab):
         app.load(opened, inputs=language, outputs=[case_choice, wanted, tabs])
         refresh.click(refreshed, inputs=[language, case_choice], outputs=[case_choice, hint])
         case_choice.change(show, inputs=[case_choice, language, wanted], outputs=[*view, status])
+        # relabel, queue_ticked and failed_relabel take the case as the browser sent it (preprocess=False): the page library would
+        # refuse, in a red box, a request that still carries a case a close has just taken out of the list (see the module docstring)
         language.change(relabel, inputs=[language, case_choice, state],
                         outputs=[title, language, case_choice, refresh, banner, doc_gallery, po_gallery, flags_title, flags_table, decisions_title,
                                  matches_title, matches_table, uncompared_title, uncompared_table, close_button, undo_choice, undo_button,
-                                 hint, entered_line])
-        close_button.click(close, inputs=[case_choice, language], outputs=[status, case_choice]).then(
-            lambda case_id, language_now: show(case_id, language_now)[:-1], inputs=[case_choice, language], outputs=view)
+                                 hint, entered_line], preprocess=False, queue=False)
+        closed = close_button.click(close, inputs=[case_choice, language], outputs=[status, case_choice])
         undo_button.click(do_undo, inputs=[case_choice, undo_choice, language], outputs=[status, undo_choice]).then(
             undo_shown, inputs=case_choice, outputs=undo_part, show_progress="hidden")       # the part closes with the last write
         language.change(lambda language_now: (gr.update(label=review_label(lines_now(), language_now, items_now())),
                                                gr.update(label=STRINGS[language_now]["settings_tab"])),
-                        inputs=language, outputs=[review_tab, settings_tab])
+                        inputs=language, outputs=[review_tab, settings_tab], queue=False)
         # the strip, the fold, the count and the case list, read again with the timer, and a failed case (see the module docstring)
-        every = [app.load, ticker.tick, refresh.click, language.change]
+        every = [app.load, ticker.tick, refresh.click, language.change, review_tab.select]
         gr.on(triggers=every, fn=strip_ticked, inputs=language, outputs=[strip, *([strip_action] if acting else []), fold, fold_table],
-              show_progress="hidden")
+              show_progress="hidden", queue=False)
         gr.on(triggers=every, fn=queue_ticked, inputs=[language, case_choice, listed],
-              outputs=[review_tab, case_choice, pick_row, pick, oldest, gone, listed], show_progress="hidden")
+              outputs=[review_tab, case_choice, pick_row, pick, oldest, gone, listed], show_progress="hidden", preprocess=False,
+              queue=False)
         case_choice.change(case_framed, inputs=[case_choice, language],
                            outputs=[pick_row, pick, oldest, gone, failed_notice, close_button, handled, decisions_title, case_part, evidence_part],
                            show_progress="hidden")
-        language.change(failed_relabel, inputs=[language, case_choice], outputs=[failed_notice, handled], show_progress="hidden")
+        language.change(failed_relabel, inputs=[language, case_choice], outputs=[failed_notice, handled], show_progress="hidden",
+                        preprocess=False, queue=False)
         oldest.click(oldest_opened, inputs=language, outputs=case_choice, show_progress="hidden")
-        handled.click(handled_marked, inputs=[case_choice, language], outputs=[status, case_choice], show_progress="hidden")
+        marked = handled.click(handled_marked, inputs=[case_choice, language], outputs=[status, case_choice], show_progress="hidden")
+        # a close, or a failed case noted as handled, changes the counts: the strip, the fold, the case list and the label of each tab
+        # with a count follow at once, through handlers of their own (see strip_after_close), without the queue as on the timer
+        # each straight after the press, which the browser sends together, so that none waits for another or for the view of the case
+        for pressed in (closed, marked):
+            pressed.then(strip_after_close, inputs=language, outputs=[strip, *([strip_action] if acting else []), fold, fold_table],
+                         show_progress="hidden", queue=False)
+            pressed.then(queue_after_close, inputs=[language, case_choice, listed],
+                         outputs=[review_tab, case_choice, pick_row, pick, oldest, gone, listed], show_progress="hidden", preprocess=False,
+                         queue=False)
+            if hand_label_read is not None:
+                pressed.then(hand_label_read, inputs=language, outputs=hand_tab, show_progress="hidden", queue=False)
+        # the view of the case after a close, bound after the counts: the counts take a few hundredths of a second, the view may
+        # render the documents again
+        closed.then(lambda case_id, language_now: show(case_id, language_now)[:-1], inputs=[case_choice, language], outputs=view)
         # the lists of the case, each its table or its sentence, and the part to undo a write; the headings of the new parts
         gr.on(triggers=[state.change, language.change], fn=record_shown, inputs=[state, language],
               outputs=[record_part, flags_table, flags_empty, uncompared_table, uncompared_empty, matches_table, matches_empty, undo_part],
               show_progress="hidden", queue=False)
         language.change(review_texts, inputs=language, outputs=[documents_title, record_title, undo_title], show_progress="hidden", queue=False)
+        language.change(close_answer_cleared, inputs=language, outputs=status, show_progress="hidden", queue=False)
         if acting:              # bound once all tabs are made, as its outputs are the page's Tabs and the sections of Instellingen
             sections.read_after(strip_action.click(strip_acted, inputs=language, outputs=[tabs, sections.tabs], show_progress="hidden"))
     return app
@@ -2071,7 +2159,7 @@ def _copy_data(buttons: dict[str, list[tuple[str, str, str]]], strings: dict[str
     return f'<div id="hand-copy-data" hidden {attributes}></div><p id="hand-copy-said" role="status" aria-live="polite"></p>'
 
 
-def _hand_tab(gr, app, language, hand_tab, live: _Live, tab: _Tab, cases_root: Path, ticker) -> None:
+def _hand_tab(gr, app, language, hand_tab, live: _Live, tab: _Tab, cases_root: Path, ticker) -> Callable[[str], dict] | None:
     """The content of the tab "In Exact invoeren" and its events, inside the tab (see the module docstring): the intro with the lines
     under it and "Lijst vernieuwen", the line of the changes that came in since the list was read (hand-new, hidden until the timer
     finds one), the two buttons for the ticked rows with the note that answers every press of the list right under them (hand-actions,
@@ -2086,14 +2174,16 @@ def _hand_tab(gr, app, language, hand_tab, live: _Live, tab: _Tab, cases_root: P
     <cases_root>/prepared (aid/execution/by_hand.py) and shown as aid/review/hand_list.py makes it; the rows of each block, and of
     each price list, as the last read showed them are kept in two gr.States, for the block's and the price list's button. A mark
     carries the time of the clock of the page's Deps. On a public share link and without a settings file the tab says only that it
-    is not available, as the settings tab does, and offers nothing, nor is anything of it on the timer."""
+    is not available, as the settings tab does, and offers nothing, nor is anything of it on the timer. Returns the read of the tab's
+    label alone (hand_label_read), which a close on the tab "Beoordelen" and a carry-out of the tab "Prijslijst" bind after their
+    press, so that the label follows at once; None on a public share link and without a settings file."""
     first = STRINGS["nl"]
     if tab.share or tab.file is None:
         key = "settings_share" if tab.share else "settings_no_file"
         notice = gr.Markdown(first[key])
         language.change(lambda language_now: (STRINGS[language_now][key], gr.update(label=STRINGS[language_now]["hand_tab"])),
                         inputs=language, outputs=[notice, hand_tab])
-        return
+        return None
     prepared = Path(cases_root) / FOLDER
 
     def shown(language_now: str, note: str = "", ticked: list[str] | None = None, chosen: str | None = None) -> tuple:
@@ -2306,6 +2396,17 @@ def _hand_tab(gr, app, language, hand_tab, live: _Live, tab: _Tab, cases_root: P
         line = strings["hand_new_rows_one"] if new == 1 else strings["hand_new_rows_many"].format(n=new)
         return gr.update(label=label), gr.update(value=line, visible=True)
 
+    def hand_label_read(language_now: str) -> dict:
+        """A press on another tab that can change the list (a close on "Beoordelen", a carry-out of "Prijslijst") ended: the tab's
+        label with the number of open changes, as a read of the list gives it, and nothing else, so that what the buyer ticked stays
+        as it is; a list that cannot be read leaves the label as it is."""
+        strings = STRINGS[language_now]
+        try:
+            open_ = [change for change in changes(prepared)[0] if change.state == "open"]
+        except Exception:
+            return gr.update()
+        return gr.update(label=strings["hand_tab_count"].format(n=len(open_)) if open_ else strings["hand_tab"])
+
     def hand_new_cleared() -> dict:
         """The list on screen read again (the tab selected, "Lijst vernieuwen", the language switch, a press of the tab): the line of
         the changes that came in hidden, as the list now holds them."""
@@ -2343,33 +2444,37 @@ def _hand_tab(gr, app, language, hand_tab, live: _Live, tab: _Tab, cases_root: P
         done_choice = gr.Dropdown(choices=[], value=None, label=first["hand_done_choice"], scale=4)
         reopen_button = gr.Button(first["hand_reopen"], scale=1)
         put_back_button = gr.Button(first["hand_put_back"], scale=1)
-    done_note = gr.Markdown("", elem_id="hand-done-note")
+    done_note = gr.Markdown("", elem_id="hand-done-note", elem_classes=["answer"])
     gr.HTML("", head=f"<style>{_ONE_PER_LINE}</style>", container=False, padding=False, js_on_load=None)   # last, so its space shows nowhere
     seen = gr.State({})                              # {block id: [the values of its rows]} as the last read of the list showed them
     listed_prices = gr.State({})                     # {the case id of a price list: [the values of its rows]} as last read
 
     listed = [hand_tab, intro, rows, block, note, seen]
     under = [done, done_choice, reopen_button, put_back_button, done_note, confirmations]
+    # the copy buttons belong to the rows shown: read with the list, without the queue as the other reads the language switch shares
+    # (see the module docstring), and again after any press that can change the list; bound before the read of the list, as the
+    # client runs the listeners of one event in the order they were bound, so that the buttons are there when the rows arrive
+    gr.on(triggers=[app.load, hand_tab.select, refresh.click, language.change], fn=copies_opened, inputs=language, outputs=copies,
+          show_progress="hidden", queue=False)
     gr.on(triggers=[app.load, hand_tab.select, refresh.click], fn=list_opened, inputs=language, outputs=listed)
     presses = [gr.on(triggers=[entered_above.click, entered.click], fn=changes_entered, inputs=[rows, language], outputs=listed),
                gr.on(triggers=[dropped_above.click, dropped.click], fn=changes_dropped, inputs=[rows, language], outputs=listed),
                block_button.click(block_entered, inputs=[block, seen, language], outputs=listed),
                pricelist_button.click(pricelist_entered, inputs=[pricelist, listed_prices, language], outputs=listed)]
+    # the reads and the relabel that the language switch shares skip the queue (see the module docstring); a read after a press keeps it
     language.change(hand_relabel, inputs=[language, rows, block],
-                    outputs=[*listed, refresh, entered_above, dropped_above, entered, dropped, block_button])
-    gr.on(triggers=[app.load, hand_tab.select, refresh.click, language.change], fn=done_opened, inputs=[language, done_choice], outputs=under)
+                    outputs=[*listed, refresh, entered_above, dropped_above, entered, dropped, block_button], queue=False)
+    gr.on(triggers=[app.load, hand_tab.select, refresh.click, language.change], fn=done_opened, inputs=[language, done_choice], outputs=under,
+          queue=False)
     for press in presses:                            # a tick or a drop moves a change into the handled ones: read them after it
         press.then(done_opened, inputs=[language, done_choice], outputs=under)
     lists = [pricelist_row, pricelist, pricelist_button, listed_prices]
-    gr.on(triggers=[app.load, hand_tab.select, refresh.click, language.change], fn=pricelists_opened, inputs=[language, pricelist], outputs=lists)
+    gr.on(triggers=[app.load, hand_tab.select, refresh.click, language.change], fn=pricelists_opened, inputs=[language, pricelist], outputs=lists,
+          queue=False)
     presses += [reopen_button.click(change_reopened, inputs=[done_choice, language], outputs=[*listed, *under]),
                 put_back_button.click(change_put_back, inputs=[done_choice, language], outputs=[*listed, *under])]
     for press in presses:                            # any press may take a price list's last row off the list, or put one back
         press.then(pricelists_opened, inputs=[language, pricelist], outputs=lists)
-    # the copy buttons belong to the rows shown: read with the list, without the queue as the other reads the language switch shares
-    # (see the module docstring), and again after any press that can change the list
-    gr.on(triggers=[app.load, hand_tab.select, refresh.click, language.change], fn=copies_opened, inputs=language, outputs=copies,
-          show_progress="hidden", queue=False)
     for press in presses:
         press.then(copies_opened, inputs=language, outputs=copies, show_progress="hidden")
     # the label on the page's timer, never the rows (see hand_label_ticked), and its line of new changes gone once the list is read again
@@ -2377,11 +2482,13 @@ def _hand_tab(gr, app, language, hand_tab, live: _Live, tab: _Tab, cases_root: P
     gr.on(triggers=[hand_tab.select, refresh.click, language.change, entered_above.click, entered.click, dropped_above.click, dropped.click,
                     block_button.click, pricelist_button.click, reopen_button.click, put_back_button.click],
           fn=hand_new_cleared, outputs=new_rows, show_progress="hidden", queue=False)
+    return hand_label_read
 
 
 # --- the tab "Prijslijst" ---
 
-def _pricelist_tab(gr, app, language, pricelist_tab, live: _Live, tab: _Tab, cases_root: Path) -> None:
+def _pricelist_tab(gr, app, language, pricelist_tab, live: _Live, tab: _Tab, cases_root: Path, hand_tab=None,
+                   hand_label_read: Callable[[str], dict] | None = None) -> None:
     """The content of the tab "Prijslijst" and its events, inside the tab (see the module docstring; aid/review/pricelist_page.py has
     what it shows and writes, aid/pricelist.py the stored article prices): a notice, and under it, shown only while the columns of the
     export of articles are set, the introduction, the supplier with the small press that asks to take its stored prices away, the row
@@ -2392,7 +2499,8 @@ def _pricelist_tab(gr, app, language, pricelist_tab, live: _Live, tab: _Tab, cas
     140 px high and the table at most 320 px, so that a view and its press fit the window. pricelist_tab is the tab itself. The
     settings are those of the page's own actions as they are now (live), and a time is the clock's of its Deps. Two states of the
     page keep the upload of the export stored last (so that one press stores one export) and what the last view showed (so that the
-    press carries out that view, or nothing). On a public share link and without a settings file the tab says only that it is not
+    press carries out that view, or nothing). hand_tab is the tab "In Exact invoeren" and hand_label_read the read of its label that
+    _hand_tab returns, which follows the press. On a public share link and without a settings file the tab says only that it is not
     available, as the settings tab does, and offers nothing."""
     first = STRINGS["nl"]
     if tab.share or tab.file is None:
@@ -2719,7 +2827,7 @@ def _pricelist_tab(gr, app, language, pricelist_tab, live: _Live, tab: _Tab, cas
         state = gr.Markdown(first["pricelist_choose_supplier"], elem_id="pricelist-state", latex_delimiters=[])   # a name as it is
         export = gr.File(label=first["pricelist_export"], type="filepath", elem_id="pricelist-export", height=140)  # any file: the tab names another type
         file_button = gr.Button(first["pricelist_file_prices"], interactive=False, elem_id="pricelist-file-prices")
-        export_note = gr.Markdown("", elem_id="pricelist-export-note", latex_delimiters=[])
+        export_note = gr.Markdown("", elem_id="pricelist-export-note", elem_classes=["answer"], latex_delimiters=[])
         with gr.Column(visible=False, elem_id="pricelist-list-part") as list_part:
             list_file = gr.File(label=first["pricelist_list"], type="filepath", elem_id="pricelist-list", height=140)   # any file, as the export's
             with gr.Row():
@@ -2728,7 +2836,7 @@ def _pricelist_tab(gr, app, language, pricelist_tab, live: _Live, tab: _Tab, cas
             hint = gr.Markdown(first["pricelist_columns_hint"], elem_id="pricelist-columns-hint")
             view = gr.Button(first["pricelist_view"], elem_id="pricelist-view")
             table = gr.Dataframe(value=table_of([], "nl"), interactive=False, wrap=True, elem_id="pricelist-table", max_height=320)
-            note = gr.Markdown("", elem_id="pricelist-note", latex_delimiters=[])
+            note = gr.Markdown("", elem_id="pricelist-note", elem_classes=["answer"], latex_delimiters=[])
             carry = gr.Button(first["pricelist_carry_out"], variant="primary", interactive=False, elem_id="pricelist-carry-out")
     given = gr.State(None)                           # the upload of the export stored last: one press stores one export
     viewed = gr.State(None)                          # what the last view showed; None: there is no view to carry out
@@ -2750,10 +2858,12 @@ def _pricelist_tab(gr, app, language, pricelist_tab, live: _Live, tab: _Tab, cas
     gr.on(triggers=[field.input for field in chosen], fn=pricelist_column_chosen, outputs=[carry, viewed])
     view.click(pricelist_shown, inputs=[list_file, supplier, *chosen, language], outputs=[table, note, carry, viewed]).then(
         None, js=_COUNT_INTO_VIEW, show_progress="hidden")                     # the count line and the press under it into view
-    carry.click(pricelist_carried_out, inputs=[list_file, supplier, *chosen, viewed, language], outputs=[table, note, carry, viewed])
+    carried = carry.click(pricelist_carried_out, inputs=[list_file, supplier, *chosen, viewed, language], outputs=[table, note, carry, viewed])
+    if hand_label_read is not None:                  # the label of "In Exact invoeren" follows the press at once, not at the timer
+        carried.then(hand_label_read, inputs=language, outputs=hand_tab, show_progress="hidden", queue=False)
     language.change(pricelist_relabel, inputs=[language, supplier, list_file],
                     outputs=[pricelist_tab, notice, intro, supplier, remove, state, export, file_button, export_note, list_file, *chosen, hint, view,
-                             table, note, carry, viewed])
+                             table, note, carry, viewed], queue=False)
     language.change(removal_relabelled, inputs=language, outputs=[confirm, ask, yes_button, no_button, remove_note], show_progress="hidden",
                     queue=False)
 
@@ -2864,7 +2974,7 @@ def _files_tab(gr, app, language, files_tab, live: _Live, tab: _Tab, cases_root:
     # any file: the tab names another type itself
     upload = gr.File(label=first["files_choose"], type="filepath", height=140, elem_id="files-upload")
     give = gr.Button(first["files_give"], variant="primary", elem_id="files-give", interactive=False)
-    note = gr.Markdown("", elem_id="files-note", latex_delimiters=[])          # a name is shown as it is: no formula either
+    note = gr.Markdown("", elem_id="files-note", elem_classes=["answer"], latex_delimiters=[])    # a name shown as it is: no formula either
     with gr.Row():                                   # in columns, whose scale a row keeps, as it does not keep a Markdown's
         with gr.Column(scale=4):
             done = gr.Markdown(f"## {first['files_done']}", elem_id="files-done")
@@ -2881,7 +2991,7 @@ def _files_tab(gr, app, language, files_tab, live: _Live, tab: _Tab, cases_root:
     give.click(file_given, inputs=[upload, language, kept], outputs=[note, listed, upload, kept])
     upload.change(file_chosen, inputs=upload, outputs=give)
     language.change(files_relabel, inputs=[language, kept],
-                    outputs=[files_tab, title, intro_text, upload, give, note, done, refresh, listed, kept])
+                    outputs=[files_tab, title, intro_text, upload, give, note, done, refresh, listed, kept], queue=False)
     # the table on the page's timer, and with every other read of it, never the field, the note or what the tab keeps
     gr.on(triggers=[app.load, ticker.tick, files_tab.select, refresh.click, give.click, language.change], fn=files_ticked, inputs=language,
           outputs=[listed, empty], show_progress="hidden", queue=False)
@@ -3511,7 +3621,7 @@ def _buyer_section(gr, app, language, settings_tab, file_line, read: Callable[[d
                     fields[field] = gr.Textbox(label=label, info=info, elem_classes=["short-field"] if field in _SHORT_FIELDS else None)
         limit = gr.Markdown(first["settings_limit"])
         save_button = gr.Button(first["settings_buyer_save"], variant="primary")
-        note = gr.Markdown("", elem_id="settings-buyer-note")
+        note = gr.Markdown("", elem_id="settings-buyer-note", elem_classes=["answer"])
         filled = gr.State(None)                      # the twelve texts the form was filled with
     with gr.Tab(first["settings_section:suppliers"], id="leveranciers") as suppliers_section:
         suppliers_title = gr.Markdown(f"### {first['settings_suppliers']}", visible=False)       # the section's label names it
@@ -3529,7 +3639,7 @@ def _buyer_section(gr, app, language, settings_tab, file_line, read: Callable[[d
         with gr.Row():
             supplier_save = gr.Button(first["settings_supplier_save"])
             supplier_remove = gr.Button(first["settings_supplier_remove"])
-        supplier_note = gr.Markdown("", elem_id="settings-supplier-note")
+        supplier_note = gr.Markdown("", elem_id="settings-supplier-note", elem_classes=["answer"])
         supplier_filled = gr.State(None)             # the supplier form as it was filled, with the supplier it was filled for
 
     form = [fields[field] for field in BUYER_FIELDS]
@@ -3547,7 +3657,7 @@ def _buyer_section(gr, app, language, settings_tab, file_line, read: Callable[[d
     supplier_remove.click(remove_supplier, inputs=[supplier, language], outputs=supplier_shown_again)
     language.change(buyer_relabel, inputs=[language, fields["digest"], fields["language"], supplier],
                     outputs=[file_line, *headings, *form, limit, save_button, note, suppliers_title, suppliers_help, suppliers, supplier,
-                             *supplier_form_fields, supplier_save, supplier_remove])
+                             *supplier_form_fields, supplier_save, supplier_remove], queue=False)
     return rules_section, suppliers_section
 
 
@@ -3837,7 +3947,7 @@ def _exact_section(gr, app, language, settings_tab, read: Callable[[dict[str, st
         part = gr.Markdown(f"### {first['exact_part_po']}")
         sample = gr.File(label=first["exact_sample"], type="filepath")      # any file: the block names another type by its sentence
         page_shown = gr.Dataframe(value=page_table([], first), label=first["exact_page"], interactive=False, wrap=True, elem_id="exact-page")
-        sample_note = gr.Markdown("", elem_id="exact-sample-note")
+        sample_note = gr.Markdown("", elem_id="exact-sample-note", elem_classes=["answer"])
         fields = {}
         for names in (("po_label", "date_label"), ("supplier_label", "supplier_line"), ("version_label",), ("currency_label", "incoterm_label")):
             with gr.Row():
@@ -3846,7 +3956,7 @@ def _exact_section(gr, app, language, settings_tab, read: Callable[[dict[str, st
         with gr.Row():
             title_word = gr.Textbox(label=first["exact_field:title_word"], scale=4)
             find = gr.Button(first["exact_find"], scale=1)
-        title_note = gr.Markdown("", elem_id="exact-title-note")
+        title_note = gr.Markdown("", elem_id="exact-title-note", elem_classes=["answer"])
         slots = []
         for start in range(0, SLOTS, 4):
             with gr.Row():
@@ -3858,7 +3968,7 @@ def _exact_section(gr, app, language, settings_tab, read: Callable[[dict[str, st
         with gr.Row():
             test_button = gr.Button(first["exact_test"])
             save_button = gr.Button(first["exact_save"], variant="primary")
-        note = gr.Markdown("", elem_id="exact-note")
+        note = gr.Markdown("", elem_id="exact-note", elem_classes=["answer"])
         reading_title = gr.Markdown(f"### {first['exact_reading']}")
         summary = gr.Markdown("", elem_id="exact-summary")
         header = gr.Dataframe(value=header_table([], first), interactive=False, wrap=True, elem_id="exact-header")
@@ -3871,7 +3981,7 @@ def _exact_section(gr, app, language, settings_tab, read: Callable[[dict[str, st
             po_least = gr.Textbox(label=first["exact_field:po_digits_least"])
             po_most = gr.Textbox(label=first["exact_field:po_digits_most"])
         number_save = gr.Button(first["exact_po_number_save"])
-        number_note = gr.Markdown("", elem_id="exact-number-note")
+        number_note = gr.Markdown("", elem_id="exact-number-note", elem_classes=["answer"])
         title_row = gr.State([])                     # the words of the title row found, whose dropdowns are shown
         filled = gr.State(None)                      # what the form was filled with: saved_values of the file at that moment
         number_filled = gr.State(None)               # the PO number pattern of the file that the two fields were filled with
@@ -3883,7 +3993,7 @@ def _exact_section(gr, app, language, settings_tab, read: Callable[[dict[str, st
     gr.on(triggers=[app.load, settings_tab.select], fn=exact_numbers_opened, inputs=language, outputs=numbers)
     number_save.click(exact_numbers_saved, inputs=[*numbers, language], outputs=[number_note, *numbers])
     language.change(exact_numbers_relabel, inputs=[language, number_filled],
-                    outputs=[numbers_title, po_words, po_least, po_most, number_save, number_note])
+                    outputs=[numbers_title, po_words, po_least, po_most, number_save, number_note], queue=False)
     form = [fields[field] for field in EXACT_FORM]
     read_out = [summary, header, lines, problems]
     gr.on(triggers=[app.load, settings_tab.select], fn=exact_opened, inputs=language,
@@ -3897,7 +4007,8 @@ def _exact_section(gr, app, language, settings_tab, read: Callable[[dict[str, st
     language.change(exact_relabel, inputs=[language, sample, fields["numbers"], title_row, *slots],
                     outputs=[block, intro, state_title, state, refresh, part, sample, page_shown, sample_note,
                              *[fields[field] for field in _EXACT_FIELDS], title_word, find, title_note, *slots, fields["table_end"],
-                             fields["numbers"], fields["per_piece"], senders, test_button, save_button, note, reading_title, *read_out])
+                             fields["numbers"], fields["per_piece"], senders, test_button, save_button, note, reading_title, *read_out],
+                    queue=False)
 
 
 def _export_part(gr, app, language, settings_tab, read: Callable[[dict[str, str]], tuple[Settings, str | None]], write: Callable, state,
@@ -4102,7 +4213,7 @@ def _export_part(gr, app, language, settings_tab, read: Callable[[dict[str, str]
         intro = gr.Markdown(first["exact_export_intro"])
         sample = gr.File(label=first["exact_export_sample"], type="filepath", elem_id="export-sample")      # any file, as part 1's
         head = gr.Dataframe(value=head_table([], "nl"), label=first["exact_export_head"], interactive=False, wrap=True, elem_id="export-head")
-        sample_note = gr.Markdown("", elem_id="export-sample-note")
+        sample_note = gr.Markdown("", elem_id="export-sample-note", elem_classes=["answer"])
         row = gr.Number(value=None, label=first["exact_export_header_row"], precision=0, elem_id="export-row")   # empty or below 1: found
         fields = {}
         for start in range(0, len(EXPORT_FORM), 4):
@@ -4115,7 +4226,7 @@ def _export_part(gr, app, language, settings_tab, read: Callable[[dict[str, str]
         with gr.Row():
             test_button = gr.Button(first["exact_test"], elem_id="export-test")
             save_button = gr.Button(first["exact_export_save"], variant="primary", elem_id="export-save")
-        note = gr.Markdown("", elem_id="export-note")
+        note = gr.Markdown("", elem_id="export-note", elem_classes=["answer"])
         read_text = gr.Markdown("", elem_id="export-read")
         lines = gr.Dataframe(value={"headers": export_headers(None, "nl"), "data": []}, interactive=False, wrap=True, elem_id="export-lines")
         offered = gr.State([])                       # the titles the twelve dropdowns offer
@@ -4132,7 +4243,7 @@ def _export_part(gr, app, language, settings_tab, read: Callable[[dict[str, str]
     save_button.click(export_saved, inputs=tried_with, outputs=[note, state, filled, read_text, lines])
     language.change(export_relabel, inputs=[language, sample, row, *chosen, offered, numbers],
                     outputs=[part, intro, sample, head, sample_note, row, *chosen, numbers, fill_down, test_button, save_button, note, read_text,
-                             lines])
+                             lines], queue=False)
 
 
 def _articles_part(gr, app, language, settings_tab, read: Callable[[dict[str, str]], tuple[Settings, str | None]], write: Callable) -> None:
@@ -4317,7 +4428,7 @@ def _articles_part(gr, app, language, settings_tab, read: Callable[[dict[str, st
         intro = gr.Markdown(first["exact_articles_intro"])
         sample = gr.File(label=first["exact_articles_sample"], type="filepath", elem_id="articles-sample")      # any file, as part 2's
         head = gr.Dataframe(value=head_table([], "nl"), label=first["exact_export_head"], interactive=False, wrap=True, elem_id="articles-head")
-        sample_note = gr.Markdown("", elem_id="articles-sample-note")
+        sample_note = gr.Markdown("", elem_id="articles-sample-note", elem_classes=["answer"])
         row = gr.Number(value=None, label=first["exact_export_header_row"], precision=0, elem_id="articles-row")   # empty or below 1: found
         with gr.Row():
             fields = {field: gr.Dropdown(choices=choices([], first), value=NO_COLUMN, label=article_label(field, "nl"),
@@ -4326,7 +4437,7 @@ def _articles_part(gr, app, language, settings_tab, read: Callable[[dict[str, st
         with gr.Row():
             test_button = gr.Button(first["exact_test"], elem_id="articles-test")
             save_button = gr.Button(first["exact_articles_save"], variant="primary", elem_id="articles-save")
-        note = gr.Markdown("", elem_id="articles-note")
+        note = gr.Markdown("", elem_id="articles-note", elem_classes=["answer"])
         read_text = gr.Markdown("", elem_id="articles-read")
         rows = gr.Dataframe(value={"headers": articles_headers(None, "nl"), "data": []}, interactive=False, wrap=True, elem_id="articles-rows")
         offered = gr.State([])                       # the titles the three dropdowns offer
@@ -4340,7 +4451,8 @@ def _articles_part(gr, app, language, settings_tab, read: Callable[[dict[str, st
     test_button.click(articles_tested, inputs=tried_with, outputs=[read_text, rows, note])
     save_button.click(articles_saved, inputs=tried_with, outputs=[note, filled, read_text, rows])
     language.change(articles_relabel, inputs=[language, sample, row, *chosen, offered, numbers],
-                    outputs=[part, intro, sample, head, sample_note, row, *chosen, numbers, test_button, save_button, note, read_text, rows])
+                    outputs=[part, intro, sample, head, sample_note, row, *chosen, numbers, test_button, save_button, note, read_text, rows],
+                    queue=False)
 
 
 def _tryout_section(gr, app, language, settings_tab, refresh, read: Callable[[dict[str, str]], tuple[Settings, str | None]], write: Callable,
@@ -4361,15 +4473,16 @@ def _tryout_section(gr, app, language, settings_tab, refresh, read: Callable[[di
         return PoStore(settings.po_store_root, settings.authorization_limit)
 
     def part(settings: Settings, strings: dict[str, str], keep: str | None = None) -> tuple:
-        """The part as the settings give it: (the line that says why it offers nothing, the controls shown or hidden, the dropdown of
-        the POs the store knows, with `keep` chosen while the store knows it and else the one filed last, a note that the store
-        knows none)."""
+        """The part as the settings give it: (the line that says why it offers nothing, the controls shown or hidden, the cart's
+        part with them, the dropdown of the POs the store knows, with `keep` chosen while the store knows it and else the one filed
+        last, a note that the store knows none)."""
         if not offers_tryouts(settings):
-            return strings["tryout_not_offered"], gr.update(visible=False), gr.update(choices=[], value=None), ""
+            return strings["tryout_not_offered"], gr.update(visible=False), gr.update(visible=False), gr.update(choices=[], value=None), ""
         known = known_pos(store_of(settings))
         numbers = [number for _, number in known]
         chosen = keep if keep in numbers else (numbers[0] if numbers else None)
-        return "", gr.update(visible=True), gr.update(choices=known, value=chosen), "" if known else strings["tryout_none_known"]
+        return ("", gr.update(visible=True), gr.update(visible=True), gr.update(choices=known, value=chosen),
+                "" if known else strings["tryout_none_known"])
 
     def drawn(po_number: str | None, change: str | None, strings: dict[str, str]) -> tuple[dict, tuple[bytes, str, Settings] | str]:
         """The try-out of the PO chosen with the change chosen, as the settings file and the store now stand, read back before it
@@ -4401,18 +4514,18 @@ def _tryout_section(gr, app, language, settings_tab, refresh, read: Callable[[di
         it cannot be read), what the switch is filled with, the part as those settings give it, and the download emptied."""
         strings = STRINGS[language_now]
         settings = read(strings)[0]
-        why, controls_shown, choices, note = part(settings, strings)
-        return settings.test_mode, settings.test_mode, why, controls_shown, choices, gr.update(value=None, visible=False), note
+        why, controls_shown, cart_shown, choices, note = part(settings, strings)
+        return settings.test_mode, settings.test_mode, why, controls_shown, cart_shown, choices, gr.update(value=None, visible=False), note
 
     def tryout_refreshed(language_now: str, po_now: str | None) -> tuple:
         """"Stand vernieuwen" (ruling Y7): the switch and the part filled again as the settings file and the store now stand, the PO
         chosen kept while the store knows it; the download goes when another PO is chosen, or none."""
         strings = STRINGS[language_now]
         settings = read(strings)[0]
-        why, controls_shown, choices, note = part(settings, strings, keep=po_now)
+        why, controls_shown, cart_shown, choices, note = part(settings, strings, keep=po_now)
         kept = bool(po_now) and choices.get("value") == po_now
-        return (settings.test_mode, settings.test_mode, why, controls_shown, choices, gr.update() if kept else gr.update(value=None, visible=False),
-                note)
+        return (settings.test_mode, settings.test_mode, why, controls_shown, cart_shown, choices,
+                gr.update() if kept else gr.update(value=None, visible=False), note)
 
     def tryout_made(po_number: str | None, change: str | None, language_now: str) -> tuple:
         """"Proefbevestiging maken (pdf)": (the dropdown, the download, the note). The try-out is written into a folder of its own in
@@ -4501,8 +4614,8 @@ def _tryout_section(gr, app, language, settings_tab, refresh, read: Callable[[di
     def test_mode_saved(on: bool, filled_with: bool | None, language_now: str) -> tuple:
         """The switch toggled by the buyer: test_mode written into the settings file and nothing else (write of _settings_tab, inside
         whose lock the file is read), and the part as the saved settings give it: (the switch, what it is filled with, the line why,
-        the controls, the dropdown, the note). Turned off while the list "In Exact invoeren" holds changes that only try-out documents
-        asked, the note says how many, to be dropped and not entered in the real Exact. Nothing is written for a file that cannot be
+        the controls, the cart's part, the dropdown, the note). Turned off while the list "In Exact invoeren" holds changes that only
+        try-out documents asked, the note says how many, to be dropped and not entered in the real Exact. Nothing is written for a file that cannot be
         read, which keeps the switch as it was filled and says so by its line, for a file whose test mode is no longer the one the
         switch was filled with (another browser tab or the file itself changed it meanwhile), and for a switch whose fill the page no
         longer knows (the page was started again): those two are filled again from the file, and the switch's own note says so."""
@@ -4510,9 +4623,9 @@ def _tryout_section(gr, app, language, settings_tab, refresh, read: Callable[[di
         settings, line = read(strings)
         if line is not None:
             kept = filled_with if isinstance(filled_with, bool) else settings.test_mode
-            return kept, gr.update(), gr.update(), gr.update(), gr.update(), line
+            return kept, gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), line
         if not isinstance(filled_with, bool):
-            return settings.test_mode, settings.test_mode, *part(settings, strings)[:3], strings["tryout_switch_refilled"]
+            return settings.test_mode, settings.test_mode, *part(settings, strings)[:4], strings["tryout_switch_refilled"]
 
         def build(held: Settings) -> dict:
             if held.test_mode != filled_with:
@@ -4522,13 +4635,13 @@ def _tryout_section(gr, app, language, settings_tab, refresh, read: Callable[[di
         saved, note, _ = write(build, strings)
         if saved is None and note == strings["tryout_switch_refilled"]:
             settings = read(strings)[0]
-            return settings.test_mode, settings.test_mode, *part(settings, strings)[:3], note
+            return settings.test_mode, settings.test_mode, *part(settings, strings)[:4], note
         if saved is None:
-            return filled_with, filled_with, gr.update(), gr.update(), gr.update(), note
+            return filled_with, filled_with, gr.update(), gr.update(), gr.update(), gr.update(), note
         made_up = 0 if saved.test_mode else _open_from_tryouts(saved.cases_root)
         note = (strings["tryout_saved"] if not made_up else strings["tryout_saved_open_one"] if made_up == 1
                 else strings["tryout_saved_open"].format(n=made_up))
-        return saved.test_mode, saved.test_mode, *part(saved, strings)[:3], note
+        return saved.test_mode, saved.test_mode, *part(saved, strings)[:4], note
 
     def tryout_relabel(language_now: str, change_now: str | None) -> tuple:
         """The page's language switched: the part in that language, the change chosen kept, and the note emptied, but for the note
@@ -4553,22 +4666,26 @@ def _tryout_section(gr, app, language, settings_tab, refresh, read: Callable[[di
         with gr.Row():
             make = gr.Button(first["tryout_make"])
             give = gr.Button(first["tryout_give"], variant="primary")
+    # the answer of the two buttons right under them, in view (finding T1 of 16 November); outside the column, which is hidden while
+    # the test mode is off, as the note also says what a toggle of the switch did; the cart's part after it, shown with the column
+    note = gr.Markdown("", elem_id="tryout-note", elem_classes=["answer"])
+    with gr.Column(visible=False, elem_id="tryout-cart") as cart_part:
         download = gr.File(value=None, visible=False, interactive=False, show_label=False, elem_id="tryout-download")
         cart_change = gr.Radio(choices=cart_choices(first), value="none", label=first["tryout_cart_change"], elem_id="tryout-cart-change")
         cart_make = gr.Button(first["tryout_cart_make"])
-    note = gr.Markdown("", elem_id="tryout-note")
     filled = gr.State(None)                          # the test mode as the file held it when the switch was filled
 
-    shown = [switch, filled, why, controls, po_choice]
+    shown = [switch, filled, why, controls, cart_part, po_choice]
     gr.on(triggers=[app.load, settings_tab.select], fn=tryout_opened, inputs=language, outputs=[*shown, download, note])
     refresh.click(tryout_refreshed, inputs=[language, po_choice], outputs=[*shown, download, note])
     make.click(tryout_made, inputs=[po_choice, change, language], outputs=[po_choice, download, note])
     give.click(tryout_given, inputs=[po_choice, change, language], outputs=[po_choice, download, note])
     gr.on(triggers=[po_choice.input, change.input], fn=tryout_chosen, inputs=None, outputs=download)      # the buyer's choice, not a fill
     switch.input(test_mode_saved, inputs=[switch, filled, language], outputs=[*shown, note])      # the buyer's toggle, not a fill
-    language.change(tryout_relabel, inputs=[language, change], outputs=[title, intro, switch, why, po_choice, change, make, give, note])
+    language.change(tryout_relabel, inputs=[language, change], outputs=[title, intro, switch, why, po_choice, change, make, give, note],
+                    queue=False)
     cart_make.click(tryout_cart_made, inputs=[po_choice, cart_change, language], outputs=[po_choice, note])
-    language.change(tryout_cart_relabel, inputs=[language, cart_change], outputs=[cart_change, cart_make])
+    language.change(tryout_cart_relabel, inputs=[language, cart_change], outputs=[cart_change, cart_make], queue=False)
 
 
 def _open_from_tryouts(cases_root: Path) -> int:

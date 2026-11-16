@@ -101,7 +101,9 @@ and what they say ("hand_reopen_not", "hand_reopen_put_back", "hand_put_back_new
 sentence behind the note of a put-back when the aid knows another value from before the change, {source} one of
 "hand_put_back_source:marks" and "hand_put_back_source:look"), and
 "hand_confirmation*" and "hand_attach_only" the section of the confirmations to attach in Exact, "hand_confirmations" its heading and
-"hand_confirmations_one" and "hand_confirmations_many" the line that counts them. The keys that begin with "exact" are
+"hand_confirmations_one" and "hand_confirmations_many" the line that counts them, the supplier's own confirmations alone,
+"hand_confirmations_tryouts_only" that line when only try-out documents are listed, and "hand_confirmation_tryout" the mark behind the
+line of a try-out, which is not attached. The keys that begin with "exact" are
 the strings of the block "Koppeling met Exact" of the settings tab (aid/review/exact_settings.py), one block in each language:
 "exact_save", "exact_export_save" and "exact_articles_save" the saves of its parts 1, 2 and 3, each named after what it saves,
 "exact_field:<field>" the label of a field of its form and "exact_help:<field>" its help, "exact_meaning:<meaning>" what a column of
@@ -574,6 +576,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "hand_new_rows_many": "Er zijn {n} nieuwe wijzigingen bijgekomen: druk op Lijst vernieuwen.",
         "hand_confirmations_one": "1 bevestiging van de laatste 7 dagen: voeg haar in Exact bij en zet de status op Bevestigd.",
         "hand_confirmations_many": "{n} bevestigingen van de laatste 7 dagen: voeg ze in Exact bij en zet de status op Bevestigd.",
+        "hand_confirmations_tryouts_only": "Er is niets om bij te voegen: hieronder staan alleen proefdocumenten.",
+        "hand_confirmation_tryout": "(proefdocument: niet bijvoegen)",
         "pricelist_remove_ask": ("De {n} opgeslagen inkoopprijzen van {supplier} worden weggehaald. De lijst In Exact invoeren blijft zoals "
                                  "hij is."),
         "pricelist_remove_ask_one": ("De opgeslagen inkoopprijs van {supplier} wordt weggehaald. De lijst In Exact invoeren blijft zoals hij "
@@ -1607,6 +1611,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "hand_new_rows_many": "{n} new changes came in: press Refresh the list.",
         "hand_confirmations_one": "1 confirmation of the last 7 days: attach it in Exact and set the status to Bevestigd.",
         "hand_confirmations_many": "{n} confirmations of the last 7 days: attach them in Exact and set the status to Bevestigd.",
+        "hand_confirmations_tryouts_only": "There is nothing to attach: below are try-out documents only.",
+        "hand_confirmation_tryout": "(try-out document: do not attach)",
         "pricelist_remove_ask": "The {n} stored purchase prices of {supplier} will be taken away. The list Enter in Exact stays as it is.",
         "pricelist_remove_ask_one": "The stored purchase price of {supplier} will be taken away. The list Enter in Exact stays as it is.",
         "pricelist_remove_yes": "Yes, take them away",

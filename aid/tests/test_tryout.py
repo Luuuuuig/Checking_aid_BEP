@@ -1107,8 +1107,9 @@ def test_the_review_tab_names_a_try_out(tmp_path, madeup_out):
 
 def test_the_confirmations_under_the_list_mark_a_try_out(tmp_path, madeup_out):
     """The merge with Task 35: the section "Bevestigingen om bij te voegen" under the list shows the confirmation of a try-out with
-    "(proefdocument)" behind its line, in both languages, so that it never asks the buyer to attach a made-up document and set the
-    status Bevestigd in the real Exact; a supplier's own confirmation keeps its line. MANUAL 2.6 says so."""
+    "(proefdocument: niet bijvoegen)" behind its line (finding T7 of 16 November), in both languages, so that it never asks the
+    buyer to attach a made-up document and set the status Bevestigd in the real Exact; a supplier's own confirmation keeps its
+    line. MANUAL 2.6 says so."""
     d = deps(tmp_path, madeup_out, settings=OPEN)
     settings = tryout_settings(tmp_path)
     give(settings, d.store, "250108", "price_small")
@@ -1117,12 +1118,12 @@ def test_the_confirmations_under_the_list_mark_a_try_out(tmp_path, madeup_out):
     found = hand_list.confirmations(settings.cases_root / "prepared", NOW)
     assert sorted((item["po_number"], item.get("tryout", False), item["set_status"]) for item in found) == [("250108", True, True),
                                                                                                           ("250114", False, True)]
-    for language, mark_text in (("nl", "(proefdocument)"), ("en", "(try-out document)")):
+    for language, mark_text in (("nl", "(proefdocument: niet bijvoegen)"), ("en", "(try-out document: do not attach)")):
         lines = hand_list.confirmation_lines(found, settings.cases_root, language)
         assert [line.endswith(f" {mark_text}") for line in lines] == [item.get("tryout", False) for item in found]
         assert sum(mark_text in line for line in lines) == 1
     manual = Path("aid/MANUAL.md").read_text(encoding="utf-8")
-    assert 'The confirmation of a try-out (section 3.17) carries "(proefdocument)" behind its line' in manual
+    assert 'The confirmation of a try-out (section 3.17) carries "(proefdocument: niet bijvoegen)" behind its line' in manual
 
 
 def test_a_file_that_is_not_there_is_not_read_again(tmp_path, madeup_out, monkeypatch):

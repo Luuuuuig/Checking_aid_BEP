@@ -118,3 +118,96 @@ def test_the_folder_of_the_demonstration_start_offers_the_try_out_and_writes_que
                         case_id="made-up"))
     assert len(list((out / "cases" / "outbox").glob("*.eml"))) == 1
     assert "demonstration" in capsys.readouterr().out
+
+
+def test_the_demonstration_opens_the_price_list_tab_with_a_made_up_pair_of_files(tmp_path):
+    """--demonstration also makes the tab "Prijslijst" work at once: the folder's settings name the columns of the export of articles
+    (an installation step otherwise, part 3 of the block "Koppeling met Exact"), the purchase prices of S04 are taken in from a made-up
+    export as the tab's "Inkoopprijzen opnemen" takes them in, and the columns of S04's price list are kept, so that the column fields
+    fill themselves. The two made-up files lie in <out>/voorbeelden: "Bekijken" on the price list shows prices that stay the same, two
+    that change by a few percent, an article that the export does not know, a price that cannot be read and one that differs so much
+    that the tab keeps it off the list; the press puts the two changes on the list "In Exact invoeren". A plain demo folder has none of
+    it: settings with these columns count as company settings and refuse a public link."""
+    from aid.pricelist import current_prices, kept_columns
+    from aid.review.page import build_app
+    from aid.tests.test_hand_tab import (CARRIED_OUT, COLUMN_FIELDS, PRICELIST_OPENED, PRICELIST_SHOWN, SUPPLIER_CHOSEN, called)
+    from aid.execution.by_hand import open_changes
+    out = tmp_path / "demo"
+    assert main(["--out", str(out), "--demonstration"]) == 0
+    path = out / "settings.json"
+    settings = load_settings(path)
+    assert settings.article_columns == {"item_code": "Artikel", "price": "Inkoopprijs"} and settings.article_decimal_comma
+    samples = out / demo.SAMPLES
+    export, price_list = samples / demo.SAMPLE_EXPORT, samples / demo.SAMPLE_LIST
+    assert demo.SAMPLES == "voorbeelden" and sorted(p.name for p in samples.iterdir()) == sorted([export.name, price_list.name])
+    assert "verzonnen" in export.name.lower() and "verzonnen" in price_list.name.lower() and "S04" in export.name and "S04" in price_list.name
+    assert export.suffix == price_list.suffix == ".xlsx"
+    assert_like_real_workbooks(export, price_list)
+    current, stored_at = current_prices(settings.cases_root, "S04")
+    assert stored_at is not None and current["KM-0424"] == "0.85" and current["KM-0422"] == "2.85" and "KM-0400" not in current
+    assert kept_columns(settings.cases_root) == {"S04": {"item_code": "Artikelnummer", "price": "Nettopreis", "basis": "Preiseinheit"}}
+
+    page = build_app(build_deps(settings, {}), settings_file=path)
+    opened = called(page, "pricelist_opened", PRICELIST_OPENED, None, "nl")
+    assert opened["body"] == {"__type__": "update", "visible": True} and opened["supplier"]["choices"] == ["S04"]
+    chosen = called(page, "pricelist_supplier_chosen", SUPPLIER_CHOSEN, "S04", str(price_list), "nl")
+    assert chosen["list_part"] == {"__type__": "update", "visible": True}
+    fields = [chosen[name]["value"] for name in COLUMN_FIELDS]
+    assert fields == ["Artikelnummer", "Nettopreis", "Preiseinheit", "", ""]
+    view = called(page, "pricelist_shown", PRICELIST_SHOWN, str(price_list), "S04", *fields, "nl")
+    rows = {row[0]: row for row in view["table"]["data"]}
+    outcomes = [row[-1] for row in view["table"]["data"]]
+    assert outcomes.count("ongewijzigd") >= 3 and outcomes.count("prijs verandert") == 2
+    assert rows["KM-0424"][1:] == ["0,85", "0,88", "prijs verandert"] and rows["KM-0406"][1:] == ["0,68", "0,70", "prijs verandert"]
+    assert rows["KM-0400"][-1] == "artikel niet bekend in Exact" and rows["KM-0421"][-1] == "prijs niet te lezen"
+    assert rows["KM-0422"][-1].startswith("wijkt sterk af")
+    assert outcomes[-1] == "ongewijzigd" and len(outcomes) <= 9         # the rows that matter come first, in the view without a scroll
+    assert view["note"].startswith("2 prijzen veranderen") and view["carry"] == {"__type__": "update", "interactive": True}
+    carried = called(page, "pricelist_carried_out", CARRIED_OUT, str(price_list), "S04", *fields, view["viewed"], "nl")
+    assert carried["note"].startswith("2 prijswijzigingen staan op de lijst In Exact invoeren.")
+    listed = {(change.article_code, change.new_value) for change in open_changes(settings.cases_root / "prepared")
+              if change.kind == "article_price" and change.case_ids[0].startswith("pricelist_S04_")}
+    assert listed == {("KM-0406", "0.70"), ("KM-0424", "0.88")}
+
+
+def assert_like_real_workbooks(export, price_list):
+    """The two sample files look as such files look when the buyer opens them in Excel. The export of Exact holds its prices as
+    number cells shown with two decimals, so Excel shows no "number stored as text" warning in it; none of them ends in a zero, as
+    the tab shows a number cell's price without its trailing zero ("0,8"). The price list holds its prices as texts with the decimal
+    comma, as a list a supplier converts from a PDF often does, so that the tab shows them as the list writes them ("0,70",
+    "28,50"). It is that of S04, a German supplier (its confirmation of 250104 is in German), with German column titles and
+    descriptions, while the export holds the buyer's Dutch descriptions; the row of KM-0422, a price per 10 read as a price per
+    piece, has its price unit blank, as a supplier who forgot to fill it in leaves it, so that a buyer who checks the column the tab
+    names finds the gap; and neither file names the library that wrote it as its author."""
+    from openpyxl import load_workbook
+    rows = {}
+    for path in (export, price_list):
+        book = load_workbook(path)
+        assert book.properties.creator != "openpyxl" and "verzonnen" in book.properties.creator.lower()
+        rows[path.name] = list(book.active.iter_rows())
+    exported = {row[0].value: row for row in rows[export.name][3:]}
+    assert [cell.value for cell in rows[export.name][2]] == ["Artikel", "Omschrijving", "Inkoopprijs"]
+    assert exported["KM-0406"][1].value == "Zeskantbout M12 x 50"
+    for row in exported.values():
+        assert row[2].data_type == "n" and isinstance(row[2].value, float) and row[2].number_format == "0.00"
+        assert not f"{row[2].value:.2f}".endswith("0")
+    assert exported["KM-0422"][2].value == 2.85
+    header, *listed = rows[price_list.name]
+    assert [cell.value for cell in header] == ["Artikelnummer", "Bezeichnung", "Nettopreis", "Preiseinheit"]
+    listed = {row[0].value: row for row in listed}
+    assert listed["KM-0406"][1].value == "Sechskantschraube M12 x 50" and listed["KM-0425"][1].value == "Schlauchtülle 1/2 Zoll"
+    for code, row in listed.items():
+        assert row[2].data_type == "s"
+        assert row[3].value == (None if code == "KM-0422" else 1)
+    assert listed["KM-0422"][2].value == "28,50" and listed["KM-0406"][2].value == "0,70" and listed["KM-0421"][2].value == "auf Anfrage"
+
+
+def test_a_plain_demo_folder_leaves_the_price_list_to_the_installation(tmp_path):
+    """Without --demonstration the columns of the export of articles stay unset, nothing is taken in and no sample is written, so that
+    the folder's settings still allow a public link of the review page."""
+    from aid.review.__main__ import refuse_share
+    out = tmp_path / "demo"
+    assert main(["--out", str(out)]) == 0
+    settings = load_settings(out / "settings.json")
+    assert settings.article_columns == {} and refuse_share(settings) is None
+    assert not (out / demo.SAMPLES).exists() and not (settings.cases_root / "exact").exists()

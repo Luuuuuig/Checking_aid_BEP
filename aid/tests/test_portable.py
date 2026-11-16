@@ -51,7 +51,10 @@ LEESMIJ = ("Deze map is de inkoopassistent. Buiten deze map zet de assistent all
            "Demonstratie: dubbelklik op Demonstratie starten om de assistent te laten zien met 22 verzonnen zaken, zonder AI en "
            "zonder verbinding. Alles in de map demo is verzonnen, en de map data wordt er niet voor gebruikt. Elke start begint "
            "opnieuw: de vorige map demo wordt vervangen. De assistent en de demonstratie draaien niet tegelijk: stop eerst de "
-           "assistent met Inkoopassistent stoppen. Stoppen: dubbelklik op Demonstratie stoppen. In de map "
+           "assistent met Inkoopassistent stoppen. Stoppen: dubbelklik op Demonstratie stoppen. "
+           "Voor het tabblad Prijslijst staan in de map voorbeelden in de map demo een verzonnen export van artikelen uit Exact en "
+           "een verzonnen prijslijst van leverancier S04; het tabblad is al ingesteld: kies S04, geef de prijslijst en druk op "
+           "Bekijken. In de map "
            "data staan de instellingen en alle documenten die de assistent verwerkt: kopieer of verstuur die map niet. Zet deze map op "
            "de eigen schijf van de pc, niet in een map die met OneDrive wordt gesynchroniseerd; verplaatst u de map, dubbelklik dan "
            "opnieuw op Inkoopassistent starten. Bijwerken: stop de assistent, verwijder in deze map alles behalve de map data, zet "
@@ -1572,6 +1575,8 @@ def test_the_demonstration_start_fills_its_own_folder_and_opens_the_page_on_it(t
     settings = load_settings(demo / "settings.json")
     assert settings.test_mode and settings.send_via == "file" and settings.cases_root == demo.resolve() / "cases"
     assert len([case for case in settings.cases_root.iterdir() if case.name[:1].isdigit()]) == 22
+    assert settings.article_columns and sorted(p.name for p in (demo / "voorbeelden").iterdir()) == [
+        "Verzonnen export artikelen S04 uit Exact.xlsx", "Verzonnen prijslijst S04.xlsx"]        # the tab Prijslijst works at once
     lines = log(demo)
     assert lines[0] == "demonstration start: --status ended with exit code 1 on the settings of the folder data: made-up line of data --status"
     assert lines[1].startswith("demonstration start: the made-up cases were written into the folder demo (python -m aid.demo ended "
@@ -1593,6 +1598,23 @@ def test_the_demonstration_start_fills_its_own_folder_and_opens_the_page_on_it(t
     assert not (demo / "logs" / "runner.out").exists() and len(log(demo)) == 11
     assert len([case for case in settings.cases_root.iterdir() if case.name[:1].isdigit()]) == 22
     assert files_of(data) == data_before and said(capsys) == [DEMO_STARTING]
+
+
+def test_a_folder_demo_marked_by_an_earlier_version_is_still_the_demonstrations_own(tmp_path, quick, windowless):
+    """The marker's text grew a sentence on the sample files of the price list; a folder demo that an earlier version of the
+    demonstration start marked is still its own: it is replaced as any other, and its marker then has the present text."""
+    windowless()
+    demo = demo_folder(tmp_path)
+    demo.mkdir()
+    (demo / "DEMONSTRATIE.txt").write_text(portable.DEMO_MARKER_EARLIER[0], encoding="ascii")
+    (demo / "STOP").write_text("", encoding="utf-8")
+    assert portable.DEMO_MARKER_EARLIER[0] != portable.DEMO_MARKER_TEXT
+    folders = Folders({("data", "--status"): 1, ("demo", "--status"): [1, 0], ("demo", *DEMO_LAUNCH): 0})
+    assert portable.demo_start(demo, run=folders, answers=Page(False, False, True), open_page=Browser(), wait_seconds=30,
+                               box=Boxes()) == 0
+    assert not (demo / "STOP").exists() and (demo / "settings.json").is_file()
+    assert (demo / "DEMONSTRATIE.txt").read_text(encoding="ascii") == portable.DEMO_MARKER_TEXT
+    assert "voorbeelden" in portable.DEMO_MARKER_TEXT and portable.DEMO_MARKER_TEXT.isascii()
 
 
 def test_a_folder_demo_the_demonstration_start_did_not_make_is_refused_and_left_as_it_is(tmp_path, capsys, quick, windowless):
@@ -1763,6 +1785,42 @@ def started_demo(demo: Path) -> None:
     folders = Folders({("data", "--status"): 1, ("demo", "--status"): 0, ("demo", *DEMO_LAUNCH): 0})
     assert portable.demo_start(demo, run=folders, answers=Page(False, False, True), open_page=Browser(), wait_seconds=30,
                                box=Boxes()) == 0
+
+
+DEMO_IN_USE = ("De vorige demonstratie kon niet worden verwijderd: een bestand in de map demo is nog geopend, bijvoorbeeld in Excel. "
+               "Sluit dat bestand en dubbelklik opnieuw op Demonstratie starten.")
+
+
+def test_a_demonstration_start_while_a_file_of_the_previous_one_is_open_says_to_close_it(tmp_path, quick, monkeypatch, windowless):
+    """A sample of demo\\voorbeelden left open in Excel during a rehearsal: Windows keeps it locked, so the next start cannot empty
+    the folder. Its warning box says which kind of file stops it and what to do, the log names the file, the marker stays and nothing
+    is filled or started; once the file is closed the next start begins afresh."""
+    windowless()
+    demo = demo_folder(tmp_path)
+    started_demo(demo)
+    locked = demo / "voorbeelden"
+    remove = portable._remove
+
+    def in_use(path):
+        if path == locked:
+            raise PermissionError(13, "The process cannot access the file because it is being used by another process",
+                                  str(locked / "Verzonnen prijslijst S04.xlsx"))
+        remove(path)
+    monkeypatch.setattr(portable, "_remove", in_use)
+    boxes, folders = Boxes(), Folders({("data", "--status"): 1, ("demo", "--status"): 1})
+    assert portable.demo_start(demo, run=folders, answers=Page(False), open_page=Browser(), wait_seconds=30, box=boxes) == 1
+    assert boxes.events == [("information", DEMO_STARTING_BOX), ("closed", DEMO_STARTING_BOX), ("warning", DEMO_IN_USE)]
+    assert ("fill",) not in folders.asked() and ("demo", *DEMO_LAUNCH) not in folders.asked()
+    assert (demo / "DEMONSTRATIE.txt").is_file() and locked.is_dir()
+    assert log(demo)[-1] == ("demonstration start: the previous demonstration could not be removed (PermissionError: [Errno 13] The "
+                             "process cannot access the file because it is being used by another process: '"
+                             + str(locked / "Verzonnen prijslijst S04.xlsx") + "'): a file in the folder demo is still open, "
+                             "for example in Excel; nothing started")
+    monkeypatch.setattr(portable, "_remove", remove)
+    folders = Folders({("data", "--status"): 1, ("demo", "--status"): [1, 0], ("demo", *DEMO_LAUNCH): 0})
+    assert portable.demo_start(demo, run=folders, answers=Page(False, False, True), open_page=Browser(), wait_seconds=30,
+                               box=Boxes()) == 0
+    assert (locked / "Verzonnen prijslijst S04.xlsx").is_file()
 
 
 def test_a_demonstration_start_while_the_previous_launcher_is_still_stopping_removes_nothing(tmp_path, quick, windowless):

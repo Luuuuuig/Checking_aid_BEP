@@ -511,8 +511,8 @@ def confirmations(prepared: Path, now: datetime, days: int = CONFIRMATION_DAYS) 
 
 def confirmation_lines(found: list[dict], cases_root: Path, language: str) -> list[str]:
     """The confirmations as the section shows them: the day, the order with its supplier as its case's result names it, and the file,
-    with "alleen bijvoegen: er staat nog iets open" after it when the status is not to be set yet, and "(proefdocument)" behind the
-    confirmation of a try-out, which is made up: nothing of it is to be done in the real Exact."""
+    with "alleen bijvoegen: er staat nog iets open" after it when the status is not to be set yet, and "(proefdocument: niet
+    bijvoegen)" behind the confirmation of a try-out, which is made up: nothing of it is to be done in the real Exact."""
     strings = STRINGS[language]
     lines = []
     for item in found:
@@ -520,18 +520,21 @@ def confirmation_lines(found: list[dict], cases_root: Path, language: str) -> li
         line = (strings["hand_confirmation"].format(date=day, number=item["po_number"], supplier=supplier, file=item["file"]) if supplier
                 else strings["hand_confirmation_alone"].format(date=day, number=item["po_number"], file=item["file"]))
         line = line if item["set_status"] else f"{line} ({strings['hand_attach_only']})"
-        lines.append(f"{line} {strings['hand_tryout']}" if item.get("tryout") else line)
+        lines.append(f"{line} {strings['hand_confirmation_tryout']}" if item.get("tryout") else line)
     return lines
 
 
 def confirmations_text(found: list[dict], cases_root: Path, language: str) -> str:
     """The section of the confirmations as Markdown: its heading, a line that counts them and says what to do with them ("2
     bevestigingen van de laatste 7 dagen: voeg ze in Exact bij en zet de status op Bevestigd."), then a line per confirmation; ""
-    when there is none."""
+    when there is none. The count leaves the try-outs out, which are made up and attached nowhere (their lines say so); with only
+    try-outs the line says that there is nothing to attach, above their lines."""
     if not found:
         return ""
     strings = STRINGS[language]
-    count = strings["hand_confirmations_one"] if len(found) == 1 else strings["hand_confirmations_many"].format(n=len(found))
+    real = sum(1 for item in found if not item.get("tryout"))
+    count = (strings["hand_confirmations_tryouts_only"] if not real else strings["hand_confirmations_one"] if real == 1
+             else strings["hand_confirmations_many"].format(n=real))
     lines = confirmation_lines(found, cases_root, language)
     return f"## {strings['hand_confirmations']}\n\n{count}\n\n" + "\n".join(f"- {_markdown(line)}" for line in lines)
 

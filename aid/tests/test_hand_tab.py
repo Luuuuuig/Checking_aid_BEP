@@ -1308,7 +1308,7 @@ def test_the_style_keeps_the_pair_in_view_and_gives_each_standing_line_its_look(
     for rule in (".gradio-container { overflow: clip; }",
                  f"#hand-actions {{ position: sticky; top: 0; z-index: 5; background: {look.GROUND}; padding: 8px 0; }}",
                  ".block.hand-rows input, .hand-copy button { scroll-margin-top: 148px; }",
-                 f".block.notice {{ background: {look.SURFACE_2}; border: 0; border-left: 4px solid {look.CONTROL}; border-radius: 6px; "
+                 f".block.notice, #pricelist-notice {{ background: {look.TINT}; border: 0; border-left: 4px solid {look.CONTROL}; border-radius: 6px; "
                  "padding: 12px 16px; }",
                  f".block.empty-line .prose, .block.empty-line .prose * {{ color: {look.MUTED}; }}",
                  ".row > .form ~ button { align-self: flex-end; }"):
@@ -1319,6 +1319,28 @@ def test_the_style_keeps_the_pair_in_view_and_gives_each_standing_line_its_look(
                    and any(isinstance(child, gr.Button) and child.value == NL["hand_block_entered"] for child in block.children)]
     form, button = block_row.children
     assert type(form).__name__ == "Form" and [field.label for field in form.children] == [NL["hand_block"]] and isinstance(button, gr.Button)
+
+
+def test_the_style_keeps_lijst_vernieuwen_on_one_line(tmp_path, madeup_out):
+    """"Lijst vernieuwen" of In Exact invoeren and of Bestanden stands in a narrow column beside a text, which at a width of 683 px
+    (a zoom of 200 percent) broke its words over two lines: the column takes the button's natural width as its start, and the
+    button keeps its words on one line at the right end of its column. The rules read the rows as the page lays them out: the
+    button alone in the column right after the column of hand-intro or files-done."""
+    from aid.review import look
+    gr = import_gradio()
+    page, prepared, d = tab_page(tmp_path, madeup_out, cases=())
+    css = look.PAGE_CSS
+    for rule in (".column:has(> #hand-intro) + .column, .column:has(> #files-done) + .column { flex-basis: auto; }",
+                 ".column:has(> #hand-intro) + .column > button, #files-refresh { width: auto; min-width: 160px; white-space: nowrap; "
+                 "align-self: flex-end; }"):
+        assert rule in css, rule
+    for text_id, refresh_id in (("hand-intro", None), ("files-done", "files-refresh")):
+        [row] = [block for block in page.blocks.values() if isinstance(block, gr.Row) and len(block.children) == 2
+                 and isinstance(block.children[0], gr.Column) and [getattr(child, "elem_id", None) for child in block.children[0].children] == [text_id]]
+        text_column, button_column = row.children
+        assert isinstance(text_column, gr.Column) and isinstance(button_column, gr.Column)
+        [button] = button_column.children
+        assert isinstance(button, gr.Button) and button.value == NL["refresh"] and button.elem_id == refresh_id
 
 
 # --- the tab 'Bestanden' (Task 37): files given on the page, and what became of them ---
@@ -1989,6 +2011,48 @@ def test_the_price_list_tab_shows_the_view_and_puts_the_changes_on_the_list(tmp_
     assert called(page, "pricelist_carried_out", CARRIED_OUT, listed, "S01", *OWN, third["viewed"], "en")["note"] == (
         "0 price changes are on the list Enter in Exact.")
     assert len(prepared_lines(root)) == 2
+
+
+def test_a_carry_out_gives_the_tab_in_exact_invoeren_its_count_at_once(tmp_path, madeup_out):
+    """Finding P4 of the rehearsal of 16 November: after "Op de lijst In Exact invoeren zetten" the label "In Exact invoeren (n)"
+    followed only at the page's timer, up to 30 seconds later. The press is followed by the read of that label alone
+    (hand_label_read, which the tab returns), without the queue, so that hand_label_ticked stays bound once, to the timer, and
+    nothing the buyer ticked on that tab is touched."""
+    gr = import_gradio()
+    page, d, clock = pricelist_page(tmp_path, madeup_out)
+    tab = hand_tab(page)
+    language = [block for block in page.blocks.values() if isinstance(block, gr.Radio) and block.label == NL["language"]][0]
+    [carry] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == "pricelist_carried_out"]
+    [after] = [f for f in page.fns.values() if f.trigger_after == carry._id]
+    assert getattr(after.fn, "__name__", "") == "hand_label_read" and after.inputs == [language] and after.outputs == [tab]
+    assert after.queue is False and after.show_progress == "hidden"
+    [tick] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == "hand_label_ticked"]
+    assert tick.outputs[0] is tab
+    export = articles_export(tmp_path, "artikelen S01.csv", [["KM-1001", "Slang", "12,50"], ["KM-1002", "Klem", "8,00"]])
+    called(page, "prices_filed", PRICES_FILED, export, "S01", "nl", None)
+    clock.later(1)
+    listed = price_list(tmp_path, "prijslijst.csv", [("KM-1001", "12,70", "", "", ""), ("KM-1002", "8,40", "", "", "")])
+    assert after.fn("nl") == {"__type__": "update", "label": NL["hand_tab"]}
+    viewed = called(page, "pricelist_shown", PRICELIST_SHOWN, listed, "S01", *OWN, "nl")
+    called(page, "pricelist_carried_out", CARRIED_OUT, listed, "S01", *OWN, viewed["viewed"], "nl")
+    assert after.fn("nl") == {"__type__": "update", "label": "In Exact invoeren (2)"}
+    assert after.fn("en") == {"__type__": "update", "label": EN["hand_tab_count"].format(n=2)}
+    (d.settings.cases_root / "prepared" / MARKS_FILE).mkdir()                # a list that cannot be read leaves the label as it is
+    assert after.fn("nl") == SAME
+    manual = manual_sections()["2.6"]
+    assert '"Op de lijst In Exact invoeren zetten" on the tab "Prijslijst"' in manual
+
+
+def test_the_copy_buttons_are_bound_before_the_read_of_the_list(tmp_path, madeup_out):
+    """Finding P5 of the rehearsal of 16 November: rows that a price list had just put on the list showed for about a second without
+    their copy buttons, because the client runs the listeners of the tab's selection in the order they were bound, and the read of
+    the copy buttons (copies_opened, without the queue) came after three reads on the queue. It is bound before the read of the
+    list, so that the buttons are there when the rows arrive."""
+    page, _, _ = tab_page(tmp_path, madeup_out)
+    tab = hand_tab(page)
+    on_select = [getattr(f.fn, "__name__", "") for f in page.fns.values() if (tab._id, "select") in f.targets]
+    assert on_select.index("copies_opened") < on_select.index("list_opened")
+    assert on_select[0] == "copies_opened"
 
 
 def prepared_lines(cases_root: Path) -> list[str]:

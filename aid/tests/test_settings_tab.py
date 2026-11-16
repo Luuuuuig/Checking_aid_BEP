@@ -673,15 +673,20 @@ def test_the_palette_meets_its_contrast_ratios():
     with puts them in those places, and every colour of the page's style rules is one of them."""
     from aid.review import look
     assert round(contrast("#767676", "#FFFFFF"), 2) == 4.54                       # the formula itself, on a pair known from WCAG
-    grounds = (look.SURFACE, look.GROUND, look.SURFACE_2)
-    text = [(look.INK, ground) for ground in (*grounds, look.ACCENT_TINT)] + [(look.SURFACE, look.INK), (look.SURFACE, look.INK_HOVER)]
-    text += [(look.MUTED, ground) for ground in grounds] + [(look.CONTROL, ground) for ground in grounds[:2]]      # help, placeholders
+    grounds = (look.SURFACE, look.GROUND, look.SURFACE_2, look.TINT)
+    text = [(look.INK, ground) for ground in (*grounds, look.ACCENT_TINT)] + [(look.SURFACE, look.ACCENT), (look.SURFACE, look.ACCENT_HOVER)]
+    text += [(look.MUTED, ground) for ground in (*grounds, look.LINE)]          # help, meta, heads, a filled button not to press yet
+    text += [(look.CONTROL, ground) for ground in (look.SURFACE, look.TINT)]                     # placeholders, in a field or a notice
     text += [(look.ACCENT, ground) for ground in (*grounds, look.ACCENT_TINT)]                                    # links
+    # the head band: the tool's name and the chosen tab's white pill, the tabs not chosen and the edge of the "..." press, the words
+    # of a tab in hover, and the ink words of the chosen tab on its pill
+    text += [(look.SURFACE, look.BAND), (look.LINE_STRONG, look.BAND), (look.SURFACE, look.INK_HOVER), (look.INK, look.SURFACE)]
     text += [(tone.text, tone.tint) for tone in look.TONES.values()] + [(look.TONES["done"].text, look.GROUND)]
     text += [(look.INK, tone.tint) for tone in look.TONES.values()]                                     # a notice in a tone
     problem = look.TONES["problem"]
     text += [(problem.mark, look.SURFACE)]                                       # the words of a button that takes something away
-    marks = [(edge, ground) for edge in (look.CONTROL, look.ACCENT) for ground in grounds[:2]]           # a control's edge, the focus ring
+    marks = [(edge, ground) for edge in (look.CONTROL, look.ACCENT) for ground in grounds]               # a control's edge, the focus ring
+    marks += [(look.SURFACE, look.BAND), (look.LINE_STRONG, look.BAND)]          # the focus ring on the band, the edge of its "..." press
     marks += [(tone.mark, tone.tint) for tone in look.TONES.values()] + [(problem.mark, look.SURFACE)]
     assert [pair for pair in text if contrast(*pair) < 4.5] == [] and [pair for pair in marks if contrast(*pair) < 3] == []
     placed = {"body_background_fill": look.GROUND, "background_fill_primary": look.SURFACE, "background_fill_secondary": look.SURFACE_2,
@@ -689,7 +694,7 @@ def test_the_palette_meets_its_contrast_ratios():
               "block_label_text_color": look.INK, "block_title_text_color": look.INK, "body_text_color_subdued": look.MUTED,
               "block_info_text_color": look.MUTED, "input_border_color": look.CONTROL, "input_placeholder_color": look.CONTROL,
               "checkbox_border_color": look.CONTROL, "button_secondary_border_color": look.CONTROL,
-              "button_primary_background_fill": look.INK, "button_primary_background_fill_hover": look.INK_HOVER,
+              "button_primary_background_fill": look.ACCENT, "button_primary_background_fill_hover": look.ACCENT_HOVER,
               "button_primary_text_color": look.SURFACE, "button_secondary_background_fill": look.SURFACE,
               "button_secondary_background_fill_hover": look.SURFACE_2, "button_secondary_text_color": look.INK,
               "color_accent": look.ACCENT, "link_text_color": look.ACCENT, "input_border_color_focus": look.ACCENT,
@@ -699,8 +704,8 @@ def test_the_palette_meets_its_contrast_ratios():
               "error_background_fill": problem.tint}
     theme = look.page_theme(import_gradio())
     assert {name: getattr(theme, name) for name in placed} == placed
-    tokens = {look.GROUND, look.SURFACE, look.SURFACE_2, look.INK, look.INK_HOVER, look.MUTED, look.CONTROL, look.LINE, look.LINE_STRONG,
-              look.ACCENT, look.ACCENT_TINT, *[colour for tone in look.TONES.values() for colour in tone]}
+    tokens = {look.GROUND, look.SURFACE, look.SURFACE_2, look.TINT, look.INK, look.INK_HOVER, look.MUTED, look.CONTROL, look.LINE,
+              look.LINE_STRONG, look.ACCENT, look.ACCENT_HOVER, look.ACCENT_TINT, look.BAND, *[colour for tone in look.TONES.values() for colour in tone]}
     assert set(re.findall(r"#[0-9A-Fa-f]{6}\b", look.PAGE_CSS)) <= tokens
 
 
@@ -750,6 +755,66 @@ def test_the_page_stays_light_in_dark_mode():
     assert darks and [name for name in darks if getattr(theme, name) != getattr(theme, name[:-len("_dark")])] == []
     light, dark = theme_variables(theme)
     assert light and dark == light
+
+
+def test_the_head_band_carries_the_name_the_language_switch_and_the_tabs_as_pills():
+    """The look the owner chose on 16 November: a dark band across the top of the window (BAND, the page's ink) with the tool's name
+    in white and the language switch on a white pill, the page's tabs on the band as pills, the chosen one white with ink words. The
+    band is painted by a border image outside the head and the tab bar, never by a clip-path or an overflow that cuts off what lies
+    over its edge: in a window of 683 px (a zoom of 200 percent) the page library folds the tabs that do not fit into a "..." menu that
+    opens below the band, and every tab must still be reachable there (checked in the browser). Every text and control on the band
+    stands at least 4.5:1 against it."""
+    from aid.review import look
+    css = look.PAGE_CSS
+    band = f"border-image: linear-gradient({look.BAND}, {look.BAND}) fill 0 //"
+    assert look.BAND == look.INK
+    for rule in (f"#page-head {{ align-items: center; padding: 4px 0 0; {band} 100vmax 100vmax 16px; }}",
+                 f".prose h1 {{ font-size: 24px; line-height: 32px; font-weight: 600; margin: 0; color: {look.SURFACE}; }}",
+                 f".block.language-switch .wrap {{ flex-wrap: nowrap; gap: 4px; padding: 4px; background: {look.SURFACE}; border-radius: 999px; }}",
+                 f".page-tabs > .tab-wrapper {{ height: auto; margin-top: -8px; padding: 0 0 8px; {band} 0 100vmax; }}",
+                 ".page-tabs > .tab-wrapper > .tab-container { height: auto; gap: 4px; overflow: visible; }",
+                 f'.page-tabs > .tab-wrapper > .tab-container [role="tab"] {{ height: 36px; padding: 0 16px; border-radius: 999px; '
+                 f"color: {look.LINE_STRONG}; }}",
+                 f'.page-tabs > .tab-wrapper > .tab-container [role="tab"]:hover:not([aria-selected="true"]) {{ background: {look.INK_HOVER}; '
+                 f"color: {look.SURFACE}; }}",
+                 f'.page-tabs > .tab-wrapper > .tab-container [role="tab"][aria-selected="true"] {{ background: {look.SURFACE}; color: {look.INK}; }}',
+                 f".page-tabs > .tab-wrapper > .overflow-menu > button {{ min-width: 44px; min-height: 36px; color: {look.SURFACE}; "
+                 f"background: none; border-color: {look.LINE_STRONG}; border-radius: 999px; }}"):
+        assert rule in css, rule
+    rules = [rule for rule in css.splitlines() if "{" in rule]
+    assert [rule for rule in rules if "clip-path" in rule or "overflow: hidden" in rule] == []
+    assert [rule for rule in css.splitlines() if "page-tabs" in rule and ":focus-visible" in rule and f"outline-color: {look.SURFACE}" in rule]
+    on_band = [look.SURFACE, look.LINE_STRONG]                     # the name, the white pills and the ring; the light tab words, the edge
+    assert [colour for colour in on_band if contrast(colour, look.BAND) < 4.5] == []
+    assert contrast(look.SURFACE, look.INK_HOVER) >= 4.5 and contrast(look.INK, look.SURFACE) >= 4.5   # a tab in hover, the chosen one
+
+
+def test_the_parts_of_each_tab_lie_on_white_cards_on_a_grey_ground():
+    """The look the owner chose on 16 November ("refined"): the page's ground is the grey GROUND, and the parts of every tab lie on
+    white cards with an edge in the line colour, corners of 8 px and a soft shadow: the strip and the fold of Beoordelen, the decisions
+    and the documents of a case, the list of In Exact invoeren, the part of Prijslijst, the part of Bestanden and each section of
+    Instellingen. A notice is on the light TINT, so that it reads as a message and not as a card; the head cells of every table are
+    on the same tint; the one filled button of a view is the blue accent; and the five fields of the columns of a price list keep
+    their words clear of the dropdown's arrow (finding P3 of the rehearsal)."""
+    from aid.review import look
+    css = look.PAGE_CSS
+    cards = ("#review-strip .strip", "#review-all", "#review-case", "#review-evidence", ".form:has(> #hand-rows)", "#pricelist-body",
+             ".column:has(> #files-title)", "#settings-sections > .tabitem")
+    assert (f"{', '.join(cards)} {{ background: {look.SURFACE}; border: 1px solid {look.LINE}; border-radius: 8px; "
+            f"box-shadow: {look.CARD_SHADOW}; }}") in css
+    assert look.GROUND != look.SURFACE and contrast(look.INK, look.GROUND) >= 4.5 and contrast(look.CONTROL, look.GROUND) >= 3
+    assert ".block.notice, #pricelist-notice { background: " + look.TINT in css and look.TINT not in (look.GROUND, look.SURFACE)
+    assert f".table-container .header-cell {{ font-weight: 600; color: {look.MUTED}; background-color: {look.TINT} !important; }}" in css
+    assert f"#review-all-table th {{ font-weight: 600; color: {look.MUTED}; border-bottom-color: {look.LINE_STRONG}; background: {look.TINT}; }}" in css
+    assert [rule for rule in css.splitlines() if "!important" in rule and "{" in rule and "header-cell" not in rule and "transition: none" not in rule] == []
+    assert f"button.primary:disabled {{ background: {look.LINE}; border-color: {look.LINE}; color: {look.MUTED}; opacity: 1; }}" in css
+    columns = ", ".join(f"#pricelist-column-{column} input" for column in ("item_code", "price", "basis", "valid_from", "valid_to"))
+    assert f"{columns} {{ padding-right: 28px; text-overflow: ellipsis; }}" in css
+    theme = look.page_theme(import_gradio())
+    assert (theme.body_background_fill, theme.button_primary_background_fill, theme.button_primary_background_fill_hover) == (
+        look.GROUND, look.ACCENT, look.ACCENT_HOVER)
+    assert (theme.block_radius, theme.table_radius, theme.input_radius, theme.button_large_radius) == ("8px", "8px", "6px", "6px")
+    assert "anywhere" not in css and "prefers-color-scheme" not in css          # no word broken at any letter; light in dark mode too
 
 
 def test_the_head_names_the_tool_and_keeps_the_label_of_the_language_switch_for_screen_readers(tmp_path, madeup_out):
@@ -3881,9 +3946,9 @@ def test_the_tables_of_part_2_keep_their_titles_whole_and_scroll_inside_the_bloc
 
 # --- the part "Proefdraaien" at the end of the block, and the switch of the test mode (Task 33) ---
 
-TRYOUT_OPENED = ("switch", "filled", "why", "controls", "po", "download", "note")    # the fill of the part, in the order of its outputs
+TRYOUT_OPENED = ("switch", "filled", "why", "controls", "cart", "po", "download", "note")    # the fill of the part, in the order of its outputs
 TRYOUT_MADE = ("po", "download", "note")                    # what "Proefbevestiging maken (pdf)" and "... direct aan de assistent geven" give
-SWITCHED = ("switch", "filled", "why", "controls", "po", "note")                      # what the switch gives
+SWITCHED = ("switch", "filled", "why", "controls", "cart", "po", "note")              # what the switch gives
 TRYOUT_RELABELLED = ("title", "intro", "switch", "why", "po", "change", "make", "give", "note")
 TRYOUT_HANDLERS = {"tryout_opened", "tryout_refreshed", "tryout_made", "tryout_given", "tryout_chosen", "test_mode_saved", "tryout_relabel",
                    "tryout_cart_made", "tryout_cart_relabel"}
@@ -3920,7 +3985,7 @@ def test_the_try_out_is_offered_in_the_test_mode_without_a_limit_only(tmp_path, 
     folder = tmp_path / "offered"
     path, page, made = tab(folder, madeup_out, **(BUYER | {"test_mode": True}))
     shown = named(TRYOUT_OPENED, handler(page, "tryout_opened")("nl"))
-    assert (shown["switch"], shown["filled"], shown["why"], shown["controls"]) == (True, True, "", SHOWN_PART)
+    assert (shown["switch"], shown["filled"], shown["why"], shown["controls"], shown["cart"]) == (True, True, "", SHOWN_PART, SHOWN_PART)
     assert shown["po"] == {"__type__": "update", "choices": [], "value": None} and shown["note"] == nl["tryout_none_known"]
     assert named(TRYOUT_MADE, handler(page, "tryout_given")(None, "none", "nl")) == {
         "po": {"__type__": "update", "choices": [], "value": None}, "download": NO_DOWNLOAD, "note": nl["tryout_none_known"]}
@@ -3975,14 +4040,17 @@ def test_the_switch_writes_the_test_mode_only(tmp_path, madeup_out):
     before = path.read_text(encoding="utf-8")
     shown = named(TRYOUT_OPENED, handler(page, "tryout_opened")("nl"))
     assert (shown["switch"], shown["filled"], shown["why"], shown["controls"]) == (False, False, nl["tryout_not_offered"], HIDDEN_PART)
+    assert shown["cart"] == HIDDEN_PART                                      # the second column of the part follows the first
     on = named(SWITCHED, handler(page, "test_mode_saved")(True, shown["filled"], "nl"))
     assert (on["switch"], on["filled"], on["why"], on["controls"], on["note"]) == (True, True, "", SHOWN_PART, nl["tryout_saved"])
+    assert on["cart"] == SHOWN_PART
     after = path.read_text(encoding="utf-8")
     assert after == before[:-2] + ',\n    "test_mode": true\n}' and held(path) == json.loads(before) | {"test_mode": True}
     assert load_settings(path).test_mode is True
     off = named(SWITCHED, handler(page, "test_mode_saved")(False, on["filled"], "en"))
     assert (off["switch"], off["filled"], off["why"], off["controls"], off["note"]) == (False, False, en["tryout_not_offered"], HIDDEN_PART,
                                                                                         en["tryout_saved"])
+    assert off["cart"] == HIDDEN_PART
     assert path.read_text(encoding="utf-8") == after.replace('"test_mode": true', '"test_mode": false')
     assert (nl["tryout_switch"], nl["tryout_saved"]) == ("Proefstand: de assistent werkt met het test-Exact", "Opgeslagen.")
     assert (en["tryout_switch"], en["tryout_saved"]) == ("Test mode: the assistant works with the test Exact", "Saved.")
@@ -4000,7 +4068,7 @@ def test_the_switch_refuses_a_save_when_the_file_changed_meanwhile(tmp_path, mad
     before = path.read_bytes()
     refused = named(SWITCHED, handler(page, "test_mode_saved")(True, shown["filled"], "nl"))
     assert (refused["switch"], refused["filled"], refused["note"]) == (True, True, nl["tryout_switch_refilled"]) and path.read_bytes() == before
-    assert (refused["why"], refused["controls"]) == ("", SHOWN_PART)                       # the part as the file now gives it
+    assert (refused["why"], refused["controls"], refused["cart"]) == ("", SHOWN_PART, SHOWN_PART)        # the part as the file now gives it
     again = named(SWITCHED, handler(page, "test_mode_saved")(False, None, "nl"))
     assert (again["switch"], again["filled"], again["note"]) == (True, True, nl["tryout_switch_refilled"]) and path.read_bytes() == before
     english = named(SWITCHED, handler(page, "test_mode_saved")(True, False, "en"))
@@ -4046,13 +4114,20 @@ def test_the_try_out_part_stands_at_the_end_of_the_exact_block(tmp_path, madeup_
 
     shown = [block for block in inside(exact) if isinstance(block, (gr.Markdown, gr.Checkbox, gr.Dropdown, gr.Radio, gr.Button, gr.File))]
     part = [name(block) for block in shown][[name(block) for block in shown].index(f"### {nl['tryout_title']}"):]
+    # finding T1 of the rehearsal of 16 November: the answer of the two buttons of the try-out stands right under them, where it stood
+    # under the cart's part, out of view; outside the column tryout-controls, which is hidden while the test mode is off and the note
+    # still says what a toggle of the switch did, and the cart's part in a second column after it (tryout-cart), shown with the first
     assert part == [f"### {nl['tryout_title']}", nl["tryout_intro"], nl["tryout_switch"], "tryout-why", nl["tryout_po"], nl["tryout_change"],
-                    f"button {nl['tryout_make']}", f"button {nl['tryout_give']}", "tryout-download", "tryout-cart-change",
-                    f"button {nl['tryout_cart_make']}", "tryout-note"]
+                    f"button {nl['tryout_make']}", f"button {nl['tryout_give']}", "tryout-note", "tryout-download", "tryout-cart-change",
+                    f"button {nl['tryout_cart_make']}"]
     [controls] = [block for block in inside(exact) if getattr(block, "elem_id", None) == "tryout-controls"]
     assert controls.visible is False and [name(block) for block in inside(controls) if block in shown] == [
-        nl["tryout_po"], nl["tryout_change"], f"button {nl['tryout_make']}", f"button {nl['tryout_give']}", "tryout-download",
-        "tryout-cart-change", f"button {nl['tryout_cart_make']}"]
+        nl["tryout_po"], nl["tryout_change"], f"button {nl['tryout_make']}", f"button {nl['tryout_give']}"]
+    [cart_part] = [block for block in inside(exact) if getattr(block, "elem_id", None) == "tryout-cart"]
+    assert cart_part.visible is False and [name(block) for block in inside(cart_part) if block in shown] == [
+        "tryout-download", "tryout-cart-change", f"button {nl['tryout_cart_make']}"]
+    [note] = [block for block in shown if getattr(block, "elem_id", None) == "tryout-note"]
+    assert note not in inside(controls) and note not in inside(cart_part) and note.parent is controls.parent is cart_part.parent
     [change] = [block for block in inside(exact) if getattr(block, "label", None) == nl["tryout_change"]]
     assert change.choices == [(nl[f"tryout_change:{value}"], value) for value in CHANGES] and change.value == "none"
     # Task 41: the try-out cart has a choice of its own under a question of its own, with the two changes a cart can show, and one
@@ -4064,7 +4139,7 @@ def test_the_try_out_part_stands_at_the_end_of_the_exact_block(tmp_path, madeup_
     assert cart_change.choices == [(nl[f"tryout_cart_change:{value}"], value) for value in CART_CHANGES] == [
         ("Niets", "none"), ("De prijs van de eerste regel is 1 procent hoger", "price_small")]
     language = nl["language"]
-    part_outputs = [nl["tryout_switch"], "filled", "tryout-why", "tryout-controls", nl["tryout_po"]]
+    part_outputs = [nl["tryout_switch"], "filled", "tryout-why", "tryout-controls", "tryout-cart", nl["tryout_po"]]
     assert bound("tryout_opened") == ([(nl["settings_tab"], "select"), ("page", "load")], [language], [*part_outputs, "tryout-download", "tryout-note"])
     assert bound("tryout_made") == ([(f"button {nl['tryout_make']}", "click")], [nl["tryout_po"], nl["tryout_change"], language],
                                     [nl["tryout_po"], "tryout-download", "tryout-note"])

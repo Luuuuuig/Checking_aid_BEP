@@ -535,6 +535,36 @@ def test_the_confirmations_of_seven_days(tmp_path):
         "19-11-2026: purchase order 250117, file MU17_conf.pdf (attach only: something is still open)"]
 
 
+def test_the_count_of_the_confirmations_leaves_the_try_outs_out(tmp_path):
+    """Finding T7 of the rehearsal of 16 November: the line that counts the confirmations to attach in Exact counted the try-out
+    documents too, which are made up and attached nowhere. It counts the supplier's own confirmations alone, and the line of a try-out
+    says that it is not attached; with only try-outs in those 7 days the section still lists them, under a line that says that there
+    is nothing to attach. MANUAL 2.6 says so."""
+    from aid.review.hand_list import confirmations_text
+    real = {"date": "2026-11-19", "po_number": "250114", "file": "MU14_conf.pdf", "set_status": True, "case_id": "250114_20261119T090000"}
+    tried = [{"date": "2026-11-19", "po_number": "250106", "file": f"PROEF_{n}.pdf", "set_status": True,
+              "case_id": f"250106_20261119T09{n}000", "tryout": True} for n in (1, 2)]
+    cases = tmp_path / "cases"
+    for language in ("nl", "en"):
+        strings = STRINGS[language]
+        text = confirmations_text([tried[0], real, tried[1]], cases, language)
+        heading, count, listed = text.split("\n\n")
+        assert heading == f"## {strings['hand_confirmations']}" and count == strings["hand_confirmations_one"], language
+        lines = listed.split("\n")
+        assert len(lines) == 3 and [line.endswith(f" {strings['hand_confirmation_tryout']}") for line in lines] == [True, False, True], language
+        assert confirmations_text([real, real], cases, language).split("\n\n")[1] == strings["hand_confirmations_many"].format(n=2)
+        alone = confirmations_text(tried, cases, language).split("\n\n")
+        assert alone[1] == strings["hand_confirmations_tryouts_only"] and len(alone[2].split("\n")) == 2, language
+    assert confirmations_text([], cases, "nl") == ""
+    texts = {"hand_confirmation_tryout": ("(proefdocument: niet bijvoegen)", "(try-out document: do not attach)"),
+             "hand_confirmations_tryouts_only": ("Er is niets om bij te voegen: hieronder staan alleen proefdocumenten.",
+                                                 "There is nothing to attach: below are try-out documents only.")}
+    assert {key: (STRINGS["nl"][key], STRINGS["en"][key]) for key in texts} == texts
+    manual = (REPO_ROOT / "aid" / "MANUAL.md").read_text(encoding="utf-8")
+    section = manual[manual.index("### 2.6 "):manual.index("### 2.7 ")]
+    assert '"(proefdocument: niet bijvoegen)"' in section and "is not counted" in section
+
+
 # --- the review round: K1 (a document counts only when it came after the change) and K2 (a put-back never replaces a newer change) ---
 
 def test_a_print_filed_before_the_put_back_never_ticks_it_off(tmp_path, madeup_out):

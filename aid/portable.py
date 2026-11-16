@@ -111,15 +111,16 @@ demonstration's settings, only the page is opened; when it runs but is stopping 
 the start removes nothing and ends with a warning (DEMO_STILL_STOPPING). Otherwise the information box stands, and the start ends
 with a warning while a start of the aid of this folder holds its lock in data (younger than the limit of a lock), or the aid of
 this folder runs (--status on data's settings, when data holds them: REAL_RUNS), or something answers at either address
-(PORT_TAKEN), since both use the same two addresses; then the self-check; then
-everything in demo is removed but its marker, its lock and logs/start.log, so that each start begins afresh; then python -m aid.demo
---out demo --force --demonstration fills it (the 22 made-up cases with the parser, and the settings of the demonstration: the test
-mode on, questions written as files; aid/demo.py), its output captured into start.log; then the launcher's --testshop --poll-seconds
-10 --background starts the parts on demo's settings, without a start at logon (never --install-autostart), the runner looking at
-the watched folder every 10 seconds, so that a try-out given to the assistant is a case within a minute; then, as the start does,
---status until a launcher runs and the wait for the page. The real start, in turn, ends with a warning (DEMO_RUNS) while a
-demonstration start holds its lock in a marked folder demo beside data, or while that folder's launcher runs. The demonstration
-stop (demo_stop) is the stop on demo, with lines of its own; a folder demo without the marker, or that is a link, is not touched.
+(PORT_TAKEN), since both use the same two addresses; then the self-check; then everything in demo is removed but its marker, its
+lock and logs/start.log, so that each start begins afresh (a file there that Windows keeps locked, a sample left open in Excel,
+ends the start with a warning that says to close it: DEMO_IN_USE); then python -m aid.demo --out demo --force --demonstration fills
+it (the 22 made-up cases with the parser, and the settings of the demonstration: the test mode on, questions written as files;
+aid/demo.py), its output captured into start.log; then the launcher's --testshop --poll-seconds 10 --background starts the parts on
+demo's settings, without a start at logon (never --install-autostart), the runner looking at the watched folder every 10 seconds,
+so that a try-out given to the assistant is a case within a minute; then, as the start does, --status until a launcher runs and the
+wait for the page. The real start, in turn, ends with a warning (DEMO_RUNS) while a demonstration start holds its lock in a marked
+folder demo beside data, or while that folder's launcher runs. The demonstration stop (demo_stop) is the stop on demo, with lines
+of its own; a folder demo without the marker, or that is a link, is not touched.
 
 Each launcher command is started with -I -X utf8 and the Python of the command (pythonw.exe for the start: a program without a
 console, which Windows starts without a window), its output captured: the buyer sees the Dutch lines only, and
@@ -203,9 +204,16 @@ DEMO_STOP_CMD = "Demonstratie stoppen.cmd"
 DEMO = "demo"                                    # the folder of the demonstration, beside data, made by the demonstration start
 DEMO_MARKER = "DEMONSTRATIE.txt"                 # in demo: written by the demonstration start, and the only proof that demo is its own
 # The marker's text, in Dutch, ASCII and on one line: this folder is the demonstration of the purchasing assistant, made by
-# Demonstratie starten; everything in it is made up; it is replaced at each start of the demonstration: put nothing of your own in it.
+# Demonstratie starten; everything in it is made up; it is replaced at each start of the demonstration: put nothing of your own in it;
+# the folder voorbeelden holds a made-up export of articles and price list of one supplier for the tab Prijslijst, which is set up.
 DEMO_MARKER_TEXT = ("Deze map is de demonstratie van de inkoopassistent, gemaakt door Demonstratie starten. Alles hierin is verzonnen. "
-                    "Bij elke start van de demonstratie wordt deze map vervangen: zet hier niets van uzelf in.")
+                    "Bij elke start van de demonstratie wordt deze map vervangen: zet hier niets van uzelf in. In de map voorbeelden "
+                    "staan een verzonnen export van artikelen en een verzonnen prijslijst van leverancier S04 voor het tabblad "
+                    "Prijslijst, dat al is ingesteld.")
+# The marker's texts of earlier versions of the demonstration start: a folder demo that one of them marked is the demonstration's own
+# too, and its marker gets DEMO_MARKER_TEXT when the folder is emptied for a fresh start (_cleared).
+DEMO_MARKER_EARLIER = ("Deze map is de demonstratie van de inkoopassistent, gemaakt door Demonstratie starten. Alles hierin is "
+                       "verzonnen. Bij elke start van de demonstratie wordt deze map vervangen: zet hier niets van uzelf in.",)
 # The launcher's options of the demonstration: the test shop of the capture server, the runner's poll of 10 seconds, and a start in
 # the background without a start at logon.
 DEMO_LAUNCH = ("--testshop", "--poll-seconds", "10", "--background")
@@ -289,6 +297,11 @@ DEMO_STARTING_BOX = DEMO_STARTING + " Dat kan een paar minuten duren."
 DEMO_ALREADY_RUNNING = "De demonstratie draait al. De pagina wordt geopend."
 # The demonstration could not start. The reason is in the folder demo, in logs, in the file start.log.
 DEMO_NOT_STARTED = "De demonstratie kon niet starten. De reden staat in de map demo, in logs, in het bestand start.log."
+# The previous demonstration could not be removed: a file in the folder demo is still open, for example in Excel. Close that file
+# and double-click Demonstratie starten again. (Windows keeps a file that a program has open locked: a sample of demo\voorbeelden
+# left open in Excel during a rehearsal.)
+DEMO_IN_USE = ("De vorige demonstratie kon niet worden verwijderd: een bestand in de map demo is nog geopend, bijvoorbeeld in Excel. "
+               "Sluit dat bestand en dubbelklik opnieuw op Demonstratie starten.")
 # The demonstration cannot write in this folder. Put the folder where you may write, for example in your own Documents folder.
 DEMO_UNWRITABLE = ("De demonstratie kan in deze map niet schrijven: niet in de map demo. Zet de map op een plek waar u mag schrijven, "
                    "bijvoorbeeld in uw eigen map Documenten.")
@@ -322,7 +335,8 @@ DEMO_NOT_STOPPED = "De demonstratie kon niet stoppen. De reden staat in de map d
 # when the page opens after about half a minute, the first time a few minutes; then at each logon; a start that fails says in a
 # message what to do; a second double click while it starts does nothing, and after a logoff or a restart during that start a double
 # click does nothing for up to eight minutes after the first); stop; the demonstration (22 made-up cases, no AI, no connection, all
-# in the folder demo and nothing in data, fresh at each start, not at the same time as the assistant, its stop); the folder data (do
+# in the folder demo and nothing in data, fresh at each start, not at the same time as the assistant, its stop, the made-up export
+# and price list of S04 in demo\voorbeelden for the tab Prijslijst, which is set up already); the folder data (do
 # not copy or send it); where to put the folder (not in a folder that OneDrive synchronises; after a move, start again); update
 # (delete everything but data, put everything that is in the folder of the new version in, the files to double-click too, and start
 # again; data stays; the zip of a new version holds a folder Inkoopassistent: unpack it elsewhere first and put what is in that
@@ -343,7 +357,9 @@ LEESMIJ = ("Deze map is de inkoopassistent. Buiten deze map zet de assistent all
            "Demonstratie: dubbelklik op Demonstratie starten om de assistent te laten zien met 22 verzonnen zaken, zonder AI en zonder "
            "verbinding. Alles in de map demo is verzonnen, en de map data wordt er niet voor gebruikt. Elke start begint opnieuw: de "
            "vorige map demo wordt vervangen. De assistent en de demonstratie draaien niet tegelijk: stop eerst de assistent met "
-           "Inkoopassistent stoppen. Stoppen: dubbelklik op Demonstratie stoppen.",
+           "Inkoopassistent stoppen. Stoppen: dubbelklik op Demonstratie stoppen. Voor het tabblad Prijslijst staan in de map "
+           "voorbeelden in de map demo een verzonnen export van artikelen uit Exact en een verzonnen prijslijst van leverancier S04; "
+           "het tabblad is al ingesteld: kies S04, geef de prijslijst en druk op Bekijken.",
            "In de map data staan de instellingen en alle documenten die de assistent verwerkt: kopieer of verstuur die map niet.",
            "Zet deze map op de eigen schijf van de pc, niet in een map die met OneDrive wordt gesynchroniseerd; verplaatst u de map, "
            "dubbelklik dan opnieuw op Inkoopassistent starten.",
@@ -1164,9 +1180,10 @@ def _linked(path: Path) -> bool:
 
 
 def _marked(demo: Path) -> bool:
-    """Whether demo is the demonstration's own folder: a folder that holds DEMO_MARKER with DEMO_MARKER_TEXT."""
+    """Whether demo is the demonstration's own folder: a folder that holds DEMO_MARKER with DEMO_MARKER_TEXT, or with the text of
+    an earlier version (DEMO_MARKER_EARLIER)."""
     try:
-        return demo.is_dir() and (demo / DEMO_MARKER).read_bytes() == DEMO_MARKER_TEXT.encode("ascii")
+        return demo.is_dir() and (demo / DEMO_MARKER).read_bytes() in {text.encode("ascii") for text in (DEMO_MARKER_TEXT, *DEMO_MARKER_EARLIER)}
     except OSError:
         return False
 
@@ -1215,8 +1232,14 @@ def _remove(path: Path) -> None:
 
 
 def _cleared(demo: Path) -> None:
-    """Empty the demonstration's folder for a fresh start: everything but its marker, its start lock and logs/start.log. An OSError
-    (a file Windows keeps in use) reaches the caller, and the marker stays, so that the next start may try again."""
+    """Empty the demonstration's folder for a fresh start: everything but its marker, its start lock and logs/start.log; a marker of
+    an earlier version then gets the present text, through a file beside it and a replace, so that the folder is marked at every
+    moment. An OSError (a file Windows keeps in use) reaches the caller, and the marker stays, so that the next start may try again."""
+    marker = demo / DEMO_MARKER
+    if marker.read_bytes() != DEMO_MARKER_TEXT.encode("ascii"):
+        fresh = demo / (DEMO_MARKER + ".new")
+        fresh.write_bytes(DEMO_MARKER_TEXT.encode("ascii"))
+        os.replace(fresh, marker)
     keep = {DEMO_MARKER.lower(), LOCK_FILE.lower()}
     for child in sorted(demo.iterdir()):
         if child.name.lower() in keep:
@@ -1303,8 +1326,9 @@ def _demo_started(demo: Path, run, answers, open_page, wait_seconds: float, log:
     try:
         _cleared(demo)
     except OSError as exc:
-        log(f"{who}: the previous demonstration could not be removed ({type(exc).__name__}: {exc}); nothing started")
-        told.failed(DEMO_NOT_STARTED)
+        log(f"{who}: the previous demonstration could not be removed ({type(exc).__name__}: {exc}): a file in the folder demo is "
+            "still open, for example in Excel; nothing started")
+        told.failed(DEMO_IN_USE)
         return 1
     fill = [sys.executable, "-I", "-X", "utf8", *DEMO_FILL[:2], "--out", str(demo), *DEMO_FILL[2:]]
     filled = _ran(run, fill)

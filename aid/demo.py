@@ -12,6 +12,7 @@ document or any connection:
     <out>/po_store/       the PO versions of the made-up PO PDFs and the looks that the two ERP exports gave
     <out>/inbox/          the watched folder of the runner, empty; drop a made-up confirmation in it and start the runner
     <out>/summary.csv     one row per case: the status, the flags, the writes, the messages, the review items
+    <out>/voorbeelden/    with --demonstration only: the made-up export of articles and price list of S04 for the tab "Prijslijst"
 
 The documents come from aid/madeup/out, which the repository holds. --reader parser (the default) reads with the template parser
 and needs no AI; the two scans then fail, which is expected, because they need the LLM reader (the carts are given as their saved pages, which the cart reader reads). --reader
@@ -31,9 +32,14 @@ written as a file (give the folder a prepared one's send_via "file" to see the q
 3.16), runs the batch as above and then gives the folder the settings of the page and the runner of the demonstration
 (demonstration_settings): the test mode on, with no authorization limit, so that the settings tab offers a try-out and the watched
 folder takes one; send_via "file", so that a question asked on the page is written to cases/outbox without any mailbox; a made-up
-address on example.com for each made-up supplier, so that a question has an address; and the buyer's address and those of the
-suppliers as the own addresses of the test mode, so that its guard lets such a question be written. The batch's own run keeps the
-settings above, so that its cases are those of every other run.
+address on example.com for each made-up supplier, so that a question has an address; the buyer's address and those of the
+suppliers as the own addresses of the test mode, so that its guard lets such a question be written; and the tab "Prijslijst" ready
+at once (demonstration_price_list): the columns of the export of articles (article_columns, article_decimal_comma), an installation
+step otherwise, a made-up export of the articles of S04 and S04's made-up price list in <out>/voorbeelden, the purchase prices of
+that export taken in for S04 and the columns of the price list kept, so that choosing S04, giving the price list and pressing
+"Bekijken" shows the comparison. A plain demo folder leaves article_columns empty: with it set, the review page counts the settings
+as a company's and refuses --share, which the demonstration never uses. The batch's own run keeps the settings above, so that its
+cases are those of every other run.
 
 After the run: python3 -m aid.review --settings <out>/settings.json opens the review page on 127.0.0.1:7860, and
 python3 -m aid.runner --settings <out>/settings.json --poll-seconds 5 --max-passes 3 runs the loop over <out>/inbox. Nothing is
@@ -49,11 +55,15 @@ import json
 import os
 import sys
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
+
+from openpyxl import Workbook
 
 from aid import batch
 from aid.decider import LlmDecider
 from aid.madeup.generate import load_specs
+from aid.pricelist import keep_columns, store_current
 from aid.readers.cart import is_cart_page, read_cart_html
 from aid.readers.llm_client import AnthropicClient
 from aid.readers.supplier_llm import read_supplier_document
@@ -69,6 +79,36 @@ DEMO_TOKEN = "made-up-token-for-the-test-shop"    # the capture token of the dem
 TESTSHOP_PAGE = "http://127.0.0.1:7870/testshop/CART02.html"     # the made-up cart page CART02 in the capture server's test shop
 EXTENSION_README = "aid/extension/README.md"
 ANTHROPIC_KEY = "ANTHROPIC_API_KEY"                  # the environment variable the Anthropic SDK reads; never written to a file
+# The price list of the demonstration (demonstration_price_list): the folder of its two made-up files, their names, the supplier they
+# are of, the columns of the export of articles that the settings name and the columns of the price list kept for the supplier.
+SAMPLES = "voorbeelden"
+SAMPLE_SUPPLIER = "S04"
+SAMPLE_EXPORT = f"Verzonnen export artikelen {SAMPLE_SUPPLIER} uit Exact.xlsx"
+SAMPLE_LIST = f"Verzonnen prijslijst {SAMPLE_SUPPLIER}.xlsx"
+ARTICLE_COLUMNS = {"item_code": "Artikel", "price": "Inkoopprijs"}
+LIST_COLUMNS = {"item_code": "Artikelnummer", "price": "Nettopreis", "basis": "Preiseinheit"}
+# (item code, the buyer's description in Exact, the supplier's description, the purchase price in Exact or None for an article the
+# export does not hold, the price on the price list, the price unit on the price list or None for a blank cell). The articles are
+# lines of the made-up purchase order 250104 of S04 with a price per piece (KM-0423 at 0.82 instead of 0.80), and one new article.
+# S04 is a German supplier (its confirmation of 250104 is in German), so its list has German titles and descriptions, those of that
+# confirmation. The export of Exact holds its prices as numbers, as such an export does; none ends in a zero, as the tab shows the
+# price of a number cell without its trailing zero ("0,8"). The price list holds its prices as texts with the decimal comma, as a
+# list that a supplier converts from a PDF often does, so the tab shows them as written ("0,70"). article_decimal_comma stays on, as
+# for a Dutch export that writes its prices as texts. In the order of the codes, so that the table of "Bekijken" shows the rows that
+# matter without a scroll: an article unknown in Exact, two prices that rise by about three percent, a price that cannot be read,
+# one ten times the purchase price (a price per 10 read as a price per piece: the supplier left its price unit blank), which the tab
+# keeps off the list, and four prices that stay the same.
+SAMPLE_ARTICLES = (("KM-0400", "Zeskantbout M10 x 30", "Sechskantschraube M10 x 30", None, "0,39", 1),
+                   ("KM-0405", "Zeskantbout M10 x 40", "Sechskantschraube M10 x 40", 0.42, "0,42", 1),
+                   ("KM-0406", "Zeskantbout M12 x 50", "Sechskantschraube M12 x 50", 0.68, "0,70", 1),
+                   ("KM-0421", "Draadeind M8 x 1000", "Gewindestange M8 x 1000", 1.95, "auf Anfrage", 1),
+                   ("KM-0422", "Draadeind M10 x 1000", "Gewindestange M10 x 1000", 2.85, "28,50", None),
+                   ("KM-0423", "Slangklem 12-20 mm", "Schlauchschelle 12-20 mm", 0.82, "0,82", 1),
+                   ("KM-0424", "Slangklem 20-32 mm", "Schlauchschelle 20-32 mm", 0.85, "0,88", 1),
+                   ("KM-0425", "Slangpilaar 1/2 inch", "Schlauchtülle 1/2 Zoll", 1.45, "1,45", 1),
+                   ("KM-0426", "Slangpilaar 3/4 inch", "Schlauchtülle 3/4 Zoll", 1.95, "1,95", 1))
+PRICE_FORMAT = "0.00"                            # a price cell's number format: Excel shows 0,42 under a Dutch locale
+SAMPLE_AUTHOR = "Verzonnen voorbeeld"            # the author of the two workbooks, instead of the library that writes them
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -99,9 +139,12 @@ def main(argv: list[str] | None = None) -> int:
         batch.main(batch_argv)
     if args.demonstration:
         demonstration_settings(settings_path)
+        demonstration_price_list(out, load_settings(settings_path).cases_root)
     print(summary_text(out, args.reader))
     if args.demonstration:
-        print("Settings of the demonstration: the test mode on, questions written as files to cases/outbox, made-up supplier addresses")
+        print("Settings of the demonstration: the test mode on, questions written as files to cases/outbox, made-up supplier addresses, "
+              f"and the tab Prijslijst set up with the purchase prices of {SAMPLE_SUPPLIER} taken in; its made-up export and price list "
+              f"are in {out / SAMPLES}")
     return 0
 
 
@@ -143,14 +186,57 @@ def write_settings(out: Path, files_only: bool = False) -> Path:
 def demonstration_settings(path: Path) -> Path:
     """The settings file of a folder whose batch has run, made those of the demonstration start of the folder version (see the module
     docstring): test_mode true (authorization_limit stays null), send_via "file", supplier_emails with a made-up address on
-    example.com for each made-up supplier, and own_addresses holding those and buyer_email. Read back through load_settings."""
+    example.com for each made-up supplier, own_addresses holding those and buyer_email, and the columns of the export of articles of
+    the tab "Prijslijst" (ARTICLE_COLUMNS, with the decimal comma). Read back through load_settings."""
     data = json.loads(path.read_text(encoding="utf-8"))
     suppliers = {spec.po.supplier: f"{spec.po.supplier.lower()}@example.com" for spec in load_specs(SPEC_DIR)}
     data.update({"test_mode": True, "send_via": "file", "supplier_emails": suppliers,
-                 "own_addresses": [data["buyer_email"], *sorted(set(suppliers.values()))]})
+                 "own_addresses": [data["buyer_email"], *sorted(set(suppliers.values()))],
+                 "article_columns": ARTICLE_COLUMNS, "article_decimal_comma": True})
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
     load_settings(path)
     return path
+
+
+def demonstration_price_list(out: Path, cases_root: Path) -> None:
+    """The tab "Prijslijst" of the demonstration, ready at once (see the module docstring): the two made-up sample files in
+    <out>/SAMPLES (write_samples), the purchase prices of SAMPLE_SUPPLIER taken in from the export as the tab's "Inkoopprijzen
+    opnemen" takes them in (store_current with the columns of the settings), and the columns of the supplier's price list kept as a
+    press of "Op de lijst In Exact invoeren zetten" keeps them (keep_columns), so that its column fields fill themselves."""
+    export, _ = write_samples(out)
+    store_current(cases_root, export, ARTICLE_COLUMNS, True, datetime.now(), SAMPLE_SUPPLIER)
+    keep_columns(cases_root, SAMPLE_SUPPLIER, LIST_COLUMNS)
+
+
+def write_samples(out: Path) -> tuple[Path, Path]:
+    """The two made-up files of the price list in <out>/SAMPLES, as workbooks: (the export of the articles of SAMPLE_SUPPLIER as Exact
+    gives one, with a title and a blank row above its column titles; that supplier's price list, its column titles in its first row).
+    The articles are lines of the made-up purchase order of SAMPLE_SUPPLIER, at the prices of that order but for KM-0423, whose
+    price was raised from 0.80 to 0.82 so that no price of the export ends in a zero, and one new article on the price list only
+    (see SAMPLE_ARTICLES)."""
+    folder = out / SAMPLES
+    folder.mkdir(exist_ok=True)
+    export, price_list = folder / SAMPLE_EXPORT, folder / SAMPLE_LIST
+    _workbook(export, [[f"Artikelen van leverancier {SAMPLE_SUPPLIER} (verzonnen voorbeeld)"], [],
+                       [ARTICLE_COLUMNS["item_code"], "Omschrijving", ARTICLE_COLUMNS["price"]],
+                       *[[code, text, price] for code, text, _, price, _, _ in SAMPLE_ARTICLES if price is not None]])
+    _workbook(price_list, [[LIST_COLUMNS["item_code"], "Bezeichnung", LIST_COLUMNS["price"], LIST_COLUMNS["basis"]],
+                           *[[code, text, listed, unit] for code, _, text, _, listed, unit in SAMPLE_ARTICLES]])
+    return export, price_list
+
+
+def _workbook(path: Path, rows: list[list]) -> None:
+    """An .xlsx workbook at `path` with one sheet holding these rows, each number (a float) shown with two decimals."""
+    book = Workbook()
+    book.properties.creator = SAMPLE_AUTHOR
+    sheet = book.active
+    sheet.title = "Blad1"
+    for row in rows:
+        sheet.append(row)
+        for cell in sheet[sheet.max_row]:
+            if isinstance(cell.value, float):
+                cell.number_format = PRICE_FORMAT
+    book.save(path)
 
 
 def write_cases(out: Path) -> Path:
@@ -217,7 +303,8 @@ def _arguments(argv: list[str] | None) -> argparse.Namespace:
                              "watching the loop work by itself (a document the folder has seen once counts as a duplicate afterwards)")
     parser.add_argument("--demonstration", action="store_true",
                         help="after the run, the settings of the demonstration start of the folder version: the test mode on, "
-                             "questions written as files, made-up supplier addresses")
+                             "questions written as files, made-up supplier addresses, and the tab Prijslijst set up with a made-up "
+                             "export and price list in <out>/voorbeelden")
     return parser.parse_args(argv)
 
 

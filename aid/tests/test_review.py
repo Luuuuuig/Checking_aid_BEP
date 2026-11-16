@@ -1,5 +1,6 @@
 """Tests of the review page (aid/review): the cases that wait for the buyer, one case as the page shows it, the buyer's decisions, the
 close and the undo, the strings of the page, the construction of the page and its command, on the made-up set."""
+import inspect
 import json
 import os
 import re
@@ -1160,7 +1161,7 @@ def test_a_moved_folder_keeps_its_purchase_order_pages(tmp_path, madeup_out):
     moved_deps = d.model_copy(update={"store": moved_store, "settings": d.settings.model_copy(update={"cases_root": after / "cases"})})
     [show] = [f.fn for f in build_app(moved_deps).fns.values() if getattr(f.fn, "__name__", "") == "show"]
     shown = show(c.case_id, "nl")
-    assert len(shown[1]) == 1 and len(shown[2]) == 1                     # the supplier's document and the PO, a page each
+    assert len(shown[1]) == 1 and len(shown[2]["value"]) == 1 and shown[2]["visible"] is True     # the supplier's document and the PO, a page each
     assert {path.relative_to(after): path.read_bytes() for path in after.rglob("*.json")} == written     # nothing written changed
 
 
@@ -3440,6 +3441,9 @@ from aid.review.page import SETTINGS_TAB  # noqa: E402
 from aid.tests.test_status import launcher_state  # noqa: E402
 
 
+NO_ORDER_PAGES = {"__type__": "update", "value": [], "visible": False}      # what show gives the purchase order's frame without a page
+
+
 def name_of(block) -> str:
     """A component of the page by its elem_id, else its label, else its value, else its class ("State", "Timer", the page's "Tabs",
     and the status line, which starts empty, as "Markdown")."""
@@ -3548,7 +3552,7 @@ def test_the_timer_refreshes_beoordelen_without_touching_the_chosen_case(tmp_pat
     path, d, page, _ = sending_page(tmp_path, madeup_out)
     [timer] = [block for block in page.blocks.values() if isinstance(block, gradio.Timer)]
     assert timer.value == 30 and timer in page.children
-    every = [("Lijst vernieuwen", "click"), ("Taal", "change"), ("Timer", "tick"), ("page", "load")]
+    every = [("Beoordelen", "select"), ("Lijst vernieuwen", "click"), ("Taal", "change"), ("Timer", "tick"), ("page", "load")]
     assert bound(page, "strip_ticked") == (every, ["Taal"], ["review-strip", "review-strip-action", "review-all", "review-all-table"])
     assert bound(page, "queue_ticked") == (every, ["Taal", "Zaak", "State"],
                                            ["Beoordelen", "Zaak", "review-pick-row", "review-pick", "review-oldest", "review-gone", "State"])
@@ -3583,6 +3587,85 @@ def test_the_timer_refreshes_beoordelen_without_touching_the_chosen_case(tmp_pat
     chosen = called(page, "queue_ticked", "nl", second.case_id, gone["State"])    # another case chosen: the closed one leaves the list
     assert chosen["Zaak"] == {"__type__": "update", "choices": [(label.replace("09:00", "09:01"), second.case_id)]}
     assert chosen["review-gone"] == {"__type__": "update", "value": "", "visible": False}
+
+
+def chain_after(page, fn) -> list:
+    """The handlers bound with .then after the handler fn, each in its turn, as long as one follows each."""
+    found, after = [], fn
+    while True:
+        following = [f for f in page.fns.values() if f.trigger_after == after._id]
+        if not following:
+            return found
+        [after] = following
+        found.append(after)
+
+
+def test_a_language_switch_clears_the_answer_of_a_close(tmp_path, madeup_out):
+    """Finding R5 of the rehearsal of 16 November: the line under "Zaak afsluiten" ("De zaak is nu: afgesloten.") kept its language
+    when the page was switched to English. A listener of its own on the switch, without the queue as the other relabels, empties it:
+    it reads nothing and writes nothing, and the next press answers in the new language."""
+    path, d, page, _ = sending_page(tmp_path, madeup_out)
+    language = handler_of(page, "review_texts").inputs[0]
+    close = handler_of(page, "close")
+    status = close.outputs[0]
+    cleared = handler_of(page, "close_answer_cleared")
+    assert cleared.targets == [(language._id, "change")] and cleared.inputs == [language] and cleared.outputs == [status]
+    assert cleared.queue is False and cleared.show_progress == "hidden"
+    assert status.elem_classes == ["answer"] and handler_of(page, "handled_marked").outputs[0] is status
+    case, _ = run(d, madeup_out, "MU07", "250107")
+    decide(case, "RI1", "keep")
+    text, _ = pressed_close(page, case)
+    assert text.startswith("De zaak is nu: afgesloten.")
+    assert cleared.fn("en") == cleared.fn("nl") == ""
+
+
+def test_a_close_and_the_tab_beoordelen_read_the_counts_again_at_once(tmp_path, madeup_out):
+    """Findings R1 and T2 of the rehearsal of 16 November: after "Zaak afsluiten" (and "Als afgehandeld noteren") the strip, the fold,
+    the label "Beoordelen (n)" with the case list and the label "In Exact invoeren (n)" are read again at once, where they followed
+    only at the timer, up to 30 seconds later; and the strip and the case list are read when the tab "Beoordelen" is selected, so
+    that a case the runner has just opened is listed without "Lijst vernieuwen". After the press the chain runs three thin handlers
+    with names of their own (strip_after_close, queue_after_close, hand_label_read), so that strip_ticked and queue_ticked stay bound
+    once each, and like them they skip the queue and never set the case chosen."""
+    nl = STRINGS["nl"]
+    path, d, page, _ = sending_page(tmp_path, madeup_out, send_via="file")
+    [review_tab] = [block for block in page.blocks.values() if isinstance(block, gradio.Tab) and block.label == nl["review_tab"]]
+    [hand_tab] = [block for block in page.blocks.values() if isinstance(block, gradio.Tab) and block.label == nl["hand_tab"]]
+    every = sorted([("Beoordelen", "select"), ("Lijst vernieuwen", "click"), ("Taal", "change"), ("Timer", "tick"), ("page", "load")])
+    assert bound(page, "strip_ticked")[0] == bound(page, "queue_ticked")[0] == every
+    strip, queue = handler_of(page, "strip_ticked"), handler_of(page, "queue_ticked")
+    for name in ("close", "handled_marked"):
+        # each straight after the press, which the browser sends together, so that none waits for another; then, for a close, the
+        # view of the case, which may render the documents again
+        pressed = handler_of(page, name)
+        chain = [f for f in page.fns.values() if f.trigger_after == pressed._id]
+        names = [getattr(f.fn, "__name__", "") for f in chain]
+        assert names == ["strip_after_close", "queue_after_close", "hand_label_read", *(["<lambda>"] if name == "close" else [])], name
+        assert [chain_after(page, f) for f in chain] == [[]] * len(chain), name             # nothing waits for another
+        after_strip, after_queue, label = chain[:3]
+        assert after_strip.inputs == strip.inputs and after_strip.outputs == strip.outputs, name
+        assert after_queue.inputs == queue.inputs and after_queue.outputs == queue.outputs and after_queue.preprocess is False, name
+        assert label.outputs == [hand_tab] and [block.label for block in label.inputs] == [nl["language"]], name
+        assert all(f.queue is False and f.show_progress == "hidden" for f in chain[:3]), name
+    assert review_tab in queue.outputs
+    case, _ = run(d, madeup_out, "MU07", "250107")
+    first = called(page, "queue_ticked", "nl", case.case_id, None)
+    assert first["Beoordelen"] == {"__type__": "update", "label": "Beoordelen (1)"}
+    [label_read] = {f.fn for f in page.fns.values() if getattr(f.fn, "__name__", "") == "hand_label_read"}
+    assert label_read("nl") == {"__type__": "update", "label": nl["hand_tab"]}
+    decide(case, "RI1", "confirm", article_update=True)
+    text, chosen = pressed_close(page, case)
+    assert chosen is None, text
+    [after_queue] = {f.fn for f in page.fns.values() if getattr(f.fn, "__name__", "") == "queue_after_close"}
+    [after_strip] = {f.fn for f in page.fns.values() if getattr(f.fn, "__name__", "") == "strip_after_close"}
+    followed = after_queue("nl", None, first["State"])
+    assert followed == queue.fn("nl", None, first["State"]) and followed[0] == {"__type__": "update", "label": "Beoordelen"}
+    assert followed[2] == {"__type__": "update"}                                 # never the row under "Zaak", nor its value
+    assert after_strip("en") == strip.fn("en")
+    # the label of "In Exact invoeren" as a read of the list gives it: here two changes that MU08 prepares, the price of its line 1 and
+    # the article's price
+    run(d.model_copy(update={"writer": PreparedWriter(d.settings.cases_root / "prepared")}), madeup_out, "MU08", "250108", now=LATER)
+    assert label_read("nl") == {"__type__": "update", "label": nl["hand_tab_count"].format(n=2)}
+    assert label_read("en") == {"__type__": "update", "label": STRINGS["en"]["hand_tab_count"].format(n=2)}
 
 
 def test_a_tick_reads_no_unchanged_case_again(tmp_path, madeup_out, monkeypatch):
@@ -3891,7 +3974,7 @@ def test_a_failed_case_is_offered_with_why_and_can_be_marked_handled(tmp_path, m
     assert called(page, "failed_relabel", "nl", review.case_id)["review-failed"] == {"__type__": "update", "value": "", "visible": False}
     assert bound(page, "failed_relabel") == ([("Taal", "change")], ["Taal", "Zaak"], ["review-failed", "review-handled"])
     shown = handler_of(page, "show").fn(failed.case_id, "nl")
-    assert shown[-1] == "" and len(shown[1]) == 1 and shown[2] == [] and shown[3]["data"] == []       # the supplier's document, no rows
+    assert shown[-1] == "" and len(shown[1]) == 1 and shown[2] == NO_ORDER_PAGES and shown[3]["data"] == []     # the supplier's document, no rows
     assert bound(page, "handled_marked") == ([("review-handled", "click")], ["Zaak", "Taal"], ["Markdown", "Zaak"])
     before = {path: path.read_bytes() for path in root.rglob("*") if path.is_file()}
     marked = called(page, "handled_marked", failed.case_id, "nl")
@@ -4032,7 +4115,7 @@ def test_a_document_left_to_the_buyer_shows_why_and_its_pages_where_the_scan_put
     for file, document in ((SCAN, madeup_out / "MU05_conf.pdf"), (MANY, madeup_out / "MU01_conf.pdf"), (PHOTO, madeup_out / "CART02.png")):
         shown = show(ids[file], "nl")
         assert [image.tobytes() for image in shown[1]] == images_of(document), file
-        assert shown[0] == {"__type__": "update", "visible": False} and shown[2] == [] and [table["data"] for table in shown[3:6]] == [[], [], []]
+        assert shown[0] == {"__type__": "update", "visible": False} and shown[2] == NO_ORDER_PAGES and [table["data"] for table in shown[3:6]] == [[], [], []]
         assert shown[6] == {"__type__": "update", "choices": [], "value": None} and shown[7] is None and shown[-1] == ""
         assert shown[8] == {"__type__": "update", "value": "", "visible": False} == shown[9]
     assert not (d.settings.cases_root / "tmp").exists()                       # an attachment's copy for its pages went again
@@ -4409,19 +4492,43 @@ def test_the_review_tab_puts_the_decisions_before_the_documents(tmp_path, madeup
 
 def test_the_handlers_the_redesign_added_to_the_language_switch_skip_the_queue(tmp_path, madeup_out):
     """The page library's client (gradio 6.31.0) runs the listeners of one event one after another, each to its end, and a listener
-    on the queue costs a round trip of the queue, a quarter of a second in the browser, where one that skips it costs a few
-    hundredths: so the five handlers that chunks 2 to 4 of the redesign added to the language switch, each a read of a few files or
-    none, skip the queue (queue=False), and the switch takes about as long as it did before them, on the same 24 queued listeners.
-    Each of the five is bound once, with the triggers it had; every listener the switch had before keeps the queue. The read of the
-    copy buttons of "In Exact invoeren" (copies_opened), which shares the switch since 16 November, skips the queue as they do."""
+    on the queue costs a round trip of the queue, where one that skips it is answered in one request: so the five handlers that
+    chunks 2 to 4 of the redesign added to the language switch, each a read of a few files or none, skip the queue (queue=False),
+    and so does the read of the copy buttons of "In Exact invoeren" (copies_opened), which shares the switch since 16 November.
+    Known limit 2 of the redesign's build record, the slow switch: since 16 November seventeen listeners that the switch had before
+    skip the queue as well, each a relabel or a read of the aid's own files that asks Microsoft nothing and is no generator. Seven
+    of the switch's thirty-one stay on the queue: the rendering of the decision rows, which the page library binds itself, and the six
+    of the settings tab itself and of its section "Postvak en AI". Every listener is bound once, with the triggers it had. The clear
+    of the answer of a close (close_answer_cleared, finding R5 of the rehearsal of 16 November) skips the queue as well."""
     path, d, page, _ = sending_page(tmp_path, madeup_out)                  # the page of this PC, with its settings file: every tab
     language = handler_of(page, "review_texts").inputs[0]
-    on_switch = [(getattr(f.fn, "__name__", ""), f.queue) for f in page.fns.values() if (language._id, "change") in f.targets]
+    on_switch = [(getattr(f.fn, "__name__", ""), f) for f in page.fns.values() if (language._id, "change") in f.targets]
     added = ["files_ticked", "hand_new_cleared", "record_shown", "removal_relabelled", "review_texts"]
-    assert sorted(name for name, queued in on_switch if not queued) == sorted([*added, "copies_opened"])
-    assert len([name for name, queued in on_switch if queued]) == 24 and len(on_switch) == 30
+    since = ["articles_relabel", "buyer_relabel", "done_opened", "exact_numbers_relabel", "exact_relabel", "export_relabel", "failed_relabel",
+             "files_relabel", "hand_relabel", "pricelist_relabel", "pricelists_opened", "queue_ticked", "relabel", "strip_ticked",
+             "tryout_cart_relabel", "tryout_relabel", "<lambda>"]            # the last: the relabel of the tabs Beoordelen and Instellingen
+    assert sorted(name for name, f in on_switch if not f.queue) == sorted([*added, "copies_opened", "close_answer_cleared", *since])
+    queued = [(name, f) for name, f in on_switch if f.queue]
+    assert sorted(name for name, f in queued) == ["<lambda>", "ai_relabel", "apply", "extension_code_relabel", "reader_shown",
+                                                  "sections_relabelled", "settings_relabel"]
+    assert len(queued) == 7 and len(on_switch) == 31 and [name for name, f in queued if f.renderable is not None] == ["apply"]
+    [review_tab] = [block for block in page.blocks.values() if isinstance(block, gradio.Tab) and block.label == STRINGS["nl"]["review_tab"]]
+    assert [f.outputs[0] is review_tab for name, f in on_switch if name == "<lambda>"] == [False, True]      # the settings tab's own stays queued
+    assert [f.queue for name, f in on_switch if name == "<lambda>"] == [True, False]
     for name in added:
         assert [f.queue for f in page.fns.values() if getattr(f.fn, "__name__", "") == name] == [False], name
+    for name in since[:-1]:                          # bound to the switch once; a read after a press of the tab keeps the queue
+        [listener] = [f for bound_name, f in on_switch if bound_name == name]
+        assert listener.queue is False and not inspect.isgeneratorfunction(listener.fn), name
+    after_a_press = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == "done_opened" and f.targets == [(None, "then")]]
+    assert after_a_press and all(f.queue for f in after_a_press)
+    opened = [("In Exact invoeren", "select"), ("Lijst vernieuwen", "click"), ("Taal", "change"), ("page", "load")]
+    every = [("Beoordelen", "select"), ("Lijst vernieuwen", "click"), ("Taal", "change"), ("Timer", "tick"), ("page", "load")]
+    several = {"done_opened": opened, "pricelists_opened": opened, "strip_ticked": every, "queue_ticked": every}
+    for name in since[:-1]:
+        [listener] = [f for bound_name, f in on_switch if bound_name == name]
+        triggers = sorted((name_of(page.blocks[block]) if block != page._id else "page", event) for block, event in listener.targets)
+        assert triggers == several.get(name, [("Taal", "change")]), name
 
 
 # --- the lines a difference was read from, marked on both documents (finding 10 of the owner's test) ---
@@ -4634,7 +4741,8 @@ def test_the_page_marks_the_cited_lines_on_both_documents_and_changes_nothing_el
     view = load_case_view(c, d.store)
     tint, edge = (ImageColor.getrgb(look.TONES["attention"].tint), ImageColor.getrgb(look.TONES["attention"].mark))
     assert (tint, edge) == ((0xFF, 0xFB, 0xEB), (0xB4, 0x53, 0x09))
-    for images, pages, marks in ((shown[1], view.doc_pages, view.doc_marks), (shown[2], view.po_pages, view.po_marks)):
+    assert set(shown[2]) == {"__type__", "value", "visible"} and shown[2]["visible"] is True         # the purchase order's frame, shown
+    for images, pages, marks in ((shown[1], view.doc_pages, view.doc_marks), (shown[2]["value"], view.po_pages, view.po_marks)):
         [mark] = marks
         rendered_page = Image.open(io.BytesIO(pages[0])).convert("RGB")
         marked = images[0].convert("RGB")
@@ -4648,7 +4756,7 @@ def test_the_page_marks_the_cited_lines_on_both_documents_and_changes_nothing_el
         assert len(images) == len(pages) and marked.size == rendered_page.size
     shown = show.fn(plain.case_id, "nl")
     view = load_case_view(plain, d.store)
-    assert [image.convert("RGB").tobytes() for image in shown[1] + shown[2]] == [
+    assert [image.convert("RGB").tobytes() for image in shown[1] + shown[2]["value"]] == [
         Image.open(io.BytesIO(page)).convert("RGB").tobytes() for page in view.doc_pages + view.po_pages]
 
 
@@ -5129,3 +5237,185 @@ def test_share_is_refused_with_own_addresses_outside_the_made_up_domains(tmp_pat
                                            "test_mode": test_mode}), encoding="utf-8")
         assert review.main(["--settings", str(path), "--share"]) == 0
     assert [d.mailer.guard is not None for d in built] == [True, False]
+
+
+# --- the known limits of the redesign's build record that were settled on 16 November (its section 4) ---
+
+import asyncio  # noqa: E402
+import copy  # noqa: E402
+
+from gradio.state_holder import SessionState  # noqa: E402
+
+CLOSED_LABEL = "Purchase order 250107 (S07): 1 item, 12-11-2026 09:00, closed"
+
+
+def requested(page, session, name: str, *data) -> tuple[list, dict]:
+    """One request of the browser to the page's handler of that name, as the page library handles it for one session, without a
+    server: the library's own check of what the browser sent (preprocess_data, which refuses a dropdown's value that is not among
+    the choices the session holds, before the handler runs), the handler, and what its answer leaves in the session
+    (postprocess_data: a list of choices that the handler sends replaces the one the session held). `data` is what the browser
+    sends, None for a State, whose value the session holds. Returns what the handler was given and what it answered, by the name
+    of each output."""
+    f = handler_of(page, name)
+
+    async def handled():
+        given = await page.preprocess_data(f, list(data), session)
+        answer = f.fn(*given)
+        answer = list(answer) if len(f.outputs) > 1 else [answer]
+        said = copy.deepcopy(answer)                 # the library empties an update as it applies it
+        await page.postprocess_data(f, answer, session)
+        return given, dict(zip([name_of(block) for block in f.outputs], said, strict=True))
+    return asyncio.run(handled())
+
+
+def closed_on_the_page(tmp_path, madeup_out) -> tuple:
+    """A session of the page in which the buyer closed MU07, the one case of the list, with its price kept: the page, the session,
+    the case, the state of the view as the case was shown, and the list as the page's load sent it. The session then holds a case
+    list without the case, as the close's answer left it."""
+    path, d, page, _ = sending_page(tmp_path, madeup_out, send_via="file")
+    case, _ = run(d, madeup_out, "MU07", "250107")
+    decide(case, "RI1", "keep")
+    session = SessionState(page)
+    _, loaded = requested(page, session, "queue_ticked", "nl", None, None)            # the page's load: the list with the case
+    view = shown_state(page, case)
+    session[handler_of(page, "relabel").inputs[2]._id] = view                        # the case chosen: the state its view left
+    _, closed = requested(page, session, "close", case.case_id, "nl")
+    assert closed["Zaak"] == {"__type__": "update", "choices": [], "value": None} and load_case(d.settings.cases_root, case.case_id)
+    return page, session, case, view, loaded["State"]
+
+
+@pytest.mark.parametrize("name", ["relabel", "queue_ticked", "failed_relabel"])
+def test_a_request_that_still_carries_a_case_the_page_just_closed_is_answered(tmp_path, madeup_out, name):
+    """Known limit 1 of the redesign's build record: the red error box. The page library keeps the choices of "Zaak" for each
+    session and refuses, before the handler runs, a request whose value is not among them ("Value: ... is not in the list of
+    choices": a red box, in English, with the id of the case). A close sends the list without the case it closed. A request that
+    the browser put together just before it applied that answer still carries the case: a listener of the language switch, or a
+    tick of the timer. The three handlers that the switch and the timer give the case therefore take what the browser sent
+    without that check (preprocess=False), each value as the check would have passed it on (the language, the case's id, and a
+    State from the session), and answer as they do for a case that was closed in another browser tab: the case keeps a place in
+    the list, named as closed, the line under the field says that it left the list, and no notice of a failed case stands. A
+    press of the buyer keeps the library's check."""
+    en = STRINGS["en"]
+    page, session, case, view, listed = closed_on_the_page(tmp_path, madeup_out)
+    sent = {"relabel": ["en", case.case_id, None], "queue_ticked": ["en", case.case_id, None], "failed_relabel": ["en", case.case_id]}[name]
+    given, answer = requested(page, session, name, *sent)
+    assert given == {"relabel": ["en", case.case_id, view], "queue_ticked": ["en", case.case_id, listed],
+                     "failed_relabel": ["en", case.case_id]}[name]
+    assert listed == [["Inkooporder 250107 (S07): 1 punt, 12-11-2026 09:00", case.case_id]] and view["case_id"] == case.case_id
+    if name == "relabel":
+        assert answer["Zaak"] == {"__type__": "update", "label": "Case", "choices": [(CLOSED_LABEL, case.case_id)]}
+    elif name == "queue_ticked":
+        assert answer["Zaak"] == {"__type__": "update", "choices": [(CLOSED_LABEL, case.case_id)]}
+        assert answer["review-gone"] == {"__type__": "update", "value": en["review_gone"].format(po="250107"), "visible": True}
+    else:
+        assert answer == {"review-failed": {"__type__": "update", "value": "", "visible": False},
+                          "review-handled": {"__type__": "update", "value": en["handled_go"], "visible": False}}
+    # and queue_after_close (twice: after a close and after "Als afgehandeld noteren"), which answers as queue_ticked does
+    assert sorted(getattr(f.fn, "__name__", "") for f in page.fns.values() if not f.preprocess) == [
+        "failed_relabel", "queue_after_close", "queue_after_close", "queue_ticked", "relabel"]
+    for press, values in (("close", [case.case_id, "en"]), ("handled_marked", [case.case_id, "en"])):
+        other = SessionState(page)                   # a session of its own, whose list is empty as well: the case is not offered
+        with pytest.raises(gradio.Error, match="is not in the list of choices"):
+            requested(page, other, press, *values)
+
+
+def test_the_handlers_that_take_the_case_unchecked_treat_a_value_that_is_no_case_as_none(tmp_path, madeup_out, monkeypatch):
+    """The three handlers that take the value of "Zaak" without the page library's check against the list judge it themselves. A
+    value that is neither the id of a document left to the buyer nor one folder name (a path out of the cases folder, a list, a
+    number: no browser sends one) is as no case chosen: it is not named in the list, no line speaks of it, and no file is opened
+    for it, also when it leads to a case folder outside the cases folder. The language switch answers for a case whose folder
+    cannot be read or is gone as "Lijst vernieuwen" does: the case keeps its place in the list by its id, without a hint."""
+    import builtins
+    import io
+    path, d, page, _ = sending_page(tmp_path, madeup_out)
+    case, _ = run(d, madeup_out, "MU07", "250107")
+    view, root = shown_state(page, case), Path(d.settings.cases_root)
+    shutil.copytree(case.root, root.parent / "elsewhere" / case.case_id)             # a case folder outside the cases folder
+    outside = f"../elsewhere/{case.case_id}"
+    assert (root / outside / "case.json").is_file()
+    opened: list[Path] = []
+    real = io.open
+
+    def counting(file, *args, **kwargs):
+        if isinstance(file, (str, os.PathLike)) and "elsewhere" in Path(file).parts:
+            opened.append(Path(file))
+        return real(file, *args, **kwargs)
+
+    monkeypatch.setattr(io, "open", counting)
+    monkeypatch.setattr(builtins, "open", counting)
+    for value in (outside, str(root.parent / "elsewhere" / case.case_id), "..", ".", "a/b", "a\x00b", [case.case_id], {"case": case.case_id}, 7):
+        for name, rest in (("relabel", [view]), ("queue_ticked", [None]), ("failed_relabel", [])):
+            assert called(page, name, "en", value, *rest) == called(page, name, "en", None, *rest), (name, value)
+    assert opened == []
+    monkeypatch.undo()
+    listed = called(page, "relabel", "en", case.case_id, view)
+    assert listed["Zaak"]["choices"] == [("Purchase order 250107 (S07): 1 item, 12-11-2026 09:00", case.case_id)]
+    hidden = {"__type__": "update", "value": "", "visible": False}
+    (case.root / "case.json").write_text("{", encoding="utf-8")                      # a case that cannot be read
+    for damage in ("unreadable", "gone"):
+        answer, pressed = called(page, "relabel", "nl", case.case_id, view), called(page, "refreshed", "nl", case.case_id)
+        assert answer["Zaak"] == {"__type__": "update", "label": "Zaak", "choices": [(case.case_id, case.case_id)]}, damage
+        assert answer["Zaak"]["choices"] == pressed["Zaak"]["choices"] and answer["review-hint"] == pressed["review-hint"] == hidden, damage
+        assert called(page, "queue_ticked", "nl", case.case_id, None)["Zaak"]["choices"] == [(case.case_id, case.case_id)], damage
+        assert called(page, "failed_relabel", "nl", case.case_id)["review-failed"] == hidden, damage
+        shutil.rmtree(case.root, ignore_errors=True)                                  # and then a case whose folder is gone
+
+
+def test_the_purchase_order_frame_shows_only_while_the_case_has_pages_of_a_purchase_order(tmp_path, madeup_out):
+    """Known limit 3 of the redesign's build record: the empty frame. A case without pages of a purchase order showed the frame
+    "Inkooporder" all the same, 560 px high and empty: a case that failed before its order was chosen, a document the intake left
+    to the buyer, a cart matched against an export from Exact, and a case whose decisions file cannot be read. show now gives that
+    frame its pages and whether it shows, and it shows only while it has a page: the next case with pages brings it back, with no
+    case chosen it is hidden, and the step after a close gives the same. The supplier's document keeps its frame, and the language
+    switch gives the frame its label and nothing else, so that it does not bring an empty frame back."""
+    from aid.review.app import DECISIONS_FILE
+    from aid.tests.helpers import EXPORT_COLUMNS
+    path, d, page, _ = sending_page(tmp_path, madeup_out)
+    ids = left_to_the_buyer(d, madeup_out, tmp_path)
+    with_pages, _ = run(d, madeup_out, "MU07", "250107")
+    failed, _ = run(d, madeup_out, "MU05", "250105", now=LATER)
+    d.store.from_export(madeup_out / "CART01_export.csv", EXPORT_COLUMNS)
+    cart = open_upload_case(d.settings.cases_root, [madeup_out / "CART01.html"], "250201", "cart", LATER + timedelta(minutes=1))
+    run_case(cart, d)
+    show = handler_of(page, "show")
+    frame = [name_of(block) for block in show.outputs].index("Inkooporder")
+    assert frame == 2 and isinstance(show.outputs[frame], gradio.Gallery) and name_of(show.outputs[1]) == "Document van de leverancier"
+    shown = show.fn(with_pages.case_id, "nl")
+    assert shown[frame]["visible"] is True and len(shown[frame]["value"]) == 1 and shown[frame]["__type__"] == "update"
+    assert load_case_view(failed, d.store).po_pages == [] == load_case_view(cart, d.store).po_pages
+    for case_id in (failed.case_id, ids[SCAN], cart.case_id, None, ""):
+        assert show.fn(case_id, "nl")[frame] == NO_ORDER_PAGES, case_id
+    assert len(show.fn(failed.case_id, "nl")[1]) == 1 and len(show.fn(ids[SCAN], "nl")[1]) == 1       # the supplier's document stands
+    again = show.fn(with_pages.case_id, "en")                                    # a case with pages after one without: shown again
+    assert again[frame]["visible"] is True and [image.size for image in again[frame]["value"]] == [image.size for image in shown[frame]["value"]]
+    (with_pages.root / DECISIONS_FILE).write_text("{", encoding="utf-8")         # decisions that cannot be read: an empty view
+    damaged = show.fn(with_pages.case_id, "nl")
+    assert damaged[frame] == NO_ORDER_PAGES and damaged[-1] == STRINGS["nl"]["decisions_damaged"].format(file=DECISIONS_FILE)
+    [after_close] = [f for f in page.fns.values() if f.trigger_after == handler_of(page, "close")._id and getattr(f.fn, "__name__", "") == "<lambda>"]
+    assert after_close.outputs == show.outputs[:-1] and after_close.fn(None, "nl")[frame] == NO_ORDER_PAGES
+    assert called(page, "relabel", "en", failed.case_id, None)["Inkooporder"] == {"__type__": "update", "label": "Purchase order"}
+
+
+READ_OUT = ("hand-done-note", "pricelist-export-note", "pricelist-note", "files-note", "settings-buyer-note", "settings-supplier-note",
+            "exact-sample-note", "exact-title-note", "exact-note", "exact-number-note", "export-sample-note", "export-note",
+            "articles-sample-note", "articles-note", "tryout-note")
+
+
+def test_the_notes_under_the_buttons_of_every_tab_are_read_out_as_they_change(tmp_path, madeup_out):
+    """Known limit 4 of the redesign's build record. The page's load script marks each answer line (the class answer) as a polite
+    live region, so that a screen reader reads an answer as it comes, without moving the focus (PAGE_JS of aid/review/look.py).
+    Fifteen notes under buttons lacked the class and were not read out as they changed: the note of the handled changes of "In
+    Exact invoeren", the two of "Prijslijst", the one of "Bestanden", the two of "Uw regels" and "Leveranciers", and the nine of
+    "Koppeling met Exact" with its part "Proefdraaien". Each has the class now, beside the status line of "Beoordelen" and the
+    notes that had it. The one style rule of the class sets the text at 16 px on a line of 24 px, as the other answer lines have
+    it: in the browser these notes keep their size, colour and place, and their line is 24 px high where it was 22.4 px."""
+    _, d, page, _ = sending_page(tmp_path, madeup_out)
+    parts = by_elem_id(page)
+    for name in READ_OUT:
+        note = parts[name]
+        assert isinstance(note, gradio.Markdown) and note.elem_classes == ["answer"] and note.value == "", name
+    for name in ("hand-note", "pricelist-remove-note"):                          # those that had it keep it
+        assert "answer" in parts[name].elem_classes, name
+    assert "document.querySelectorAll('.block.answer, .block.row-note')" in look.PAGE_JS and "line.setAttribute('aria-live', 'polite')" in look.PAGE_JS
+    assert ".block.answer .prose { font-size: 16px; line-height: 24px; }" in look.PAGE_CSS
+    assert [rule for rule in look.PAGE_CSS.splitlines() if ".answer" in rule and "{" in rule] == [".block.answer .prose { font-size: 16px; line-height: 24px; }"]
