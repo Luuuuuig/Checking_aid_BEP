@@ -1,14 +1,18 @@
 """What the settings tab of the review page shows and writes for the buyer, without gradio, so that it is tested without a page.
 
-The eleven settings of the form (BUYER_FIELDS) are the buyer's rules: the two price thresholds, the days a delivery date may pass the
+The twelve settings of the form (BUYER_FIELDS) are the buyer's rules: the two price thresholds, the days a delivery date may pass the
 supplier's lead time, the first cases of a supplier that always come to the buyer, the wait for a supplier's answer, the name under
-the messages, the digest and its time, the buyer's address, the language and the approver's address. shown gives them as the form
-shows them: the two price values with a decimal comma in Dutch and a point in English, without trailing zeros beyond two decimals
-("2", "2,5"; the euro amount with two decimals at least, "25,00"), the whole numbers as text and the rest as it is. parse reads the
-form's texts back, all of them or the fields named only: a number with a comma or a point as its decimal mark and at most two
-decimals, so that "1.000", a thousand as a Dutch buyer writes it, is refused and not read as 1; each number in its range, the time
-as HH:MM, the addresses by the settings' address rule, the name one line of at most 80 characters (it may be empty). It gives the
-values to write and a problem per refused field, a short sentence in the page's language from i18n.STRINGS
+the messages, the digest and its time, the buyer's address, the language and the approver's address, and the owner's own addresses
+of the test mode, which the page shows in the test mode only. shown gives them as the form shows them: the two price values with a
+decimal comma in Dutch and a point in English, without trailing zeros beyond two decimals ("2", "2,5"; the euro amount with two
+decimals at least, "25,00"), the whole numbers as text, the own addresses with a comma between them and the rest as it is. parse
+reads the form's texts back, all of them or the fields named only: a number with a comma or a point as its decimal mark and at most
+two decimals, so that "1.000", a thousand as a Dutch buyer writes it, is refused and not read as 1; each number in its range, the
+time as HH:MM, the two addresses by the settings' address rule, the name one line of at most 80 characters (it may be empty), and the
+own addresses as a list: the text parted at its commas, each entry trimmed, an empty one passed over and one equal to an earlier one
+without regard to capitals dropped, and each one address with nothing around it (is_own_address of aid/settings.py), else the field
+is refused; an empty text is no own address at all. It gives the values to write and a problem per refused field, a short sentence
+in the page's language from i18n.STRINGS
 ("settings_problem:<kind>"), never the value itself. changed_fields gives the fields whose text differs from the text the form
 was filled with: a save writes those and no other, so that a setting the buyer did not touch is never written.
 
@@ -29,10 +33,10 @@ from collections.abc import Iterable, Mapping
 from decimal import Decimal, InvalidOperation
 
 from aid.review.i18n import STRINGS
-from aid.settings import Settings, is_address
+from aid.settings import Settings, is_address, is_own_address
 
 BUYER_FIELDS = ("price_pct", "price_abs", "lead_time_tolerance_days", "first_cases_review", "ask_wait_working_days", "buyer_name",
-                "digest", "digest_time", "buyer_email", "language", "approver_email")
+                "digest", "digest_time", "buyer_email", "language", "approver_email", "own_addresses")
 SUPPLIER_FIELDS = ("supplier_emails", "supplier_lead_times", "review_suppliers", "messages_off_suppliers")
 SUPPLIER_PARTS = ("email", "lead_time", "review", "off")       # what the supplier form holds of one supplier, beside its name
 NAME_LENGTH = 80                                 # the longest buyer's name and supplier's name
@@ -46,12 +50,13 @@ _CHOICES = {"digest": (("daily", "per_case"), "digest"), "language": (("nl", "en
 
 
 def shown(settings: Settings, language: str) -> dict:
-    """The eleven settings as the form shows them in the page's language (see the module docstring), in the order of BUYER_FIELDS."""
+    """The twelve settings as the form shows them in the page's language (see the module docstring), in the order of BUYER_FIELDS."""
     values = {field: getattr(settings, field) for field in BUYER_FIELDS}
     values["price_pct"] = _decimal_text(settings.price_pct, 0, language)
     values["price_abs"] = _decimal_text(settings.price_abs, 2, language)
     for field in _WHOLE_RANGES:
         values[field] = str(values[field])
+    values["own_addresses"] = ", ".join(settings.own_addresses)
     return values
 
 
@@ -103,6 +108,15 @@ def parse(form: dict, language: str, only: Iterable[str] | None = None) -> tuple
                 values[field] = text
             else:
                 refuse(field, "address")
+        elif field == "own_addresses":
+            entries = [entry.strip() for entry in text.split(",") if entry.strip()]
+            if all(is_own_address(entry) for entry in entries):
+                kept: dict[str, str] = {}
+                for entry in entries:                 # the first of the entries equal without regard to capitals
+                    kept.setdefault(entry.lower(), entry)
+                values[field] = list(kept.values())
+            else:
+                refuse(field, "addresses")
         else:                                    # buyer_name
             if len(text) <= NAME_LENGTH and not ("\n" in text or "\r" in text):
                 values[field] = text

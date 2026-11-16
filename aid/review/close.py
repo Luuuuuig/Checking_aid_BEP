@@ -20,8 +20,8 @@ from aid.comparison import Flag, Uncompared
 from aid.execution.by_hand import FOLDER, KINDS, link_put_back
 from aid.execution.ops import WriteOp
 from aid.execution.writer import LOG_FILE, WriteLog, WriteLogEntry, WriterError, undo_entry
-from aid.messaging import (MESSAGES, QUESTIONS, REAPPROVAL, SENT_FILE, HandOverUnconfirmed, SentRecord, question_ends, record_sent, render,
-                           render_reapproval)
+from aid.messaging import (MESSAGES, QUESTIONS, REAPPROVAL, SENT_FILE, TEST_MODE, HandOverUnconfirmed, NotOwnAddress, SentRecord, question_ends,
+                           record_sent, render, render_reapproval)
 # BUYER_RULE: the rule id of the buyer's decisions, in the write log and the disposition log
 from aid.pipeline import (BUYER_RULE, DISPOSITION_COLUMNS, DISPOSITION_FILE, LOOKS, NOT_APPLIED_LOOK, NOT_SENT, RESULT_FILE, SENT, UNADDRESSED,
                           UNROUTED_WORDS, UNSENT, CaseResult, Deps, ReviewItem, Status, asked_by_the_run, record_dispositions, waits_for_po)
@@ -46,9 +46,10 @@ _ASKED_OTHERWISE = "missing_info"               # the question about a price, a 
 _DISPOSITIONS = {"keep": "accept the PO value", "confirm": "accept the supplier's value", "ask": "ask the supplier", "unresolved": "unresolved"}
 _ACKNOWLEDGED = "accept"                         # "confirm" or "keep" on an item without a finding
 # Why the close did not send a message, besides the kinds of a mailer's own error (MailerError.kind of aid/messaging: "sign_in", "store",
-# "unreachable", "refused", "no_password") and of a mailer without a route ("no_mailbox", "settings"): the case's document cannot
-# be read, so that nobody can say whether it is a try-out. The record of the message keeps the kind as its "cause", by which the
-# page says what to do (aid/review/page.py); its status reads "not sent (<the words of the cause>)".
+# "unreachable", "refused", "no_password"), of a mailer without a route ("no_mailbox", "settings") and of the guard of the test mode
+# ("test_mode", NotOwnAddress): the case's document cannot be read, so that nobody can say whether it is a try-out. The record of the
+# message keeps the kind as its "cause", by which the page says what to do (aid/review/page.py); its status reads "not sent (<the words
+# of the cause>)".
 NO_DOCUMENT = "document"
 NO_ADDRESS = "no_address"                        # the cause of a question to a supplier without an address in the settings
 _NOT_SENT_WORDS = UNROUTED_WORDS | {NO_DOCUMENT: "document cannot be read"}
@@ -105,20 +106,23 @@ def close_case(case: Case, deps: Deps) -> CaseResult:
     Nothing is given to a mailer that has no route (the file mailer that mailer_of gives for want of a way to send, or the
     settings file that cannot be read: "not sent (no mailbox connected)" and the like), and nothing is sent about a case whose
     document cannot be read at that moment, since nobody can say then whether it is a try-out ("not sent (document cannot be
-    read)"); neither is written as a file. A supplier without an address in the settings gives "not sent (no address for the
-    supplier)", with the cause "no_address". In each case nothing is recorded as asked, the case stays in review, and it gets a
-    review item without a finding, once: "message not sent", or "no address for the supplier"; a later failure of the same
-    question gives that item the reason of the latest one (ruling C7 of the clean-up of Task 44). Step 09 keeps which item belongs
-    to which message (the changes of a request under "reapproval_pending", the template of a question under "unsent_questions"),
-    and the next close sends the message again (a request with the changes it makes itself). Once it is sent, that review item is
-    settled without a decision of its own, and so is the item of a question when no item asks it any more (the buyer decided the
-    item otherwise): the saved result marks it "settled", and the review page and the digest leave it out. A mailer that could not
-    confirm the hand-over (HandOverUnconfirmed) leaves the message recorded as sent, with
-    "unconfirmed" true and the id it carries, and in sent.jsonl: it counts as asked, the case waits, and nothing is sent a second
-    time. Nothing about a case made from a try-out is sent (aid/tryout_mark.py): a question or a request of such a case is
-    recorded "not sent (try-out document: nothing is sent)" without asking the mailer; the request counts as settled, and a
-    question keeps the case in review, its item on "ask" not carried out (decide refuses "ask" on such a case, so only a decision
-    written before that refusal comes here).
+    read)"); neither is written as a file. In the test mode the guard of the mailer keeps back a question or a request whose To or Cc
+    holds an address that is not one of the owner's own (NotOwnAddress of aid/messaging): it is recorded "not sent (test mode: not
+    your own address)", with the cause "test_mode" and no error text, and nothing of it is sent or written; a request to the approver
+    stopped so stays pending, and keeps the case in review at each close until its addresses are own addresses or the test mode is
+    off. A supplier without an address in the settings gives "not sent (no address for the supplier)", with the cause "no_address".
+    In each case nothing is recorded as asked, the case stays in review, and it gets a review item without a finding, once: "message
+    not sent", or "no address for the supplier"; a later failure of the same question gives that item the reason of the latest one
+    (ruling C7 of the clean-up of Task 44). Step 09 keeps which item belongs to which message (the changes of a request under
+    "reapproval_pending", the template of a question under "unsent_questions"), and the next close sends the message again (a request
+    with the changes it makes itself). Once it is sent, that review item is settled without a decision of its own, and so is the item
+    of a question when no item asks it any more (the buyer decided the item otherwise): the saved result marks it "settled", and the
+    review page and the digest leave it out. A mailer that could not confirm the hand-over (HandOverUnconfirmed) leaves the message
+    recorded as sent, with "unconfirmed" true and the id it carries, and in sent.jsonl: it counts as asked, the case waits, and
+    nothing is sent a second time. Nothing about a case made from a try-out is sent (aid/tryout_mark.py): a question or a request of
+    such a case is recorded "not sent (try-out document: nothing is sent)" without asking the mailer; the request counts as settled,
+    and a question keeps the case in review, its item on "ask" not carried out (decide refuses "ask" on such a case, so only a
+    decision written before that refusal comes here).
 
     A question and its item. The question about an item is the latest one sent that names the item: messages/sent.jsonl keeps
     the items a close's question is about ("item_ids"), so that this is known also after a close that was cut off before its
@@ -582,6 +586,8 @@ class _Close:
         unconfirmed = {}
         try:
             sent = route.send(message)            # through the route judged: a second look might give the file mailer of no route
+        except NotOwnAddress:                     # the test mode: an address of the message is none of the owner's own
+            return self.unsent_for(template, items, finding_ids, item_ids, TEST_MODE)
         except HandOverUnconfirmed as doubt:      # it may have left: recorded as sent, so that a reply finds its case, and not sent again
             sent, unconfirmed = doubt.record, {"unconfirmed": True}
         except Exception as error:                # whatever stops the mailer: not sent, the case stays in review, the next close sends it

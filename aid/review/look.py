@@ -264,6 +264,21 @@ button:hover, label:hover {{ transition-duration: 150ms; }}
 #hand-actions {{ position: sticky; top: 0; z-index: 5; background: {GROUND}; padding: 8px 0; }}
 .block.hand-rows input {{ scroll-margin-top: 120px; }}
 
+/* In Exact invoeren: behind each row its copy buttons, which the page's script draws (PAGE_JS) and which name the text they copy:
+   the row in the first column and its buttons in the second, on one line, once the script has marked the list (hand-copies), so
+   that a page without the script keeps the list as it was; the buttons in the look of a small secondary button, 32 px high; a
+   button just pressed in the colours of done for a moment, a change of colour only; and under the list the line of what the press
+   copied, in the colour of done, or of a problem when the browser gave no clipboard: one line high also while it is empty, so that
+   a press moves nothing, flush with the rows and half the layout's gap from them */
+.block.hand-rows .wrap.hand-copies {{ display: grid; grid-template-columns: minmax(0, max-content) max-content; justify-content: start; align-items: center; gap: 8px 12px; }}
+.hand-copy {{ display: flex; flex-wrap: wrap; gap: 8px; }}
+.hand-copy button {{ min-height: 32px; padding: 4px 12px; font-size: 14px; line-height: 20px; font-weight: 600; color: {INK}; background: {SURFACE}; border: 1px solid {CONTROL}; border-radius: 4px; cursor: pointer; white-space: nowrap; }}
+.hand-copy button:hover {{ background: {SURFACE_2}; border-color: {MUTED}; }}
+.hand-copy button.copied {{ color: {_DONE.text}; background: {_DONE.tint}; border-color: {_DONE.mark}; }}
+#hand-copy {{ margin: -8px 0; padding: 0; }}
+#hand-copy-said {{ min-height: 20px; margin: 0; font-size: 14px; line-height: 20px; font-weight: 600; color: {_DONE.text}; }}
+#hand-copy-said.refused {{ color: {_PROBLEM.text}; }}
+
 /* Prijslijst: the small press that asks to take a supplier's prices away has the width of its words, on one line (its scale 0 gives
    it no share of the row); its question, with "Ja, weghalen" and "Niet weghalen", is one standing message in the look of a notice,
    its words and its two presses centred on one line */
@@ -284,6 +299,15 @@ button:hover, label:hover {{ transition-duration: 150ms; }}
 # (.block.answer, and the note of a decision row, .block.row-note) once as a polite live region (role status), so that a screen
 # reader reads an answer as it comes, without moving the focus. It watches the page for lines that appear later. It holds no
 # address.
+#
+# It also draws the copy buttons of the tab "In Exact invoeren" (copies). The tab gives them in a hidden element (hand-copy-data:
+# _copy_data of aid/review/page.py), by the value of each row's tick box, which the page library writes as the box's name. After
+# each tick box the script puts a holder with the row's buttons, as the next element and never inside the box's label, so that the
+# label stays the name of the box alone; it does so again whenever the rows or the element change (the rows of a list read again,
+# another language), and leaves a list that is right as it is, so that its own change does not call it again without end. A press
+# copies the button's text through the browser's clipboard, or where the browser gives a page none, through a field of the page
+# for a moment; it never ticks the row; and it says what it copied in the line under the list (hand-copy-said), or that copying
+# did not work. A text of a document is set as text, never read as markup.
 PAGE_JS = """
 () => {
   const language = () => {
@@ -296,9 +320,76 @@ PAGE_JS = """
       line.setAttribute('aria-live', 'polite');
     }
   });
+  const copies = () => {
+    const data = document.getElementById('hand-copy-data');
+    const list = document.querySelector('#hand-rows [data-testid="checkbox-group"]');
+    if (!data || !list) return;
+    let rows = {};
+    try { rows = JSON.parse(data.dataset.rows || '{}'); } catch (error) { rows = {}; }
+    const boxes = Array.from(list.children).filter((child) => child.tagName === 'LABEL');
+    const wanted = boxes.map((box) => JSON.stringify(rows[(box.querySelector('input') || {}).name] || []));
+    const holders = Array.from(list.children).filter((child) => child.classList.contains('hand-copy'));
+    if (holders.length === boxes.length && boxes.every((box, at) => box.nextElementSibling === holders[at] && holders[at].dataset.made === wanted[at])) return;
+    holders.forEach((holder) => holder.remove());
+    boxes.forEach((box, at) => {
+      const holder = document.createElement('span');
+      holder.className = 'hand-copy';
+      holder.dataset.made = wanted[at];
+      JSON.parse(wanted[at]).forEach(([text, words, name]) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = words;
+        button.setAttribute('aria-label', name);
+        button.dataset.copy = text;
+        holder.appendChild(button);
+      });
+      box.after(holder);
+    });
+    list.classList.add('hand-copies');
+  };
+  const copied = (button, done) => {
+    const data = document.getElementById('hand-copy-data');
+    const line = document.getElementById('hand-copy-said');
+    const words = (data && (done ? data.dataset.copied : data.dataset.failed)) || '';
+    if (line) {
+      line.textContent = words.replace('{text}', button.dataset.copy || '');
+      line.classList.toggle('refused', !done);
+    }
+    if (done) {
+      button.classList.add('copied');
+      setTimeout(() => button.classList.remove('copied'), 1500);
+    }
+  };
+  const throughAField = (text) => {
+    const field = document.createElement('textarea');
+    field.value = text;
+    field.setAttribute('readonly', '');
+    field.setAttribute('aria-hidden', 'true');
+    field.style.position = 'fixed';
+    field.style.opacity = '0';
+    document.body.appendChild(field);
+    field.select();
+    let done = false;
+    try { done = document.execCommand('copy'); } catch (error) { done = false; }
+    field.remove();
+    return done;
+  };
   language();
   answers();
-  new MutationObserver(() => { language(); answers(); }).observe(document.body, { childList: true, subtree: true });
+  copies();
+  new MutationObserver(() => { language(); answers(); copies(); })
+    .observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['name', 'data-rows'] });
   document.addEventListener('change', language, true);
+  document.addEventListener('click', (event) => {
+    const button = event.target instanceof Element ? event.target.closest('.hand-copy button') : null;
+    if (!button) return;
+    event.preventDefault();
+    const text = button.dataset.copy || '';
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(() => copied(button, true), () => copied(button, throughAField(text)));
+    } else {
+      copied(button, throughAField(text));
+    }
+  });
 }
 """

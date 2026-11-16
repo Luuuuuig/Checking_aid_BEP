@@ -1,4 +1,4 @@
-"""Tests of what the settings tab shows and writes for the buyer (aid/review/buyer_settings.py), without a page: the eleven settings
+"""Tests of what the settings tab shows and writes for the buyer (aid/review/buyer_settings.py), without a page: the twelve settings
 as the form shows them and as a save reads them, which of them the buyer changed, and the suppliers across the four settings that
 name them."""
 from decimal import Decimal
@@ -26,13 +26,13 @@ def problem(language: str, kind: str) -> str:
 
 # --- shown ---
 
-def test_the_form_shows_the_eleven_settings_as_text_with_a_decimal_comma_in_dutch():
+def test_the_form_shows_the_twelve_settings_as_text_with_a_decimal_comma_in_dutch():
     s = settings(price_pct=Decimal("2.0"), price_abs=Decimal("25.00"), buyer_name="A. Buyer", digest="per_case", digest_time="07:05")
     nl = shown(s, "nl")
-    assert list(nl) == list(BUYER_FIELDS) and len(BUYER_FIELDS) == 11
+    assert list(nl) == list(BUYER_FIELDS) and len(BUYER_FIELDS) == 12
     assert nl == {"price_pct": "2", "price_abs": "25,00", "lead_time_tolerance_days": "7", "first_cases_review": "0",
                   "ask_wait_working_days": "3", "buyer_name": "A. Buyer", "digest": "per_case", "digest_time": "07:05",
-                  "buyer_email": "buyer@example.com", "language": "nl", "approver_email": "approver@example.com"}
+                  "buyer_email": "buyer@example.com", "language": "nl", "approver_email": "approver@example.com", "own_addresses": ""}
     en = shown(s, "en")
     assert (en["price_pct"], en["price_abs"]) == ("2", "25.00") and en["language"] == "nl"      # the setting, not the page's language
 
@@ -57,7 +57,7 @@ def test_a_form_as_shown_parses_to_the_values_to_write():
     assert problems == {} and list(values) == list(BUYER_FIELDS)
     assert values == {"price_pct": "2", "price_abs": "25.00", "lead_time_tolerance_days": 7, "first_cases_review": 0,
                       "ask_wait_working_days": 3, "buyer_name": "", "digest": "daily", "digest_time": "16:30",
-                      "buyer_email": "buyer@example.com", "language": "nl", "approver_email": "approver@example.com"}
+                      "buyer_email": "buyer@example.com", "language": "nl", "approver_email": "approver@example.com", "own_addresses": []}
     assert Settings.model_validate(SETTINGS.model_dump() | values).price_pct == Decimal("2")
 
 
@@ -154,7 +154,7 @@ def test_every_refused_field_has_its_problem_and_a_missing_field_counts_as_empty
     del form["buyer_email"]
     values, problems = parse(form, "en")
     assert problems == {"price_pct": problem("en", "percent"), "digest_time": problem("en", "time"), "buyer_email": problem("en", "address")}
-    assert parse({key: None for key in BUYER_FIELDS} | {"buyer_name": None}, "nl")[1].keys() == set(BUYER_FIELDS) - {"buyer_name"}
+    assert parse({key: None for key in BUYER_FIELDS} | {"buyer_name": None}, "nl")[1].keys() == set(BUYER_FIELDS) - {"buyer_name", "own_addresses"}
 
 
 def test_the_changed_fields_are_those_whose_text_differs_from_what_the_form_was_filled_with():
@@ -163,7 +163,8 @@ def test_the_changed_fields_are_those_whose_text_differs_from_what_the_form_was_
     form = filled | {"price_pct": " 2 ", "buyer_name": "A. Buyer", "digest": "per_case", "approver_email": "boss@example.com"}
     assert changed_fields(form, filled) == ["buyer_name", "digest", "approver_email"]          # a space around a text is no change
     assert changed_fields(filled | {"price_abs": "25"}, filled) == ["price_abs"]                # "25" for "25,00": the text differs
-    assert changed_fields(filled | {"digest": None}, filled) == ["digest"] and changed_fields({}, filled) == list(BUYER_FIELDS)[:5] + list(BUYER_FIELDS)[6:]
+    assert changed_fields(filled | {"digest": None}, filled) == ["digest"]
+    assert changed_fields({}, filled) == list(BUYER_FIELDS)[:5] + list(BUYER_FIELDS)[6:11]       # the empty name and own addresses: no change
     assert changed_fields({"buyer_name": "x"}, {}) == ["buyer_name"]                             # a field never filled counts as empty
 
 
@@ -309,3 +310,21 @@ def test_a_supplier_is_removed_from_all_four():
                       "review_suppliers": ["Beta"], "messages_off_suppliers": ["acme", "Delta"]}
     assert without_supplier(SUPPLIERS, "Delta")["messages_off_suppliers"] == ["acme"]
     assert without_supplier(SUPPLIERS, "unknown") == {field: getattr(SUPPLIERS, field) for field in SUPPLIER_FIELDS}
+
+
+# --- the own addresses of the test mode ---
+
+def test_the_own_addresses_show_with_a_comma_and_are_read_back_as_a_list():
+    """The form shows the own addresses with a comma between them, and reads them back as a list: each entry trimmed, an empty one
+    passed over and a later one equal to an earlier one without regard to capitals dropped; an empty text is no address at all. An
+    entry that is not one address with nothing around it, or that holds a colon, refuses the field."""
+    s = settings(own_addresses=["owner@example.org", "buyer@example.com"])
+    assert shown(s, "nl")["own_addresses"] == shown(s, "en")["own_addresses"] == "owner@example.org, buyer@example.com"
+    text = " owner@example.org ,Buyer@example.com,, OWNER@example.org "
+    assert parse({"own_addresses": text}, "nl", only=["own_addresses"]) == ({"own_addresses": ["owner@example.org", "Buyer@example.com"]}, {})
+    assert parse({"own_addresses": ""}, "nl", only=["own_addresses"]) == ({"own_addresses": []}, {})
+    for wrong in ("owner@example.org; buyer@example.com", "Owner <owner@example.org>", "x:y@example.org"):
+        for language in ("nl", "en"):
+            assert parse({"own_addresses": wrong}, language, only=["own_addresses"]) == ({}, {"own_addresses": problem(language, "addresses")})
+    assert (problem("nl", "addresses"), problem("en", "addresses")) == ("e-mailadressen met een komma ertussen",
+                                                                        "e-mail addresses with a comma between them")

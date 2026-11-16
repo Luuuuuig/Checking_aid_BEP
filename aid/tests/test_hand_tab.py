@@ -1,6 +1,7 @@
 """Tests of the tab 'In Exact invoeren' of the review page (aid/review/page.py; its list in aid/review/hand_list.py, its strings in
 aid/review/i18n.py), through its handlers by name as the page holds them: no browser. The cases are made-up cases run as the runner
 runs them, their changes prepared in <cases_root>/prepared, where the page of the review command reads the list."""
+import html
 import itertools
 import json
 import os
@@ -343,8 +344,144 @@ def test_the_tab_is_wired_as_the_page_shows_it(tmp_path, madeup_out):
     [rows] = [block for block in inside(tab) if isinstance(block, gr.CheckboxGroup)]
     assert rows.show_label is False and rows.choices == [] and isinstance(tab.parent, gr.Tabs) and rows.elem_classes == ["hand-rows"]
     # one tick box under the other: a style rule given to the page through the head of an HTML block of the tab, for the group's class
-    [style] = [block for block in inside(tab) if isinstance(block, gr.HTML)]
+    # (the other HTML block of the tab carries the copy buttons of the rows: test_each_row_has_its_copy_buttons_on_the_page)
+    [style] = [block for block in inside(tab) if isinstance(block, gr.HTML) and block.elem_id != "hand-copy"]
     assert ".hand-rows .wrap" in style.head and "flex-direction: column" in style.head and style.head.startswith("<style>")
+
+
+def copy_data(element: str) -> tuple[dict, str, str]:
+    """What the element of the copy buttons carries for the page's script: the buttons of each row by the value of its tick box, and
+    the two lines of a press."""
+    [(rows, copied, failed)] = re.findall(r'<div id="hand-copy-data" hidden data-rows="([^"]*)" data-copied="([^"]*)" data-failed="([^"]*)"></div>',
+                                          element)
+    return json.loads(html.unescape(rows)), html.unescape(copied), html.unescape(failed)
+
+
+def copies_of(page, language: str):
+    """What copies_opened gives, which the page binds to the list's own triggers and after each press: any of them, the same function."""
+    return [f.fn for f in page.fns.values() if getattr(f.fn, "__name__", "") == "copies_opened"][0](language)
+
+
+def test_each_row_has_its_copy_buttons_on_the_page(tmp_path, madeup_out):
+    """Behind each row of the list the page puts copy buttons, so that the buyer pastes into Exact what the row asks instead of
+    typing it: the order number, the article and the new value. copies_opened gives them to the page's script in a hidden element
+    right under the tick boxes, by the value of each row's tick box, in the page's language; a week is no date to paste, so that
+    row offers its order and its article only. Under them stands the line that says what a press copied."""
+    gr = import_gradio()
+    page, prepared, d = tab_page(tmp_path, madeup_out)
+    listed = shown(page, "list_opened", "nl")
+    price, date, article = (value_of(listed, words) for words in ("prijs 12,50", "leverdatum", "inkoopprijs"))
+    element = copies_of(page, "nl")
+    rows, copied, failed = copy_data(element)
+    assert rows == {
+        price: [["250108", "Kopieer 250108", "Inkoopordernummer 250108 kopiëren"], ["KM-0801", "Kopieer KM-0801", "Artikelcode KM-0801 kopiëren"],
+                ["12,70", "Kopieer 12,70", "Nieuwe waarde 12,70 kopiëren"]],
+        date: [["250114", "Kopieer 250114", "Inkoopordernummer 250114 kopiëren"], ["KM-1401", "Kopieer KM-1401", "Artikelcode KM-1401 kopiëren"]],
+        article: [["KM-0801", "Kopieer KM-0801", "Artikelcode KM-0801 kopiëren"], ["12,70", "Kopieer 12,70", "Nieuwe waarde 12,70 kopiëren"]]}
+    assert (copied, failed) == ("Gekopieerd: {text}", "Kopiëren is niet gelukt. Typ {text} over in Exact.") == (NL["hand_copied"], NL["hand_copy_failed"])
+    assert element.endswith('<p id="hand-copy-said" role="status" aria-live="polite"></p>')        # read out as it changes, the focus left alone
+    english, copied, failed = copy_data(copies_of(page, "en"))
+    assert english[price] == [["250108", "Copy 250108", "Copy purchase order number 250108"], ["KM-0801", "Copy KM-0801", "Copy article code KM-0801"],
+                              ["12.70", "Copy 12.70", "Copy new value 12.70"]]
+    assert (copied, failed) == ("Copied: {text}", "Copying did not work. Type {text} into Exact.")
+    # the element stands right under the tick boxes, as the page is built: empty of rows, in Dutch, and no box of its own
+    tab = hand_tab(page)
+    parts = inside(tab)
+    [carrier] = [block for block in parts if isinstance(block, gr.HTML) and block.elem_id == "hand-copy"]
+    [boxes] = [block for block in parts if isinstance(block, gr.CheckboxGroup)]
+    assert parts.index(carrier) == parts.index(boxes) + 1 and copy_data(carrier.value) == ({}, NL["hand_copied"], NL["hand_copy_failed"])
+    assert (carrier.container, carrier.padding, carrier.js_on_load, carrier.visible) == (False, False, None, True)
+    # a row that left the list has no buttons any more
+    shown(page, "changes_entered", [price], "nl")
+    assert set(copy_data(copies_of(page, "nl"))[0]) == {date, article}
+    # a text of a document stands inside its attribute whatever it holds: a code with a quote, an angle and an ampersand
+    odd = 'KM"<b>&\'x'
+    made = PreparedWriter(prepared).apply(WriteOp(kind="article_price", po_number="250108", version=1, article_code=odd, new_value="3.00"),
+                                          "250108_20261112T090000", "R04", {}, datetime(2026, 11, 12, 9, 30))
+    element = copies_of(page, "nl")
+    assert copy_data(element)[0][made.entry_id][0] == [odd, f"Kopieer {odd}", f"Artikelcode {odd} kopiëren"]
+    assert "<b>" not in element and element.count('"') == 2 * 4 + 2 * 3          # the quotes of the seven attributes, and no other
+    # a list that cannot be read leaves the buttons as they were, as it leaves the rows
+    (prepared / PREPARED_FILE).write_bytes((prepared / PREPARED_FILE).read_bytes().replace(b",", b";"))
+    assert copies_of(page, "nl") == {"__type__": "update"}
+
+
+def test_the_copy_buttons_are_read_again_with_the_list(tmp_path, madeup_out):
+    """copies_opened runs when the page loads, when the tab is selected, with "Lijst vernieuwen", when the language switches, and
+    after each press of the tab that can change the list, so that the buttons belong to the rows shown."""
+    gr = import_gradio()
+    page, prepared, d = tab_page(tmp_path, madeup_out)
+    language = [block for block in page.blocks.values() if isinstance(block, gr.Radio) and block.label == NL["language"]][0]
+    [carrier] = [block for block in page.blocks.values() if isinstance(block, gr.HTML) and block.elem_id == "hand-copy"]
+    fills = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == "copies_opened"]
+    assert all(f.outputs == [carrier] and f.inputs == [language] and f.show_progress == "hidden" for f in fills)
+    [list_fill] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == "list_opened"]
+    triggered = sorted(target for f in fills for target in f.targets if target[0] is not None)
+    assert triggered == sorted([*list_fill.targets, (language._id, "change")])
+    # the read that shares the language switch skips the queue, so that the switch is no slower for it; a read after a press keeps it
+    assert [f.queue for f in fills if f.targets != [(None, "then")]] == [False] and all(f.queue for f in fills if f.targets == [(None, "then")])
+    presses = {"changes_entered", "changes_dropped", "block_entered", "pricelist_entered", "change_reopened", "change_put_back"}
+    after = sorted(f.trigger_after for f in fills if f.targets == [(None, "then")])
+    assert after == sorted(key for key, f in page.fns.items() if getattr(f.fn, "__name__", "") in presses) and len(after) == 6
+
+
+def test_the_pages_script_draws_the_copy_buttons_and_the_style_gives_them_their_place():
+    """The buttons are drawn in the browser by the page's load script (aid/review/look.py, PAGE_JS), which reads the hidden element
+    and puts a holder with the buttons after each tick box by the box's name, the value of its row; a press copies the button's text
+    through the browser's clipboard, never ticks the row, and says what it copied in the line under the list. The style puts each
+    row and its buttons on one line, in the look of the page's small secondary buttons. Without the script the list is as it was."""
+    from aid.review import look
+    script, css = look.PAGE_JS, look.PAGE_CSS
+    for part in ("getElementById('hand-copy-data')", "#hand-rows [data-testid=\"checkbox-group\"]", "dataset.rows", "classList.add('hand-copies')",
+                 "navigator.clipboard.writeText", "document.execCommand('copy')", "event.preventDefault()", "getElementById('hand-copy-said')",
+                 "attributeFilter: ['name', 'data-rows']", "setAttribute('aria-label'", "button.type = 'button'"):
+        assert part in script, part
+    assert "innerHTML" not in script and "http" not in script                   # a text of a document is never read as markup; no address
+    for rule in (".block.hand-rows .wrap.hand-copies { display: grid; grid-template-columns: minmax(0, max-content) max-content; "
+                 "justify-content: start; align-items: center; gap: 8px 12px; }",
+                 ".hand-copy { display: flex; flex-wrap: wrap; gap: 8px; }",
+                 f".hand-copy button {{ min-height: 32px; padding: 4px 12px; font-size: 14px; line-height: 20px; font-weight: 600; "
+                 f"color: {look.INK}; background: {look.SURFACE}; border: 1px solid {look.CONTROL}; border-radius: 4px; cursor: pointer; "
+                 "white-space: nowrap; }",
+                 f".hand-copy button:hover {{ background: {look.SURFACE_2}; border-color: {look.MUTED}; }}",
+                 f".hand-copy button.copied {{ color: {look.TONES['done'].text}; background: {look.TONES['done'].tint}; "
+                 f"border-color: {look.TONES['done'].mark}; }}",
+                 "#hand-copy { margin: -8px 0; padding: 0; }",
+                 f"#hand-copy-said {{ min-height: 20px; margin: 0; font-size: 14px; line-height: 20px; font-weight: 600; "
+                 f"color: {look.TONES['done'].text}; }}",
+                 f"#hand-copy-said.refused {{ color: {look.TONES['problem'].text}; }}"):
+        assert rule in css, rule
+
+
+def test_the_documents_say_what_the_copy_buttons_do():
+    """The manual's section 2.6, its Dutch guide for the buyer, the README and the page's own description name the copy buttons with
+    the page's words: what each copies, that a press ticks nothing, the line of what was copied, the row without a value to paste,
+    and that pasting into Exact depends on how the virtual application is set up."""
+    section = " ".join(manual_sections()["2.6"].split())
+    for sentence in ('**Copying.** Behind each row stand buttons that copy what the row asks, so that you paste it into Exact (Ctrl+V) and do not type it',
+                     '"Kopieer 250108" copies the order number, "Kopieer KM-0801" the article code of the line and "Kopieer 12,70" the new value.',
+                     "The words on a button are the text it copies, in the form the row shows",
+                     'A press ticks nothing and changes nothing: the line under the list says what was copied, "Gekopieerd: 12,70"',
+                     "A row whose new value is a week or a range of days has no button for the value, because you choose the day",
+                     f'When the browser gives the page no clipboard, the line says "{NL["hand_copy_failed"].format(text="12,70")}"',
+                     "Exact is opened as a virtual application (section 3.10): whether a text copied in the browser can be pasted there "
+                     "depends on how that application is set up, so try it once."):
+        assert sentence in section, sentence
+    assert section.index("**The list.**") < section.index("**Copying.**") < section.index("**Ticking.**")
+    manual = " ".join(Path("aid/MANUAL.md").read_text(encoding="utf-8").split())
+    for sentence in ('Achter elke regel staan knoppen die kopiëren wat u in Exact invoert: "Kopieer 250108" kopieert het ordernummer, '
+                     '"Kopieer KM-0801" de artikelcode en "Kopieer 12,70" de nieuwe waarde; plak de tekst in Exact met Ctrl+V.',
+                     'Zo\'n knop vinkt niets aan: onder de lijst staat wat er gekopieerd is, bijvoorbeeld "Gekopieerd: 12,70".',
+                     "Is de nieuwe waarde een week of een periode, dan is er geen knop voor de waarde en kiest u de dag zelf."):
+        assert sentence in manual, sentence
+    readme = " ".join(Path("aid/README.md").read_text(encoding="utf-8").split())
+    assert ("with buttons behind it that copy the order number, the article code and the new value for pasting into the ERP system, to tick "
+            "as entered or as not to enter") in readme
+    from aid.review import page as page_module
+    described = " ".join(page_module.__doc__.split())
+    assert ('behind each row its copy buttons, "Kopieer 250108", "Kopieer KM-0801" and "Kopieer 12,70", which copy the order number, the '
+            "article code and the new value for pasting into Exact and tick nothing") in described
+    assert (NL["hand_copy"].format(text="250108"), NL["hand_copied"].format(text="12,70")) == ("Kopieer 250108", "Gekopieerd: 12,70")
 
 
 def test_the_texts_of_the_tab_in_both_languages():
@@ -1030,7 +1167,8 @@ def test_the_answer_of_the_tick_buttons_stands_under_them_and_stays_in_view(tmp_
         """The child of the tab that holds the block (the page library puts a group of tick boxes in a form block of its own)."""
         return block if block.parent is tab else top(block.parent)
     assert children.index(new) + 1 == children.index(actions) == children.index(top(rows)) - 1  # under the intro and the new line
-    below = children[children.index(top(rows)) + 1]                                             # the same pair under the rows, small
+    assert children[children.index(top(rows)) + 1] is by_id["hand-copy"]                        # the copy buttons' element and its line
+    below = children[children.index(top(rows)) + 2]                                             # the same pair under the rows, small
     assert isinstance(below, gr.Row) and [(button.value, button.variant, button.size) for button in below.children] == [
         (NL["hand_entered"], "secondary", "sm"), (NL["hand_dropped"], "secondary", "sm")]
     buttons = [block for block in inside(tab) if isinstance(block, gr.Button)]
@@ -1531,9 +1669,10 @@ def label_patterns() -> dict[str, re.Pattern]:
 # reference added, moved or taken away fails the test until it is read and counted here.
 # The merge with Task 41 added three, read as the others: in 2.5 the grey banner's line names the tab "Bestanden" (2.7), and in the
 # cart's walk of 3.17 step 2 names that tab (2.7) and step 3 the settings of the tab "Instellingen" (2.8).
-REFERENCES = {"1": {"2.7": 1}, "2.2": {"2.7": 2, "2.8": 1}, "2.3": {"2.8": 1}, "2.5": {"2.7": 1}, "3.1": {"2.7": 3}, "3.2": {"2.8": 1},
-              "3.3": {"2.7": 1}, "3.6": {"2.7": 2}, "3.7": {"2.7": 1, "2.8": 1}, "3.12": {"2.7": 3}, "3.13": {"2.7": 3}, "3.16": {"2.8": 1},
-              "3.17": {"2.7": 8, "2.8": 2}, "4.1": {"2.8": 1}, "4.2": {"2.8": 2}, "4.5": {"2.7": 1}, "5": {"2.7": 3, "2.8": 1}}
+REFERENCES = {"1": {"2.7": 1}, "2.2": {"2.7": 2, "2.8": 1}, "2.3": {"2.8": 1}, "2.5": {"2.7": 1}, "3.1": {"2.7": 3}, "3.2": {"2.8": 2},
+              "3.3": {"2.7": 1}, "3.6": {"2.7": 2}, "3.7": {"2.7": 1, "2.8": 2}, "3.12": {"2.7": 3}, "3.13": {"2.7": 3}, "3.16": {"2.8": 1},
+              "3.17": {"2.7": 8, "2.8": 3}, "4.1": {"2.8": 1}, "4.2": {"2.8": 2}, "4.5": {"2.7": 1}, "5": {"2.7": 3, "2.8": 1}}
+# 3.2, 3.7 and 3.17 each send the reader to "Uw eigen adressen in de proefstand" in 2.8, the own addresses of the test mode.
 
 
 def test_the_documents_say_what_the_files_tab_does():

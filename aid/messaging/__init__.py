@@ -23,6 +23,14 @@ headers X-Aid-Template and X-Aid-Case. MicrosoftMailer (microsoft_mailer.py) sen
 Microsoft sign-in, and its record keeps the Message-ID that Exchange gave the message (internet_message_id), whose part before
 the "@" is then the record's message id.
 
+The test mode. While settings.test_mode is true, every mailer that mailer_of of microsoft_mailer.py makes carries the guard of the
+test mode (OwnOnly, made by own_only): a message goes out, or is written as a file, only when every entry of its To and of its Cc is
+one of the owner's own addresses, those of settings.own_addresses and the address of the Microsoft work account that a mailer of the
+work mailbox sends with at that moment. Entries are compared without their outer spaces and without regard to capitals, and the whole
+entry must be one own address. Any other message is NotOwnAddress, a MailerError of the kind "test_mode", raised before anything is
+read, sent or written: the file mailer makes no file, the SMTP mailer reads no password and opens no connection, and the mailer of the
+work mailbox asks no token and makes no draft. Outside the test mode no mailer carries a guard, and each sends as it did before.
+
 The messages of a case are kept in <case root>/messages/:
 
     sent.jsonl       one SentRecord per message sent, a JSON line each (record_sent)
@@ -156,8 +164,9 @@ class MailerError(Exception):
     """A message the mailer could not send. Its text names the class of the error behind it, never a password, a login or a
     recipient. `kind` is the kind of its cause, by which the review page says what to do (aid/review/page.py): "sign_in" (the
     Microsoft sign-in has lapsed), "store" (this process may not use the store of the sign-in), "unreachable" (no connection, a time-out, an answer that another try may get past), "refused"
-    (the mailbox or the server will not take the message), "no_password" (the mail server's password is not set), or what a
-    mailer without a route gives (NoRoute)."""
+    (the mailbox or the server will not take the message), "no_password" (the mail server's password is not set), "test_mode" (the
+    guard of the test mode kept the message from an address that is not one of the owner's own, NotOwnAddress), or what a mailer
+    without a route gives (NoRoute)."""
 
     def __init__(self, text: str, kind: str = "refused"):
         super().__init__(text)
@@ -173,6 +182,73 @@ class HandOverUnconfirmed(MailerError):
     def __init__(self, text: str, record: SentRecord):
         super().__init__(text, "unconfirmed")
         self.record = record
+
+
+TEST_MODE = "test_mode"                          # the kind of a message that the guard of the test mode keeps back (NotOwnAddress)
+
+
+class NotOwnAddress(MailerError):
+    """A message that the guard of the test mode keeps back (OwnOnly): an entry of its To or of its Cc is none of the owner's own
+    addresses. Nothing was sent and no file was written; no password was read, no token was asked and no draft was made. Its text
+    names no address, and its kind is "test_mode"."""
+
+    def __init__(self):
+        super().__init__("in the test mode a message goes to the own addresses only, and an address of this message is not one of them",
+                         TEST_MODE)
+
+
+class OwnOnly:
+    """The guard of the test mode (settings.test_mode, settings.own_addresses). A message passes only when each entry of its To and of
+    its Cc, without its outer spaces and without regard to capitals, is one of the owner's own addresses: those given (own), and the
+    address of the Microsoft work account signed in at the moment of the send (signed_in, which reads the token cache on this PC and
+    asks Microsoft nothing), for a mailer that sends through that account. The whole entry must be one own address: an entry that
+    holds two addresses, or a name around one, is none, since the SMTP mailer gives the message to every address an entry holds, and
+    neither is an empty entry. signed_in is asked only for an entry that is not among the addresses given, and at most once a
+    message; one that raises, or gives no address, adds none, so that a token cache that cannot be read lets nothing more pass. check
+    raises NotOwnAddress for any other message, and each mailer calls it before it reads, sends or writes anything."""
+
+    def __init__(self, own: Iterable[str], signed_in: Callable[[], str | None] | None = None):
+        self.own = frozenset(folded for folded in map(_folded, own) if folded)
+        self.signed_in = signed_in
+
+    def allows(self, to: Iterable[str], cc: Iterable[str]) -> bool:
+        """Whether every entry of to and of cc is an own address (see the class docstring)."""
+        account = None                           # the signed-in account's address, asked once an entry needs it
+        for entry in (*to, *cc):
+            folded = _folded(entry)
+            if folded in self.own:
+                continue
+            if account is None:
+                account = self._account()
+            if not folded or folded != account:
+                return False
+        return True
+
+    def check(self, msg: Message) -> None:
+        """Raise NotOwnAddress unless every entry of the message's To and Cc is an own address."""
+        if not self.allows(msg.to, msg.cc):
+            raise NotOwnAddress()
+
+    def _account(self) -> str:
+        """The address of the account signed in now, folded as an entry is; "" when no account is given, none is signed in, or the
+        token cache cannot be read (a store that is refused among them), as AutoMailer.current() takes such a cache."""
+        if self.signed_in is None:
+            return ""
+        try:
+            return _folded(self.signed_in())
+        except Exception:
+            return ""
+
+
+def own_only(settings: Settings, signed_in: Callable[[], str | None] | None = None) -> OwnOnly | None:
+    """The guard of these settings: OwnOnly of their own addresses, with signed_in, while the test mode is on; None outside it, so that
+    a mailer made without the test mode sends as it did before."""
+    return OwnOnly(settings.own_addresses, signed_in) if settings.test_mode else None
+
+
+def _folded(address) -> str:
+    """An address as the guard compares it: without its outer spaces, in lower case; "" for anything that is no text."""
+    return address.strip().lower() if isinstance(address, str) else ""
 
 
 class EndedWait(NamedTuple):
@@ -253,13 +329,17 @@ class FileMailer:
     `unrouted` is None for a mailer that writes files by choice (send_via "file", a mailer made in code), and says why for one
     given for want of a way to send (mailer_of of microsoft_mailer.py: "no_mailbox" or "no_password"). The mailer writes its file
     either way; the review page's close neither writes nor counts a message through a mailer that has no route
-    (aid/review/close.py)."""
+    (aid/review/close.py). With the guard of the test mode (`guard`, see the module docstring) a message to an address that is not
+    one of the owner's own is NotOwnAddress, and no folder and no file is made for it."""
     name = "file"
 
-    def __init__(self, out_dir: Path, sender: str = "", clock: Callable[[], datetime] | None = None, unrouted: str | None = None):
-        self.out_dir, self.sender, self.clock, self.unrouted = Path(out_dir), sender, clock or datetime.now, unrouted
+    def __init__(self, out_dir: Path, sender: str = "", clock: Callable[[], datetime] | None = None, unrouted: str | None = None,
+                 guard: OwnOnly | None = None):
+        self.out_dir, self.sender, self.clock, self.unrouted, self.guard = Path(out_dir), sender, clock or datetime.now, unrouted, guard
 
     def send(self, msg: Message) -> SentRecord:
+        if self.guard is not None:               # the test mode: only to the own addresses, before anything is written
+            self.guard.check(msg)
         message_id, sent_at = uuid.uuid4().hex, self.clock()
         self.out_dir.mkdir(parents=True, exist_ok=True)
         (self.out_dir / f"{message_id}.eml").write_bytes(bytes(_email(msg, self.sender, sent_at, message_id)))
@@ -290,15 +370,20 @@ class SmtpMailer:
     recipients and names none; a refused Cc alone is counted in the record, and the message goes to the others. Until the message
     is given a failure is a message not sent. A failure after that, while the message is given or before the server's answer to
     it, is HandOverUnconfirmed: nobody knows whether the message left. An answer of the server that refuses the message it was
-    given is a message not sent again."""
+    given is a message not sent again.
+
+    With the guard of the test mode (`guard`, see the module docstring) a message to an address that is not one of the owner's own
+    is NotOwnAddress before the password is read and before any connection is made."""
     name = "smtp"
 
     def __init__(self, host: str, port: int, user: str, password_env: str = "AID_MAIL_PASSWORD", sender: str | None = None,
-                 clock: Callable[[], datetime] | None = None):
+                 clock: Callable[[], datetime] | None = None, guard: OwnOnly | None = None):
         self.host, self.port, self.user, self.password_env = host, port, user, password_env
-        self.sender, self.clock = sender or user, clock or datetime.now
+        self.sender, self.clock, self.guard = sender or user, clock or datetime.now, guard
 
     def send(self, msg: Message) -> SentRecord:
+        if self.guard is not None:               # the test mode: only to the own addresses, before the password and any connection
+            self.guard.check(msg)
         try:
             password = os.environ[self.password_env]
         except KeyError:

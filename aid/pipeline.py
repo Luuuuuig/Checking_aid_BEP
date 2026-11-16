@@ -108,19 +108,22 @@ can send is not asked (ruling C12 of the clean-up of Task 44): when the mailer, 
 message, is the file mailer given for want of a way to send (its `unrouted`, mailer_of of aid/messaging/microsoft_mailer.py: no
 mailbox connected, or the mail server's password not set), nothing is written as a file and nothing counts as asked; the message
 is "not sent (no mailbox connected)" or "not sent (mail server password not set)", with that "cause" (UNROUTED_WORDS). With
-send_via "file" the file mailer writes by choice, and its message counts as sent. A question to a supplier the settings give no
-address is "not sent (no address for the supplier)", and a message the mailer cannot send, whatever it raises, is "not sent (<the
-error's class>)", the audit keeping the error's text: each finding of the message is then a review item, "no address for the
-supplier" or "message not sent" (also for a message nothing can send), and the run goes on, so that the case comes to the buyer,
-who chooses "Leverancier vragen" on the item once a way to send is there. A mailer that could not confirm the hand-over of a message
-(HandOverUnconfirmed of aid/messaging: the failure came at or after it) leaves it unknown whether the message left: the message is
-recorded as sent, with "unconfirmed" true and the id it would carry, and its record goes to sent.jsonl, so that a reply or a bounce
-that names it is filed with the case and belongs to its question, the case waits, and nothing is sent a second time under another
-id. No message about a case made from a try-out document is sent
-(tryout_case of aid/tryout_mark.py: its document's first row is the try-out's): without asking the mailer, each is recorded as "not
-sent (try-out document: nothing is sent)", and each finding of the message is a review item with the reason "try-out document:
-nothing is sent", so that the case comes to the buyer instead of waiting for an answer. Such a case writes through the prepared
-writer only, never through the Exact writer (tryout_writer), and it is not counted among a supplier's closed cases.
+send_via "file" the file mailer writes by choice, and its message counts as sent. In the test mode the mailer's guard keeps a message
+back whose To or Cc holds an address that is not one of the owner's own (NotOwnAddress of aid/messaging): it is "not sent (test mode:
+not your own address)", with the cause "test_mode" and no error text, nothing is sent or written, and each of its findings is a
+review item "message not sent", as for a message that nothing can send; the mark of a missing way to send is read first, and wins. A
+question to a supplier the settings give no address is "not sent (no address for the supplier)", and a message the mailer cannot
+send, whatever it raises, is "not sent (<the error's class>)", the audit keeping the error's text: each finding of the message is
+then a review item, "no address for the supplier" or "message not sent" (also for a message nothing can send), and the run goes on,
+so that the case comes to the buyer, who chooses "Leverancier vragen" on the item once a way to send is there. A mailer that could
+not confirm the hand-over of a message (HandOverUnconfirmed of aid/messaging: the failure came at or after it) leaves it unknown
+whether the message left: the message is recorded as sent, with "unconfirmed" true and the id it would carry, and its record goes to
+sent.jsonl, so that a reply or a bounce that names it is filed with the case and belongs to its question, the case waits, and nothing
+is sent a second time under another id. No message about a case made from a try-out document is sent (tryout_case of
+aid/tryout_mark.py: its document's first row is the try-out's): without asking the mailer, each is recorded as "not sent (try-out
+document: nothing is sent)", and each finding of the message is a review item with the reason "try-out document: nothing is sent", so
+that the case comes to the buyer instead of waiting for an answer. Such a case writes through the prepared writer only, never through
+the Exact writer (tryout_writer), and it is not counted among a supplier's closed cases.
 
 The status: review when the case has a review item, from a REVIEW action, a write or a message not sent (a question of the same case
 is sent all the same, but the buyer has to act), else waiting when an action is ASK, else closed; a request for re-approval does not
@@ -186,9 +189,9 @@ from aid.execution.by_hand import as_entered, filed_of, reconcile, withdraw
 from aid.execution.ops import WriteOp
 from aid.execution.writer import LOG_FILE, WriteLog, WriteLogEntry, Writer, WriterError, outcome_not_known
 from aid.matching import match_lines
-from aid.messaging import (MESSAGES, QUESTIONS, REAPPROVAL, REPLIES, SENT_FILE, EndedWait, HandOverUnconfirmed, Mailer, decision_lines,
-                           ended_waits, escalation_line, file_reply, kind_of, named_ids, outstanding_questions, record_escalation, record_sent,
-                           render, render_reapproval)
+from aid.messaging import (MESSAGES, QUESTIONS, REAPPROVAL, REPLIES, SENT_FILE, TEST_MODE, EndedWait, HandOverUnconfirmed, Mailer, NotOwnAddress,
+                           decision_lines, ended_waits, escalation_line, file_reply, kind_of, named_ids, outstanding_questions, record_escalation,
+                           record_sent, render, render_reapproval)
 from aid.po_store import PoStore, PoVersion
 from aid.readers.cart import is_cart_page, read_cart_html
 from aid.readers.llm_client import LlmResponse, ReaderError
@@ -205,9 +208,11 @@ from aid.versioning import VersionChoice, select_version
 Status = Literal["closed", "review", "waiting", "failed"]
 RESULT_FILE = "08_result.json"                   # the result in steps/, which a case that was run holds
 NOT_SENT = "not sent (no mailer)"                # the status of a message recorded without a mailer
-# What a message is "not sent (...)" for when no mailer can send it, by the `unrouted` of the mailer given for want of a way to send
-# (aid/messaging) or the review page's mailer of a settings file it cannot read: the words of its status, its "cause" the key.
-UNROUTED_WORDS = {"no_mailbox": "no mailbox connected", "no_password": "mail server password not set", "settings": "settings cannot be read"}
+# What a message is "not sent (...)" for when no mailer may send it: by the `unrouted` of the mailer given for want of a way to send
+# (aid/messaging), the review page's mailer of a settings file it cannot read, or the guard of the test mode (NotOwnAddress): the
+# words of its status, its "cause" the key.
+UNROUTED_WORDS = {"no_mailbox": "no mailbox connected", "no_password": "mail server password not set", "settings": "settings cannot be read",
+                  TEST_MODE: "test mode: not your own address"}
 SENT = "sent"                                    # the status of a message the mailer sent
 UNADDRESSED = "no address for the supplier"      # why a question was not sent; with UNSENT, the reasons of their review items
 UNSENT = "message not sent"
@@ -609,6 +614,10 @@ class _Run:
         unconfirmed = {}
         try:
             sent = route.send(message)
+        except NotOwnAddress:                        # the test mode: an address of the message is none of the owner's own
+            self.record(action, template, items, f"not sent ({UNROUTED_WORDS[TEST_MODE]})", cause=TEST_MODE)
+            self.review_findings(UNSENT, action.finding_ids)
+            return
         except HandOverUnconfirmed as doubt:         # it may have left: recorded as sent, so that a reply finds its case, and not sent again
             sent, unconfirmed = doubt.record, {"unconfirmed": True}
         except Exception as error:                   # whatever stops the mailer, the run goes on and the buyer sends the message

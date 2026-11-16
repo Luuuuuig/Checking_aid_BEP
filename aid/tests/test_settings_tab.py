@@ -781,8 +781,8 @@ def test_the_head_names_the_tool_and_keeps_the_label_of_the_language_switch_for_
 
 def test_a_number_or_a_time_of_the_rules_stands_in_a_short_field(tmp_path, madeup_out):
     """The fields of "Uw regels" that hold a percentage, an amount, a number of days or of cases, or the time of the digest have the
-    class short-field, which the style rules of aid/review/look.py keep at most 16 rem wide; the name and the two addresses keep the
-    width of the section."""
+    class short-field, which the style rules of aid/review/look.py keep at most 16 rem wide; the name, the two addresses and the own
+    addresses of the test mode keep the width of the section."""
     from aid.review import look
     gr = import_gradio()
     path, page, made = tab(tmp_path, madeup_out)
@@ -793,7 +793,7 @@ def test_a_number_or_a_time_of_the_rules_stands_in_a_short_field(tmp_path, madeu
     fields = [block for block in inside(section(page, "regels")) if isinstance(block, gr.Textbox)]
     short = ("price_pct", "price_abs", "lead_time_tolerance_days", "first_cases_review", "ask_wait_working_days", "digest_time")
     assert [block.label for block in fields if "short-field" in (block.elem_classes or [])] == [nl[f"settings_field:{field}"] for field in short]
-    assert len(fields) == 9 and ".block.short-field textarea, .block.short-field input { max-width: 16rem; }" in look.PAGE_CSS
+    assert len(fields) == 10 and ".block.short-field textarea, .block.short-field input { max-width: 16rem; }" in look.PAGE_CSS
 
 
 def test_each_tab_has_its_headings_in_order(tmp_path, madeup_out):
@@ -1445,10 +1445,10 @@ BUYER = {"price_pct": "2.0", "price_abs": "25.00", "lead_time_tolerance_days": 7
          "buyer_name": "", "digest": "daily", "digest_time": "16:30", "language": "nl",
          "supplier_emails": {"S07": "sales@s07.example.com"}, "supplier_lead_times": {"S07": 10, "S01": 10},
          "review_suppliers": ["Acme"], "messages_off_suppliers": []}
-SHOWN = ["2", "25,00", "7", "0", "3", "", "daily", "16:30", "buyer@example.com", "nl", "approver@example.com"]    # BUYER as the Dutch form shows it
+SHOWN = ["2", "25,00", "7", "0", "3", "", "daily", "16:30", "buyer@example.com", "nl", "approver@example.com", ""]    # BUYER, in the Dutch form
 CODE = re.compile(r"\b[RB]\d\d\b|_")                 # a rule code, or a setting's name such as price_pct
 SUPPLIER_FORM = ("name", "email", "lead_time", "review", "off")
-OPENED = ("line", *BUYER_FIELDS, "filled", "table", "choice", *SUPPLIER_FORM, "supplier_filled")       # what the fill gives, in its order
+OPENED = ("line", *BUYER_FIELDS, "filled", "table", "choice", *SUPPLIER_FORM, "supplier_filled", "own_part")   # the fill, in its order
 SAVED = ("note", "line", *BUYER_FIELDS, "filled")                                                       # what the main save gives
 SUPPLIER_SAVED = ("note", "line", "table", "choice", *SUPPLIER_FORM, "supplier_filled")               # what a supplier save or removal gives
 NEW_FORM = {"name": NEW_SUPPLIER, "email": "", "lead_time": "", "review": False, "off": False}        # the supplier form as "Leverancier toevoegen" fills it
@@ -1466,13 +1466,13 @@ def opened(page, language="nl") -> dict:
 
 
 def form(page, language="nl") -> list:
-    """The eleven fields of the form as the fill gives them, in the order of BUYER_FIELDS."""
+    """The twelve fields of the form as the fill gives them, in the order of BUYER_FIELDS."""
     shown = opened(page, language)
     return [shown[field] for field in BUYER_FIELDS]
 
 
 def save(page, values: list, filled, language="nl") -> dict:
-    """The main save with the eleven texts and what the form was filled with, by name."""
+    """The main save with the twelve texts and what the form was filled with, by name."""
     return named(SAVED, handler(page, "save_buyer")(*values, filled, language))
 
 
@@ -1540,15 +1540,16 @@ def test_the_form_shows_the_file_when_the_page_loads_and_each_time_the_settings_
     assert form(page)[0] == "3,5"
 
 
-def test_a_save_writes_each_of_the_eleven_fields_where_it_belongs_and_keeps_every_other_key_and_the_order(tmp_path, madeup_out):
-    """All eleven changed, each to a value of its own, on a file that lacks six of them."""
-    path, page, made = tab(tmp_path, madeup_out, price_abs="25.00", supplier_emails={"S07": "sales@s07.example.com"})
+def test_a_save_writes_each_of_the_twelve_fields_where_it_belongs_and_keeps_every_other_key_and_the_order(tmp_path, madeup_out):
+    """All twelve changed, each to a value of its own, on a file that lacks seven of them, in the test mode, in which alone a save
+    writes the own addresses."""
+    path, page, made = tab(tmp_path, madeup_out, price_abs="25.00", supplier_emails={"S07": "sales@s07.example.com"}, test_mode=True)
     before = held(path)
-    lacking = ["lead_time_tolerance_days", "first_cases_review", "ask_wait_working_days", "buyer_name", "digest", "digest_time"]
+    lacking = ["lead_time_tolerance_days", "first_cases_review", "ask_wait_working_days", "buyer_name", "digest", "digest_time", "own_addresses"]
     assert [key for key in BUYER_FIELDS if key not in before] == lacking
     typed = {"price_pct": "3,5", "price_abs": "40", "lead_time_tolerance_days": "9", "first_cases_review": "4", "ask_wait_working_days": "6",
              "buyer_name": " A. Buyer ", "digest": "per_case", "digest_time": "7:05", "buyer_email": "new.buyer@example.com", "language": "en",
-             "approver_email": "new.approver@example.com"}
+             "approver_email": "new.approver@example.com", "own_addresses": "owner@example.org"}
     result = changed(page, **typed)
     assert result["note"] == STRINGS["nl"]["settings_buyer_saved"] == "Opgeslagen. De assistent gebruikt dit vanaf de volgende ronde, binnen een minuut."
     assert STRINGS["en"]["settings_buyer_saved"] == "Saved. The aid uses this from its next pass, within a minute."
@@ -1556,12 +1557,13 @@ def test_a_save_writes_each_of_the_eleven_fields_where_it_belongs_and_keeps_ever
     assert {key: after[key] for key in BUYER_FIELDS} == {
         "price_pct": "3.5", "price_abs": "40", "lead_time_tolerance_days": 9, "first_cases_review": 4, "ask_wait_working_days": 6,
         "buyer_name": "A. Buyer", "digest": "per_case", "digest_time": "07:05", "buyer_email": "new.buyer@example.com", "language": "en",
-        "approver_email": "new.approver@example.com"}
+        "approver_email": "new.approver@example.com", "own_addresses": ["owner@example.org"]}
     assert list(after) == list(before) + lacking                                             # a key the file lacked at its end, in the form's order
     assert {key: after[key] for key in after if key not in BUYER_FIELDS} == {key: before[key] for key in before if key not in BUYER_FIELDS}
     assert path.read_text(encoding="utf-8").startswith('{\n    "language"')
     # the form shows the values as the file now holds them, and they are what the next save compares with
-    as_held = ["3,5", "40,00", "9", "4", "6", "A. Buyer", "per_case", "07:05", "new.buyer@example.com", "en", "new.approver@example.com"]
+    as_held = ["3,5", "40,00", "9", "4", "6", "A. Buyer", "per_case", "07:05", "new.buyer@example.com", "en", "new.approver@example.com",
+               "owner@example.org"]
     assert [result[field] for field in BUYER_FIELDS] == as_held and result["filled"] == dict(zip(BUYER_FIELDS, as_held)) and result["line"] == ""
     assert load_settings(path).price_pct == Decimal("3.5") and form(page) == as_held
 
@@ -1608,7 +1610,7 @@ def test_a_refused_field_writes_nothing_also_not_a_valid_field_changed_with_it_a
     assert result["note"] == en["settings_buyer_refused"].format(fields="; ".join(
         [f"{en['settings_field:price_pct']}: {en['settings_problem:percent']}", f"{en['settings_field:digest_time']}: {en['settings_problem:time']}"]))
     assert path.read_bytes() == before and "150-xyz" not in result["note"]
-    assert [result[field] for field in BUYER_FIELDS] == [SAME] * 11 and result["filled"] == SAME      # what he typed stays in the form
+    assert [result[field] for field in BUYER_FIELDS] == [SAME] * 12 and result["filled"] == SAME      # what he typed stays in the form
     # a field that is not valid but that he did not change is not read and holds nothing back
     by_hand(path, digest_time="half past four")
     assert changed(page, buyer_name="A. Buyer")["note"] == STRINGS["nl"]["settings_buyer_saved"]
@@ -1762,7 +1764,7 @@ def test_a_save_that_cannot_write_the_file_says_so_by_the_class_of_the_error(tmp
 
 
 def test_a_field_of_the_file_that_is_not_valid_is_named_by_its_label_on_the_tab(tmp_path, madeup_out):
-    """The labels of the eleven fields and of the four supplier settings (FIELD_LABELS): never a setting's name for a field of the tab."""
+    """The labels of the twelve fields and of the four supplier settings (FIELD_LABELS): never a setting's name for a field of the tab."""
     path, page, made = tab(tmp_path, madeup_out, **BUYER)
     nl = STRINGS["nl"]
     by_hand(path, lead_time_tolerance_days="week-xyz", review_suppliers="Acme-xyz", supplier_emails={"S07": 7}, authorization_limit="x")
@@ -2200,7 +2202,7 @@ def test_the_buyers_part_is_wired_as_the_page_shows_it(tmp_path, madeup_out):
         return [block, *[found for child in getattr(block, "children", []) for found in inside(child)]]
     buyers = [settings.children[0], *inside(section(page, "regels")), *inside(section(page, "leveranciers"))]
     [fill] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == "buyer_opened"]
-    states = {id(fill.outputs[OPENED.index("filled")]): "filled", id(fill.outputs[-1]): "supplier filled"}
+    states = {id(fill.outputs[OPENED.index("filled")]): "filled", id(fill.outputs[OPENED.index("supplier_filled")]): "supplier filled"}
     assert all(isinstance(fill.outputs[OPENED.index(name)], gr.State) for name in ("filled", "supplier_filled"))
 
     def name(component) -> str:
@@ -2224,7 +2226,7 @@ def test_the_buyers_part_is_wired_as_the_page_shows_it(tmp_path, madeup_out):
     page_language, choice = STRINGS["nl"]["language"], nl["settings_supplier_choice"]
     line, note, supplier_note = "settings-file-line", "settings-buyer-note", "settings-supplier-note"
     assert bound("buyer_opened") == ([(nl["settings_tab"], "select"), ("page", "load")], [page_language],
-                                     [line, *fields, "filled", "table", choice, *supplier_form, "supplier filled"])
+                                     [line, *fields, "filled", "table", choice, *supplier_form, "supplier filled", "settings-own-addresses"])
     assert bound("save_buyer") == ([(f"button {nl['settings_buyer_save']}", "click")], [*fields, "filled", page_language], [note, line, *fields, "filled"])
     assert bound("supplier_chosen") == ([(choice, "change")], [choice, page_language], [*supplier_form, "supplier filled"])
     assert bound("supplier_picked") == ([(choice, "input")], [], [supplier_note])
@@ -2237,7 +2239,7 @@ def test_the_buyers_part_is_wired_as_the_page_shows_it(tmp_path, madeup_out):
     # what the page shows when it is built: each field with its help, the headings in their order, the table read-only
     shown = {block.label: block for block in buyers if getattr(block, "label", None)}
     assert [shown[label].info for label in fields] == [nl[f"settings_help:{field}"] for field in BUYER_FIELDS]
-    assert [type(shown[label]).__name__ for label in fields] == ["Textbox"] * 6 + ["Radio", "Textbox", "Textbox", "Radio", "Textbox"]
+    assert [type(shown[label]).__name__ for label in fields] == ["Textbox"] * 6 + ["Radio", "Textbox", "Textbox", "Radio", "Textbox", "Textbox"]
     assert shown[nl["settings_field:digest"]].choices == [(nl["settings_digest:daily"], "daily"), (nl["settings_digest:per_case"], "per_case")]
     assert shown[nl["settings_field:language"]].choices == [("Nederlands", "nl"), ("English", "en")]
     headings = [block.value for block in buyers if isinstance(block, gr.Markdown) and str(block.value).startswith("#")]
@@ -2245,7 +2247,8 @@ def test_the_buyers_part_is_wired_as_the_page_shows_it(tmp_path, madeup_out):
                         "### Leveranciers"]
     order = [block for block in buyers if isinstance(block, (gr.Markdown, gr.Textbox, gr.Radio, gr.Button, gr.Dataframe, gr.Dropdown, gr.Checkbox))]
     labels = [name(block) if not isinstance(block, gr.Markdown) or block.elem_id else block.value for block in order]
-    assert labels == [line, headings[0], *fields[:4], headings[1], *fields[4:6], headings[2], *fields[6:10], headings[3], fields[10], nl["settings_limit"],
+    assert labels == [line, headings[0], *fields[:4], headings[1], *fields[4:6], headings[2], *fields[6:9], fields[11], fields[9], headings[3],
+                      fields[10], nl["settings_limit"],
                       f"button {nl['settings_buyer_save']}", note, headings[4], nl["settings_suppliers_help"], "table", choice, *supplier_form,
                       f"button {nl['settings_supplier_save']}", f"button {nl['settings_supplier_remove']}", supplier_note]
     [table] = [block for block in buyers if isinstance(block, gr.Dataframe)]
@@ -4712,3 +4715,95 @@ def test_the_sample_of_part_2_is_read_from_the_sheet_the_buyer_sees(tmp_path, ma
     saved = named(EXPORT_SAVED, handler(page, "export_saved")(*export_args(two, form)))
     assert saved["note"] == "Niet opgeslagen: " + nl["exact_export_refused:several_sheets"].format(names="Open, \\_Geleverd\\_") and path.read_bytes() == before
 
+
+
+# --- the own addresses of the test mode, and the switch that lifts their guard ---
+
+def test_the_own_addresses_are_on_the_tab_in_the_test_mode_only(tmp_path, madeup_out):
+    """"Uw eigen adressen in de proefstand" stands in the group "Dagoverzicht en taal" under "Uw e-mailadres", in a part of its own
+    that shows while the test mode is on: the fill gives its visibility from the file, and so does choosing the section "Uw regels",
+    since the switch of the test mode stands in another section."""
+    gr = import_gradio()
+    path, page, made = tab(tmp_path, madeup_out, test_mode=True, **BUYER)
+    nl = STRINGS["nl"]
+    [part] = [block for block in page.blocks.values() if isinstance(block, gr.Column) and block.elem_id == "settings-own-addresses"]
+
+    def inside(block) -> list:
+        return [block, *[found for child in getattr(block, "children", []) for found in inside(child)]]
+    [field] = [block for block in inside(part) if isinstance(block, gr.Textbox)]
+    assert (field.label, field.info, part.visible) == (nl["settings_field:own_addresses"], nl["settings_help:own_addresses"], False)
+    assert handler(page, "buyer_opened")("nl")[-1] == {"__type__": "update", "visible": True}
+    by_hand(path, test_mode=False)
+    assert handler(page, "own_part_shown")("nl") == {"__type__": "update", "visible": False}
+    assert handler(page, "buyer_opened")("nl")[-1] == {"__type__": "update", "visible": False}
+    by_hand(path, test_mode=True)
+    assert handler(page, "own_part_shown")("en") == {"__type__": "update", "visible": True}
+    [shown] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == "own_part_shown"]
+    assert shown.targets == [(section(page, "regels")._id, "select")] and shown.outputs == [part]
+    assert [getattr(block, "label", None) for block in shown.inputs] == [nl["language"]]
+
+
+def test_a_save_writes_the_own_addresses_and_names_a_wrong_one_by_its_label(tmp_path, madeup_out):
+    path, page, made = tab(tmp_path, madeup_out, test_mode=True, **BUYER)
+    before = held(path)
+    result = changed(page, own_addresses="owner@example.org, BUYER@example.com")
+    assert result["note"] == STRINGS["nl"]["settings_buyer_saved"]
+    after = held(path)
+    assert after["own_addresses"] == ["owner@example.org", "BUYER@example.com"] and list(after) == [*before, "own_addresses"]
+    assert {key: after[key] for key in before} == before and result["own_addresses"] == "owner@example.org, BUYER@example.com"
+    saved = path.read_bytes()
+    refused = changed(page, own_addresses="Owner <owner@example.org>")
+    assert refused["note"] == "Niet opgeslagen: Uw eigen adressen in de proefstand: e-mailadressen met een komma ertussen."
+    assert path.read_bytes() == saved and "Owner" not in refused["note"]
+    # the step of the hand-over (sections 3.16 and 3.17 of the manual): the field emptied and saved writes no address at all
+    emptied = changed(page, own_addresses="")
+    assert emptied["note"] == STRINGS["nl"]["settings_buyer_saved"] and emptied["own_addresses"] == "" and held(path)["own_addresses"] == []
+    assert path.read_bytes().split(b'"own_addresses"')[0] == saved.split(b'"own_addresses"')[0]      # every other key keeps its bytes
+
+
+def test_outside_the_test_mode_a_save_neither_reads_nor_writes_the_hidden_own_addresses(tmp_path, madeup_out):
+    """The form was filled while the test mode was on, and the switch was then cleared (in the section "Koppeling met Exact", here in
+    the file), which hides the part of the own addresses; what was typed into its field stays there. A save of another field writes
+    that field alone: a valid text in the hidden field is not written, and a wrong one refuses nothing. With nothing else changed the
+    save writes nothing and says so. After each save the field shows the own addresses of the file again."""
+    path, page, made = tab(tmp_path, madeup_out, test_mode=True, **BUYER)
+    nl = STRINGS["nl"]
+    for typed, name, note in (("owner@example.org", "A. Buyer", nl["settings_buyer_saved"]),
+                              ("Owner <owner@example.org>", "B. Buyer", nl["settings_buyer_saved"]),
+                              ("owner@example.org", None, nl["settings_buyer_unchanged"])):
+        by_hand(path, test_mode=True)
+        shown = opened(page)
+        assert shown["own_part"] == {"__type__": "update", "visible": True}
+        by_hand(path, test_mode=False)
+        assert handler(page, "own_part_shown")("nl") == {"__type__": "update", "visible": False}
+        before, typed_in = held(path), {"own_addresses": typed} | ({"buyer_name": name} if name else {})
+        result = save(page, [typed_in.get(field, shown[field]) for field in BUYER_FIELDS], shown["filled"])
+        after = held(path)
+        assert result["note"] == note and "own_addresses" not in after, typed
+        assert after == before | ({"buyer_name": name} if name else {}) and after["test_mode"] is False
+        assert result["own_addresses"] == "" and result["filled"]["own_addresses"] == ""
+
+
+def test_the_switch_says_that_switching_the_test_mode_off_lifts_the_guard(tmp_path, madeup_out):
+    gr = import_gradio()
+    path, page, made = tab(tmp_path, madeup_out, **BUYER)
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    [switch] = [block for block in page.blocks.values() if isinstance(block, gr.Checkbox) and block.label == nl["tryout_switch"]]
+    assert switch.info == nl["tryout_switch_help"] == ("In de proefstand verstuurt de assistent alleen berichten aan uw eigen adressen "
+                                                       "(Instellingen, Uw regels). Zet u de proefstand uit, dan vervalt dat: elk bericht "
+                                                       "gaat dan naar het adres dat de instellingen geven.")
+    relabelled = named(TRYOUT_RELABELLED, handler(page, "tryout_relabel")("en", None))
+    assert relabelled["switch"]["info"] == en["tryout_switch_help"] == (
+        "In the test mode the assistant sends messages to your own addresses only (Settings, Your rules). Switching the test mode off "
+        "ends that: every message then goes to the address the settings give.")
+
+
+def test_the_manual_names_the_guard_as_the_page_does():
+    nl, manual = STRINGS["nl"], manual_sections()
+    assert f"\"{nl['not_sent:test_mode']}\"" in manual["2.2"] and f"\"{nl['row_asks_unrouted:test_mode']}\"" in manual["2.2"]
+    for number in ("2.8", "3.14"):
+        assert f"\"{nl['settings_field:own_addresses']}\"" in manual[number], number
+    assert f"\"{nl['tryout_switch_help']}\"" in manual["3.17"] and "`own_addresses`" in manual["3.2"]
+    assert "cases/digests/<YYYY-MM-DD>.txt" in manual["3.8"]
+    for number in ("3.16", "3.17"):
+        assert "lifts the guard" in manual[number], number

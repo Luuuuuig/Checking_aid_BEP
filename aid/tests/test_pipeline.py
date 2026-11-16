@@ -2434,3 +2434,86 @@ def test_a_tick_whose_line_a_newer_print_does_not_show_so_is_ended(tmp_path, mad
     assert (r.version.version, [ids for ids, _, _ in price_flags(r)], step_names(second)) == (1, [[line_id]], sorted(STEP_FILES))
     assert last_mark(prepared) | {"at": "", "entry_id": ""} == {"entry_id": "", "mark": "reopened", "at": "", "by": by, "shown": shown}
     assert [state for *_, state, _ in line_changes(prepared)] == ["open"]
+
+
+# --- the guard of the test mode: the run's questions and requests go to the owner's own addresses only ---
+
+TEST_MODE_WORDS = "not sent (test mode: not your own address)"
+OWNER = "owner@example.org"                          # a made-up own address of the owner
+
+
+@pytest.mark.parametrize("own", [[SETTINGS.buyer_email], [SUPPLIER], []], ids=["supplier not own", "copy not own", "neither"])
+def test_in_the_test_mode_a_question_of_the_run_to_an_address_not_ones_own_is_not_asked(tmp_path, madeup_out, own):
+    """While the test mode is on, the run's question goes only when the supplier's address and the buyer's copy are both own
+    addresses. Otherwise it is not asked, by the way of a message that nothing can send: no file is written (send_via "file" would
+    write one), nothing counts as asked, the question is recorded "not sent" with the cause "test_mode" and no error, and the case
+    comes to the buyer with the item "message not sent", under "Wacht op u" in the digest and not under "Vraag gesteld"."""
+    from datetime import date
+
+    from aid.notify import build_digest
+    d = mailer_of_the_settings(with_settings(deps(tmp_path, madeup_out), supplier_emails=ADDRESSES, send_via="file", test_mode=True,
+                                             own_addresses=own))
+    c, r = run(d, madeup_out, "MU17", "250117")
+    assert r.status == "review" and [(m["status"], m["cause"]) for m in r.messages] == [(TEST_MODE_WORDS, "test_mode")]
+    assert [(i.finding_id, i.reason) for i in r.review_items] == [("F1", "message not sent")]
+    assert not (d.settings.cases_root / "outbox").exists() and not list(tmp_path.rglob("*.eml")) and not (c.root / "messages" / "sent.jsonl").exists()
+    assert audit(c)["messages"][0]["cause"] == "test_mode" and "error" not in audit(c)["messages"][0]
+    digest = [line.strip() for line in build_digest([r], [], d.settings, date(2026, 11, 12)).text.splitlines()]
+    assert digest[digest.index("Wacht op u") + 2] == "- Bericht niet verzonden (ontbrekende of extra regel, regel 3)"
+    assert not any(line.startswith("Vraag gesteld") for line in digest)
+
+
+def test_in_the_test_mode_a_question_of_the_run_to_ones_own_addresses_is_asked_as_before(tmp_path, madeup_out):
+    """The supplier's address and the copy own addresses, compared trimmed and without regard to capitals: the question is written as
+    a file by the choice of send_via "file", counts as asked and the case waits, as without the test mode."""
+    d = mailer_of_the_settings(with_settings(deps(tmp_path, madeup_out), supplier_emails={"S17": " Sales@S17.example.com "}, send_via="file",
+                                             test_mode=True, own_addresses=["sales@s17.example.com", " BUYER@example.com "]))
+    c, r = run(d, madeup_out, "MU17", "250117")
+    [eml] = (d.settings.cases_root / "outbox").glob("*.eml")
+    assert r.status == "waiting" and [m["status"] for m in r.messages] == ["sent"] and r.review_items == []
+    assert [json.loads(line)["message_id"] for line in (c.root / "messages" / "sent.jsonl").read_text(encoding="utf-8").splitlines()] == [eml.stem]
+
+
+def test_in_the_test_mode_the_request_to_the_approver_goes_to_an_own_address_only(tmp_path, madeup_out):
+    """MU08 above the authorization limit: R10's request goes to the approver with the buyer in copy, so it goes only when both are
+    own addresses. Stopped, it is recorded "not sent" with the cause "test_mode", R10's finding is the item "message not sent" and
+    no file is written; R01 still prepares the confirmation and the status."""
+    base = with_settings(deps(tmp_path, madeup_out), supplier_emails=ADDRESSES, send_via="file", test_mode=True)
+    for minute, own in enumerate(([SETTINGS.buyer_email], [SETTINGS.approver_email])):
+        limited, _ = above_authorization(mailer_of_the_settings(with_settings(base, own_addresses=own)))
+        c, r = run(limited, madeup_out, "MU08", "250108", now=NOW + timedelta(minutes=minute))
+        assert [(m["template"], m["status"], m["cause"]) for m in r.messages] == [("reapproval", TEST_MODE_WORDS, "test_mode")], own
+        assert [(i.finding_id, i.field, i.reason) for i in r.review_items] == [("F1", "price", "message not sent")] and r.status == "review"
+        assert [e.op.kind for e in r.write_entries] == ["po_line_price", "article_price", "attach_document", "set_status"]
+        assert not list(tmp_path.rglob("*.eml"))
+    limited, _ = above_authorization(mailer_of_the_settings(with_settings(base, own_addresses=[SETTINGS.approver_email, SETTINGS.buyer_email])))
+    c, r = run(limited, madeup_out, "MU08", "250108", now=NOW + timedelta(minutes=5))
+    [eml] = (limited.settings.cases_root / "outbox").glob("*.eml")
+    assert (read_eml(eml)["To"], read_eml(eml)["Cc"]) == (SETTINGS.approver_email, SETTINGS.buyer_email)
+    assert [(m["template"], m["status"]) for m in r.messages] == [("reapproval", "sent")] and r.status == "closed"
+
+
+def test_with_the_test_mode_off_the_run_sends_as_before_whatever_the_own_addresses_hold(tmp_path, madeup_out):
+    seen = []
+    for name, own in (("none", []), ("one", [OWNER])):
+        d = mailer_of_the_settings(with_settings(deps(tmp_path / name, madeup_out), supplier_emails=ADDRESSES, send_via="file", test_mode=False,
+                                                 own_addresses=own))
+        c, r = run(d, madeup_out, "MU17", "250117")
+        [eml] = (d.settings.cases_root / "outbox").glob("*.eml")
+        seen.append(((read_eml(eml)["To"], read_eml(eml)["Cc"]), r.status, [(m["status"], m["to"]) for m in r.messages]))
+    assert seen[0] == seen[1] == ((SUPPLIER, SETTINGS.buyer_email), "waiting", [("sent", [SUPPLIER])])
+
+
+@pytest.mark.parametrize("values, cause, words", [
+    ({}, "no_mailbox", "no mailbox connected"),
+    ({"smtp_host": "smtp.example.com", "smtp_user": "aid@example.com"}, "no_password", "mail server password not set"),
+    ({"send_via": "smtp"}, "no_mailbox", "no mailbox connected"),
+], ids=["nothing connected", "no password", "smtp without a server"])
+def test_the_unrouted_mark_stays_readable_through_the_guard_in_the_run(tmp_path, madeup_out, values, cause, words):
+    """In the test mode with no own address, the route of a mailer that has no way to send still carries what is missing, and the
+    run reads it before the guard: the question is not sent for that cause, with its own words."""
+    d = mailer_of_the_settings(with_settings(deps(tmp_path, madeup_out), supplier_emails=ADDRESSES, test_mode=True, own_addresses=[], **values))
+    route = d.mailer.current() if hasattr(d.mailer, "current") else d.mailer
+    assert route.unrouted == cause and route.guard is not None
+    c, r = run(d, madeup_out, "MU17", "250117")
+    assert [(m["status"], m["cause"]) for m in r.messages] == [(f"not sent ({words})", cause)]

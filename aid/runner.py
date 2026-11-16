@@ -129,7 +129,12 @@ clock:
   So is a digest that it cannot send because this process may not use the store of the sign-in (a SignInLapsed of the kind
   "store"), but that is no lapse, as no sign-in puts it right: the state notes no lapse, so that neither the digest nor the review
   page tells the buyer to sign in again, and it is logged once in a run of the loop, until a digest goes out through the mailbox
-  again (the review page tells a store inside a git work tree by itself).
+  again (the review page tells a store inside a git work tree by itself). In the test mode the guard of the mailer keeps back a
+  digest whose address, buyer_email, is none of the owner's own (NotOwnAddress of aid/messaging), before the work mailbox asks for
+  a token, so that such a digest never takes the way of a lapsed sign-in either. It is not sent and not written into
+  <cases_root>/outbox, where it would lie as a whole e-mail to that address that a person could send on: its text is written to
+  <cases_root>/digests/<day>.txt beside its HTML, as without a mailer, runner.log gets one line that names the setting and the
+  file and never an address, and the period is closed as for a digest sent.
 
 When run_loop is given the settings file the Deps were built from, it looks at the file's modification time at the start of each
 pass. When the time has changed, the file is read again with load_settings and the pass runs with the Deps that `rebuild` makes of
@@ -193,7 +198,7 @@ from aid.connections.secrets import LazySecretStore, default_secrets_dir
 from aid.decider import LlmDecider, NoDecider
 from aid.execution.by_hand import FOLDER as PREPARED, open_changes, reconcile
 from aid.execution.writer import PreparedWriter
-from aid.messaging import FileMailer
+from aid.messaging import FileMailer, NotOwnAddress
 from aid.messaging.microsoft_mailer import OUTBOX, SignInLapsed, mailer_of
 from aid.notify import build_digest, digest_due, send_digest, unread_scan
 from aid.pipeline import (DISPOSITION_FILE, RESULT_FILE, UNREADABLE, CaseResult, Deps, end_empty_waits, escalate_pending, read_with_parser,
@@ -1045,6 +1050,10 @@ def _digest(loop: _Loop, root: Path, state: dict, now: datetime) -> None:
     if deps.mailer is not None:
         try:
             send_digest(digest, deps.mailer, settings)
+        except NotOwnAddress:                    # the test mode: buyer_email is none of the own addresses (OwnOnly of aid/messaging)
+            (folder / f"{digest.period}.txt").write_text(digest.text, encoding="utf-8")
+            _log(root, now, "digest", f"not sent: in the test mode the digest goes to the own addresses only, and buyer_email is not "
+                                      f"one of them; its text is in {DIGESTS_FOLDER}/{digest.period}.txt")
         except SignInLapsed as error:            # the work mailbox cannot send it: the digest is written as a file, as without SMTP
             send_digest(digest, FileMailer(root / OUTBOX, sender=settings.aid_email), settings)
             line = f"the digest is written to {OUTBOX}/, as the work mailbox cannot send it: {error}"

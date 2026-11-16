@@ -8,8 +8,9 @@ never the texts themselves, so that no rule code and no setting value reaches it
 the page and for the digest (aid/notify.py), which imports these strings and not gradio. "message_not_sent" is what the page says
 after a close whose message could not be sent, followed by "not_sent:<cause>", the kind of its cause and what to do about it
 (the causes of aid/review/close.py: the sign-in, a mailbox or server not reached or refusing, no mailbox connected, the mail
-server's password, the settings file, the case's document, no address for the supplier, and the store of the sign-in that the PC
-refuses, "not_sent:store"); "message_filed" after one whose
+server's password, the settings file, the case's document, no address for the supplier, the store of the sign-in that the PC
+refuses, "not_sent:store", and the guard of the test mode, "not_sent:test_mode", for an address that is not one of the owner's
+own); "message_filed" after one whose
 message was written as a file because the settings say so, into {folder}; "message_unconfirmed" after one whose hand-over was not confirmed; and "reply_unread" after a
 close that did nothing because a reply filed with the case could not be read at that moment. "state:<state>" is what a case is now
 (STATES of aid/review/status.py), and "state:look" and "state:looked" what a document is that the intake left to the buyer, before
@@ -36,8 +37,9 @@ to undo a write, and "empty:<list>" in the place of a list without a row. A deci
 "source_po" and "source_doc" with "source_place", and its note says "row_saved" once the decision is saved, then for "Leverancier
 vragen" where the question goes ("row_asks", "row_asks_no_address" or "row_asks_as_file"), or why it would not go, when the close
 would have no way to send it ("row_asks_unrouted:<cause>", by the cause of a mailer without a route: "no_mailbox", "no_password" or
-"settings"; or, after the supplier's address, "sign_in" for the work mailbox with nobody signed in and "store" for a refused store
-of the sign-in), and for "Onopgelost laten" "row_open", and last what is left to decide ("row_left_one", "row_left_many" or
+"settings"; or, after the supplier's address, "test_mode" for an address of the question that the guard of the test mode would
+keep back, and after that "sign_in" for the work mailbox with nobody signed in and "store" for a refused store of the sign-in), and
+for "Onopgelost laten" "row_open", and last what is left to decide ("row_left_one", "row_left_many" or
 "row_all_decided").
 The keys that begin with "settings" are the
 strings of the settings tab, "settings_via:<value>" labelling a value of the setting send_via and "settings_reader:<value>" a value of
@@ -86,6 +88,9 @@ the row of the undo of an article price whose price before it the aid never read
 cannot be read, "hand_new_rows_one" and "hand_new_rows_many" the line under its intro of the changes that came in since the list was
 read, and "hand_nothing_noted" the note of a press that noted nothing. Under the list: "hand_put_back_row" is a row that puts
 a change back in Exact and "hand_exact_shows" the note of an open row whose order Exact printed with a third value;
+"hand_copy" is the words on a copy button behind a row ("Kopieer 250108": the words are the text it copies), "hand_copy:<part>" the
+name a screen reader reads for the button of that part (order, article, value; hand_list.copy_parts), "hand_copied" the line that
+says what a press copied and "hand_copy_failed" the line of a press that could not copy;
 "hand_tick_ended" and "hand_tick_ended_unfound" are the note of a row whose tick a newer print of its order ended, and
 "hand_list_changed" what the tab says of a list whose file was changed outside the aid; "hand_done*" are
 the section of the changes handled in the last 14 days and how the aid knows each, "hand_reopen*" and "hand_put_back*" its two buttons
@@ -109,7 +114,8 @@ the sentence for a count of one, in the singular, beside the key without it for 
 "exact_export_unread"), or, for the parts of the count line, beside the key that ends in "_many" ("exact_export_lines_one",
 "exact_export_lines_many"); the count line "exact_export_read" is put together from those parts: the orders, the lines, the rows passed
 over and the order or orders shown below it. The keys that begin with "tryout" are the strings of the part "Proefdraaien" at the end of
-that block and of the switch of the test mode (aid/tryout.py), "tryout_change:<change>" the label of a change of a try-out and
+that block and of the switch of the test mode (aid/tryout.py), "tryout_switch_help" the line under that switch, which says that
+switching the test mode off lifts its guard on the mail, "tryout_change:<change>" the label of a change of a try-out and
 "tryout_reason:<reason>" why a purchase order gives none, and "tryout_nothing_sent" the answer of the review tab to "Leverancier vragen"
 on a case made from a try-out (aid/tryout_mark.py); "tryout_cart_change:<change>" is the label of a change of a try-out cart, under a
 question of its own ("tryout_cart_change", so that the page says which choice is the cart's), "tryout_cart_make" its button and
@@ -185,6 +191,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "not_sent:document": "Het document van de zaak kan nu niet worden gelezen: er is niets verstuurd.",
         "not_sent:no_address": ("Er is geen e-mailadres van de leverancier: vul het in onder Instellingen, Leveranciers, en sluit de zaak "
                                 "opnieuw af."),
+        "not_sent:test_mode": ("Proefstand: een adres van het bericht staat niet bij uw eigen adressen, dus is er niets verzonden. Is het uw "
+                               "eigen adres, vul het dan in bij \"Uw eigen adressen in de proefstand\" onder Instellingen, Uw regels, en "
+                               "sluit de zaak opnieuw af."),
         "message_unconfirmed": ("Niet zeker of het bericht is verstuurd: het postvak gaf geen bevestiging. Kijk bij Verzonden items. Staat het "
                                 "er niet, dan komt de zaak na de wachttijd bij u terug en stelt u de vraag opnieuw."),
         "reply_unread": "Een antwoord bij deze zaak kan nu niet worden gelezen: sluit de zaak zo opnieuw af.",
@@ -221,6 +230,12 @@ STRINGS: dict[str, dict[str, str]] = {
         "hand_row:article_price_back": "artikel {item}: inkoopprijs {old} terugzetten naar de prijs van daarvoor",
         "hand_unknown": "onbekend",
         "hand_empty": "leeg",
+        "hand_copy": "Kopieer {text}",
+        "hand_copy:order": "Inkoopordernummer {text} kopiëren",
+        "hand_copy:article": "Artikelcode {text} kopiëren",
+        "hand_copy:value": "Nieuwe waarde {text} kopiëren",
+        "hand_copied": "Gekopieerd: {text}",
+        "hand_copy_failed": "Kopiëren is niet gelukt. Typ {text} over in Exact.",
         "hand_week": "week {week} ({year})",
         "hand_hint": "Let op: na deze wijziging moet de inkooporder opnieuw gefiatteerd worden.",
         "hand_entered": "Aangevinkte regels zijn ingevoerd",
@@ -408,6 +423,9 @@ STRINGS: dict[str, dict[str, str]] = {
                                       "vraag bij afsluiten niet weg."),
         "row_asks_unrouted:store": ("De beveiligde opslag van de aanmelding op deze pc is geweigerd: de vraag gaat bij afsluiten niet weg. "
                                     "Onder Instellingen, Postvak en AI, staat waarom en wat u kunt doen."),
+        "row_asks_unrouted:test_mode": ("Proefstand: een adres van deze vraag, van de leverancier of van de kopie aan u, staat niet bij uw "
+                                        "eigen adressen: de vraag gaat bij afsluiten niet weg. Is het uw eigen adres, vul het dan in onder "
+                                        "Instellingen, Uw regels."),
         "files_outcome:po": "Inkooporder {number} opgenomen (versie {version})",
         "files_outcome:export": "Export uit Exact opgenomen: {n} inkooporders, waarvan {m} nieuw of gewijzigd",
         "files_outcome:export_one": "Export uit Exact opgenomen: 1 inkooporder, waarvan {m} nieuw of gewijzigd",
@@ -707,6 +725,11 @@ STRINGS: dict[str, dict[str, str]] = {
         "settings_field:buyer_email": "Uw e-mailadres",
         "settings_help:buyer_email": ("Hierheen gaat het dagoverzicht, en u staat in de kopie van elke vraag aan een leverancier en van "
                                       "het verzoek aan de fiatteur."),
+        "settings_field:own_addresses": "Uw eigen adressen in de proefstand",
+        "settings_help:own_addresses": ("In de proefstand gaat een bericht van de assistent alleen weg als elk adres erop, ook dat in de "
+                                        "kopie, hier staat of het adres is van het account waarmee de assistent via uw postvak verstuurt. "
+                                        "Vul uw eigen e-mailadressen in, met een komma ertussen, ook uw e-mailadres hierboven. Het adres "
+                                        "van een echte leverancier, of van een fiatteur die niet u zelf bent, hoort hier niet."),
         "settings_field:language": "Taal van de assistent",
         "settings_help:language": ("De taal van het dagoverzicht, van de berichten aan leveranciers en aan de fiatteur, en van de balk in "
                                    "de webshop."),
@@ -756,6 +779,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "settings_problem:digest": "elke dag of na elke zaak",
         "settings_problem:time": "een tijd van 00:00 tot 23:59",
         "settings_problem:address": "een e-mailadres",
+        "settings_problem:addresses": "e-mailadressen met een komma ertussen",
         "settings_problem:name": "één regel van hoogstens 80 tekens",
         "settings_problem:supplier_name": "een naam van 1 tot 80 tekens",
         "settings_problem:language": "Nederlands of English",
@@ -1019,6 +1043,8 @@ STRINGS: dict[str, dict[str, str]] = {
                          "assistent een verzonnen orderbevestiging. Voor de voorcontrole in de browser maakt de assistent van dezelfde "
                          "inkooporder een verzonnen winkelwagen. U kiest wat er afwijkt. Het proefdocument blijft op deze pc."),
         "tryout_switch": "Proefstand: de assistent werkt met het test-Exact",
+        "tryout_switch_help": ("In de proefstand verstuurt de assistent alleen berichten aan uw eigen adressen (Instellingen, Uw regels). "
+                               "Zet u de proefstand uit, dan vervalt dat: elk bericht gaat dan naar het adres dat de instellingen geven."),
         "tryout_saved": "Opgeslagen.",
         "tryout_saved_open": ("Opgeslagen. Op de lijst In Exact invoeren staan nog {n} wijzigingen uit proefdocumenten. Voer die niet in het "
                               "echte Exact in; laat ze vallen."),
@@ -1207,6 +1233,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "not_sent:settings": "The settings cannot be read now: nothing was sent. Pass this on to the researcher.",
         "not_sent:document": "The case's document cannot be read now: nothing was sent.",
         "not_sent:no_address": "There is no e-mail address for the supplier: fill it in under Settings, Suppliers, and close the case again.",
+        "not_sent:test_mode": ("Test mode: an address of the message is not among your own addresses, so nothing was sent. If it is your "
+                               "own address, add it under \"Your own addresses in the test mode\" in Settings, Your rules, and close the "
+                               "case again."),
         "message_unconfirmed": ("Not sure whether the message was sent: the mailbox gave no confirmation. Look in Sent items. If it is not "
                                 "there, the case comes back to you after the wait and you ask the question again."),
         "reply_unread": "A reply filed with this case cannot be read now: close the case again in a moment.",
@@ -1243,6 +1272,12 @@ STRINGS: dict[str, dict[str, str]] = {
         "hand_row:article_price_back": "article {item}: purchase price {old} back to the price before it",
         "hand_unknown": "unknown",
         "hand_empty": "empty",
+        "hand_copy": "Copy {text}",
+        "hand_copy:order": "Copy purchase order number {text}",
+        "hand_copy:article": "Copy article code {text}",
+        "hand_copy:value": "Copy new value {text}",
+        "hand_copied": "Copied: {text}",
+        "hand_copy_failed": "Copying did not work. Type {text} into Exact.",
         "hand_week": "week {week} ({year})",
         "hand_hint": "Note: after this change the purchase order must be approved again.",
         "hand_entered": "The ticked rows have been entered",
@@ -1423,6 +1458,9 @@ STRINGS: dict[str, dict[str, str]] = {
                                       "go when you close."),
         "row_asks_unrouted:store": ("The protected store of the sign-in on this PC was refused: the question will not go when you close. "
                                     "Settings, Mailbox and AI, says why and what you can do."),
+        "row_asks_unrouted:test_mode": ("Test mode: an address of this question, the supplier's or that of the copy to you, is not among "
+                                        "your own addresses: the question will not go when you close. If it is your own address, fill it "
+                                        "in under Settings, Your rules."),
         "files_outcome:po": "Purchase order {number} filed (version {version})",
         "files_outcome:export": "Export from Exact filed: {n} purchase orders, of which {m} new or changed",
         "files_outcome:export_one": "Export from Exact filed: 1 purchase order, of which {m} new or changed",
@@ -1713,6 +1751,12 @@ STRINGS: dict[str, dict[str, str]] = {
         "settings_field:buyer_email": "Your e-mail address",
         "settings_help:buyer_email": ("The digest goes here, and you are in copy of every question to a supplier and of the request to "
                                       "the approver."),
+        "settings_field:own_addresses": "Your own addresses in the test mode",
+        "settings_help:own_addresses": ("In the test mode a message of the aid goes out only when every address on it, the one in copy "
+                                        "included, stands here or is the address of the account the aid sends through your mailbox with. "
+                                        "Fill in your own e-mail addresses, with a comma between them, your e-mail address above "
+                                        "included. The address of a real supplier, or of an approver who is not you, does not belong "
+                                        "here."),
         "settings_field:language": "Language of the aid",
         "settings_help:language": ("The language of the digest, of the messages to suppliers and to the approver, and of the banner in the "
                                    "webshop."),
@@ -1762,6 +1806,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "settings_problem:digest": "every day or after every case",
         "settings_problem:time": "a time from 00:00 to 23:59",
         "settings_problem:address": "an e-mail address",
+        "settings_problem:addresses": "e-mail addresses with a comma between them",
         "settings_problem:name": "one line of at most 80 characters",
         "settings_problem:supplier_name": "a name of 1 to 80 characters",
         "settings_problem:language": "Nederlands or English",
@@ -2018,6 +2063,8 @@ STRINGS: dict[str, dict[str, str]] = {
                          "order confirmation. For the pre-check in the browser the assistant makes a made-up cart of the same purchase "
                          "order. You choose what differs. The try-out document stays on this PC."),
         "tryout_switch": "Test mode: the assistant works with the test Exact",
+        "tryout_switch_help": ("In the test mode the assistant sends messages to your own addresses only (Settings, Your rules). Switching "
+                               "the test mode off ends that: every message then goes to the address the settings give."),
         "tryout_saved": "Saved.",
         "tryout_saved_open": ("Saved. The list Enter in Exact still holds {n} changes from try-out documents. Do not enter them in the real "
                               "Exact; drop them."),

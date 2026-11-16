@@ -1107,3 +1107,100 @@ def test_a_pass_reads_the_replies_of_the_cases_that_wait_and_of_no_other(tmp_pat
     assert ended_waits(tmp_path / "cases", now, 3, waiting=lambda case_id: case_id != cases[0].case_id) == ([EndedWait(cases[2].case_id, "m1", False)], [])
     assert seen == [cases[1].case_id]
     assert ended_waits(tmp_path / "cases", now, 3)[0] == [EndedWait(cases[2].case_id, "m1", False)] and seen.count(cases[0].case_id) == 1
+
+
+# --- the guard of the test mode: mail to the owner's own addresses only (amendment 3 of protocol v2) ---
+
+OWNER, INKOOP = "owner@example.org", "inkoop@example.org"    # made-up own addresses of the owner
+
+
+def addressed(to: list[str], cc: list[str]) -> Message:
+    """MESSAGE with these entries in its To and its Cc."""
+    return MESSAGE.model_copy(update={"to": to, "cc": cc})
+
+
+def test_the_guard_lets_a_message_go_only_when_each_to_and_cc_entry_is_an_own_address():
+    """While the test mode is on, a message goes only when every entry of its To and of its Cc is one of the owner's own addresses.
+    A message the guard stops is NotOwnAddress, a MailerError of the kind "test_mode", whose text names no address."""
+    from aid.messaging import NotOwnAddress, OwnOnly
+    guard = OwnOnly([OWNER, "buyer@example.com"])
+    assert guard.allows([OWNER], ["buyer@example.com"]) and guard.allows([OWNER], [])
+    assert not guard.allows(["sales@supplier.example.com"], ["buyer@example.com"])            # the To is no own address
+    assert not guard.allows([OWNER], ["sales@supplier.example.com"])                          # nor is the Cc
+    guard.check(addressed([OWNER], ["buyer@example.com"]))
+    with pytest.raises(NotOwnAddress) as stopped:
+        guard.check(MESSAGE)
+    assert isinstance(stopped.value, MailerError) and stopped.value.kind == "test_mode" and "@" not in str(stopped.value)
+
+
+def test_the_guard_compares_each_entry_trimmed_and_without_regard_to_capitals():
+    from aid.messaging import OwnOnly
+    assert OwnOnly([" Owner@Example.ORG "]).allows(["owner@example.org  "], ["OWNER@example.org"])
+
+
+def test_an_entry_with_two_addresses_or_a_name_around_one_is_no_own_address():
+    """The whole entry must be one own address: the SMTP mailer delivers to every address an entry holds, so an entry with a second
+    address, or a name around one, is no own address even when each address in it is one; nor is an empty entry."""
+    from aid.messaging import OwnOnly
+    guard = OwnOnly([OWNER, INKOOP])
+    for entry in (f"{OWNER}, {INKOOP}", f"Owner <{OWNER}>", f"<{OWNER}>", ""):
+        assert not guard.allows([entry], []) and not guard.allows([OWNER], [entry]), entry
+
+
+def test_the_signed_in_account_counts_as_own_and_is_read_only_when_needed():
+    """The address of the Microsoft work account signed in at the send counts as own. It is asked only for an entry that is not
+    among the addresses given; an account that gives no address, or whose store cannot be read, adds none."""
+    from aid.connections.secrets import StoreRefused
+    from aid.messaging import OwnOnly
+    asked = []
+
+    def signed_in():
+        asked.append(1)
+        return "Buyer@Example.com"
+    guard = OwnOnly([OWNER], signed_in)
+    assert guard.allows([OWNER], []) and asked == []
+    assert guard.allows([OWNER], ["buyer@example.com"]) and asked == [1]
+
+    def refused():
+        raise StoreRefused("made-up: this process may not use the store")
+
+    def unreadable():
+        raise OSError("made-up: the token cache is held by another process")
+    for account in (lambda: None, lambda: "", refused, unreadable):
+        assert not OwnOnly([OWNER], account).allows([OWNER], ["buyer@example.com"])
+
+
+def test_each_mailer_with_the_guard_sends_and_writes_nothing_to_an_address_not_ones_own(tmp_path, smtp, monkeypatch):
+    """Each mailer checks the guard before anything else: the file mailer makes no folder and writes no file, the SMTP mailer reads
+    no password and opens no connection (the error is the guard's, not "no_password"), and the mailer of the work mailbox asks no
+    token and makes no draft. With own addresses only, each sends or writes as before."""
+    from aid.messaging import NotOwnAddress, OwnOnly
+    from aid.messaging.microsoft_mailer import MicrosoftMailer
+    from aid.tests.fakes import USERNAME, FakeApp
+    from aid.tests.test_microsoft_mailer import account, graph
+    guard, own = OwnOnly([OWNER, "buyer@example.com"]), addressed([OWNER], ["buyer@example.com"])
+    files = FileMailer(tmp_path / "outbox", sender="aid@example.com", clock=lambda: SENT, guard=guard)
+    with pytest.raises(NotOwnAddress):
+        files.send(MESSAGE)
+    assert not (tmp_path / "outbox").exists()
+    assert (tmp_path / "outbox" / f"{files.send(own).message_id}.eml").exists()
+    monkeypatch.delenv("AID_MAIL_PASSWORD", raising=False)
+    server = SmtpMailer("smtp.example.com", 587, "aid@example.com", clock=lambda: SENT, guard=guard)
+    with pytest.raises(NotOwnAddress) as stopped:
+        server.send(MESSAGE)
+    assert stopped.value.kind == "test_mode" and smtp.calls == []
+    monkeypatch.setenv("AID_MAIL_PASSWORD", SECRET)
+    assert server.send(own).to == [OWNER] and ("rcpt", OWNER) in smtp.calls
+    app, session = FakeApp(accounts=[USERNAME]), graph()
+    mailbox = MicrosoftMailer(account(tmp_path, app), None, "", clock=lambda: SENT, session=session, guard=guard)
+    with pytest.raises(NotOwnAddress):
+        mailbox.send(MESSAGE)
+    assert session.calls == [] and not [call for call in app.calls if call[0] == "acquire_token_silent_with_error"]
+    assert mailbox.send(own).internet_message_id and len(session.calls) == 2
+
+
+def test_a_file_mailer_given_for_want_of_a_route_keeps_its_mark_with_the_guard(tmp_path):
+    from aid.messaging import OwnOnly
+    guard = OwnOnly([OWNER])
+    mailer = FileMailer(tmp_path / "out", unrouted="no_mailbox", guard=guard)
+    assert (mailer.unrouted, mailer.guard) == ("no_mailbox", guard)

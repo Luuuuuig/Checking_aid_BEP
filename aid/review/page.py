@@ -140,7 +140,8 @@ The page library's client (gradio 6.31.0) runs the listeners of one click, chang
 quarter of a second in the browser: the language switch, which some thirty listeners share, is as slow as their number. So the five
 handlers that the redesign added to it after its first part (record_shown, review_texts, hand_new_cleared, removal_relabelled,
 files_ticked), each a read of a few files or none, skip the queue, which costs a few hundredths of a second, and the switch takes
-about as long as before them.
+about as long as before them. The read of the copy buttons of "In Exact invoeren" (copies_opened), which the switch shares since
+16 November, skips it as well.
 
 Above the tabs, the head of the page (the Row page-head) names the tool, "Inkoopassistent" in both languages, as the page's one h1
 (its class page-title) and as the title of the browser's tab, and holds the language switch (its class language-switch), which the
@@ -166,6 +167,10 @@ them the note of what a press of the list did ("Vink eerst aan wat u bedoelt." w
 genoteerd: ..." when no ticked row was still open; either way nothing is written), in one column (hand-actions) that the page's style
 keeps at the top of the window while the list scrolls; one group of tick boxes with every open change, one under the other (a style
 rule given to the page in the head of an HTML block, for the group's class "hand-rows"), so that the rows of one order stand together;
+behind each row its copy buttons, "Kopieer 250108", "Kopieer KM-0801" and "Kopieer 12,70", which copy the order number, the article
+code and the new value for pasting into Exact and tick nothing: the tab gives them in a hidden element under the tick boxes
+(hand-copy: _copy_data, read by copies_opened with the list and after each press), the page's load script draws them and copies
+(PAGE_JS of aid/review/look.py), and the line under the list says what a press copied, "Gekopieerd: 12,70";
 the two buttons again under the rows, small, so that they stay in reach of a long list; the dropdown "Inkooporder of artikelprijzen"
 with "Alles hiervan is ingevoerd" (block_entered), which marks the changes of the block chosen as the page showed them when the list
 was last read (kept per block in a gr.State that each read fills, with the dropdown's choices), each only while it is open, so that a
@@ -290,14 +295,19 @@ buyer's settings as a form (aid/review/buyer_settings.py has what it shows and w
 a help text that says what the rule does, without a rule code or a setting's name: "Wat de assistent zelf mag afhandelen" (the two
 price thresholds, the days a delivery date may pass the supplier's lead time, the first cases of a supplier that always come to the
 buyer), "Vragen aan leveranciers" (the wait for an answer, the name under the messages), "Dagoverzicht en taal" (daily at a time or
-after every case, the time, the buyer's address, the language) and "Fiattering" (the approver's address, and a line that the limit
-itself is set at the installation), under "Regels opslaan". "Leveranciers", whose label names it in place of its heading, which stays
-hidden: a table of every supplier the four supplier settings name, and a form for one supplier, chosen from a dropdown, which fills
-the form, or added with its choice "Leverancier toevoegen", with "Leverancier opslaan" and "Leverancier verwijderen".
+after every case, the time, the buyer's address, in the test mode the owner's own addresses, the language) and "Fiattering" (the
+approver's address, and a line that the limit itself is set at the installation), under "Regels opslaan". The field of the own
+addresses stands in a part of its own (settings-own-addresses) that shows only while the file's test mode is on: the fill gives its
+visibility (buyer_opened), and so does choosing the section "Uw regels" (own_part_shown), since the switch of the test mode stands
+in the section "Koppeling met Exact"; a hidden field keeps what was typed into it, and a save while the file's test mode is off
+neither reads nor writes it (save_buyer).
+"Leveranciers", whose label names it in place of its heading, which stays hidden: a table of every supplier the four supplier
+settings name, and a form for one supplier, chosen from a dropdown, which fills the form, or added with its choice "Leverancier
+toevoegen", with "Leverancier opslaan" and "Leverancier verwijderen".
 
-The form shows the file, and a save writes only what the buyer changed. The eleven fields, the table and the dropdown are filled
+The form shows the file, and a save writes only what the buyer changed. The twelve fields, the table and the dropdown are filled
 from the settings file when the page loads and each time the settings tab is selected (buyer_opened), so that a change made in the
-file by hand or from another browser tab shows. Two states of the page keep what the forms were filled with: the eleven texts,
+file by hand or from another browser tab shows. Two states of the page keep what the forms were filled with: the twelve texts,
 and the supplier form with the supplier it was filled for. "Regels opslaan" writes the fields whose text differs from the text the form
 was filled with, and no other: a field the buyer changed wins over a change made in the file meanwhile, a field he did not touch
 is never written and not checked, and with no field changed nothing is written and the file keeps its modification time. A
@@ -329,20 +339,22 @@ The mailer of a close. A page built with `environ` (the review command gives it 
 and the requests of a close the way the runner sends its own: for each close it makes the mailer that the setting send_via names,
 with mailer_of of aid/messaging/microsoft_mailer.py, the one builder the runner makes its mailer with, from the settings as they are
 at that close, the clock of the page's Deps and the Microsoft account of the settings' tenant and client, the one the settings tab
-signs in with. So a sign-in or a save on the settings tab counts for the next close, without a restart. A message that is not
+signs in with. So a sign-in or a save on the settings tab counts for the next close, without a restart. In the test mode the
+mailer of each close carries the guard of the test mode, as the runner's does (mailer_of; OwnOnly of aid/messaging): a question or
+a request whose To or Cc holds an address that is not one of the owner's own is neither sent nor written. A message that is not
 sent leaves the case in review with a review item of its own, as the close records it (aid/review/close.py), and close_text says
 "Een bericht is niet verzonden; de zaak blijft ter beoordeling." and then the kind of its cause with what to do, by a fixed
 sentence that holds no address and no text of a server: the sign-in has lapsed; the mailbox or the mail server was not reached,
 or refused the message; no mailbox is connected, or the mail server's password is not set (the settings name a way to send that
-is not there: nothing is written as a file in its place); the case's document cannot be read at that moment; or the settings
-file cannot be read at that moment, in which case the page sends nothing rather than by the settings it read before
-(_Live.sending). With send_via "file", the owner's choice for a run in which nothing may leave, the message is written to
-<cases_root>/outbox and counts as asked, and close_text says so after the status, with the folder the mailer writes into: "Het
-bericht is niet verstuurd maar als bestand klaargezet (cases/outbox): de instellingen laten berichten als bestand schrijven." A
-message whose hand-over the mailbox did not confirm counts as asked, and close_text says to look in Sent items. A page built
-without `environ` (a test's, the notebook's) keeps the mailer of the Deps it was given, and so does a page on a public share
-link, which never makes a mailer: it is for the made-up set only. Nothing about a case made from a try-out document is sent by
-either: the close asks no mailer for it (aid/tryout_mark.py).
+is not there: nothing is written as a file in its place); an address of the message is not one of the owner's own while the
+test mode is on; the case's document cannot be read at that moment; or the settings file cannot be read at that moment, in which
+case the page sends nothing rather than by the settings it read before (_Live.sending). With send_via "file", the owner's choice
+for a run in which nothing may leave, the message is written to <cases_root>/outbox and counts as asked, and close_text says so after
+the status, with the folder the mailer writes into: "Het bericht is niet verstuurd maar als bestand klaargezet (cases/outbox): de
+instellingen laten berichten als bestand schrijven." A message whose hand-over the mailbox did not confirm counts as asked, and
+close_text says to look in Sent items. A page built without `environ` (a test's, the notebook's) keeps the mailer of the Deps it was
+given, and so does a page on a public share link, which never makes a mailer: it is for the made-up set only. Nothing about a case
+made from a try-out document is sent by either: the close asks no mailer for it (aid/tryout_mark.py).
 
 What the page says after a close stays on the screen. A close that takes the case out of the review empties the case list, and
 that change runs the function that shows the chosen case (show): with no case chosen it leaves the status line alone.
@@ -418,24 +430,25 @@ when the page loads and each time the tab is selected, and a save from a form wh
 nothing and says so, as in part 2.
 
 The block ends with the part "Proefdraaien met een inkooporder uit Exact" (_tryout_section; aid/tryout.py makes the try-out): the
-switch "Proefstand: de assistent werkt met het test-Exact", which writes the setting test_mode and nothing else as soon as the buyer
-ticks or clears it ("Opgeslagen.", and when it turns the test mode off while the list "In Exact invoeren" holds changes that only
-try-out documents asked, how many, to be dropped and not entered in the real Exact) and, as the block's form, writes nothing when the
-file no longer holds the value it was filled with (another browser tab, or the file itself, changed it), filling itself again from
-the file and saying so in a sentence of its own; and, only while test_mode is true and no authorization limit is set
-(offers_tryouts of aid/tryout_mark.py), a try-out confirmation of a purchase order the store knows ("Inkooporder", known_pos, the one
-filed last first) with one change ("Wat wijkt af?", aid/tryout.py's CHANGES). Otherwise the part shows one line that says why. Each
-try-out is read back before it leaves the page (checked_confirmation of aid/tryout.py), and one that would not read back as the
-order with the change alone, or whose order the scan would not find, is refused. "Proefbevestiging maken (pdf)" writes the PDF into a
-folder of its own in the page library's temporary folder, the one the download is served from, so that it is the one file written
-and goes as the library's other temporary files go; "Proefbevestiging direct aan de assistent geven" puts it into the watched folder
-of the settings (drop of aid/sources/dropin.py, from a copy under <cases_root>/tmp/work that goes again at once), for the runner's
-next pass, and clears the download, as a new choice of the order or of the change by the buyer does, so that the file offered is
-always the one of the choice shown. A purchase order that gives no try-out is named by the sentence of its reason, and nothing is
-written. The part is filled when the page loads, each time the tab is selected and with the block's "Stand vernieuwen", which keeps
-the order chosen while the store knows it; a button pressed with no order chosen fills the dropdown from the store first and takes
-the order filed last. The language switch keeps the note that the store knows no purchase order. A try-out's moment of making, which
-gives it its date, its title and the time in its file's name, is the clock's of the page's Deps.
+switch "Proefstand: de assistent werkt met het test-Exact", which says under its label that switching the test mode off lifts the
+guard of the test mode on the mail ("tryout_switch_help"; OwnOnly of aid/messaging), and writes the setting test_mode and nothing
+else as soon as the buyer ticks or clears it ("Opgeslagen.", and when it turns the test mode off while the list "In Exact
+invoeren" holds changes that only try-out documents asked, how many, to be dropped and not entered in the real Exact) and, as the
+block's form, writes nothing when the file no longer holds the value it was filled with (another browser tab, or the file itself,
+changed it), filling itself again from the file and saying so in a sentence of its own; and, only while test_mode is true and no
+authorization limit is set (offers_tryouts of aid/tryout_mark.py), a try-out confirmation of a purchase order the store knows
+("Inkooporder", known_pos, the one filed last first) with one change ("Wat wijkt af?", aid/tryout.py's CHANGES). Otherwise the part
+shows one line that says why. Each try-out is read back before it leaves the page (checked_confirmation of aid/tryout.py), and one
+that would not read back as the order with the change alone, or whose order the scan would not find, is refused. "Proefbevestiging
+maken (pdf)" writes the PDF into a folder of its own in the page library's temporary folder, the one the download is served from, so
+that it is the one file written and goes as the library's other temporary files go; "Proefbevestiging direct aan de assistent geven"
+puts it into the watched folder of the settings (drop of aid/sources/dropin.py, from a copy under <cases_root>/tmp/work that goes
+again at once), for the runner's next pass, and clears the download, as a new choice of the order or of the change by the buyer does,
+so that the file offered is always the one of the choice shown. A purchase order that gives no try-out is named by the sentence of
+its reason, and nothing is written. The part is filled when the page loads, each time the tab is selected and with the block's "Stand
+vernieuwen", which keeps the order chosen while the store knows it; a button pressed with no order chosen fills the dropdown from the
+store first and takes the order filed last. The language switch keeps the note that the store knows no purchase order. A try-out's
+moment of making, which gives it its date, its title and the time in its file's name, is the clock's of the page's Deps.
 
 Under the download the part offers a try-out cart for the pre-check in the browser, with a choice of its own under a question of
 its own, "Wat wijkt af in de proefwinkelwagen?": "Niets" or the price of the first line 1 percent higher (aid/tryout.py's
@@ -542,7 +555,7 @@ from aid.execution.by_hand import FIELDS, FOLDER, Change, ListUnread, changes, m
 from aid.execution.ops import WriteOp
 from aid.execution.writer import LOG_FILE as WRITE_LOG
 from aid.execution.writer import WriteLog, WriteLogEntry, WriterError, read_before
-from aid.messaging import FileMailer, Mailer, NoRoute
+from aid.messaging import TEST_MODE, FileMailer, Mailer, NoRoute
 from aid.messaging import _append_line           # a line appended in one write, a line a crash cut off ended first
 from aid.messaging.microsoft_mailer import MicrosoftMailer, mailer_of
 from aid.pipeline import LOOKS, NOT_SENT, RESULT_FILE, SENT, UNADDRESSED, UNSENT, CaseResult, Deps, asked_by_the_run
@@ -593,7 +606,7 @@ COPILOT_TEST = "Answer with the word OK only."                         # the mes
 MAIL_STEPS = ("ids", "sign_in", "mailbox", "send", "read")             # the five numbered steps of "Postvak en AI" ("mail_step:<step>")
 _STATUS_CODE = re.compile(r"\b[1-5][0-9]{2}\b")  # a status code of HTTP in an error of Copilot: three digits, standing on their own
 # The label on the tab of each setting the tab writes, by which a refused field is named, never by its value: the six of the mailbox,
-# the reader, the eleven of the buyer's form, the four supplier settings by the heading of the suppliers, the three fields of the
+# the reader, the twelve of the buyer's form, the four supplier settings by the heading of the suppliers, the three fields of the
 # supplier form (the keys of with_supplier's problems), the layout of the purchase order and its senders of the block "Koppeling met
 # Exact", the three settings of the export of its part 2, the two of the export of articles of its part 3, and the test mode by its
 # switch at the end of that block.
@@ -612,7 +625,7 @@ NEW_FORM = {"name": NEW_SUPPLIER, "email": "", "lead_time": "", "review": False,
 # The groups of the buyer's form, top to bottom, each with its fields in the order of the page.
 BUYER_GROUPS = (("handled", ("price_pct", "price_abs", "lead_time_tolerance_days", "first_cases_review")),
                 ("questions", ("ask_wait_working_days", "buyer_name")),
-                ("digest", ("digest", "digest_time", "buyer_email", "language")),
+                ("digest", ("digest", "digest_time", "buyer_email", "own_addresses", "language")),
                 ("approval", ("approver_email",)))
 _COLUMNS = ("item", "field", "line", "po_value", "doc_value", "reason", "po_source", "doc_source")
 # The width of each column of the three lists, in whole percents that make 100 together, so that a list fits the page and its cells
@@ -1134,7 +1147,8 @@ def close_text(case: Case, deps: Deps, language: str) -> tuple[str, bool]:
     through and a message not sent are named by fixed labels: the error's own text, which may name an endpoint or a folder of the
     settings, stays in the result, step 09 and the audit record. After a message not sent comes the kind of its cause with what to
     do ("not_sent:<cause>", for each cause among the close's messages once, in the order they arose: a supplier without an address
-    among them, "no_address"; a cause without a sentence has its review item). A message of the close that the mailer wrote as a file, by the
+    among them, "no_address", and an address that the guard of the test mode kept back, "test_mode"; a cause without a sentence has
+    its review item). A message of the close that the mailer wrote as a file, by the
     settings' choice (_files_folder), is said too, with the folder it lies in, and so is one whose hand-over was not confirmed.
     A close that did nothing because a reply filed with the case could not be read says to close again."""
     strings = STRINGS[language]
@@ -1211,20 +1225,34 @@ def _signed_out(deps: Deps) -> str | None:
         return None
 
 
+def _held_back(deps: Deps, address: str) -> str | None:
+    """Why the guard of the test mode would keep the close's question from going (OwnOnly of aid/messaging): "test_mode" when the
+    mailer a message would go through now carries the guard and the question's entries, the supplier's address in To and the
+    buyer's in Cc, are not all the owner's own; None otherwise, and for a page whose mailer has no guard. Reads the token cache on
+    this PC only, as the guard does, and asks Microsoft nothing."""
+    mailer = deps.mailer
+    route = mailer.current() if mailer is not None and hasattr(mailer, "current") else mailer
+    guard = getattr(route, "guard", None)
+    return TEST_MODE if guard is not None and not guard.allows([address], [deps.settings.buyer_email]) else None
+
+
 def _asked_text(case: Case, result: CaseResult, deps: Deps, strings: dict[str, str]) -> str:
     """Where the question of "Leverancier vragen" on the case goes when the case is closed, as the close would send it with `deps`,
     the Deps of a close as they would be now (spec 2.1.1): with the checks the close makes before it sends, in its order. A mailer
     that would have no way to send it says why not and what to do ("row_asks_unrouted:<cause>", _unrouted); a supplier without an
-    address (of the case's routing context, as close.py takes it), that the question does not go until one is filled in; the work
-    mailbox with nobody signed in or its store refused, that the question would not go and what to do (_signed_out); a mailer that
-    writes files by the settings' choice (_files_folder), that the question is kept as a file; and else that it goes to the
-    supplier, named and never by its address."""
+    address (of the case's routing context, as close.py takes it), that the question does not go until one is filled in; in the test
+    mode, an address of the question that the guard would keep back, the supplier's or the buyer's in copy, that the question would
+    not go and what to do (_held_back); the work mailbox with nobody signed in or its store refused, that the question would not go
+    and what to do (_signed_out); a mailer that writes files by the settings' choice (_files_folder), that the question is kept as a
+    file; and else that it goes to the supplier, named and never by its address."""
     supplier = _context(case, result).supplier
     named = _literal(supplier) if supplier else strings["unknown_po"]
     if (cause := _unrouted(deps)) is not None:
         return strings[f"row_asks_unrouted:{cause}"]
     if not deps.settings.supplier_emails.get(supplier):
         return strings["row_asks_no_address"].format(supplier=named)
+    if (cause := _held_back(deps, deps.settings.supplier_emails[supplier])) is not None:
+        return strings[f"row_asks_unrouted:{cause}"]
     if (cause := _signed_out(deps)) is not None:
         return strings[f"row_asks_unrouted:{cause}"]
     if _files_folder(deps) is not None:
@@ -2029,12 +2057,25 @@ def _page(gr, deps: Deps, tab: _Tab):
 
 # --- the tab "In Exact invoeren" ---
 
+def _copy_data(buttons: dict[str, list[tuple[str, str, str]]], strings: dict[str, str]) -> str:
+    """What the tab "In Exact invoeren" gives the page's script (PAGE_JS of aid/review/look.py) for the copy buttons behind its rows:
+    a hidden element with the buttons of each row as JSON in data-rows (hand_list.copy_buttons: by the value of the row's tick box,
+    each button as the text to copy, its words and its name for a screen reader) and the two lines of a press in data-copied and
+    data-failed, and after it the line that says what a press did, a polite live region that the script fills. Every text stands
+    escaped inside its attribute, so that a code or a number taken from a document is data to the browser and never markup."""
+    rows = escape(json.dumps(buttons, ensure_ascii=False), quote=True)
+    return (f'<div id="hand-copy-data" hidden data-rows="{rows}" data-copied="{escape(strings["hand_copied"], quote=True)}" '
+            f'data-failed="{escape(strings["hand_copy_failed"], quote=True)}"></div>'
+            '<p id="hand-copy-said" role="status" aria-live="polite"></p>')
+
+
 def _hand_tab(gr, app, language, hand_tab, live: _Live, tab: _Tab, cases_root: Path, ticker) -> None:
     """The content of the tab "In Exact invoeren" and its events, inside the tab (see the module docstring): the intro with the lines
     under it and "Lijst vernieuwen", the line of the changes that came in since the list was read (hand-new, hidden until the timer
     finds one), the two buttons for the ticked rows with the note that answers every press of the list right under them (hand-actions,
     which the page's style keeps at the top of the window while the list scrolls), one group of tick boxes with every open change, one
-    under the other, the two buttons again, small, the dropdown of the blocks with its button, the dropdown of the price lists with its
+    under the other, the element of the copy buttons that the page's script draws behind each row, with the line of what a press
+    copied (hand-copy: _copy_data; copies_opened reads it with the list), the two buttons again, small, the dropdown of the blocks with its button, the dropdown of the price lists with its
     button (shown while a price list has article prices to enter), the section of the confirmations to attach in Exact, and last the
     section of the handled changes (its text, the dropdown "Afgehandelde wijziging" with its two buttons, a note). hand_tab is the tab
     itself, whose label counts the open changes and whose selection reads the list again; ticker is the page's gr.Timer, whose tick
@@ -2154,6 +2195,16 @@ def _hand_tab(gr, app, language, hand_tab, live: _Live, tab: _Tab, cases_root: P
         except Exception as error:
             return unread(error, language_now)
 
+    def copies_opened(language_now: str):
+        """The page loaded, the tab selected, "Lijst vernieuwen" pressed, the language switched, or a button of the tab pressed: what
+        each open row offers the buyer to copy into Exact (hand_list.copy_buttons), as the element the page's script reads
+        (_copy_data). A list that cannot be read leaves the buttons as they were, as it leaves the rows."""
+        try:
+            open_ = [change for change in changes(prepared)[0] if change.state == "open"]
+            return _copy_data(hand_list.copy_buttons(open_, cases_root, language_now), STRINGS[language_now])
+        except Exception:
+            return gr.update()
+
     def hand_relabel(language_now: str, ticked: list[str] | None, chosen: str | None) -> tuple:
         """The page's language switched: the tab in that language, with the rows ticked and the block chosen kept while they are
         listed, and the note cleared."""
@@ -2270,6 +2321,8 @@ def _hand_tab(gr, app, language, hand_tab, live: _Live, tab: _Tab, cases_root: P
             dropped_above = gr.Button(first["hand_dropped"])
         note = gr.Markdown("", elem_id="hand-note", elem_classes=["answer"])           # the answer of every press of the list
     rows = gr.CheckboxGroup(choices=[], value=[], show_label=False, elem_id="hand-rows", elem_classes=["hand-rows"])
+    # what the page's script needs to draw the copy buttons behind the rows, and the line of what a press copied
+    copies = gr.HTML(_copy_data({}, first), elem_id="hand-copy", container=False, padding=False, apply_default_css=False, js_on_load=None)
     with gr.Row():                                   # the same pair under a long list, small
         entered = gr.Button(first["hand_entered"], size="sm")
         dropped = gr.Button(first["hand_dropped"], size="sm")
@@ -2308,6 +2361,12 @@ def _hand_tab(gr, app, language, hand_tab, live: _Live, tab: _Tab, cases_root: P
                 put_back_button.click(change_put_back, inputs=[done_choice, language], outputs=[*listed, *under])]
     for press in presses:                            # any press may take a price list's last row off the list, or put one back
         press.then(pricelists_opened, inputs=[language, pricelist], outputs=lists)
+    # the copy buttons belong to the rows shown: read with the list, without the queue as the other reads the language switch shares
+    # (see the module docstring), and again after any press that can change the list
+    gr.on(triggers=[app.load, hand_tab.select, refresh.click, language.change], fn=copies_opened, inputs=language, outputs=copies,
+          show_progress="hidden", queue=False)
+    for press in presses:
+        press.then(copies_opened, inputs=language, outputs=copies, show_progress="hidden")
     # the label on the page's timer, never the rows (see hand_label_ticked), and its line of new changes gone once the list is read again
     ticker.tick(hand_label_ticked, inputs=[language, seen], outputs=[hand_tab, new_rows], show_progress="hidden")
     gr.on(triggers=[hand_tab.select, refresh.click, language.change, entered_above.click, entered.click, dropped_above.click, dropped.click,
@@ -3227,13 +3286,15 @@ def _extension_code(gr, app, language, current: Callable[[], Settings]) -> None:
 def _buyer_section(gr, app, language, settings_tab, file_line, read: Callable[[dict[str, str]], tuple[Settings, str | None]],
                    write: Callable) -> tuple:
     """The buyer's two sections of the settings tab and their events, its first two (see the module docstring): "Uw regels", the
-    eleven settings of buyer_settings.BUYER_FIELDS in the groups of BUYER_GROUPS, each field with its label and its help, under
-    "Regels opslaan"; and "Leveranciers", a table of the suppliers and a form for one supplier. file_line is the line of a settings
-    file that cannot be read, which _settings_tab puts above the sections and the handlers here write. read gives the settings in
-    the file (or those in use, with the line), and write saves into it (both of _settings_tab). The fill (buyer_opened) runs when the
-    page loads and each time settings_tab is selected. Two states of the page hold what the forms were filled with: the eleven texts,
-    and the supplier form with the supplier it was filled for, so that a save writes what the buyer changed and nothing else.
-    Returns the two sections, which the language switch of _settings_tab relabels."""
+    twelve settings of buyer_settings.BUYER_FIELDS in the groups of BUYER_GROUPS, each field with its label and its help, under
+    "Regels opslaan", the own addresses of the test mode in a part of their own that shows in the test mode only; and
+    "Leveranciers", a table of the suppliers and a form for one supplier. file_line is the line of a settings file that cannot be
+    read, which _settings_tab puts above the sections and the handlers here write. read gives the settings in the file (or those in
+    use, with the line), and write saves into it (both of _settings_tab). The fill (buyer_opened) runs when the page loads and each
+    time settings_tab is selected, and choosing "Uw regels" shows or hides the part of the own addresses by the file's test mode
+    (own_part_shown). Two states of the page hold what the forms were filled with: the twelve texts, and the supplier form with the
+    supplier it was filled for, so that a save writes what the buyer changed and nothing else. Returns the two sections, which the
+    language switch of _settings_tab relabels."""
     first = STRINGS["nl"]
 
     def headers(strings: dict[str, str]) -> list[str]:
@@ -3274,25 +3335,33 @@ def _buyer_section(gr, app, language, settings_tab, file_line, read: Callable[[d
         return f"**{line}**" if line else ""
 
     def buyer_opened(language_now: str) -> tuple:
-        """The page loaded, or the settings tab selected: the line of a file that cannot be read, the eleven settings of the file
-        and what the form is filled with, the table of the suppliers, their dropdown on "Leverancier toevoegen" and the supplier
-        form emptied. With a file that cannot be read, the settings in use."""
+        """The page loaded, or the settings tab selected: the line of a file that cannot be read, the twelve settings of the file
+        and what the form is filled with, the table of the suppliers, their dropdown on "Leverancier toevoegen", the supplier form
+        emptied, and the part of the own addresses shown while the test mode is on and hidden otherwise. With a file that cannot be
+        read, the settings in use."""
         strings = STRINGS[language_now]
         settings, line = read(strings)
         values = shown(settings, language_now)
         return (top(line), *[values[field] for field in BUYER_FIELDS], values, table(settings, strings),
-                dropdown(settings, strings, NEW_SUPPLIER)[0], *supplier_form(settings, NEW_SUPPLIER))
+                dropdown(settings, strings, NEW_SUPPLIER)[0], *supplier_form(settings, NEW_SUPPLIER), gr.update(visible=settings.test_mode))
+
+    def own_part_shown(language_now: str) -> dict:
+        """The section "Uw regels" chosen: the part of the own addresses shown while the file's test mode is on and hidden otherwise,
+        so that a toggle of the switch in the section "Koppeling met Exact" shows here; what is typed in the field stays as it is.
+        With a file that cannot be read, the settings in use."""
+        return gr.update(visible=read(STRINGS[language_now])[0].test_mode)
 
     def save_buyer(price_pct, price_abs, lead_time_tolerance_days, first_cases_review, ask_wait_working_days, buyer_name, digest,
-                   digest_time, buyer_email, language_setting, approver_email, filled: dict | None, language_now: str) -> tuple:
+                   digest_time, buyer_email, language_setting, approver_email, own_addresses, filled: dict | None, language_now: str) -> tuple:
         """Write the fields whose text differs from the text the form was filled with, and no other: (a note, the line of a file
-        that cannot be read, the eleven fields, what they are filled with). A refused field writes nothing and is named by its
+        that cannot be read, the twelve fields, what they are filled with). A refused field writes nothing and is named by its
         label, and the form keeps what was typed; nothing changed writes nothing; a file that cannot be read refuses with its
-        line. After a save, and when nothing was changed, the fields show the values as the file now holds them. A form whose
+        line. While the file's test mode is off the own addresses are neither read nor written, whatever their hidden field
+        holds. After a save, and when nothing was changed, the fields show the values as the file now holds them. A form whose
         fill the page no longer knows (the page was started again while the browser tab stayed open) is filled again from the
         file, and nothing is written."""
         strings = STRINGS[language_now]
-        same = [gr.update()] * (len(BUYER_FIELDS) + 1)       # the eleven fields and what they were filled with, left as they are
+        same = [gr.update()] * (len(BUYER_FIELDS) + 1)       # the twelve fields and what they were filled with, left as they are
         settings, line = read(strings)
         if line is not None:
             return (line, top(line), *same)
@@ -3300,9 +3369,11 @@ def _buyer_section(gr, app, language, settings_tab, file_line, read: Callable[[d
             values = shown(settings, language_now)
             return (strings["settings_buyer_refilled"], "", *[values[field] for field in BUYER_FIELDS], values)
         form = dict(zip(BUYER_FIELDS, (price_pct, price_abs, lead_time_tolerance_days, first_cases_review, ask_wait_working_days, buyer_name,
-                                       digest, digest_time, buyer_email, language_setting, approver_email)))
+                                       digest, digest_time, buyer_email, language_setting, approver_email, own_addresses)))
         changed = changed_fields(form, filled)
-        if not changed:                                      # nothing typed is lost: the form shows the file as it is now
+        if not settings.test_mode:                           # the own addresses' field is hidden then: never read or written
+            changed = [field for field in changed if field != "own_addresses"]
+        if not changed:                                      # nothing typed in a field shown is lost: the form shows the file as it is now
             values = shown(settings, language_now)
             return (strings["settings_buyer_unchanged"], "", *[values[field] for field in BUYER_FIELDS], values)
         values, problems = parse(form, language_now, only=changed)
@@ -3428,12 +3499,15 @@ def _buyer_section(gr, app, language, settings_tab, file_line, read: Callable[[d
                     fields[field] = gr.Radio(choices=_digest_choices(first), value=None, label=label, info=info)
                 elif field == "language":
                     fields[field] = gr.Radio(choices=_language_choices(first), value=None, label=label, info=info)
+                elif field == "own_addresses":           # in the test mode only (buyer_opened, own_part_shown)
+                    with gr.Column(visible=False, elem_id="settings-own-addresses") as own_part:
+                        fields[field] = gr.Textbox(label=label, info=info)
                 else:
                     fields[field] = gr.Textbox(label=label, info=info, elem_classes=["short-field"] if field in _SHORT_FIELDS else None)
         limit = gr.Markdown(first["settings_limit"])
         save_button = gr.Button(first["settings_buyer_save"], variant="primary")
         note = gr.Markdown("", elem_id="settings-buyer-note")
-        filled = gr.State(None)                      # the eleven texts the form was filled with
+        filled = gr.State(None)                      # the twelve texts the form was filled with
     with gr.Tab(first["settings_section:suppliers"], id="leveranciers") as suppliers_section:
         suppliers_title = gr.Markdown(f"### {first['settings_suppliers']}", visible=False)       # the section's label names it
         suppliers_help = gr.Markdown(first["settings_suppliers_help"])
@@ -3457,7 +3531,8 @@ def _buyer_section(gr, app, language, settings_tab, file_line, read: Callable[[d
     supplier_form_fields = [name, email, lead_time, review, off]
     supplier_shown_again = [supplier_note, file_line, suppliers, supplier, *supplier_form_fields, supplier_filled]
     gr.on(triggers=[app.load, settings_tab.select], fn=buyer_opened, inputs=language,
-          outputs=[file_line, *form, filled, suppliers, supplier, *supplier_form_fields, supplier_filled])
+          outputs=[file_line, *form, filled, suppliers, supplier, *supplier_form_fields, supplier_filled, own_part])
+    rules_section.select(own_part_shown, inputs=language, outputs=own_part)        # the switch of the test mode stands in another section
     save_button.click(save_buyer, inputs=[*form, filled, language], outputs=[note, file_line, *form, filled])
     # The dropdown's change (the buyer's choice, or the value a save or a removal gave it) fills the form and leaves the note of a
     # save alone; the buyer's own choice (input) clears that note.
@@ -4457,14 +4532,15 @@ def _tryout_section(gr, app, language, settings_tab, refresh, read: Callable[[di
         settings = read(strings)[0]
         offered = offers_tryouts(settings)
         none_known = offered and not known_pos(store_of(settings), limit=1)
-        return (f"### {strings['tryout_title']}", strings["tryout_intro"], gr.update(label=strings["tryout_switch"]),
+        return (f"### {strings['tryout_title']}", strings["tryout_intro"],
+                gr.update(label=strings["tryout_switch"], info=strings["tryout_switch_help"]),
                 "" if offered else strings["tryout_not_offered"], gr.update(label=strings["tryout_po"]),
                 gr.update(label=strings["tryout_change"], choices=change_choices(strings), value=change_now),
                 gr.update(value=strings["tryout_make"]), gr.update(value=strings["tryout_give"]), strings["tryout_none_known"] if none_known else "")
 
     title = gr.Markdown(f"### {first['tryout_title']}")
     intro = gr.Markdown(first["tryout_intro"])
-    switch = gr.Checkbox(value=False, label=first["tryout_switch"])
+    switch = gr.Checkbox(value=False, label=first["tryout_switch"], info=first["tryout_switch_help"])     # it says what switching off lifts
     why = gr.Markdown("", elem_id="tryout-why")
     with gr.Column(visible=False, elem_id="tryout-controls") as controls:
         po_choice = gr.Dropdown(choices=[], value=None, label=first["tryout_po"])

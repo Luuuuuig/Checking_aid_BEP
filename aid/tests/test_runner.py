@@ -3229,3 +3229,118 @@ def test_a_case_that_waits_without_a_question_comes_back_at_the_next_pass(tmp_pa
     assert "De leverancier heeft geantwoord: lees het antwoord" in block and "Er staat geen vraag meer open: besluit over deze zaak" in block
     run_loop(d, tmp_path / "STOP", poll_seconds=0, max_passes=1)
     assert len(result_of(case).review_items) == 1 and len(result_of(unasked).review_items) == 1
+
+
+# --- the guard of the test mode: the digest goes to the owner's own addresses only ---
+
+OWNER = "owner@example.org"                          # a made-up own address of the owner
+
+
+def guarded_deps(tmp_path, madeup_out, now: list, **values):
+    """loop_deps at the clock now[0], with the settings in the test mode (and the values given) and the mailer that mailer_of makes of
+    them, as build_deps makes it."""
+    from aid.messaging.microsoft_mailer import mailer_of
+    d = loop_deps(tmp_path, madeup_out)
+    settings = d.settings.model_copy(update={"test_mode": True, "send_via": "file"} | values)
+    return d.model_copy(update={"settings": settings, "clock": lambda: now[0], "mailer": mailer_of(settings, {}, lambda: None, clock=lambda: now[0])})
+
+
+def log_lines(d) -> list[str]:
+    log = d.settings.cases_root / "runner.log"
+    return log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+
+
+@pytest.mark.parametrize("digest", ["daily", "per_case"])
+def test_in_the_test_mode_a_digest_to_an_address_not_ones_own_is_not_sent_and_the_log_says_so(tmp_path, madeup_out, digest):
+    """buyer_email is none of the own addresses: the digest is not sent and not written into cases/outbox/, where it would lie as a
+    whole e-mail to that address that a person could send on. Its text is written to cases/digests/<day>.txt beside its HTML, as a
+    digest made without a mailer, runner.log says so in one line that names no address, and the digest counts as made: the next
+    digest starts a new period."""
+    now = [AFTER_DIGEST_TIME]
+    d = guarded_deps(tmp_path, madeup_out, now, own_addresses=[OWNER], digest=digest)
+    shutil.copy(madeup_out / "MU01_conf.pdf", d.settings.watched_folder)
+    run_loop(d, tmp_path / "STOP", poll_seconds=0, max_passes=1)
+    root = d.settings.cases_root
+    assert not (root / "outbox").exists() and not list(tmp_path.rglob("*.eml"))
+    digests = root / "digests"
+    assert sorted(path.name for path in digests.iterdir()) == ["2026-11-12.html", "2026-11-12.txt"]
+    text = (digests / "2026-11-12.txt").read_text(encoding="utf-8")
+    assert "Dagoverzicht 12-11-2026" in text and "PO 250101" in text
+    [line] = log_lines(d)
+    assert " digest: " in line and "@" not in line and "digests/2026-11-12.txt" in line
+    state = json.loads((root / "digest_state.json").read_text(encoding="utf-8"))
+    assert state["last_sent"] == AFTER_DIGEST_TIME.isoformat() and state["reported"] == []
+    now[0] = AFTER_DIGEST_TIME + timedelta(minutes=5)
+    if digest == "per_case":
+        shutil.copy(madeup_out / "MU02_conf.pdf", d.settings.watched_folder)
+    run_loop(d, tmp_path / "STOP", poll_seconds=0, max_passes=1)
+    assert len(log_lines(d)) == (2 if digest == "per_case" else 1) and not (root / "outbox").exists()
+
+
+def test_in_the_test_mode_a_digest_to_ones_own_address_goes_as_before(tmp_path, madeup_out):
+    now = [AFTER_DIGEST_TIME]
+    d = guarded_deps(tmp_path, madeup_out, now, own_addresses=[SETTINGS.buyer_email])
+    shutil.copy(madeup_out / "MU01_conf.pdf", d.settings.watched_folder)
+    run_loop(d, tmp_path / "STOP", poll_seconds=0, max_passes=1)
+    root = d.settings.cases_root
+    [sent] = (root / "outbox").glob("*.eml")
+    assert "Dagoverzicht 12-11-2026" in sent.read_text(encoding="utf-8")
+    assert [path.name for path in (root / "digests").iterdir()] == ["2026-11-12.html"] and log_lines(d) == []
+
+
+def test_the_runner_guards_its_mailer_from_the_pass_after_the_test_mode_is_switched_on(tmp_path, madeup_out):
+    """The runner of the command builds its Deps again when the settings file changes: a save that switches the test mode on guards
+    the mailer from the next pass on."""
+    from aid.settings import update_settings_file
+    deps(tmp_path, madeup_out)                                            # the made-up POs, in tmp_path/store
+    now = [AFTER_DIGEST_TIME]
+    settings, path = settings_file(tmp_path, send_via="file", po_store_root="store")
+
+    def rebuild(new):
+        return build_deps(new, {}).model_copy(update={"clock": lambda: now[0]})       # build_deps gives the clock of the PC
+    (tmp_path / "inbox").mkdir(exist_ok=True)
+    loop, root = aid.runner._Loop(rebuild(settings), path, rebuild), tmp_path / "cases"
+    aid.runner._pass(loop)
+    [day_one] = (root / "outbox").glob("*.eml")
+    assert "Dagoverzicht 12-11-2026" in day_one.read_text(encoding="utf-8")
+    before = path.stat().st_mtime_ns
+    update_settings_file(path, {"test_mode": True, "own_addresses": []})
+    os.utime(path, ns=(before + 1_000_000_000, before + 1_000_000_000))
+    now[0] = AFTER_DIGEST_TIME + timedelta(days=1)
+    loop.reload()
+    aid.runner._pass(loop)
+    assert list((root / "outbox").glob("*.eml")) == [day_one] and (root / "digests" / "2026-11-13.txt").exists()
+    [line] = (root / "runner.log").read_text(encoding="utf-8").splitlines()
+    assert " digest: " in line and "digests/2026-11-13.txt" in line
+
+
+def test_build_deps_in_the_test_mode_guards_its_mailer(tmp_path):
+    settings, _ = settings_file(tmp_path, test_mode=True)
+    mailer = build_deps(settings, {}).mailer
+    assert isinstance(mailer, FileMailer) and mailer.unrouted == "no_mailbox" and mailer.guard is not None
+    assert build_deps(settings.model_copy(update={"test_mode": False}), {}).mailer.guard is None
+
+
+def test_in_the_test_mode_the_runner_asks_no_supplier_outside_ones_own_addresses_and_lists_the_case_for_the_buyer(tmp_path, madeup_out):
+    """The runner as the command builds it, in the test mode with no own address and a real-looking supplier address in the settings:
+    the run's question to the supplier is not sent and not written as a file, the case comes to the buyer with "message not sent",
+    and the digest, kept back as well, lists it under "Wacht op u"."""
+    deps(tmp_path, madeup_out)                                            # the made-up POs, in tmp_path/store
+    settings, _ = settings_file(tmp_path, test_mode=True, own_addresses=[], send_via="file", digest="per_case",
+                                supplier_emails={"S17": "sales@s17.example.com"}, po_store_root="store")
+    d = build_deps(settings, {}).model_copy(update={"clock": lambda: AFTER_DIGEST_TIME})
+    (tmp_path / "inbox").mkdir(exist_ok=True)
+    shutil.copy(madeup_out / "MU17_conf.pdf", tmp_path / "inbox")
+    run_loop(d, tmp_path / "STOP", poll_seconds=0, max_passes=1)
+    root = tmp_path / "cases"
+    [case] = root.glob("250117_*")
+    result = json.loads((case / "steps" / "08_result.json").read_text(encoding="utf-8"))
+    assert result["status"] == "review" and [(m["status"], m["cause"]) for m in result["messages"]] == [
+        ("not sent (test mode: not your own address)", "test_mode")]
+    assert [item["reason"] for item in result["review_items"]] == ["message not sent"]
+    assert not (root / "outbox").exists() and not list(tmp_path.rglob("*.eml")) and not (case / "messages" / "sent.jsonl").exists()
+    [text] = (root / "digests").glob("*.txt")
+    lines = [line.strip() for line in text.read_text(encoding="utf-8").splitlines()]
+    assert lines[lines.index("Wacht op u") + 2] == "- Bericht niet verzonden (ontbrekende of extra regel, regel 3)"
+    [line] = (root / "runner.log").read_text(encoding="utf-8").splitlines()
+    assert " digest: " in line and "@" not in line

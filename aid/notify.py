@@ -237,7 +237,8 @@ def build_digest(results: list[CaseResult], skipped: list[tuple[str, str]], sett
 def send_digest(d: Digest, mailer: Mailer, settings: Settings) -> SentRecord:
     """Send the text of the digest to the buyer (settings.buyer_email, no one in copy) under its subject through the mailer, as a
     message of the template "digest" and the case "digest-<period>", and return the mailer's record of it. The HTML is not sent:
-    it stays in the Digest for the caller."""
+    it stays in the Digest for the caller. In the test mode the mailer's guard may keep it back (NotOwnAddress of aid/messaging), and
+    the runner handles that (aid/runner.py)."""
     return mailer.send(Message(to=[settings.buyer_email], cc=[], subject=d.subject, body=d.text, template=DIGEST,
                                case_id=f"{DIGEST}-{d.period}"))
 

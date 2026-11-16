@@ -693,7 +693,8 @@ def first_start(data: Path, token: Callable[[], str] = _token) -> Path:
     """Write data/settings.json when it is missing, and make the folders inbox, cases, po_store and logs beside it: the example
     settings with the parser as the reader, the folders by their names beside the file (so that the folder may be moved), a capture
     token of the token function (43 random characters), the example's addresses on example.com, and the test mode on, for the owner's
-    test with the test account of Exact (the hand-over switches it off). A settings file that exists is never overwritten, whatever it
+    test with the test account of Exact (the hand-over switches it off), with no own addresses of the test mode, so that the aid sends
+    nothing to the example's addresses until the owner fills them in. A settings file that exists is never overwritten, whatever it
     holds. The path of the settings file."""
     data = Path(data)
     path = data / SETTINGS_FILE

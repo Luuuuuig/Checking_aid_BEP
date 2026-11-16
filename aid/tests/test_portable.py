@@ -524,7 +524,11 @@ def test_build_reads_the_system_when_it_is_called(tmp_path, monkeypatch):
     for name in ("system", "machine", "version", "run", "fetch"):
         assert inspect.signature(portable.build).parameters[name].default is None, name
     monkeypatch.setattr(portable, "platform", types.SimpleNamespace(system=lambda: "Windows", machine=lambda: "AMD64"))
-    fetch = Fetch(data=embeddable_zip(sys.version_info[:2]))
+    data = embeddable_zip(sys.version_info[:2])
+    # The build checks the package of a version that EMBED_SHA256 names against the sha256 there. The made-up package gets its own
+    # sha256 under the version of this Python, so that the test holds on every Python, also on one the table names (3.13.17).
+    monkeypatch.setitem(portable.EMBED_SHA256, ".".join(str(part) for part in sys.version_info[:3]), hashlib.sha256(data).hexdigest())
+    fetch = Fetch(data=data)
     assert portable.build(tmp_path / "out", run=Pip(), fetch=fetch) == 0
     assert fetch.asked == [portable.embed_url(sys.version_info[:3])]
 

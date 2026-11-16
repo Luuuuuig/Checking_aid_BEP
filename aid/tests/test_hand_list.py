@@ -18,7 +18,8 @@ from aid.execution.writer import UNDO_RULE_ID, PreparedWriter, WriteLog, undo_ca
 from aid.madeup.generate import MadeUpSpec, confirmation_pdf, export_csv, load_specs
 from aid.pipeline import record_dispositions, run_case
 from aid.po_store import PoStore, PoVersion
-from aid.review.hand_list import blocks, confirmation_lines, confirmations, done_rows, ids_of, row_text, take_back, tick_rows
+from aid.review.hand_list import (blocks, confirmation_lines, confirmations, copy_buttons, copy_parts, done_rows, ids_of, row_text,
+                                  take_back, tick_rows)
 from aid.review.i18n import STRINGS
 from aid.sources.upload import open_upload_case
 from aid.tests.conftest import REPO_ROOT, deps
@@ -136,6 +137,73 @@ def test_values_in_dutch_and_in_english(tmp_path, madeup_out):
                            "article KM-1001: purchase price unknown → 12.70", "article KM-1002: purchase price 12.50 → 12.7"]
     assert (STRINGS["nl"]["hand_unknown"], STRINGS["en"]["hand_unknown"]) == ("onbekend", "unknown")
     assert ids_of("e1+e2") == ["e1", "e2"] and ids_of("e1") == ["e1"] and ids_of("") == []
+
+
+def test_a_row_gives_what_the_buyer_copies_into_exact(tmp_path, madeup_out):
+    """copy_parts: the order number, the item code and the new value of a row, each as the row shows it, in the order the buyer needs
+    them in Exact. An article price gives the article and the price, never an order: the buyer opens the article."""
+    d = deps(tmp_path, madeup_out)
+    asking = Asking(tmp_path, d.store)
+    asking.ask(asking.case("250104"), on_line("po_line_price", "250104", "2", "2.00", "2.10"),
+               on_line("po_line_date", "250104", "2", "2026-11-16", "2026-11-20"), on_line("po_line_quantity", "250104", "2", "5", "6"),
+               article("KM-0402", "2.10", po="250104"))
+    by_kind = {change.kind: change for change in asking.open()}
+    assert copy_parts(by_kind["po_line_price"], asking.root, "nl") == [("order", "250104"), ("article", "KM-0402"), ("value", "2,10")]
+    assert copy_parts(by_kind["po_line_price"], asking.root, "en") == [("order", "250104"), ("article", "KM-0402"), ("value", "2.10")]
+    assert copy_parts(by_kind["po_line_date"], asking.root, "nl") == [("order", "250104"), ("article", "KM-0402"), ("value", "20-11-2026")]
+    assert copy_parts(by_kind["po_line_quantity"], asking.root, "en") == [("order", "250104"), ("article", "KM-0402"), ("value", "6")]
+    assert copy_parts(by_kind["article_price"], asking.root, "nl") == [("article", "KM-0402"), ("value", "2,10")]
+    # every value a part gives stands in the row as the buyer reads it
+    for change in by_kind.values():
+        for language in ("nl", "en"):
+            assert all(text in f"{change.po_number} {row_text(change, asking.root, language)}" for _, text in copy_parts(change, asking.root, language))
+
+
+def test_a_value_the_buyer_cannot_paste_as_it_stands_is_not_offered(tmp_path, madeup_out):
+    """A week and a range of days are no date to paste: the buyer chooses the day. A value the aid does not know, and the field that
+    a put-back empties, give nothing to paste either. A line whose item code no case knows gives no article."""
+    d = deps(tmp_path, madeup_out)
+    asking = Asking(tmp_path, d.store)
+    asking.ask(asking.case("250114"), on_line("po_line_date", "250114", "1", "2026-11-16", "2026-W48"))
+    asking.ask(asking.case("250104"), on_line("po_line_date", "250104", "2", "2026-11-16", "2026-11-30/2026-12-04"))
+    asking.ask(asking.case("99999", versions=[]), on_line("po_line_quantity", "99999", "1", "1", "2"))      # a PO the store lacks
+    by_po = {change.po_number: change for change in asking.open()}
+    assert copy_parts(by_po["250114"], asking.root, "nl") == [("order", "250114"), ("article", "KM-1401")]
+    assert copy_parts(by_po["250104"], asking.root, "nl") == [("order", "250104"), ("article", "KM-0402")]
+    assert copy_parts(by_po["99999"], asking.root, "nl") == [("order", "99999"), ("value", "2")]
+    unknown = by_po["99999"].model_copy(update={"new_value": None})
+    assert copy_parts(unknown, asking.root, "nl") == [("order", "99999")]
+    back = by_po["99999"].model_copy(update={"kind": "article_price", "article_code": "KM-0801", "new_value": None, "rule_id": UNDO_RULE_ID})
+    assert copy_parts(back, asking.root, "nl") == [("article", "KM-0801")]         # "terugzetten naar de prijs van daarvoor"
+    nameless = by_po["99999"].model_copy(update={"kind": "article_price", "article_code": None, "new_value": "3.00"})
+    assert copy_parts(nameless, asking.root, "en") == [("value", "3.00")]
+
+
+def test_the_buttons_of_each_row_name_what_they_copy(tmp_path, madeup_out):
+    """copy_buttons: for the value of each row of the list, its buttons as (the text to copy, the words on the button, the name a
+    screen reader reads), in the page's language. The words on a button are the text it copies, so that the buyer sees what lands in
+    Exact; a row with nothing to copy has no entry."""
+    d = deps(tmp_path, madeup_out)
+    asking = Asking(tmp_path, d.store)
+    [price], [week] = (asking.ask(asking.case("250108"), on_line("po_line_price", "250108", "1", "12.50", "12.70")),
+                       asking.ask(asking.case("250114"), on_line("po_line_date", "250114", "1", "2026-11-16", "2026-W48")))
+    [priced] = asking.ask(asking.case("250108"), article("KM-0801", "12.70"))
+    assert copy_buttons(asking.open(), asking.root, "nl") == {
+        price: [("250108", "Kopieer 250108", "Inkoopordernummer 250108 kopiëren"), ("KM-0801", "Kopieer KM-0801", "Artikelcode KM-0801 kopiëren"),
+                ("12,70", "Kopieer 12,70", "Nieuwe waarde 12,70 kopiëren")],
+        week: [("250114", "Kopieer 250114", "Inkoopordernummer 250114 kopiëren"), ("KM-1401", "Kopieer KM-1401", "Artikelcode KM-1401 kopiëren")],
+        priced: [("KM-0801", "Kopieer KM-0801", "Artikelcode KM-0801 kopiëren"), ("12,70", "Kopieer 12,70", "Nieuwe waarde 12,70 kopiëren")]}
+    english = copy_buttons(asking.open(), asking.root, "en")
+    assert english[price] == [("250108", "Copy 250108", "Copy purchase order number 250108"), ("KM-0801", "Copy KM-0801", "Copy article code KM-0801"),
+                              ("12.70", "Copy 12.70", "Copy new value 12.70")]
+    # the keys are the values of the tick boxes, so that the page finds a row's buttons by its box; a change two cases asked is one row
+    again = asking.ask(asking.case("250108"), on_line("po_line_price", "250108", "1", "12.50", "12.70"))
+    listed = blocks(asking.open(), d.store, asking.root, "nl")
+    assert set(copy_buttons(asking.open(), asking.root, "nl")) == {value for _, value in tick_rows(listed)} and f"{price}+{again[0]}" in {
+        value for _, value in tick_rows(listed)}
+    nothing = [change.model_copy(update={"po_number": "", "new_value": None, "article_code": None, "kind": "article_price"})
+               for change in asking.open()[:1]]
+    assert copy_buttons(nothing, asking.root, "nl") == {} and copy_buttons([], asking.root, "en") == {}
 
 
 def test_the_hint_on_an_order_above_the_authorization_shows_no_amount(tmp_path, madeup_out):

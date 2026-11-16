@@ -40,6 +40,12 @@ had ticked it, and a print given after the tick contradicts it) says that in the
 showed, whatever it is: "... U vinkte dit af, maar de inkooporder die daarna binnenkwam toont 12,50. Voer de wijziging in Exact
 in, of vink opnieuw af als zij er al in staat."; or, when the line could not be found in that print, that it could not.
 
+copy_parts gives what the buyer copies from a row into Exact, and copy_buttons the buttons the page puts behind each row for it
+(aid/review/page.py; the page's script of aid/review/look.py draws them): one for the order number, one for the item or article
+code and one for the new value, each named by the text it copies, "Kopieer 250108", "Kopieer KM-0801", "Kopieer 12,70". The new
+value is offered only when it can be pasted as it stands (a price, a quantity, one day): a week or a range of days is the buyer's
+to choose a day from.
+
 Under the list the tab has two sections. done_rows gives the section "Afgehandeld in de laatste 14 dagen": the changes entered, seen or
 dropped in that time, the newest first, each as label_of names it, followed by how the aid knows it, "(door u afgevinkt op 18-11-2026)",
 "(gezien in versie 2 van de inkooporder)", "(gezien in een export uit Exact)" or "(niet ingevoerd, op 18-11-2026)"; done_text makes the
@@ -91,6 +97,7 @@ from aid.routing import CONFIRMED
 TAB = "invoeren"                                 # the id of the tab on the page, and the value of tab= in an address that selects it
 ARTICLES = "articles"                            # the id of the block of the article prices
 PO_BLOCK = "po:"                                 # the start of the id of a PO's block
+COPY_PARTS = ("order", "article", "value")       # what a row gives the buyer to copy into Exact, in the order of the work there
 DONE_DAYS, CONFIRMATION_DAYS = 14, 7             # how far back the two sections under the list look
 PRICELISTS = "pricelists"                        # under cases_root: the write-log folders of the price-list import (aid/pricelist.py)
 _HELD = ("entered", "seen")                      # the states in which the marks say that Exact holds a change's value
@@ -175,6 +182,43 @@ def tick_rows(listed: list[tuple[str, str, list[tuple[str, str]]]]) -> list[tupl
 def block_choices(listed: list[tuple[str, str, list[tuple[str, str]]]]) -> list[tuple[str, str]]:
     """The dropdown of the blocks: the first line of each heading, and the block's id."""
     return [(_title(heading), block_id) for block_id, heading, _ in listed]
+
+
+def copy_parts(change: Change, cases_root: Path, language: str) -> list[tuple[str, str]]:
+    """What the buyer copies from a row into Exact, as (the part, the text), in the order of COPY_PARTS: the order number of a change
+    of a PO line; the item code of that line (item_code, as row_text shows it) or the article code of an article price, when one is
+    known; and the new value as the row shows it in the page's language, when it is one value that can be pasted as it stands: a
+    price or a quantity, or a day as dd-mm-yyyy. A week and a range of days are no date to paste, since the buyer chooses the day,
+    and neither is a value the aid does not know or the field that a put-back empties. An article price gives no order: the buyer
+    opens the article."""
+    parts = []
+    if change.kind == ARTICLE_KIND:
+        code = change.article_code
+    else:
+        if change.po_number:
+            parts.append(("order", change.po_number))
+        code = item_code(change, cases_root)
+    if code:
+        parts.append(("article", code))
+    new = change.new_value
+    if new is not None and (change.kind in _NUMBERS or _DAY.fullmatch(new)):
+        parts.append(("value", _value(new, change.kind, language)))
+    return parts
+
+
+def copy_buttons(open_: list[Change], cases_root: Path, language: str) -> dict[str, list[tuple[str, str, str]]]:
+    """The copy buttons of the rows of the list: for the value of each row (the entry ids of its change joined by "+", as tick_rows
+    gives it, so that the page finds a row's buttons by its tick box) its buttons as (the text to copy, the words on the button, the
+    name a screen reader reads), in the page's language and in the order of copy_parts. The words on a button are the text it
+    copies ("Kopieer 12,70"), so that the buyer sees what will stand in Exact. A row with nothing to copy has no entry."""
+    strings = STRINGS[language]
+    found = {}
+    for change in open_:
+        buttons = [(text, strings["hand_copy"].format(text=text), strings[f"hand_copy:{part}"].format(text=text))
+                   for part, text in copy_parts(change, cases_root, language)]
+        if buttons:
+            found["+".join(change.ids)] = buttons
+    return found
 
 
 def price_lists(open_: list[Change], cases_root: Path, language: str) -> list[tuple[str, str, list[str]]]:

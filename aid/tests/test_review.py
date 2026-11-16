@@ -1864,7 +1864,8 @@ def test_a_try_out_sends_nothing(tmp_path, madeup_out, smtp_server):
     """A case made from a try-out document on the page that sends: with the SMTP server set, "Leverancier vragen" is refused, and a
     decision "ask" that stands in its decisions all the same sends nothing. The close asks no mailer: the stand-in server gets no
     e-mail, no file is written, nothing is recorded as sent, and the case stays in review. The guard is the try-out's alone: the
-    supplier's own confirmation of the same order, asked on the same page, is sent."""
+    supplier's own confirmation of the same order, asked on the same page, is sent. A try-out needs the test mode, so the
+    supplier's made-up address and the buyer's are the owner's own addresses here, which the guard of the test mode lets through."""
     from aid.decider import NoDecider
     from aid.pipeline import Deps
     from aid.tests.test_tryout import NOW as MADE, OPEN, give, outbox, results, runner_pass, tryout_settings
@@ -1872,6 +1873,7 @@ def test_a_try_out_sends_nothing(tmp_path, madeup_out, smtp_server):
 
     store = deps(tmp_path, madeup_out, settings=OPEN).store
     settings = tryout_settings(tmp_path, first_cases_review=5, send_via="smtp", smtp_host="smtp.example.com", smtp_user="aid@example.com")
+    settings = settings.model_copy(update={"own_addresses": [settings.supplier_emails["S08"], settings.buyer_email]})
     give(settings, store, "250108", "price_large")
     runner_pass(settings, store)                              # the runner of the tests' try-outs: a file mailer, which gets nothing
     [r] = results(settings)
@@ -1933,6 +1935,10 @@ CAUSES = {      # the kind of cause the page names after a message that was not 
                  "The settings cannot be read now: nothing was sent. Pass this on to the researcher."),
     "document": ("Het document van de zaak kan nu niet worden gelezen: er is niets verstuurd.",
                  "The case's document cannot be read now: nothing was sent."),
+    "test_mode": ("Proefstand: een adres van het bericht staat niet bij uw eigen adressen, dus is er niets verzonden. Is het uw eigen adres, "
+                  "vul het dan in bij \"Uw eigen adressen in de proefstand\" onder Instellingen, Uw regels, en sluit de zaak opnieuw af.",
+                  "Test mode: an address of the message is not among your own addresses, so nothing was sent. If it is your own address, "
+                  "add it under \"Your own addresses in the test mode\" in Settings, Your rules, and close the case again."),
 }
 UNCONFIRMED = {"nl": ("Niet zeker of het bericht is verstuurd: het postvak gaf geen bevestiging. Kijk bij Verzonden items. Staat het er niet, "
                       "dan komt de zaak na de wachttijd bij u terug en stelt u de vraag opnieuw."),
@@ -2290,10 +2296,12 @@ def test_a_choice_made_on_the_unsent_item_ends_with_it(tmp_path, madeup_out):
                                            ({"smtp_host": "smtp.example.com", "smtp_user": "aid@example.com"}, "no_password"),
                                            ({"send_via": "smtp"}, "no_mailbox")],
                          ids=["nothing connected", "a sign-in without a folder", "a folder and nobody signed in", "no password", "smtp without a server"])
-def test_for_want_of_a_route_nothing_is_asked(tmp_path, madeup_out, language, values, cause):
+@pytest.mark.parametrize("guarded", [{}, {"test_mode": True, "own_addresses": []}], ids=["outside the test mode", "in the test mode"])
+def test_for_want_of_a_route_nothing_is_asked(tmp_path, madeup_out, language, values, cause, guarded):
     """Ruling S4 (b). The settings name a way to send that is not there: the page's close writes no file and counts nothing as
-    asked. It is a message not sent: the case stays in review with its item, and the page says what is missing."""
-    path, d, page, _ = sending_page(tmp_path, madeup_out, **values)
+    asked. It is a message not sent: the case stays in review with its item, and the page says what is missing. In the test mode
+    without an own address the route carries the guard, and the close reads what is missing before the guard: the cause stays."""
+    path, d, page, _ = sending_page(tmp_path, madeup_out, **values, **guarded)
     c = asked_on_the_page(d, madeup_out)
     assert after_the_press(page, c, language) == (not_sent(language, cause), c.case_id)
     assert not (tmp_path / "cases" / "outbox").exists() and not (tmp_path / "given").exists() and sent_lines(c) == [] and rows(c) == []
@@ -4404,13 +4412,14 @@ def test_the_handlers_the_redesign_added_to_the_language_switch_skip_the_queue(t
     on the queue costs a round trip of the queue, a quarter of a second in the browser, where one that skips it costs a few
     hundredths: so the five handlers that chunks 2 to 4 of the redesign added to the language switch, each a read of a few files or
     none, skip the queue (queue=False), and the switch takes about as long as it did before them, on the same 24 queued listeners.
-    Each of the five is bound once, with the triggers it had; every listener the switch had before keeps the queue."""
+    Each of the five is bound once, with the triggers it had; every listener the switch had before keeps the queue. The read of the
+    copy buttons of "In Exact invoeren" (copies_opened), which shares the switch since 16 November, skips the queue as they do."""
     path, d, page, _ = sending_page(tmp_path, madeup_out)                  # the page of this PC, with its settings file: every tab
     language = handler_of(page, "review_texts").inputs[0]
     on_switch = [(getattr(f.fn, "__name__", ""), f.queue) for f in page.fns.values() if (language._id, "change") in f.targets]
     added = ["files_ticked", "hand_new_cleared", "record_shown", "removal_relabelled", "review_texts"]
-    assert sorted(name for name, queued in on_switch if not queued) == added
-    assert len([name for name, queued in on_switch if queued]) == 24 and len(on_switch) == 29
+    assert sorted(name for name, queued in on_switch if not queued) == sorted([*added, "copies_opened"])
+    assert len([name for name, queued in on_switch if queued]) == 24 and len(on_switch) == 30
     for name in added:
         assert [f.queue for f in page.fns.values() if getattr(f.fn, "__name__", "") == name] == [False], name
 
@@ -4828,7 +4837,7 @@ def test_a_decision_to_ask_says_where_the_question_goes(tmp_path, madeup_out):
     assert en["row_asks_unrouted:no_password"] == ("The mail server's password is not set: the question will not go when you close. "
                                                    "Pass this on to the researcher.")
     assert {key.split(":")[1] for key in nl if key.startswith("row_asks_unrouted:")} == {"no_mailbox", "no_password", "settings",
-                                                                                  "sign_in", "store"}
+                                                                                  "sign_in", "store", "test_mode"}
 
 
 
@@ -4993,3 +5002,130 @@ def test_the_case_list_names_the_order_the_count_and_the_day(tmp_path, madeup_ou
     assert close_case(review, d).status == "closed"                               # closed in another browser tab
     kept = called(page, "queue_ticked", "nl", review.case_id, None)["Zaak"]["choices"]
     assert kept[-1] == ("Inkooporder 250107 (S07): 1 punt, 12-11-2026 09:00, afgesloten", review.case_id)
+
+
+# --- the guard of the test mode: a close's question and request go to the owner's own addresses only ---
+
+TEST_MODE_WORDS = "not sent (test mode: not your own address)"
+
+
+@pytest.mark.parametrize("values, sent", [
+    ({"send_via": "microsoft", **MAILBOX, "own_addresses": [SUPPLIER]}, True),
+    ({"send_via": "microsoft", **MAILBOX, "own_addresses": []}, False),
+    ({"send_via": "microsoft", **MAILBOX, "own_addresses": [SUPPLIER], "buyer_email": "inkoop@example.org"}, False),
+    ({"send_via": "file", "own_addresses": [SUPPLIER]}, False),
+    ({"send_via": "microsoft", **MAILBOX, "own_addresses": [f"  {SUPPLIER.upper()} "]}, True),
+], ids=["both own", "supplier not own", "copy not own", "files by choice", "trimmed and in capitals"])
+def test_in_the_test_mode_a_close_sends_its_question_only_to_ones_own_addresses(tmp_path, madeup_out, values, sent):
+    """In the test mode a close's question goes only when the supplier's address and the copy to the buyer are both own addresses:
+    those of the setting, compared trimmed and without regard to capitals, and through the work mailbox the account signed in, here
+    the buyer's own address. Through files by choice no account is known. A question stopped so is not sent and not written, nothing
+    of Graph is asked, the case stays in review with the item "Bericht niet verzonden", and the page says why."""
+    mailbox = graph()
+    path, d, page, _ = sending_page(tmp_path, madeup_out, app=FakeApp(accounts=[USERNAME]), session=mailbox, test_mode=True, **values)
+    c = asked_on_the_page(d, madeup_out)
+    if sent:
+        assert after_the_press(page, c) == (WAITING["nl"], None) and len(mailbox.calls) == 2 and len(sent_lines(c)) == 1
+        return
+    assert after_the_press(page, c) == (not_sent("nl", "test_mode"), c.case_id) and mailbox.calls == []
+    assert items(c)[-1] == ("RI2", "message not sent") and sent_lines(c) == [] and rows(c) == []
+    assert [(m["status"], m["cause"]) for m in c.read_step("close")["records"][-1]["messages"]] == [(TEST_MODE_WORDS, "test_mode")]
+    assert not (tmp_path / "cases" / "outbox").exists() and not (tmp_path / "given").exists()
+
+
+def test_in_the_test_mode_a_request_to_the_approver_of_a_close_goes_to_an_own_address_only(tmp_path, madeup_out):
+    """MU07 confirmed above the authorization limit: the request to the approver, the buyer in copy, goes only when both are own
+    addresses. Stopped, it keeps the case in review at each close, and once both are own addresses the next close sends one request
+    and closes the case."""
+    for name, own in (("buyer", [SETTINGS.buyer_email]), ("approver", [SETTINGS.approver_email])):
+        (tmp_path / name).mkdir()
+        path, d, page, _ = sending_page(tmp_path / name, madeup_out, send_via="file", test_mode=True, own_addresses=own)
+        c, _ = run(d, madeup_out, "MU07", "250107")
+        decide(c, "RI1", "confirm", article_update=True)
+        for _ in range(2):
+            assert after_the_press(page, c) == (not_sent("nl", "test_mode"), c.case_id), name
+            record = c.read_step("close")["records"][-1]
+            assert record["reapproval_pending"] is not None and [(m["template"], m["cause"]) for m in record["messages"]] == [
+                ("reapproval", "test_mode")]
+        assert items(c)[-1] == ("RI2", "message not sent") and not (tmp_path / name / "cases" / "outbox").exists()
+    changed_on_disk(path, own_addresses=[SETTINGS.buyer_email, SETTINGS.approver_email])
+    assert after_the_press(page, c) == (f"{CLOSED['nl']} {written('nl')}", None)
+    [eml] = (tmp_path / "approver" / "cases" / "outbox").glob("*.eml")
+    mail = read_eml(eml)
+    assert (mail["To"], mail["Cc"], mail["X-Aid-Template"]) == (SETTINGS.approver_email, SETTINGS.buyer_email, "reapproval")
+
+
+def test_with_the_test_mode_off_a_close_sends_as_before(tmp_path, madeup_out, smtp_server):
+    path, d, page, _ = sending_page(tmp_path, madeup_out, environ=os.environ, send_via="smtp", smtp_host="smtp.example.com",
+                                    smtp_user="aid@example.com", test_mode=False, own_addresses=["owner@example.org"])
+    c = asked_on_the_page(d, madeup_out)
+    assert pressed_close(page, c) == (WAITING["nl"], None)
+    [mail] = smtp_server
+    assert (mail["To"], mail["Cc"]) == (SUPPLIER, SETTINGS.buyer_email) and c.read_step("result")["status"] == "waiting"
+
+
+def test_the_ask_note_says_in_the_test_mode_that_the_question_would_not_go(tmp_path, madeup_out):
+    """"Leverancier vragen" saved in the test mode says, in the order in which the close meets them, that the question would not go:
+    a missing way to send first, then a missing address, then the guard of the test mode, then a missing sign-in. With the supplier
+    and the copy both own addresses the guard lets the question pass, and the sign-in follows; without the account signed in, the
+    copy to the buyer is no own address."""
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    path, d, page, _ = sending_page(tmp_path, madeup_out, send_via="file", test_mode=True, own_addresses=[])
+    c, _ = run(d, madeup_out, "MU07", "250107")
+    [row] = decision_rows(page, shown_state(page, c)).values()
+
+    def note(language: str = "nl") -> dict:
+        return row.radio_save.fn("ask", False, language, shown_state(page, c))[0]
+    assert note() == noted(nl["row_saved"], nl["row_asks_unrouted:test_mode"], nl["row_all_decided"])
+    assert note("en") == noted(en["row_saved"], en["row_asks_unrouted:test_mode"], en["row_all_decided"])
+    changed_on_disk(path, send_via="auto")                                  # nothing connected: that comes first
+    assert note() == noted(nl["row_saved"], nl["row_asks_unrouted:no_mailbox"], nl["row_all_decided"])
+    changed_on_disk(path, send_via="file", supplier_emails={})               # no address: the address comes before the guard
+    assert note() == noted(nl["row_saved"], nl["row_asks_no_address"].format(supplier="S07"), nl["row_all_decided"])
+    changed_on_disk(path, supplier_emails={"S07": SUPPLIER}, send_via="microsoft", own_addresses=[SUPPLIER, SETTINGS.buyer_email], **MAILBOX)
+    assert note() == noted(nl["row_saved"], nl["row_asks_unrouted:sign_in"], nl["row_all_decided"])
+    changed_on_disk(path, own_addresses=[SUPPLIER])                         # nobody signed in: the copy is no own address
+    assert note() == noted(nl["row_saved"], nl["row_asks_unrouted:test_mode"], nl["row_all_decided"])
+
+
+def test_the_page_says_word_for_word_why_the_test_mode_kept_a_message_back():
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    assert (nl["not_sent:test_mode"], en["not_sent:test_mode"]) == CAUSES["test_mode"]
+    assert nl["row_asks_unrouted:test_mode"] == ("Proefstand: een adres van deze vraag, van de leverancier of van de kopie aan u, staat niet "
+                                                 "bij uw eigen adressen: de vraag gaat bij afsluiten niet weg. Is het uw eigen adres, vul het "
+                                                 "dan in onder Instellingen, Uw regels.")
+    assert en["row_asks_unrouted:test_mode"] == ("Test mode: an address of this question, the supplier's or that of the copy to you, is not "
+                                                 "among your own addresses: the question will not go when you close. If it is your own "
+                                                 "address, fill it in under Settings, Your rules.")
+    for text in (*CAUSES["test_mode"], nl["row_asks_unrouted:test_mode"], en["row_asks_unrouted:test_mode"]):
+        assert not re.search(r"[@_—–]", text), text
+
+
+def test_share_is_refused_with_own_addresses_outside_the_made_up_domains(tmp_path, monkeypatch):
+    """An own address of the test mode outside example.com and example.org is a company value, as any other address is: --share is
+    refused for it. The page on a public link keeps the file mailer the command gives it, which carries the guard of the settings at
+    the command's start while they are in the test mode."""
+    import aid.review.__main__ as review
+    example = load_settings(REPO_ROOT / "aid" / "settings.example.json")
+    owned = example.model_copy(update={"own_addresses": ["owner@example.org"]})
+    assert company_values(owned) == []
+    with monkeypatch.context() as patch:                   # the address as one outside the made-up domains, without using a real one
+        patch.setattr(review, "MADE_UP_DOMAINS", ("example.com",))
+        assert company_values(owned) == ["own_addresses holds an address outside example.com and example.org"]
+    built = []
+
+    class Page:
+        def launch(self, **options):
+            pass
+
+        def block_thread(self):
+            pass
+    monkeypatch.setenv("GRADIO_TEMP_DIR", str(tmp_path / "temporary"))
+    monkeypatch.setattr(review, "build_app", lambda d, **options: (built.append(d), Page())[1])
+    for test_mode in (True, False):
+        path = tmp_path / "settings.json"
+        data = json.loads((REPO_ROOT / "aid" / "settings.example.json").read_text(encoding="utf-8"))
+        path.write_text(json.dumps(data | {"cases_root": "cases", "po_store_root": "po_store", "watched_folder": "inbox", "reader": "parser",
+                                           "test_mode": test_mode}), encoding="utf-8")
+        assert review.main(["--settings", str(path), "--share"]) == 0
+    assert [d.mailer.guard is not None for d in built] == [True, False]

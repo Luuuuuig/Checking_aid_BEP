@@ -1,13 +1,16 @@
 """python3 -m aid.review --settings settings.json [--share]: the review page on this machine.
 
 The dependencies come from the settings: the PO store at po_store_root, read with the settings' authorization limit; the parser as the
-reader; no decider; the prepared writer into <cases_root>/prepared; the file mailer into <cases_root>/outbox, from the aid's address;
-and the clock of the machine. The page gets the environment of the command too (build_app's environ), with which it makes the mailer
+reader; no decider; the prepared writer into <cases_root>/prepared; the file mailer into <cases_root>/outbox, from the aid's address,
+with the guard of the test mode while the settings are in the test mode at the command's start (own_only of aid/messaging); and the
+clock of the machine.
+The page gets the environment of the command too (build_app's environ), with which it makes the mailer
 of each close from the settings as they are then, the way the runner makes its own (mailer_of of aid/messaging/microsoft_mailer.py):
 a question asked on the page goes out through the work mailbox or the SMTP server when the settings name one, is written into
 <cases_root>/outbox when send_via is "file", and is not asked at all, the case staying with the buyer, when the settings name a way
-to send that is not there. A page on a public link never makes a mailer and keeps the file mailer. The page is
-served on 127.0.0.1 only and answers its own host only (see below). --share opens a
+to send that is not there. A page on a public link never makes a mailer and keeps the file mailer, with the guard of the
+settings at the command's start: a later change of test_mode or of own_addresses in the settings file counts for its closes only
+once the command is started again. The page is served on 127.0.0.1 only and answers its own host only (see below). --share opens a
 public gradio link and is for the made-up set only: it is refused, with exit status 2 and the reason of refuse_share, when the
 settings hold company values, because the company's data are for internal use only. A settings file that is missing or not valid
 ends the command with exit status 2 and a message that names the file and the fields, never a value; one in which exact_base_url is
@@ -58,7 +61,7 @@ from pydantic import ValidationError
 from aid.case import TEMPORARY, WORK      # the page's temporary folder under cases_root, and its folder work
 from aid.decider import NoDecider
 from aid.execution.writer import PreparedWriter
-from aid.messaging import FileMailer
+from aid.messaging import FileMailer, own_only
 from aid.pipeline import Deps, read_with_parser
 from aid.po_store import PoStore
 from aid.review.app import build_app
@@ -142,14 +145,16 @@ def company_values(settings: Settings) -> list[str]:
     the company side from the company's own PO; exact_endpoints, exact_fields or po_senders not empty; export_columns not empty,
     since the column titles of the export are chosen on the company side from the company's own export (the made-up exports need no
     map), and for the same reason article_columns, the column titles of the company's export of articles; an address of
-    supplier_emails, or buyer_email, aid_email or approver_email, outside example.com and example.org (a domain under them counts
-    as theirs). The folders are no mark: the made-up set may be kept anywhere (in Colab, in Drive)."""
+    supplier_emails or of own_addresses, or buyer_email, aid_email or approver_email, outside example.com and example.org (a domain
+    under them counts as theirs). The folders are no mark: the made-up set may be kept anywhere (in Colab, in Drive)."""
     found = [f"{name} is set" for name in ("exact_base_url", "authorization_limit", "smtp_host", "smtp_user", "ms_tenant_id", "mail_folder",
                                            "po_layout") if getattr(settings, name) is not None]
     found += [f"{name} is not empty" for name in ("exact_endpoints", "exact_fields", "po_senders", "export_columns", "article_columns")
               if getattr(settings, name)]
     if not all(_made_up(address) for address in settings.supplier_emails.values()):
         found.append("supplier_emails holds an address outside example.com and example.org")
+    if not all(_made_up(address) for address in settings.own_addresses):
+        found.append("own_addresses holds an address outside example.com and example.org")
     found += [f"{name} is outside example.com and example.org" for name in ("buyer_email", "aid_email", "approver_email")
               if not _made_up(getattr(settings, name))]
     return found
@@ -260,8 +265,8 @@ def main(argv: list[str] | None = None) -> int:
     page_temporary_folder(cases)                             # before build_app imports gradio, too
     own_hosts_without_proxy()                                # and so is this: no proxy of the PC before the page's own address
     deps = Deps(settings=settings, store=PoStore(settings.po_store_root, settings.authorization_limit), reader=read_with_parser,
-                decider=NoDecider(), writer=PreparedWriter(cases / "prepared"), mailer=FileMailer(cases / "outbox", sender=settings.aid_email),
-                clock=datetime.now)
+                decider=NoDecider(), writer=PreparedWriter(cases / "prepared"),
+                mailer=FileMailer(cases / "outbox", sender=settings.aid_email, guard=own_only(settings)), clock=datetime.now)
     page = build_app(deps, settings_file=args.settings, share=args.share, environ=os.environ)
     remove_empty_vibe_folder()
     page.launch(**launch_options(page, args.share), prevent_thread_lock=True)

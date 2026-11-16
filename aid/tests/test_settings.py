@@ -245,3 +245,42 @@ def test_no_command_builds_the_route_or_reads_its_token():
     assert len(sources) > 20 and "execution/exact_api.py" in sources
     assert [name for name, source in sources.items() if "AID_EXACT_TOKEN" in source] == []
     assert [name for name, source in sources.items() if "ExactApiWriter" in source and name != "execution/exact_api.py"] == []
+
+
+@pytest.mark.parametrize("entry", ["Owner <owner@example.org>", "<owner@example.org>", "a,b@example.org", "owner@example.org, inkoop@example.org",
+                                   "", "example.org"])
+def test_own_addresses_are_one_address_each_and_a_wrong_one_is_named_by_its_place(tmp_path, entry):
+    """The owner's own addresses of the test mode stand in the example, empty, right before test_mode, which stays the last key. Each
+    entry is one e-mail address with nothing around it, taken without its outer spaces; any other entry is refused by its place in the
+    list, own_addresses.<n>, and never by what it holds."""
+    example = json.loads(Path("aid/settings.example.json").read_text(encoding="utf-8"))
+    assert example["own_addresses"] == [] and list(example)[-2:] == ["own_addresses", "test_mode"]
+    p = tmp_path / "s.json"
+    p.write_text(json.dumps(example | {"own_addresses": ["owner@example.org", entry]}), encoding="utf-8")
+    with pytest.raises(ValueError) as info:
+        load_settings(p)
+    error = str(info.value)
+    assert "own_addresses.1" in error and "own_addresses.0" not in error and "input_value" not in error
+    assert not entry.strip() or entry.strip() not in error.split("s.json is not valid: ", 1)[1], error
+    p.write_text(json.dumps(example | {"own_addresses": [" owner@example.org "]}), encoding="utf-8")
+    assert load_settings(p).own_addresses == ["owner@example.org"]
+
+
+@pytest.mark.parametrize("entry", ["x:y@example.org", "mailto:owner@example.org", "a:b:c@example.org", "x:@example.org"])
+def test_an_own_address_with_a_colon_is_refused_by_its_place(tmp_path, entry):
+    """A colon makes an entry a group to a mail program: "x:y@example.org" is read as the group "x:" with y@example.org in it, so the
+    SMTP mailer would give the message to y@example.org, an address that the guard of the test mode never compared. The settings file
+    refuses such an entry by its place, own_addresses.0, never by what it holds, and is_own_address, by which the settings tab reads
+    the field, refuses it too."""
+    from email.utils import getaddresses
+
+    from aid.settings import is_own_address
+    assert getaddresses([entry]) != [("", entry)]
+    example = json.loads(Path("aid/settings.example.json").read_text(encoding="utf-8"))
+    p = tmp_path / "s.json"
+    p.write_text(json.dumps(example | {"own_addresses": [entry]}), encoding="utf-8")
+    with pytest.raises(ValueError) as info:
+        load_settings(p)
+    error = str(info.value)
+    assert "own_addresses.0" in error and "input_value" not in error and entry not in error.split("s.json is not valid: ", 1)[1], error
+    assert not is_own_address(entry)

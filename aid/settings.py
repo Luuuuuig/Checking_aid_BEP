@@ -47,7 +47,17 @@ it is true, whatever the authorization limit, the tab "In Exact invoeren" of the
 Exact only, and only the switch on the settings tab ends it: setting a limit does not. While it is true and no authorization limit is
 set, the settings tab offers a try-out confirmation made from a purchase order the aid knows (aid/tryout.py), and only then does the
 scan of the watched folder take a try-out (aid/tryout_mark.py). The switch on the settings tab writes it; the first start of the folder
-version writes it true, and the hand-over switches it off on the settings tab as a step of its own.
+version writes it true, and the hand-over switches it off on the settings tab as a step of its own. While it is true the aid sends mail
+only to the owner's own addresses (own_addresses, and the account of the work mailbox; OwnOnly of aid/messaging); switching it off
+lifts that.
+
+own_addresses are the owner's own e-mail addresses for the test mode, one address to each entry, with no name around it, no second
+address, no comma and no colon (a mail program reads "x:y@example.org" as a group that holds y@example.org, and the SMTP mailer would
+send to that address); an entry that is no such address is refused by its place (own_addresses.1), never by what it holds, as the
+entries of po_senders are. While test_mode is true a message of the aid goes out, or is written as a file, only when every entry of its
+To and of its Cc is one of them, or is the address of the Microsoft work account that a mailer of the work mailbox sends with at that
+moment (OwnOnly of aid/messaging). Outside the test mode the setting does nothing. The settings tab writes it while the test mode is on.
+No rule reads it, and it is no address of the aid's own side when a reply is filed: an own address may play the supplier in a test.
 """
 import codecs
 import json
@@ -69,6 +79,9 @@ _GUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}
 _DOMAIN = re.compile(r"(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}")
 _ADDRESS = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s.]+")
 _SENDER = re.compile(r"[^@\s,;<>()\[\]\"']+@" + _DOMAIN.pattern)       # the address of a sender: no list, no name, nothing around it
+# An own address of the test mode: as a sender's, and without a colon, by which a mail program reads "x:y@example.org" as the group
+# "x:" that holds y@example.org, an address the guard of the test mode would never have compared.
+_OWN = re.compile(r"[^@\s,;:<>()\[\]\"']+@" + _DOMAIN.pattern)
 _WRITING = threading.Lock()                      # one save of a settings file at a time in this process (update_settings_file)
 _BLANK = " \t\n\r"                               # the white space of JSON
 WRITE_ROUTE_SET = ('exact_base_url is set, but this version of the aid writes nothing in Exact: every change is prepared for the tab '
@@ -81,6 +94,14 @@ def _sender(entry: str) -> str:
     if not (_SENDER.fullmatch(entry) or _DOMAIN.fullmatch(entry.removeprefix("@"))):
         raise ValueError("must be one e-mail address or one domain (the part after the at sign, with or without the at sign): no name "
                          "around it, no second address, no comma")
+    return entry
+
+
+def _own_address(entry: str) -> str:
+    """An entry of own_addresses without its outer spaces: one e-mail address with nothing around it and no colon."""
+    entry = entry.strip()
+    if not _OWN.fullmatch(entry):
+        raise ValueError("must be one e-mail address: no name around it, no second address, no comma, no colon")
     return entry
 
 
@@ -152,11 +173,16 @@ class Settings(BaseModel):
     # The token the browser extension sends to the capture server (aid/capture_server.py) in the header X-Aid-Token. It is
     # company-specific: set it in the real settings.json only, never in a repository. None (or empty) keeps the server from starting.
     capture_token: str | None = None
+    # The owner's own e-mail addresses, for the test mode: while test_mode is true a message of the aid goes out, or is written as a
+    # file, only when each entry of its To and its Cc is one of them, or is the address of the Microsoft work account that a mailer of
+    # the work mailbox sends with at that moment (OwnOnly of aid/messaging). Outside the test mode it does nothing. The settings tab
+    # writes it while the test mode is on.
+    own_addresses: list[Annotated[str, AfterValidator(_own_address)]] = []
     # The test mode: the aid works with the test account of Exact. While it is on, whatever the authorization limit, the tab "In Exact
     # invoeren" says to enter the changes in the test Exact only, and only the switch on the settings tab ends it. While it is on and no
     # authorization limit is set, the review page offers a try-out confirmation made from a stored PO (aid/tryout.py) and the watched
-    # folder takes one (aid/tryout_mark.py). Off in the example; the first settings file of the folder version turns it on, and the
-    # hand-over switches it off.
+    # folder takes one (aid/tryout_mark.py). While it is on, mail goes to the own addresses only (own_addresses above). Off in the
+    # example; the first settings file of the folder version turns it on, and the hand-over switches it off.
     test_mode: bool = False
 
     @field_validator("ms_tenant_id", "ms_client_id", "mailbox", "mail_folder", "mail_folder_name", mode="before")
@@ -217,6 +243,12 @@ def is_tenant_id(text: str) -> bool:
 def is_address(text: str) -> bool:
     """Whether the text is an e-mail address by the rule the settings check one with (mailbox): one @, no spaces, a dot after it."""
     return bool(_ADDRESS.fullmatch(text))
+
+
+def is_own_address(text: str) -> bool:
+    """Whether the text is an address as own_addresses takes one: one e-mail address with nothing around it (no name, no second
+    address, no comma) and no colon."""
+    return bool(_OWN.fullmatch(text))
 
 
 def is_client_id(text: str) -> bool:

@@ -47,6 +47,11 @@ nothing: who is signed in is read at each message. The FileMailer of send_via "f
 FileMailer is given for want of a way to send, and is marked with what is missing (its `unrouted`): "no_password" when the SMTP
 server is set and its password is not in the environment, else "no_mailbox". The runner writes its own messages through it all
 the same; the review page's close sends and writes nothing through a marked one, and says what is missing (aid/review/close.py).
+In the test mode each mailer it makes, the MicrosoftMailer and the SMTP or file mailer alike, carries the guard of the test mode
+(own_only of aid/messaging), with the account of the MicrosoftMailer as the account whose address counts as an own address; a mailer
+without a MicrosoftMailer (send_via "smtp" or "file", or "auto" without a folder) knows no account and counts the own addresses of
+the settings only. The guard sits on the mailers that send or write, so that the route that AutoMailer.current() gives, which the
+pipeline and the close send through, is guarded itself and keeps its `unrouted`.
 
 Errors. A lapsed sign-in, an answer of Graph other than success and a request that fails are a MailerError that names the status
 code ("HTTP 403"), the class of the error or the lapsed sign-in, and the step it stopped at; never a token, an address or Graph's
@@ -75,7 +80,8 @@ import requests
 from aid.connections.microsoft import (GRAPH, GRAPH_TIMEOUT, SIGN_IN_AGAIN, MicrosoftAccount, MicrosoftUnreachable, SignInNeeded, mail_scopes,
                                        owner_path)
 from aid.connections.secrets import StoreRefused
-from aid.messaging import FileMailer, HandOverUnconfirmed, Mailer, MailerError, Message, SentRecord, SmtpMailer, _email, _sent
+from aid.messaging import (FileMailer, HandOverUnconfirmed, Mailer, MailerError, Message, OwnOnly, SentRecord, SmtpMailer, _email, _sent,
+                           own_only)
 from aid.settings import Settings
 from aid.sources.microsoft_mail import trigger_on
 
@@ -95,13 +101,18 @@ class SignInLapsed(MailerError):
 
 class MicrosoftMailer:
     """Sends each message through Graph from the mailbox (None: the signed-in account's own), From the sender (when none is given:
-    the mailbox, or the account signed in at the send), at the clock's time (see the module docstring)."""
+    the mailbox, or the account signed in at the send), at the clock's time (see the module docstring). With the guard of the test
+    mode (`guard`) a message to an address that is not one of the owner's own is NotOwnAddress of aid/messaging before a token is
+    asked, so that no draft of it is made; a digest stopped so never reaches the runner's way for a lapsed sign-in either."""
     name = "microsoft"
 
-    def __init__(self, account: MicrosoftAccount, mailbox: str | None, sender: str, clock: Callable[[], datetime], session=None):
-        self.account, self.mailbox, self.sender, self.clock, self.session = account, mailbox, sender, clock, session
+    def __init__(self, account: MicrosoftAccount, mailbox: str | None, sender: str, clock: Callable[[], datetime], session=None,
+                 guard: OwnOnly | None = None):
+        self.account, self.mailbox, self.sender, self.clock, self.session, self.guard = account, mailbox, sender, clock, session, guard
 
     def send(self, msg: Message) -> SentRecord:
+        if self.guard is not None:               # the test mode: only to the own addresses, before the token and any draft
+            self.guard.check(msg)
         try:
             token = self.account.token(mail_scopes(self.mailbox))
         except SignInNeeded:
@@ -180,16 +191,20 @@ def mailer_of(settings: Settings, environ: Mapping[str, str], account: Callable[
     environment that the password of the aid's mailbox is looked up in; `account` gives the Microsoft account a MicrosoftMailer sends
     through, and is called only when one is made; `session` is the requests session Graph is called through (None: requests); and
     `clock` gives the time a message is sent at. Nothing here asks Microsoft anything: "auto" and the From of the work mailbox are
-    decided at each message."""
+    decided at each message. In the test mode every mailer made carries the guard of these settings (own_only of aid/messaging), with
+    the account of the MicrosoftMailer, when one is made, as the signed-in account; outside it no mailer carries one."""
     # SmtpMailer reads the password from os.environ at each send, not from `environ`; the callers pass os.environ, so the two agree.
     server = bool(settings.smtp_host and settings.smtp_user)
+    work = settings.send_via == "microsoft" or (settings.send_via == "auto" and trigger_on(settings))
+    microsoft_account = account() if work else None                      # asked only when a MicrosoftMailer is made, as before
+    guard = own_only(settings, getattr(microsoft_account, "account", None))   # None outside the test mode
     if settings.send_via != "file" and server and PASSWORD_ENV in environ:
         other = SmtpMailer(settings.smtp_host, settings.smtp_port, settings.smtp_user, password_env=PASSWORD_ENV, sender=settings.aid_email,
-                           clock=clock)
+                           clock=clock, guard=guard)
     else:                                            # files: by choice ("file"), or marked with what is missing of a way to send
         unrouted = None if settings.send_via == "file" else "no_password" if server else "no_mailbox"
-        other = FileMailer(settings.cases_root / OUTBOX, sender=settings.aid_email, clock=clock, unrouted=unrouted)
-    if settings.send_via == "microsoft" or (settings.send_via == "auto" and trigger_on(settings)):
-        microsoft = MicrosoftMailer(account(), settings.mailbox, "", clock=clock, session=session)
+        other = FileMailer(settings.cases_root / OUTBOX, sender=settings.aid_email, clock=clock, unrouted=unrouted, guard=guard)
+    if work:
+        microsoft = MicrosoftMailer(microsoft_account, settings.mailbox, "", clock=clock, session=session, guard=guard)
         return microsoft if settings.send_via == "microsoft" else AutoMailer(microsoft, other)
     return other

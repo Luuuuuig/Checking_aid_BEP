@@ -45,5 +45,6 @@
   "po_senders": [],
   "review_url": "http://localhost:7860",
   "capture_token": null,
+  "own_addresses": [],
   "test_mode": false
 }

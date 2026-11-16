@@ -709,3 +709,33 @@ def test_the_runner_makes_its_own_account_in_the_folder_the_review_page_uses(tmp
                                                                        (other_client, f"https://login.microsoftonline.com/{TENANT_ID}")]
     assert _account(TENANT_ID, CLIENT_ID).store.directory == store == SecretStore(store).directory
     assert build_deps(load_settings(path), {}).mailer.microsoft.account.store.directory == store
+
+
+def test_a_digest_the_guard_stops_with_a_lapsed_sign_in_leaves_no_outbox_file_and_asks_microsoft_nothing(tmp_path, madeup_out):
+    """The test mode with a lapsed sign-in. The guard comes before the token, so a digest to an address that is not one's own is
+    stopped before the work mailbox asks Microsoft anything, and it never reaches the outbox that a lapsed sign-in writes to: its text
+    goes to cases/digests/. The lapsed account is still on the PC and counts as one's own address, so a digest to that address goes
+    the way of a lapsed sign-in, into cases/outbox/, as before."""
+    from aid.messaging.microsoft_mailer import mailer_of
+    from aid.tests.fakes import FakeSession
+    now = [datetime(2026, 11, 12, 17, 0)]                    # past the digest time
+    for name, buyer, own in (("stopped", "inkoop@example.org", ["owner@example.org"]), ("own", USERNAME, [])):
+        folder = tmp_path / name
+        folder.mkdir()
+        sending = FakeApp(accounts=[USERNAME], silent=None)                      # in the cache, but no token to be had
+        lapsed, reading = signed_in_account(folder, sending), signed_in_account(folder, FakeApp(accounts=[USERNAME], silent=None))
+        d = mail_deps(folder, madeup_out, clock=lambda: now[0])
+        settings = d.settings.model_copy(update={"test_mode": True, "own_addresses": own, "buyer_email": buyer})
+        graph_calls = FakeSession()
+        d = d.model_copy(update={"settings": settings, "mailer": mailer_of(settings, {}, lambda: lapsed, session=graph_calls, clock=lambda: now[0])})
+        run_loop(d, folder / "STOP", poll_seconds=0, max_passes=1, account=reading, session=FakeSession())
+        root = folder / "cases"
+        assert graph_calls.calls == [], name
+        if name == "stopped":
+            assert not (root / "outbox").exists() and (root / "digests" / "2026-11-12.txt").exists()
+            assert not [call for call in sending.calls if call[0] == "acquire_token_silent_with_error"]
+        else:
+            [sent] = (root / "outbox").glob("*.eml")
+            mail = message_from_bytes(sent.read_bytes(), policy=policy.default)
+            assert mail["Subject"] == "[Inkoopassistent] Dagoverzicht 12-11-2026" and mail["To"] == USERNAME
+            assert not (root / "digests" / "2026-11-12.txt").exists()

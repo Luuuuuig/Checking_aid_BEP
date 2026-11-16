@@ -343,3 +343,61 @@ def test_the_choice_of_auto_needs_no_network_and_follows_the_token_cache(tmp_pat
 def test_send_via_microsoft_needs_the_tenant_and_the_client(tmp_path):
     with pytest.raises(ValueError, match="ms_client_id"):
         settings_file(tmp_path, send_via="microsoft", ms_tenant_id=TENANT_ID)
+
+
+# --- the guard of the test mode on every route of the mailer of the settings ---
+
+OWN = ["owner@example.org"]                         # a made-up own address of the owner
+ROUTES = [({"send_via": "file"}, {}, FileMailer, None), ({}, {}, FileMailer, "no_mailbox"), (SMTP, {}, FileMailer, "no_password"),
+          (SMTP | {"send_via": "smtp"}, PASSWORD, SmtpMailer, None), (MAIL | {"send_via": "microsoft"}, {}, MicrosoftMailer, None),
+          (MAIL, {}, AutoMailer, "no_mailbox")]
+ROUTE_IDS = ["files by choice", "auto with nothing connected", "a server without its password", "smtp", "microsoft", "auto with a folder"]
+
+
+def leaves(mailer) -> list:
+    """The mailers that send or write: the two of an AutoMailer, or the mailer itself."""
+    return [mailer.microsoft, mailer.other] if isinstance(mailer, AutoMailer) else [mailer]
+
+
+@pytest.mark.parametrize("values, environ, chosen, unrouted", ROUTES, ids=ROUTE_IDS)
+def test_in_the_test_mode_every_route_of_the_mailer_of_the_settings_carries_the_guard(tmp_path, values, environ, chosen, unrouted):
+    """The guard sits on each mailer that sends or writes, so that the route the pipeline and the close take of the mailer
+    (current()) is guarded itself, and its mark of a missing way to send stays readable. The types and the marks are those of the
+    settings without the test mode."""
+    from aid.messaging import OwnOnly
+    built = mailer_of(settings_file(tmp_path, **values, test_mode=True, own_addresses=OWN), environ, lambda: account(tmp_path))
+    assert type(built) is chosen and all(isinstance(leaf.guard, OwnOnly) for leaf in leaves(built))
+    route = built.current() if isinstance(built, AutoMailer) else built
+    assert isinstance(route.guard, OwnOnly) and getattr(leaves(built)[-1], "unrouted", None) == unrouted
+
+
+@pytest.mark.parametrize("values, environ, chosen, unrouted", ROUTES, ids=ROUTE_IDS)
+def test_without_the_test_mode_no_route_carries_a_guard(tmp_path, values, environ, chosen, unrouted):
+    built = mailer_of(settings_file(tmp_path, **values, test_mode=False, own_addresses=OWN), environ, lambda: account(tmp_path))
+    assert type(built) is chosen and [leaf.guard for leaf in leaves(built)] == [None] * len(leaves(built))
+
+
+def test_the_work_account_signed_in_at_the_send_counts_as_own(tmp_path, monkeypatch):
+    """Through the work mailbox the signed-in account counts as an own address: a question to an own address with the account in
+    copy goes. Through the SMTP server no account is known, so the same copy is no own address there, while that account is still
+    signed in. After a sign-out the account counts no more for the work mailbox either, and nothing is asked of Graph."""
+    import smtplib
+
+    from aid.messaging import NotOwnAddress
+
+    class NoServer:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("a connection to the mail server for a message the guard stops")
+    monkeypatch.setattr(smtplib, "SMTP", NoServer)
+    signed, session = account(tmp_path), graph()
+    settings = settings_file(tmp_path, **MAIL, send_via="microsoft", test_mode=True, own_addresses=MESSAGE.to)
+    built = mailer_of(settings, {}, lambda: signed, session=session, clock=lambda: NOW)
+    assert MESSAGE.cc == [USERNAME] and built.send(MESSAGE).internet_message_id and len(session.calls) == 2
+    smtp_settings = settings_file(tmp_path, **SMTP, send_via="smtp", test_mode=True, own_addresses=MESSAGE.to)
+    assert signed.account() == USERNAME
+    with pytest.raises(NotOwnAddress):
+        mailer_of(smtp_settings, PASSWORD, lambda: signed).send(MESSAGE)
+    signed.sign_out()
+    with pytest.raises(NotOwnAddress):
+        built.send(MESSAGE)
+    assert len(session.calls) == 2
