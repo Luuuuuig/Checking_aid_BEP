@@ -1,0 +1,164 @@
+# Builds the aid as a folder for Windows (python -m aid.portable --build, aid/MANUAL.md section 3.16), starts the unzipped folder
+# once through its own start file and checks that the start opens the page and ends, and on main puts the folder on the Releases
+# page as Inkoopassistent.zip, under the one tag "inkoopassistent", so that the download link stays the same for every version.
+name: Folder for Windows
+
+on:
+  push:
+    branches: [main]
+    paths: ["aid/**", ".github/workflows/folder.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# One run per branch at a time. A newer push waits for the run in progress instead of cancelling it, so that no run is stopped
+# halfway through the update of the release.
+concurrency:
+  group: folder-for-windows-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  folder:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      PYTHON_VERSION: "3.13.17"   # a release with a Windows package on python.org whose sha256 the build checks (EMBED_SHA256)
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          architecture: x64
+
+      - name: Build the folder
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP "build\Inkoopassistent"
+          python -m aid.portable --build $out
+          if ($LASTEXITCODE -ne 0) { throw "the build ended with exit code $LASTEXITCODE" }
+          if (Test-Path (Join-Path $out "data")) { throw "a fresh build holds no data folder" }
+
+      - name: Zip the folder
+        shell: pwsh
+        run: |
+          $zip = Join-Path $env:RUNNER_TEMP "Inkoopassistent.zip"
+          7z a -tzip -mx=5 $zip (Join-Path $env:RUNNER_TEMP "build\Inkoopassistent") | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "7z ended with exit code $LASTEXITCODE" }
+          "zip: {0:N0} MB" -f ((Get-Item $zip).Length / 1MB)
+
+      - name: Start the unzipped folder through its start file
+        shell: pwsh
+        timeout-minutes: 15
+        run: |
+          $test = Join-Path $env:RUNNER_TEMP "test folder"
+          7z x (Join-Path $env:RUNNER_TEMP "Inkoopassistent.zip") "-o$test" | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "7z could not unzip the folder" }
+          $folder = Join-Path $test "Inkoopassistent"
+          $log = Join-Path $folder "data\logs\start.log"
+          # The lines with which the start of aid/portable.py ends as a start that failed, or tells that a message box failed: each
+          # stands for a warning box on the buyer's PC, or for no box at all. The launcher's own lines in start.log carry no
+          # "folder start:", and the start's lines of a launcher command give the launcher's output only after the command's name.
+          $failed = '^\S+ \S+ folder start: (the settings file could not be written|something already answers at |these modules cannot be imported: |--(status|install-autostart|resume --background) could not be run|--(install-autostart|resume --background) ended with exit code [1-9]|no launcher runs on these settings|the page did not answer within|the browser could not be opened|the command failed|the (information|warning) box could not be )'
+          $opened = 'folder start: the page answers and was opened in the browser'
+          function Test-Failed { (Test-Path -LiteralPath $log) -and (Select-String -LiteralPath $log -Pattern $failed -Quiet) }
+          function Test-Opened { (Test-Path -LiteralPath $log) -and (Select-String -LiteralPath $log -Pattern $opened -SimpleMatch -Quiet) }
+          function Get-Start { @(Get-CimInstance Win32_Process -Filter "Name = 'pythonw.exe'" | Where-Object { $_.CommandLine -like "*aid.portable --start*" }) }
+          function Show-StartLog { if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log | Select-Object -Last 60 } }
+          Start-Process -FilePath (Join-Path $folder "Inkoopassistent starten.cmd") -WorkingDirectory $folder
+          $deadline = (Get-Date).AddMinutes(10)
+          $answered = $false
+          while (-not $answered -and (Get-Date) -lt $deadline) {
+            if (Test-Failed) { Show-StartLog; throw "the start failed: start.log holds its line" }
+            try {
+              $page = Invoke-WebRequest -Uri "http://127.0.0.1:7860/" -UseBasicParsing -TimeoutSec 5
+              $answered = $page.StatusCode -eq 200
+            } catch { }
+            if (-not $answered) { Start-Sleep -Seconds 5 }
+          }
+          if (-not $answered) { Show-StartLog; throw "the page did not answer within 10 minutes of the double-click" }
+          # The page answers. As on the buyer's PC, the start must now open it, say so in start.log and end: a start that still runs
+          # waits at a warning box (the page came after the start's own wait, or no browser opened).
+          $deadline = (Get-Date).AddMinutes(2)
+          $done = $false
+          while (-not $done -and (Get-Date) -lt $deadline) {
+            if (Test-Failed) { Show-StartLog; throw "the start failed after the page answered: start.log holds its line" }
+            $done = (Test-Opened) -and (Get-Start).Count -eq 0
+            if (-not $done) { Start-Sleep -Seconds 2 }
+          }
+          Show-StartLog
+          if (Test-Failed) { throw "the start failed: start.log holds its line" }
+          if (-not (Test-Opened)) { throw "the page answers, but start.log does not say that the start opened it" }
+          if ((Get-Start).Count -ne 0) { throw "the start still runs two minutes after the page answered: it waits at a message box" }
+          "the page answers, and the start opened it and ended: the folder starts through its own start file"
+
+      - name: Stop the folder
+        if: always()
+        shell: pwsh
+        run: |
+          $folder = Join-Path $env:RUNNER_TEMP "test folder\Inkoopassistent"
+          if (Test-Path (Join-Path $folder "data")) {
+            & (Join-Path $folder "python\python.exe") -I -X utf8 -m aid.portable --stop (Join-Path $folder "data")
+            & (Join-Path $folder "python\python.exe") -I -X utf8 -m aid.portable --no-autostart (Join-Path $folder "data")
+          }
+          # a start that still waits at a message box
+          Get-CimInstance Win32_Process -Filter "Name = 'pythonw.exe'" | Where-Object { $_.CommandLine -like "*aid.portable --start*" } |
+            ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+
+      - name: Put the zip on the Releases page
+        if: github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $zip = Join-Path $env:RUNNER_TEMP "Inkoopassistent.zip"
+          $short = $env:GITHUB_SHA.Substring(0, 7)
+          $day = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd")
+          $title = "Inkoopassistent (nieuwste versie)"
+          $notes = @(
+            "De inkoopassistent als map voor Windows, gebouwd op $day uit commit $short met Python $env:PYTHON_VERSION.",
+            "",
+            "1. Download Inkoopassistent.zip hieronder.",
+            "2. Klik met de rechtermuisknop op het zip-bestand, kies Eigenschappen, vink Blokkering opheffen aan en klik op OK.",
+            "3. Pak het zip-bestand uit op de eigen schijf van de pc, niet in een map die met OneDrive wordt gesynchroniseerd. Het zip-bestand bevat de map Inkoopassistent.",
+            "4. Open die map Inkoopassistent en dubbelklik op Inkoopassistent starten.",
+            "",
+            "Hebt u het zip-bestand al uitgepakt zonder stap 2, stop dan de assistent als die draait en verwijder wat u uitpakte, maar nooit een map data; doe daarna stap 2 en pak het zip-bestand opnieuw uit.",
+            "",
+            "Bijwerken: stop de assistent, verwijder in de map van de assistent alles behalve de map data, zet alles wat in de map van de nieuwe versie staat in die map, ook de bestanden waarop u dubbelklikt, en start opnieuw; de map data blijft staan. Dit zip-bestand bevat een map Inkoopassistent: pak het na stap 2 eerst uit op een andere plek, bijvoorbeeld in Downloads, en zet wat in die map Inkoopassistent staat in de map van de assistent, niet die map zelf."
+          ) -join "`n"
+          gh release view inkoopassistent *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create inkoopassistent $zip --target $env:GITHUB_SHA --title $title --notes $notes
+            if ($LASTEXITCODE -ne 0) { throw "the release could not be made" }
+            "the release is made, with the zip of $short"
+          } else {
+            # The release is kept and changed in place. The new zip goes up under a name of its own first, so that an upload that
+            # fails leaves the old zip in place; then the other zips are removed and the new one takes the name Inkoopassistent.zip.
+            # The tag moves to this commit; when the token may not move it (a change of a workflow file between the two commits can
+            # be refused, and would be on every later run), the run warns and goes on, as the notes name the commit of the zip. The
+            # notes come last, so that the step ends with their exit code.
+            $upload = Join-Path $env:RUNNER_TEMP "Inkoopassistent-$short.zip"
+            Copy-Item -LiteralPath $zip -Destination $upload -Force
+            gh release upload inkoopassistent $upload --clobber
+            if ($LASTEXITCODE -ne 0) { throw "the new zip could not be uploaded: the release keeps the old one" }
+            $release = gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/inkoopassistent" | Out-String | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0) { throw "the release could not be read" }
+            $new = @($release.assets | Where-Object { $_.name -eq "Inkoopassistent-$short.zip" })
+            if ($new.Count -ne 1) { throw "the uploaded zip is not on the release" }
+            foreach ($asset in @($release.assets | Where-Object { $_.id -ne $new[0].id })) {
+              gh api -X DELETE "repos/$env:GITHUB_REPOSITORY/releases/assets/$($asset.id)" | Out-Null
+              if ($LASTEXITCODE -ne 0) { throw "$($asset.name) could not be removed from the release" }
+            }
+            gh api -X PATCH "repos/$env:GITHUB_REPOSITORY/releases/assets/$($new[0].id)" -f "name=Inkoopassistent.zip" | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "the new zip could not be named Inkoopassistent.zip: it is on the release as $($new[0].name)" }
+            gh api -X PATCH "repos/$env:GITHUB_REPOSITORY/git/refs/tags/inkoopassistent" -f "sha=$env:GITHUB_SHA" -F "force=true" | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+              "::warning::the tag inkoopassistent could not be moved to $short; the zip and the notes are of $short, the tag still names an earlier commit"
+            }
+            gh release edit inkoopassistent --title $title --notes $notes
+            if ($LASTEXITCODE -ne 0) { throw "the release notes could not be written" }
+            "the release holds the zip of $short"
+          }
