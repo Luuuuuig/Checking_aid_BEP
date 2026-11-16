@@ -1,5 +1,6 @@
 """The one-command demo of aid/demo.py: a folder with valid settings, the 22 made-up cases and the batch's first pass."""
 import csv
+import hashlib
 
 from aid import demo
 from aid.demo import RECORDED_DIR, main
@@ -66,6 +67,53 @@ def test_the_anthropic_reader_is_wired_like_the_notebook(tmp_path, monkeypatch):
     out = tmp_path / "demo"
     assert main(["--out", str(out), "--reader", "anthropic"]) == 0
     assert {row["case_id"]: row["status"] for row in read_csv(out / "summary.csv")} == RECORDED_STATUS
+
+
+def test_a_case_named_runs_alone_and_force_adds_another_to_the_folder(tmp_path, capsys):
+    """--case runs only the cases named, in any case of letters, so that a demonstration sends one document at a time; --force adds
+    the next case to the folder, whose review page then holds both."""
+    out = tmp_path / "demo"
+    assert main(["--out", str(out), "--case", "MU01"]) == 0
+    assert [row["case_id"] for row in read_csv(out / "cases.csv")] == ["MU01"]
+    assert {row["case_id"]: row["status"] for row in read_csv(out / "summary.csv")} == {"MU01": PARSER_STATUS["MU01"]}
+    assert "1 made-up case run with the parser reader" in capsys.readouterr().out
+    assert main(["--out", str(out), "--case", "mu07"]) == 2 and "not empty" in capsys.readouterr().err
+    assert main(["--out", str(out), "--case", "mu07", "--force"]) == 0
+    assert {row["case_id"]: row["status"] for row in read_csv(out / "summary.csv")} == {"MU07": PARSER_STATUS["MU07"]}
+    folders = {path.name.split("_")[0] for path in (out / "cases").iterdir() if path.is_dir() and path.name[:6].isdigit()}
+    assert {"250101", "250107"} <= folders
+
+
+def test_a_case_that_is_not_in_the_made_up_set_is_refused_before_anything_is_written(tmp_path, capsys):
+    out = tmp_path / "demo"
+    assert main(["--out", str(out), "--case", "MU05", "--case", "MU99"]) == 2
+    err = capsys.readouterr().err
+    assert "MU99" in err and "MU01" in err and "CART02" in err and not out.exists()
+    assert main(["--out", str(out), "--case", "MU05", "--prepare-only"]) == 2
+    assert "--prepare-only" in capsys.readouterr().err and not out.exists()
+
+
+def test_the_anthropic_reader_reads_only_the_cases_named(tmp_path, monkeypatch):
+    """With --case the live option sends the documents of the cases named alone: the client is asked for no other document."""
+    asked = []
+
+    class Replayed(RecordedClient):
+        def __init__(self, model, effort="medium"):
+            super().__init__(RECORDED_DIR)
+            self.model, self.effort = model, effort
+
+        def complete(self, req):
+            if req.pdf is not None:
+                asked.append(hashlib.sha256(req.pdf).hexdigest())
+            return super().complete(req)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "made-up-key-for-the-test")
+    monkeypatch.setattr(demo, "AnthropicClient", Replayed)
+    out = tmp_path / "demo"
+    assert main(["--out", str(out), "--reader", "anthropic", "--case", "MU05", "--case", "MU16"]) == 0
+    assert {row["case_id"]: row["status"] for row in read_csv(out / "summary.csv")} == {"MU05": RECORDED_STATUS["MU05"],
+                                                                                          "MU16": RECORDED_STATUS["MU16"]}
+    named = {hashlib.sha256((demo.MADEUP_OUT / f"{case}_conf.pdf").read_bytes()).hexdigest() for case in ("MU05", "MU16")}
+    assert set(asked) <= named
 
 
 def test_a_prepared_folder_lets_the_loop_open_a_case_by_itself(tmp_path, capsys):

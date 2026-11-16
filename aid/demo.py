@@ -19,7 +19,10 @@ and needs no AI; the two scans then fail, which is expected, because they need t
 recorded replays the recorded LLM answers of the test fixtures instead, so every document is read, still without any call.
 --reader anthropic reads with the LLM reader over the Anthropic client, the development client of the plan: it needs the key in the
 environment variable ANTHROPIC_API_KEY, calls the service for every document and the decider, and is for the made-up documents of
-this demo only; company documents go to Microsoft 365 Copilot (aid/readers/copilot_client.py) and to no other service.
+this demo only; company documents go to Microsoft 365 Copilot (aid/readers/copilot_client.py) and to no other service. --case
+MU05 runs only that case of the set (more than once for more cases), so that only its document goes to the service; with --force
+the cases are added to a folder run before, and its review page lists them all. A case that is not in the set is refused before
+anything is written, as is --case together with --prepare-only, which runs no case.
 
 --prepare-only writes the folder and files the purchase orders but runs no case: the folder to watch the runner loop work by
 itself, because a document a folder has seen once counts as a duplicate afterwards and opens no second case. Its settings say
@@ -115,12 +118,20 @@ def main(argv: list[str] | None = None) -> int:
     """Prepare --out and run the batch over the made-up set; 0 when the run was made, 2 when the folder was refused."""
     args = _arguments(argv)
     out = args.out.resolve()
+    known = [spec.case_id for spec in load_specs(SPEC_DIR)]
+    chosen = [case.upper() for case in args.case] if args.case else None
+    if chosen and args.prepare_only:
+        print("--case names the cases to run, and --prepare-only runs none: give one of the two", file=sys.stderr)
+        return 2
+    if unknown := [case for case in chosen or () if case not in known]:
+        print(f"no made-up case {', '.join(unknown)}; the made-up set holds {', '.join(known)}", file=sys.stderr)
+        return 2
     if out.exists() and any(out.iterdir()) and not args.force:
         print(f"{out} exists and is not empty; choose another folder or pass --force to run into it", file=sys.stderr)
         return 2
     out.mkdir(parents=True, exist_ok=True)
     settings_path = write_settings(out, files_only=args.prepare_only)
-    cases_path = write_cases(out)
+    cases_path = write_cases(out, chosen)
     (out / "inbox").mkdir(exist_ok=True)
     if args.prepare_only:
         batch.file_po_dir(load_settings(settings_path), MADEUP_OUT)
@@ -239,14 +250,17 @@ def _workbook(path: Path, rows: list[list]) -> None:
     book.save(path)
 
 
-def write_cases(out: Path) -> Path:
+def write_cases(out: Path, only: list[str] | None = None) -> Path:
     """<out>/cases.csv: the made-up confirmations as <case>_conf.pdf and the carts as their saved pages, with the PO number of
-    each case's spec, in the batch's columns (case_id, document, po_number, kind)."""
+    each case's spec, in the batch's columns (case_id, document, po_number, kind); with only, the cases of those ids alone, in the
+    order of the set."""
     path = out / "cases.csv"
     with open(path, "w", encoding="utf-8", newline="") as f:
         writer = csv.writer(f, lineterminator="\n")
         writer.writerow(["case_id", "document", "po_number", "kind"])
         for spec in load_specs(SPEC_DIR):
+            if only and spec.case_id not in only:
+                continue
             document = MADEUP_OUT / (f"{spec.case_id}_conf.pdf" if spec.confirmation else f"{spec.case_id}.html")
             writer.writerow([spec.case_id, str(document), spec.po.po_number, "confirmation" if spec.confirmation else "cart"])
     return path
@@ -278,7 +292,7 @@ def summary_text(out: Path, reader: str) -> str:
     counts = Counter(row["status"] for row in rows)
     failed = [row["case_id"] for row in rows if row["status"] == "failed"]
     lines = [f"Demo folder: {out}",
-             f"{len(rows)} made-up cases run with the {reader} reader: " + ", ".join(f"{counts[s]} {s}" for s in ("closed", "review", "waiting", "failed") if counts[s])]
+             f"{len(rows)} made-up case{'' if len(rows) == 1 else 's'} run with the {reader} reader: " + ", ".join(f"{counts[s]} {s}" for s in ("closed", "review", "waiting", "failed") if counts[s])]
     if failed and reader == "parser":
         lines.append(f"Failed with the parser, as expected: {', '.join(failed)} (a scan has no text layer, so it needs the LLM reader; "
                      f"run again with --reader recorded to replay recorded answers for them)")
@@ -298,6 +312,10 @@ def _arguments(argv: list[str] | None) -> argparse.Namespace:
                         help="the template parser (default, no AI), the LLM reader over the recorded answers of the tests, or the LLM reader "
                              "over the Anthropic client with the key in ANTHROPIC_API_KEY (made-up documents only)")
     parser.add_argument("--force", action="store_true", help="run into a folder that exists and is not empty")
+    parser.add_argument("--case", action="append", metavar="CASE",
+                        help="run only this case of the made-up set (MU01 to MU20, CART01, CART02), so that with --reader anthropic only "
+                             "its document goes to the service; give it more than once for more cases. With --force the cases are "
+                             "added to a folder run before, whose review page then lists them all")
     parser.add_argument("--prepare-only", action="store_true",
                         help="write the settings and the case list and file the purchase orders, but run no case: the folder for "
                              "watching the loop work by itself (a document the folder has seen once counts as a duplicate afterwards)")
