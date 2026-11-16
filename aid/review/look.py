@@ -262,20 +262,23 @@ button:hover, label:hover {{ transition-duration: 150ms; }}
 /* In Exact invoeren: the top pair of buttons and their answer stay at the top of the window while the list scrolls, and a box that
    the keyboard reaches never hides under them */
 #hand-actions {{ position: sticky; top: 0; z-index: 5; background: {GROUND}; padding: 8px 0; }}
-.block.hand-rows input {{ scroll-margin-top: 120px; }}
+.block.hand-rows input, .hand-copy button {{ scroll-margin-top: 148px; }}
 
 /* In Exact invoeren: behind each row its copy buttons, which the page's script draws (PAGE_JS) and which name the text they copy:
    the row in the first column and its buttons in the second, on one line, once the script has marked the list (hand-copies), so
-   that a page without the script keeps the list as it was; the buttons in the look of a small secondary button, 32 px high; a
-   button just pressed in the colours of done for a moment, a change of colour only; and under the list the line of what the press
-   copied, in the colour of done, or of a problem when the browser gave no clipboard: one line high also while it is empty, so that
-   a press moves nothing, flush with the rows and half the layout's gap from them */
-.block.hand-rows .wrap.hand-copies {{ display: grid; grid-template-columns: minmax(0, max-content) max-content; justify-content: start; align-items: center; gap: 8px 12px; }}
+   that a page without the script keeps the list as it was. Both columns give way in a narrow window, and a long code breaks inside
+   its button, so that no button lies over a row at a zoom of 200 percent; the list keeps 4 px on the right for the focus ring of
+   a row's last button. The buttons have the look of a small secondary button, 32 px high. A button just pressed shows the word
+   "Gekopieerd" or "Niet gekopieerd" for a moment, in the colours of done or of a problem: the word says it, the colour only goes
+   with it. The line of what the press copied stands in the column of the two buttons, which stays in view, one line high also
+   while it is empty, so that a press moves nothing, in the colour of done, or of a problem when the browser gave no clipboard */
+.block.hand-rows .wrap.hand-copies {{ display: grid; grid-template-columns: minmax(0, max-content) minmax(0, max-content); justify-content: start; align-items: center; gap: 8px 12px; padding-right: 4px; }}
 .hand-copy {{ display: flex; flex-wrap: wrap; gap: 8px; }}
-.hand-copy button {{ min-height: 32px; padding: 4px 12px; font-size: 14px; line-height: 20px; font-weight: 600; color: {INK}; background: {SURFACE}; border: 1px solid {CONTROL}; border-radius: 4px; cursor: pointer; white-space: nowrap; }}
+.hand-copy button {{ min-height: 32px; max-width: 100%; padding: 4px 12px; font-size: 14px; line-height: 20px; font-weight: 600; color: {INK}; background: {SURFACE}; border: 1px solid {CONTROL}; border-radius: 4px; cursor: pointer; text-align: left; overflow-wrap: break-word; }}
 .hand-copy button:hover {{ background: {SURFACE_2}; border-color: {MUTED}; }}
 .hand-copy button.copied {{ color: {_DONE.text}; background: {_DONE.tint}; border-color: {_DONE.mark}; }}
-#hand-copy {{ margin: -8px 0; padding: 0; }}
+.hand-copy button.refused {{ color: {_PROBLEM.text}; background: {_PROBLEM.tint}; border-color: {_PROBLEM.mark}; }}
+#hand-copy, #hand-copy .html-container {{ margin: 0; padding: 0; }}
 #hand-copy-said {{ min-height: 20px; margin: 0; font-size: 14px; line-height: 20px; font-weight: 600; color: {_DONE.text}; }}
 #hand-copy-said.refused {{ color: {_PROBLEM.text}; }}
 
@@ -306,8 +309,10 @@ button:hover, label:hover {{ transition-duration: 150ms; }}
 # label stays the name of the box alone; it does so again whenever the rows or the element change (the rows of a list read again,
 # another language), and leaves a list that is right as it is, so that its own change does not call it again without end. A press
 # copies the button's text through the browser's clipboard, or where the browser gives a page none, through a field of the page
-# for a moment; it never ticks the row; and it says what it copied in the line under the list (hand-copy-said), or that copying
-# did not work. A text of a document is set as text, never read as markup.
+# for a moment, after which the focus is back on the button; it never ticks the row; it says what it copied in the line in the
+# column of the two buttons (hand-copy-said), or that copying did not work; and the pressed button itself reads "Gekopieerd" or
+# "Niet gekopieerd" for a moment, at the width it had, with its name for a screen reader unchanged. A text of a document is set
+# as text, never read as markup, and never as a pattern of a replacement.
 PAGE_JS = """
 () => {
   const language = () => {
@@ -352,15 +357,26 @@ PAGE_JS = """
     const line = document.getElementById('hand-copy-said');
     const words = (data && (done ? data.dataset.copied : data.dataset.failed)) || '';
     if (line) {
-      line.textContent = words.replace('{text}', button.dataset.copy || '');
+      line.textContent = words.split('{text}').join(button.dataset.copy || '');
       line.classList.toggle('refused', !done);
     }
-    if (done) {
-      button.classList.add('copied');
-      setTimeout(() => button.classList.remove('copied'), 1500);
+    const word = (data && (done ? data.dataset.done : data.dataset.notDone)) || '';
+    clearTimeout(button.copiedTimer);
+    if (!button.dataset.words) {
+      button.dataset.words = button.textContent;
+      button.style.minWidth = button.offsetWidth + 'px';
     }
+    button.classList.toggle('copied', done);
+    button.classList.toggle('refused', !done);
+    if (word) button.textContent = word;
+    button.copiedTimer = setTimeout(() => {
+      button.classList.remove('copied', 'refused');
+      button.textContent = button.dataset.words;
+      button.style.minWidth = '';
+      delete button.dataset.words;
+    }, 1500);
   };
-  const throughAField = (text) => {
+  const throughAField = (text, button) => {
     const field = document.createElement('textarea');
     field.value = text;
     field.setAttribute('readonly', '');
@@ -372,6 +388,7 @@ PAGE_JS = """
     let done = false;
     try { done = document.execCommand('copy'); } catch (error) { done = false; }
     field.remove();
+    button.focus({ preventScroll: true });
     return done;
   };
   language();
@@ -386,9 +403,9 @@ PAGE_JS = """
     event.preventDefault();
     const text = button.dataset.copy || '';
     if (navigator.clipboard && window.isSecureContext) {
-      navigator.clipboard.writeText(text).then(() => copied(button, true), () => copied(button, throughAField(text)));
+      navigator.clipboard.writeText(text).then(() => copied(button, true), () => copied(button, throughAField(text, button)));
     } else {
-      copied(button, throughAField(text));
+      copied(button, throughAField(text, button));
     }
   });
 }

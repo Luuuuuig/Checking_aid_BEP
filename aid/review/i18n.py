@@ -89,8 +89,9 @@ cannot be read, "hand_new_rows_one" and "hand_new_rows_many" the line under its 
 read, and "hand_nothing_noted" the note of a press that noted nothing. Under the list: "hand_put_back_row" is a row that puts
 a change back in Exact and "hand_exact_shows" the note of an open row whose order Exact printed with a third value;
 "hand_copy" is the words on a copy button behind a row ("Kopieer 250108": the words are the text it copies), "hand_copy:<part>" the
-name a screen reader reads for the button of that part (order, article, value; hand_list.copy_parts), "hand_copied" the line that
-says what a press copied and "hand_copy_failed" the line of a press that could not copy;
+name a screen reader reads for the button of that part (order, article, value; hand_list.copy_parts), which begins with the words on
+the button, "hand_copied" the line that says what a press copied and "hand_copy_failed" the line of a press that could not copy, and
+"hand_copy_done" and "hand_copy_not_done" the word the pressed button itself shows for a moment;
 "hand_tick_ended" and "hand_tick_ended_unfound" are the note of a row whose tick a newer print of its order ended, and
 "hand_list_changed" what the tab says of a list whose file was changed outside the aid; "hand_done*" are
 the section of the changes handled in the last 14 days and how the aid knows each, "hand_reopen*" and "hand_put_back*" its two buttons
@@ -231,11 +232,13 @@ STRINGS: dict[str, dict[str, str]] = {
         "hand_unknown": "onbekend",
         "hand_empty": "leeg",
         "hand_copy": "Kopieer {text}",
-        "hand_copy:order": "Inkoopordernummer {text} kopiëren",
-        "hand_copy:article": "Artikelcode {text} kopiëren",
-        "hand_copy:value": "Nieuwe waarde {text} kopiëren",
+        "hand_copy:order": "Kopieer {text}, inkoopordernummer",
+        "hand_copy:article": "Kopieer {text}, artikelcode",
+        "hand_copy:value": "Kopieer {text}, nieuwe waarde",
         "hand_copied": "Gekopieerd: {text}",
         "hand_copy_failed": "Kopiëren is niet gelukt. Typ {text} over in Exact.",
+        "hand_copy_done": "Gekopieerd",
+        "hand_copy_not_done": "Niet gekopieerd",
         "hand_week": "week {week} ({year})",
         "hand_hint": "Let op: na deze wijziging moet de inkooporder opnieuw gefiatteerd worden.",
         "hand_entered": "Aangevinkte regels zijn ingevoerd",
@@ -1273,11 +1276,13 @@ STRINGS: dict[str, dict[str, str]] = {
         "hand_unknown": "unknown",
         "hand_empty": "empty",
         "hand_copy": "Copy {text}",
-        "hand_copy:order": "Copy purchase order number {text}",
-        "hand_copy:article": "Copy article code {text}",
-        "hand_copy:value": "Copy new value {text}",
+        "hand_copy:order": "Copy {text}, purchase order number",
+        "hand_copy:article": "Copy {text}, item code",
+        "hand_copy:value": "Copy {text}, new value",
         "hand_copied": "Copied: {text}",
         "hand_copy_failed": "Copying did not work. Type {text} into Exact.",
+        "hand_copy_done": "Copied",
+        "hand_copy_not_done": "Not copied",
         "hand_week": "week {week} ({year})",
         "hand_hint": "Note: after this change the purchase order must be approved again.",
         "hand_entered": "The ticked rows have been entered",

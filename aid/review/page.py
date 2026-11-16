@@ -168,9 +168,10 @@ genoteerd: ..." when no ticked row was still open; either way nothing is written
 keeps at the top of the window while the list scrolls; one group of tick boxes with every open change, one under the other (a style
 rule given to the page in the head of an HTML block, for the group's class "hand-rows"), so that the rows of one order stand together;
 behind each row its copy buttons, "Kopieer 250108", "Kopieer KM-0801" and "Kopieer 12,70", which copy the order number, the article
-code and the new value for pasting into Exact and tick nothing: the tab gives them in a hidden element under the tick boxes
-(hand-copy: _copy_data, read by copies_opened with the list and after each press), the page's load script draws them and copies
-(PAGE_JS of aid/review/look.py), and the line under the list says what a press copied, "Gekopieerd: 12,70";
+code and the new value for pasting into Exact and tick nothing: the tab gives them in a hidden element in the column of the two
+buttons (hand-copy: _copy_data, read by copies_opened with the list and after each press), the page's load script draws them and
+copies (PAGE_JS of aid/review/look.py), and the line under those two buttons, which stays in view, says what a press copied,
+"Gekopieerd: 12,70", while the pressed button itself reads "Gekopieerd" for a moment;
 the two buttons again under the rows, small, so that they stay in reach of a long list; the dropdown "Inkooporder of artikelprijzen"
 with "Alles hiervan is ingevoerd" (block_entered), which marks the changes of the block chosen as the page showed them when the list
 was last read (kept per block in a gr.State that each read fills, with the dropdown's choices), each only while it is open, so that a
@@ -2060,22 +2061,24 @@ def _page(gr, deps: Deps, tab: _Tab):
 def _copy_data(buttons: dict[str, list[tuple[str, str, str]]], strings: dict[str, str]) -> str:
     """What the tab "In Exact invoeren" gives the page's script (PAGE_JS of aid/review/look.py) for the copy buttons behind its rows:
     a hidden element with the buttons of each row as JSON in data-rows (hand_list.copy_buttons: by the value of the row's tick box,
-    each button as the text to copy, its words and its name for a screen reader) and the two lines of a press in data-copied and
-    data-failed, and after it the line that says what a press did, a polite live region that the script fills. Every text stands
-    escaped inside its attribute, so that a code or a number taken from a document is data to the browser and never markup."""
-    rows = escape(json.dumps(buttons, ensure_ascii=False), quote=True)
-    return (f'<div id="hand-copy-data" hidden data-rows="{rows}" data-copied="{escape(strings["hand_copied"], quote=True)}" '
-            f'data-failed="{escape(strings["hand_copy_failed"], quote=True)}"></div>'
-            '<p id="hand-copy-said" role="status" aria-live="polite"></p>')
+    each button as the text to copy, its words and its name for a screen reader), the two lines of a press in data-copied and
+    data-failed and the word the pressed button shows for a moment in data-done and data-not-done, and after it the line that says
+    what a press did, a polite live region that the script fills. Every text stands escaped inside its attribute, so that a code or
+    a number taken from a document is data to the browser and never markup."""
+    held = {"rows": json.dumps(buttons, ensure_ascii=False), "copied": strings["hand_copied"], "failed": strings["hand_copy_failed"],
+            "done": strings["hand_copy_done"], "not-done": strings["hand_copy_not_done"]}
+    attributes = " ".join(f'data-{name}="{escape(text, quote=True)}"' for name, text in held.items())
+    return f'<div id="hand-copy-data" hidden {attributes}></div><p id="hand-copy-said" role="status" aria-live="polite"></p>'
 
 
 def _hand_tab(gr, app, language, hand_tab, live: _Live, tab: _Tab, cases_root: Path, ticker) -> None:
     """The content of the tab "In Exact invoeren" and its events, inside the tab (see the module docstring): the intro with the lines
     under it and "Lijst vernieuwen", the line of the changes that came in since the list was read (hand-new, hidden until the timer
     finds one), the two buttons for the ticked rows with the note that answers every press of the list right under them (hand-actions,
-    which the page's style keeps at the top of the window while the list scrolls), one group of tick boxes with every open change, one
-    under the other, the element of the copy buttons that the page's script draws behind each row, with the line of what a press
-    copied (hand-copy: _copy_data; copies_opened reads it with the list), the two buttons again, small, the dropdown of the blocks with its button, the dropdown of the price lists with its
+    which the page's style keeps at the top of the window while the list scrolls; in the same column, so that it stays in view as
+    well, the element of the copy buttons that the page's script draws behind each row, with the line of what a press copied:
+    hand-copy, _copy_data, which copies_opened reads with the list), one group of tick boxes with every open change, one
+    under the other, the two buttons again, small, the dropdown of the blocks with its button, the dropdown of the price lists with its
     button (shown while a price list has article prices to enter), the section of the confirmations to attach in Exact, and last the
     section of the handled changes (its text, the dropdown "Afgehandelde wijziging" with its two buttons, a note). hand_tab is the tab
     itself, whose label counts the open changes and whose selection reads the list again; ticker is the page's gr.Timer, whose tick
@@ -2320,9 +2323,11 @@ def _hand_tab(gr, app, language, hand_tab, live: _Live, tab: _Tab, cases_root: P
             entered_above = gr.Button(first["hand_entered"], variant="primary")          # the one filled button of the tab
             dropped_above = gr.Button(first["hand_dropped"])
         note = gr.Markdown("", elem_id="hand-note", elem_classes=["answer"])           # the answer of every press of the list
+        # what the page's script needs to draw the copy buttons behind the rows, and the line of what a press copied: in this
+        # column, so that the line is in view wherever in a long list the press was
+        copies = gr.HTML(_copy_data({}, first), elem_id="hand-copy", container=False, padding=False, apply_default_css=False,
+                         js_on_load=None)
     rows = gr.CheckboxGroup(choices=[], value=[], show_label=False, elem_id="hand-rows", elem_classes=["hand-rows"])
-    # what the page's script needs to draw the copy buttons behind the rows, and the line of what a press copied
-    copies = gr.HTML(_copy_data({}, first), elem_id="hand-copy", container=False, padding=False, apply_default_css=False, js_on_load=None)
     with gr.Row():                                   # the same pair under a long list, small
         entered = gr.Button(first["hand_entered"], size="sm")
         dropped = gr.Button(first["hand_dropped"], size="sm")

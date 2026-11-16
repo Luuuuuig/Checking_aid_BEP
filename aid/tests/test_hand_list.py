@@ -18,8 +18,8 @@ from aid.execution.writer import UNDO_RULE_ID, PreparedWriter, WriteLog, undo_ca
 from aid.madeup.generate import MadeUpSpec, confirmation_pdf, export_csv, load_specs
 from aid.pipeline import record_dispositions, run_case
 from aid.po_store import PoStore, PoVersion
-from aid.review.hand_list import (blocks, confirmation_lines, confirmations, copy_buttons, copy_parts, done_rows, ids_of, row_text,
-                                  take_back, tick_rows)
+from aid.review.hand_list import (COPY_PARTS, blocks, confirmation_lines, confirmations, copy_buttons, copy_parts, done_rows, ids_of,
+                                  row_text, take_back, tick_rows)
 from aid.review.i18n import STRINGS
 from aid.sources.upload import open_upload_case
 from aid.tests.conftest import REPO_ROOT, deps
@@ -189,13 +189,22 @@ def test_the_buttons_of_each_row_name_what_they_copy(tmp_path, madeup_out):
                        asking.ask(asking.case("250114"), on_line("po_line_date", "250114", "1", "2026-11-16", "2026-W48")))
     [priced] = asking.ask(asking.case("250108"), article("KM-0801", "12.70"))
     assert copy_buttons(asking.open(), asking.root, "nl") == {
-        price: [("250108", "Kopieer 250108", "Inkoopordernummer 250108 kopiëren"), ("KM-0801", "Kopieer KM-0801", "Artikelcode KM-0801 kopiëren"),
-                ("12,70", "Kopieer 12,70", "Nieuwe waarde 12,70 kopiëren")],
-        week: [("250114", "Kopieer 250114", "Inkoopordernummer 250114 kopiëren"), ("KM-1401", "Kopieer KM-1401", "Artikelcode KM-1401 kopiëren")],
-        priced: [("KM-0801", "Kopieer KM-0801", "Artikelcode KM-0801 kopiëren"), ("12,70", "Kopieer 12,70", "Nieuwe waarde 12,70 kopiëren")]}
+        price: [("250108", "Kopieer 250108", "Kopieer 250108, inkoopordernummer"), ("KM-0801", "Kopieer KM-0801", "Kopieer KM-0801, artikelcode"),
+                ("12,70", "Kopieer 12,70", "Kopieer 12,70, nieuwe waarde")],
+        week: [("250114", "Kopieer 250114", "Kopieer 250114, inkoopordernummer"), ("KM-1401", "Kopieer KM-1401", "Kopieer KM-1401, artikelcode")],
+        priced: [("KM-0801", "Kopieer KM-0801", "Kopieer KM-0801, artikelcode"), ("12,70", "Kopieer 12,70", "Kopieer 12,70, nieuwe waarde")]}
     english = copy_buttons(asking.open(), asking.root, "en")
-    assert english[price] == [("250108", "Copy 250108", "Copy purchase order number 250108"), ("KM-0801", "Copy KM-0801", "Copy article code KM-0801"),
-                              ("12.70", "Copy 12.70", "Copy new value 12.70")]
+    assert english[price] == [("250108", "Copy 250108", "Copy 250108, purchase order number"), ("KM-0801", "Copy KM-0801", "Copy KM-0801, item code"),
+                              ("12.70", "Copy 12.70", "Copy 12.70, new value")]
+    # the name a screen reader reads begins with the words on the button, so that a buyer who works by voice says what he sees; and
+    # the parts stand in the order of COPY_PARTS, each with its name in both languages
+    for language in ("nl", "en"):
+        for buttons in copy_buttons(asking.open(), asking.root, language).values():
+            assert all(name.startswith(f"{words}, ") for _, words, name in buttons)
+        assert all(f"hand_copy:{part}" in STRINGS[language] for part in COPY_PARTS)
+    for change in asking.open():
+        parts = [part for part, _ in copy_parts(change, asking.root, "nl")]
+        assert parts == [part for part in COPY_PARTS if part in parts]
     # the keys are the values of the tick boxes, so that the page finds a row's buttons by its box; a change two cases asked is one row
     again = asking.ask(asking.case("250108"), on_line("po_line_price", "250108", "1", "12.50", "12.70"))
     listed = blocks(asking.open(), d.store, asking.root, "nl")
