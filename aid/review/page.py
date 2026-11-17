@@ -229,6 +229,52 @@ nothing, as the settings tab does. The review tab's own list of writes to undo i
 An undo of such a write that the page's writer only prepares is not undone in Exact: the page then says, as the tab does for a
 put-back (below), "Nog niet teruggedraaid in Exact. Op de lijst staat nu: ...", never "Ongedaan gemaakt".
 
+The button into Exact. The tab has one more button only when build_app is given a route into Exact (its argument route; the review
+command gives it the route of route_for of aid/execution/exact_route.py when there is one, and there is none in this version, so
+that the page shows none of what follows and is as described above, control for control): "Aangevinkte regels in Exact zetten" (changes_written), first in the row of
+buttons above the list and then the one filled button of the tab, beside the two buttons for what the buyer enters themselves, with
+"De assistent zet alleen iets in Exact als u daarom vraagt. ..." in the place of the intro. A press takes the ticked rows one at a
+time, under a lock of the page's own (held for a row from its checks to its mark, the route's call included, so that a slow route
+makes a press in another browser tab wait), and for each reads the settings file and the list again: it sends nothing more once the
+settings file cannot be read at that moment (as a close's sending, _Live; the settings and whether they could be read come from one
+look, _Live.look), the test mode is off, the route's target is not "test" or the route is not available, and the note says why,
+judged before the row's own reads and again as the last step before its attempt is logged (available() counts only when it returns
+True, in both; the last check, write_gate, asks it first, then judges the settings, reading the settings file itself as well, and
+reads the target once, after them, the one both lines of the route's log name); it passes a row over unless the change that holds
+the row's first entry id is still open with the same entry ids, of a kind of the
+list, with one number or one day as its new value (hand_list.one_value) in the normal form of the aid's own writers
+(exact_route.sendable), not of a try-out document, as the list read it nor as the documents of its cases read at the press
+(mark_for_writing of aid/tryout_mark.py: a case that cannot be read, or whose folder is gone, may be a try-out's, and a price list,
+told by its case id, is none), and not kept off (exact_route.doubt_of: a write in doubt from an earlier press, a verified write whose
+row was not ticked off, or a put-back, which the button never writes: a change that holds an undo row, linked to the change it puts
+back or not, judged by the rows of the change as prepared_changes.csv reads at the press (an entry id on more than one line counting
+as an undo row), or one with an entry whose row that read does not give). Every one of these checks comes before the attempt is
+logged. It appends the attempt to the route's log,
+<cases_root>/prepared/exact_writes.jsonl, before the call, and sends nothing when that fails; it gives the route a copy of the change,
+and takes a write that raises, or that gives no Outcome or one that does not validate again, as not_known; it appends the outcome
+after the call, and marks the change "entered" by "exact" only after a verified write whose outcome line is in the log (a row whose
+outcome line cannot be appended counts as not sure, whatever the route answered: its attempt stands for a write in doubt), saying so
+when that mark writes nothing (the row was no longer open: a newer change of its line or article stands open on the list and asks
+another value, or another browser tab ticked it, or a case withdrew it) or the file of the marks is held. The
+note counts what became of the rows ("1 wijziging in Exact gezet.", in Exact but not ticked off, in Exact while a newer change asks
+another value, not put in, not sure, handed over, passed over); an error nobody foresaw at one row keeps those counts and ends the
+note with a sentence of its own. The ticked rows still listed stay ticked, but the rows the press left in doubt (not sure, handed
+over, or passed over because an earlier press left them in doubt), so that "Aangevinkte regels zijn ingevoerd" beside the button
+cannot tick them off before the buyer looked in Exact; a row that the button keeps off carries a note of why (a write in doubt, to
+look in Exact; a write in Exact not ticked off, to tick it off, without the note of a print that ended an earlier tick of the row,
+and with what a print shows only when the store was given that print after the write;
+a put-back, to enter it by hand, with what the route read in Exact before the aid's write when the change put back is still marked
+entered by the aid and that is not the put-back's value), and the route's own reason is never shown. The press is followed by the reads that
+follow every press of the tab (done_opened, pricelists_opened, copies_opened, hand_new_cleared); its label follows the language
+switch as the last output of hand_relabel, so that the switch has no listener more; nothing of it is on the timer. Among the handled
+changes a change the aid put into Exact reads "(door de assistent in Exact gezet op 18-11-2026)", and "Weer op de lijst zetten"
+refuses it ("Deze wijziging heeft de assistent zelf in Exact gezet. Kies Terugdraaien in Exact als de oude waarde terug moet.");
+"Terugdraaien in Exact" prepares its old value as a row, as for a tick, and the button never puts a change back: the buyer enters
+every put-back, and its row says so, naming what the route read in Exact before the aid's write when the change put back is still
+marked entered by the aid and that is not the put-back's value (the note of Terugdraaien names it too). A newer print of the order that ends a tick
+the aid made says that the assistant put the change into Exact ("De assistent zette dit in Exact, maar de inkooporder die daarna
+binnenkwam toont 12,50. ...").
+
 Under the list the tab has two sections, fixed controls as well (aid/review/hand_list.py makes what they show). First, a task of
 every day, "Bevestigingen om bij te voegen" lists the confirmations to attach in Exact, under a line that counts them and says what to
 do ("2 bevestigingen van de laatste 7 dagen: voeg ze in Exact bij en zet de status op Bevestigd."), each with whether the status is to
@@ -599,7 +645,10 @@ from msal.oauth2cli.oauth2 import BrowserInteractionTimeoutError
 from aid.case import TEMPORARY, WORK, Case, load_case, names_a_folder, sha256_file, work_copy_folder
 from aid.connections.microsoft import COPILOT_SCOPES, MicrosoftAccount, SignInFailed, SignInNeeded, mail_scopes
 from aid.connections.secrets import LazySecretStore, SecretStore, StoreRefused, default_secrets_dir, work_tree_refusal
-from aid.execution.by_hand import FIELDS, FOLDER, Change, ListUnread, changes, mark, open_changes, reopen
+from aid.execution import exact_route
+from aid.execution.by_hand import (ARTICLE_KIND, FIELDS, FOLDER, KINDS, Change, ListUnread, changes, mark, open_changes, place_of,
+                                   reopen)
+from aid.execution.exact_route import WRITTEN, Outcome, Route
 from aid.execution.ops import WriteOp
 from aid.execution.writer import LOG_FILE as WRITE_LOG
 from aid.execution.writer import WriteLog, WriteLogEntry, WriterError, read_before
@@ -608,8 +657,8 @@ from aid.messaging import _append_line           # a line appended in one write,
 from aid.messaging.microsoft_mailer import MicrosoftMailer, mailer_of
 from aid.pipeline import LOOKS, NOT_SENT, RESULT_FILE, SENT, UNADDRESSED, UNSENT, CaseResult, Deps, asked_by_the_run
 from aid.po_store import PoStore
-from aid.pricelist import (NameRefused, NoArticle, also_held, current_prices, is_supplier_name, keep_columns, kept_columns, others_asking,
-                           remove_stored, store_current, stored_prices, supplier_named, with_others)
+from aid.pricelist import (NameRefused, NoArticle, also_held, current_prices, is_supplier_name, keep_columns, kept_columns, list_of,
+                           others_asking, remove_stored, store_current, stored_prices, supplier_named, with_others)
 from aid.readers.copilot_client import UNREACHABLE, CopilotClient, CopilotError
 from aid.readers import stand_in
 from aid.readers.llm_client import ReaderError
@@ -638,7 +687,7 @@ from aid.sources.microsoft_mail import (GraphError, connection_of, folder_summar
                                         orders_on, trigger_on)
 from aid.tryout import (CART_CHANGES, CHANGES, TryoutRefused, as_compared, cart_link, checked_cart, checked_confirmation, file_name,
                         known_pos, made_from, write_cart)
-from aid.tryout_mark import TRYOUT_NOT_SENT, case_is_tryout, offers_tryouts
+from aid.tryout_mark import TRYOUT_NOT_SENT, case_is_tryout, mark_for_writing, offers_tryouts
 
 _REVIEW_ITEM = re.compile(r"RI\d+")              # the ids of the review items (aid/pipeline.py)
 # The ids of three tabs; "In Exact invoeren" has hand_list.TAB and "Prijslijst" pricelist_page.TAB.
@@ -1370,6 +1419,21 @@ def import_gradio():
     return gradio
 
 
+_NO_OUTCOME = Outcome(kind="not_known", reason="no_outcome")      # a write that gave no Outcome that validates
+
+
+def _newer_open(change: Change, found: list[Change]) -> bool:
+    """Whether a newer change of the same line or article as the change stands open on the list `found` (every change, as
+    by_hand.changes gives them, in the order they were first asked), after the change that holds its first entry id: the change was
+    replaced by a later value that the list asks, for the button's note "replaced". A change that a case withdrew (the mark
+    "replaced" of by_hand.withdraw: the supplier asks the value Exact holds again) leaves none."""
+    at = next((index for index, one in enumerate(found) if change.ids[0] in one.ids), None)
+    if at is None:
+        return False
+    place = place_of(found[at])
+    return any(one.state == "open" and place_of(one) == place for one in found[at + 1:])
+
+
 class _Live:
     """The Deps the page's own actions use: those the page was built with, carrying the settings of its settings file once that file
     changed. now() looks at the file's modification time and reads a changed file again. A file that cannot be read keeps the
@@ -1382,7 +1446,8 @@ class _Live:
     the mailer they were given. While the settings file cannot be read (unread: its last look failed), the Deps of a close carry
     a mailer that sends nothing and writes nothing (NoRoute of aid/messaging), so that no message goes out by settings the owner
     has since changed: the route and the supplier's address of the settings read before may be the very thing the edit was to
-    correct."""
+    correct. look() gives the Deps of one look together with whether the file could not be read at that look, taken under the
+    lock, for the button into Exact, which judges its gate by that pair."""
 
     def __init__(self, deps: Deps, file: Path | None, mailer: Callable[[Deps], Mailer] | None = None):
         self.deps, self.file, self.modified, self.mailer = deps, file, _modified(file), mailer
@@ -1391,19 +1456,31 @@ class _Live:
 
     def now(self) -> Deps:
         with self.lock:
-            modified = _modified(self.file)
-            if self.file is not None and (modified != self.modified or modified is None or self.unread):
-                try:
-                    self.deps = self.deps.model_copy(update={"settings": load_settings(self.file)})
-                except OSError:                  # not opened at this look: the settings in use are kept, and every look tries again
-                    self.unread = True
-                    return self.deps
-                except ValueError:               # a file that does not validate: the settings in use are kept
-                    self.unread = True
-                else:
-                    self.unread = False
-                self.modified = modified
-            return self.deps
+            return self._looked()
+
+    def look(self) -> tuple[Deps, bool]:
+        """The Deps of one look, as now() gives them, and whether the settings file could not be read at that very look (unread),
+        taken together under the lock, so that another look between the two cannot give the one without the other: the button
+        into Exact judges its gate by this pair."""
+        with self.lock:
+            deps = self._looked()
+            return deps, self.unread
+
+    def _looked(self) -> Deps:
+        """now() inside the lock: the file looked at, and read again when it changed or did not read before."""
+        modified = _modified(self.file)
+        if self.file is not None and (modified != self.modified or modified is None or self.unread):
+            try:
+                self.deps = self.deps.model_copy(update={"settings": load_settings(self.file)})
+            except OSError:                      # not opened at this look: the settings in use are kept, and every look tries again
+                self.unread = True
+                return self.deps
+            except ValueError:                   # a file that does not validate: the settings in use are kept
+                self.unread = True
+            else:
+                self.unread = False
+            self.modified = modified
+        return self.deps
 
     def sending(self) -> Deps:
         deps = self.now()
@@ -1470,11 +1547,12 @@ class _Tab(NamedTuple):
     account_factory: Callable[[str, str], MicrosoftAccount]
     session: object                              # the requests session that Graph is called through; None: requests
     environ: Mapping[str, str] | None            # where the password of the aid's mailbox is looked up; None: the page makes no mailer
+    route: Route | None = None                   # the route into Exact of the button on "In Exact invoeren"; None: no button
 
 
 def build_app(deps: Deps, settings_file: Path | None = None, share: bool = False,
               account_factory: Callable[[str, str], MicrosoftAccount] | None = None, session=None,
-              environ: Mapping[str, str] | None = None) -> "gr.Blocks":  # noqa: F821
+              environ: Mapping[str, str] | None = None, route: Route | None = None) -> "gr.Blocks":  # noqa: F821
     """The review page, Dutch by default with a switch to English, in five tabs. On "Beoordelen": the strip of the aid's state and
     the fold of every case of the last 7 days, read again every TICK_SECONDS seconds (see the module docstring); a dropdown of the
     cases offered (offered_cases), of the failed cases not noted as handled and of the documents the intake left to the buyer that
@@ -1499,10 +1577,13 @@ def build_app(deps: Deps, settings_file: Path | None = None, share: bool = False
     section (see the module docstring), whose Copilot is called through the same session. With `environ`, the environment that the
     password of the aid's mailbox is looked up in, the page makes the mailer of each close from the settings as they are then, as the
     runner makes its own (see "The mailer of a close" in the module docstring); without it, and on a public link whatever is given, a
-    close sends through the mailer of deps."""
+    close sends through the mailer of deps. With `route`, a route into Exact (aid/execution/exact_route.py; the review command gives
+    the route of route_for(settings) when there is one, and there is none in this version), the tab "In Exact invoeren" of the page of this PC has the button that puts
+    the ticked changes into Exact (see "The button into Exact" in the module docstring); without it, the default, the page is as it
+    was, and on a public link or without a settings file a route offers nothing."""
     gr = import_gradio()
     tab = _Tab(Path(settings_file) if settings_file is not None else None, share, account_factory or _account, session,
-               None if share else environ)
+               None if share else environ, route)
     try:
         asyncio.get_running_loop()
     except RuntimeError:
@@ -2197,7 +2278,9 @@ def _hand_tab(gr, app, language, hand_tab, live: _Live, tab: _Tab, cases_root: P
     carries the time of the clock of the page's Deps. On a public share link and without a settings file the tab says only that it
     is not available, as the settings tab does, and offers nothing, nor is anything of it on the timer. Returns the read of the tab's
     label alone (hand_label_read), which a close on the tab "Beoordelen" and a carry-out of the tab "Prijslijst" bind after their
-    press, so that the label follows at once; None on a public share link and without a settings file."""
+    press, so that the label follows at once; None on a public share link and without a settings file. With a route into Exact (the
+    route of tab, which build_app was given) the row of buttons above the list begins with the button that puts the ticked changes
+    into Exact (changes_written; see "The button into Exact" in the module docstring); without one, nothing of it is made or bound."""
     first = STRINGS["nl"]
     if tab.share or tab.file is None:
         key = "settings_share" if tab.share else "settings_no_file"
@@ -2206,6 +2289,8 @@ def _hand_tab(gr, app, language, hand_tab, live: _Live, tab: _Tab, cases_root: P
                         inputs=language, outputs=[notice, hand_tab])
         return None
     prepared = Path(cases_root) / FOLDER
+    route = tab.route                                # the route into Exact of the button; None: no button, the tab as it was
+    writing = threading.Lock()                       # one row of the button at a time, from its check to its mark
 
     def shown(language_now: str, note: str = "", ticked: list[str] | None = None, chosen: str | None = None) -> tuple:
         """The tab as the list is now: its label with the number of open changes, the intro with the lines under it, the tick boxes
@@ -2215,12 +2300,13 @@ def _hand_tab(gr, app, language, hand_tab, live: _Live, tab: _Tab, cases_root: P
         found, passed = changes(prepared)
         open_ = [change for change in found if change.state == "open"]
         deps_now = live.now()
-        listed = hand_list.blocks(open_, deps_now.store, cases_root, language_now)
+        doubted = exact_route.doubts(prepared, found) if route is not None else None      # the rows the button keeps off
+        listed = hand_list.blocks(open_, deps_now.store, cases_root, language_now, doubted)
         rows, offered = hand_list.tick_rows(listed), hand_list.block_choices(listed)
         label = strings["hand_tab_count"].format(n=len(open_)) if open_ else strings["hand_tab"]
         kept = [value for value in ticked or [] if value in {value for _, value in rows}]
         chosen = chosen if chosen in {block_id for _, block_id in offered} else None
-        above = hand_list.intro(listed, passed, language_now, deps_now.settings.test_mode)     # in the test mode with its line
+        above = hand_list.intro(listed, passed, language_now, deps_now.settings.test_mode, routed=route is not None)  # with the test mode's line
         return (gr.update(label=label), above, gr.update(choices=rows, value=kept),
                 gr.update(choices=offered, value=chosen, label=strings["hand_block"]), note,
                 {block_id: [value for _, value in block_rows] for block_id, _, block_rows in listed})
@@ -2327,7 +2413,7 @@ def _hand_tab(gr, app, language, hand_tab, live: _Live, tab: _Tab, cases_root: P
             listed = shown(language_now, "", ticked, chosen)
         except Exception as error:
             listed = unread(error, language_now)
-        buttons = ("refresh", "hand_entered", "hand_dropped", "hand_block_entered")
+        buttons = ("refresh", "hand_entered", "hand_dropped", "hand_block_entered", *(("hand_exact",) if route is not None else ()))
         return (*listed, *(gr.update(value=strings[key]) for key in buttons))      # an update each: gradio takes its value out as it applies it
 
     def sections(language_now: str, note: str = "", chosen: str | None = None) -> tuple:
@@ -2375,12 +2461,18 @@ def _hand_tab(gr, app, language, hand_tab, live: _Live, tab: _Tab, cases_root: P
             return (*unread(error, language_now), *sections_unread(error, language_now))
 
     def taken_back(change: Change, language_now: str) -> str:
-        """"Weer op de lijst zetten": a change the buyer ticked or dropped himself put on the list again; not a change the aid saw. A
-        change that stays off the list says why: it was put back (its put-back would cancel it: the buyer asked for the value from
-        before), or another change of its line or article came in after it."""
+        """"Weer op de lijst zetten": a change the buyer ticked or dropped themselves put on the list again; not a change the aid saw,
+        nor one the aid put into Exact through a route (the mark "entered" by "exact"), for which the note points to "Terugdraaien in
+        Exact", or, for a put-back marked so, which Terugdraaien in Exact cannot put back, says that the aid cannot put it back and
+        the buyer puts the old value back in Exact. The button no longer makes the mark of a put-back, since it never writes one, so
+        that a put-back marked so comes only from an older log or a mark made by hand: the refusal stays as a guard. A change that
+        stays off the list says why: it was put back (its put-back would cancel it: the buyer asked for the value from before), or
+        another change of its line or article came in after it."""
         strings = STRINGS[language_now]
         if change.state == "seen":
             return strings["hand_reopen_seen"]
+        if change.state == "entered" and change.marked_by == WRITTEN:       # the aid put it into Exact through a route: Terugdraaien
+            return strings["hand_put_back_cannot" if change.puts_back is not None else "hand_reopen_written"]   # in Exact puts it back
         if change.state not in ("entered", "dropped"):
             return strings["hand_reopened"] if change.state == "open" else strings["hand_reopen_not"]
         state = reopen(prepared, change.ids, live.now().clock())
@@ -2396,6 +2488,196 @@ def _hand_tab(gr, app, language, hand_tab, live: _Live, tab: _Tab, cases_root: P
         """"Terugdraaien in Exact" on the handled change chosen: the old value prepared as a change to enter (hand_list.take_back)."""
         deps = live.now()
         return pressed(chosen, language_now, lambda change, language_then: hand_list.take_back(deps, change, deps.clock(), language_then))
+
+    def changes_written(ticked: list[str] | None, language_now: str) -> tuple:
+        """"Aangevinkte regels in Exact zetten", on a page with a route into Exact (see "The button into Exact" in the module
+        docstring): the ticked changes put into Exact through the route, one row at a time (written), and the list shown again with the
+        note of what became of them; the ticked rows still listed stay ticked, but for the rows the press left in doubt. With nothing
+        ticked nothing is sent. When the list cannot be read after the press, the note still says what the press did, before the note
+        of the error, which it does not say twice when the press itself stopped on it."""
+        strings = STRINGS[language_now]
+        if not ticked:
+            try:
+                return shown(language_now, strings["hand_tick_first"])
+            except Exception as error:
+                return unread(error, language_now)
+        try:
+            note, kept = written(list(ticked), language_now)
+        except Exception as error:               # unforeseen outside a row: the note of the error, as the tab's other presses give it
+            return unread(error, language_now)
+        try:
+            return shown(language_now, note, kept)
+        except Exception as error:               # the note of the error once: the press may have stopped on the same error
+            said = failed(error, language_now)
+            return (gr.update(label=strings["hand_tab_unread"]), gr.update(), gr.update(), gr.update(),
+                    note if note.endswith(said) else f"{note} {said}", gr.update())
+
+    def written(values: list[str], language_now: str) -> tuple[str, list[str]]:
+        """Each ticked row in turn through write_one, under the page's lock of the button, and (the note of the press, the rows to keep
+        ticked): how many were put into Exact, are in Exact but not ticked off, are in Exact while a newer change replaced theirs, were
+        not put in, are not sure, were handed over and were passed over, each count of one in the singular, and last, when the press
+        sent nothing more from some row on, why (the rows after it count as not put in). An error nobody foresaw at one row does not
+        take the place of that note: the row counts as not sure once its attempt was logged, else as not put in, and the press stops
+        with a sentence of its own (hand_exact_stop:error). The rows the press left in doubt (not sure, handed over, or passed over
+        because an earlier press left them in doubt) are not kept ticked, so that "Aangevinkte regels zijn ingevoerd" beside the
+        button cannot tick them off before the buyer looked in Exact; every other row stays ticked: passed over, not put in, or in
+        Exact but not ticked off."""
+        strings = STRINGS[language_now]
+        counts: Counter = Counter()
+        doubted: set[str] = set()                # the rows the press leaves in doubt: their ticks go
+        stop = None
+        for number, value in enumerate(values):
+            attempted: list[bool] = []           # write_one notes here that the row's attempt is in the route's log
+            with writing:
+                try:
+                    what, stop = write_one(hand_list.ids_of(value), language_now, attempted)
+                except Exception:                # unforeseen: what the press did so far stays in the note
+                    what, stop = ("unsure" if attempted else "not_made"), strings["hand_exact_stop:error"]
+            if what is not None:
+                counts["passed" if what == "doubted" else what] += 1
+                if what in ("unsure", "handed_over", "doubted"):
+                    doubted.add(value)
+            if stop is not None:
+                counts["not_made"] += len(values) - number - (what is not None)
+                break
+        parts = [strings[f"hand_exact_{what}_one"] if counts[what] == 1 else strings[f"hand_exact_{what}_many"].format(n=counts[what])
+                 for what in ("written", "unmarked", "replaced", "not_made", "unsure", "handed_over", "passed") if counts[what]]
+        return " ".join([*parts, *([stop] if stop is not None else [])]), [value for value in values if value not in doubted]
+
+    def write_one(ids: list[str], language_now: str, attempted: list[bool]) -> tuple[str | None, str | None]:
+        """One ticked row of the button: (what became of it, None), or (None, the sentence why the press sends nothing more); a row
+        passed over because an earlier press left it in doubt is "doubted", which the note counts as passed over. First the
+        settings file is read as it is now (live.look: the settings and whether they could be read, from one look, as a close's sending
+        reads them), and nothing is sent unless it could be read, the test mode is on, the route's target is "test" and the route is
+        available (write_stop). The change that holds the row's first entry id now is written only when it is open with the same
+        entry ids, of a kind of the list, with one value (hand_list.one_value) in the normal form of the aid's own writers
+        (exact_route.sendable), not of a try-out document as the list read it nor as its cases' documents read at this moment
+        (tried), and not kept off (exact_route.doubt_of: a write in doubt, a verified write not ticked off, or a put-back, judged by
+        the rows of the change as prepared_changes.csv reads at the press, which the button never writes); else it is passed over.
+        Then the gate is judged again, last (write_gate: available() first, then one more look and the settings file read itself,
+        then the target), so that a gate that closed during the row's own reads, or while available() ran, stops it; all of these
+        checks come before the attempt is logged, and nothing reads a file between the last one and the attempt. The attempt is
+        appended to the route's log before the call, and nothing is sent when that fails ("attempted" is noted once it is in the
+        log); the route is given a copy of the change (write_through); the outcome is appended after the
+        call, both lines naming the target the last check judged. A row whose outcome line cannot be appended counts as not sure,
+        whatever the route answered, since its attempt stands in the log for a write in doubt, and only a verified write whose outcome
+        is in the log is marked "entered" by "exact". A mark that writes nothing says "replaced" when a newer change of the change's
+        line or article stands open on the list (it replaced the change during the call), else "unmarked", as a mark that cannot
+        write (the file of the marks is held) does."""
+        strings = STRINGS[language_now]
+        deps_now, unread_now = live.look()
+        cause = write_stop(deps_now, unread_now)
+        if cause is not None:
+            return None, strings[f"hand_exact_stop:{cause}"]
+        try:
+            found = changes(prepared)[0]
+            rules = exact_route.rules_of(prepared)        # the rows as they read now: a change that holds an undo row is a put-back
+        except Exception as error:               # a list that cannot be read: nothing more is sent
+            return None, failed(error, language_now)
+        change = next((one for one in found if ids and ids[0] in one.ids), None)
+        if (change is None or change.state != "open" or change.ids != ids or change.kind not in KINDS or change.tryout
+                or not hand_list.one_value(change) or not exact_route.sendable(change) or tried(change)):
+            return "passed", None
+        try:
+            held = exact_route.doubt_of(prepared, change, found=found, rules=rules)
+        except OSError:
+            return None, strings["hand_exact_stop:log"]
+        if held is not None:                     # in doubt ("doubted": passed over, its tick goes), in Exact and not ticked off, or a
+            return ("doubted" if held.kind in exact_route.DOUBTS else "passed"), None       # put-back, which the buyer enters
+        deps_now, cause, target = write_gate()
+        if cause is not None:
+            return None, strings[f"hand_exact_stop:{cause}"]
+        try:
+            exact_route.log_attempt(prepared, change, target, deps_now.clock())
+        except OSError:
+            return None, strings["hand_exact_stop:log"]
+        attempted.append(True)
+        outcome = write_through(change, deps_now.clock())
+        try:
+            exact_route.log_outcome(prepared, change, target, outcome, deps_now.clock())
+        except OSError:                          # the attempt stands in the log for a write in doubt, whatever the route answered:
+            return "unsure", None                # not marked, so that the log holds the value read before every write marked
+        if outcome.kind != "verified":
+            return {"not_verified": "unsure", "not_known": "unsure"}.get(outcome.kind, outcome.kind), None
+        try:
+            if mark(prepared, change.ids, "entered", deps_now.clock(), by=WRITTEN) > 0:
+                return "written", None
+        except OSError:                          # the file of the marks is held: the value is in Exact all the same
+            return "unmarked", None
+        try:                                     # no longer open: a newer change of its line or article on the list now?
+            return ("replaced" if _newer_open(change, changes(prepared)[0]) else "unmarked"), None
+        except Exception:
+            return "unmarked", None
+
+    def tried(change: Change) -> bool:
+        """Whether the change may be of a try-out document, judged at the press and fail-closed (mark_for_writing of
+        aid/tryout_mark.py, as a close judges a case before it sends): the document of each of its cases is read now, and a case that
+        is a try-out, or whose case.json or document cannot be read, or whose folder is gone, may be one. A price list is no case:
+        its case id is the one the price-list import gives (list_of of aid/pricelist.py), and it asks article prices only."""
+        return any(mark_for_writing(cases_root, case_id) is not False for case_id in change.case_ids
+                   if not (change.kind == ARTICLE_KIND and list_of(case_id) is not None))
+
+    def write_stop(deps_now: Deps, unread_now: bool) -> str | None:
+        """Why the button sends nothing now, by the cause of its sentence (hand_exact_stop:<cause>), or None: the settings file could
+        not be read at the look that gave deps_now (unread_now, of that same look), the test mode is off, the route's target is not
+        "test" (during the BEP nothing is written into the live Exact), or the route is not available: as in the last check
+        (write_gate), it counts as available only when available() returns True itself (one that raises, or returns anything else,
+        is not), so that the two checks agree."""
+        if unread_now:
+            return "settings"
+        if not deps_now.settings.test_mode:
+            return "test_mode"
+        if getattr(route, "target", None) != "test":
+            return "live"
+        try:
+            up = route.available() is True
+        except Exception:
+            up = False
+        return None if up else "unavailable"
+
+    def write_gate() -> tuple[Deps | None, str | None, str | None]:
+        """The gate judged again as the last step before an attempt is logged, after the row's own reads: (the Deps of one more look,
+        None when the gate closed before that look, the cause of the sentence why nothing is sent, or None, and the route's target to
+        log). First the route counts as available only when available() returns True itself (one that raises, or returns anything
+        else, is not); only after it are the settings judged, so that a settings file changed while available() ran is seen: the
+        settings and whether they could be read come from one more look (live.look), as for write_stop, and then from the settings
+        file read here itself (load_settings on the file _Live reads), since _Live reads the file again only when its modification
+        time changed, and a rewrite can keep that time. A file that cannot be read now, or that the settings refuse (exact_base_url
+        set), stops it ("settings"), and so does the test mode off in either. Last the target is read once and judged, and that same
+        value is the one both lines of the route's log name."""
+        try:
+            up = route.available() is True
+        except Exception:
+            up = False
+        if not up:
+            return None, "unavailable", None
+        deps_now, unread_now = live.look()
+        if unread_now:
+            return deps_now, "settings", None
+        if not deps_now.settings.test_mode:
+            return deps_now, "test_mode", None
+        try:
+            settings_now = load_settings(live.file)
+        except (OSError, ValueError):            # cannot be opened, is no JSON, does not validate, or sets exact_base_url (WriteRouteSet)
+            return deps_now, "settings", None
+        if not settings_now.test_mode:
+            return deps_now, "test_mode", None
+        target = getattr(route, "target", None)
+        return deps_now, (None if target == "test" else "live"), target
+
+    def write_through(change: Change, now: datetime) -> Outcome:
+        """The route's write of a copy of the change, so that a route that changes what it was given changes nothing of the page's own
+        change, which is logged and marked; a write that raises, or that gives no Outcome or one that does not validate again (an
+        Outcome built past its checks), is not_known with a fixed reason: the page cannot tell whether anything reached Exact, and
+        the error's own text is never kept."""
+        try:
+            outcome = route.write(change.model_copy(deep=True), now)
+        except Exception:
+            return Outcome(kind="not_known", reason="raised")
+        try:
+            return Outcome.model_validate(outcome.model_dump(warnings=False)) if isinstance(outcome, Outcome) else _NO_OUTCOME
+        except Exception:
+            return _NO_OUTCOME
 
     def hand_label_ticked(language_now: str, seen: dict[str, list[str]] | None) -> tuple:
         """The page's timer ticked: (the tab's label with the number of open changes, as a read of the list gives it; the line under
@@ -2435,14 +2717,16 @@ def _hand_tab(gr, app, language, hand_tab, live: _Live, tab: _Tab, cases_root: P
 
     with gr.Row():                                   # in columns, whose scale a row keeps, as it does not keep a Markdown's
         with gr.Column(scale=4):
-            intro = gr.Markdown(first["hand_intro"], elem_id="hand-intro")
+            intro = gr.Markdown(first["hand_intro_route" if route is not None else "hand_intro"], elem_id="hand-intro")
         with gr.Column(scale=1, min_width=160):
             refresh = gr.Button(first["refresh"])
     # shown by the timer while changes came in that the list does not show, in the look of every standing message
     new_rows = gr.Markdown("", visible=False, elem_id="hand-new", elem_classes=["notice"])
     with gr.Column(elem_id="hand-actions"):          # the pair and its answer, which the page's style keeps in view while the list scrolls
         with gr.Row():
-            entered_above = gr.Button(first["hand_entered"], variant="primary")          # the one filled button of the tab
+            # with a route into Exact its button comes first and is the one filled button of the tab; without one there is none
+            written_above = gr.Button(first["hand_exact"], variant="primary") if route is not None else None
+            entered_above = gr.Button(first["hand_entered"], variant="primary" if route is None else "secondary")  # else the one filled button
             dropped_above = gr.Button(first["hand_dropped"])
         note = gr.Markdown("", elem_id="hand-note", elem_classes=["answer"])           # the answer of every press of the list
         # what the page's script needs to draw the copy buttons behind the rows, and the line of what a press copied: in this
@@ -2479,9 +2763,13 @@ def _hand_tab(gr, app, language, hand_tab, live: _Live, tab: _Tab, cases_root: P
                dropped_above.click(changes_dropped, inputs=[rows, language], outputs=listed),
                block_button.click(block_entered, inputs=[block, seen, language], outputs=listed),
                pricelist_button.click(pricelist_entered, inputs=[pricelist, listed_prices, language], outputs=listed)]
-    # the reads and the relabel that the language switch shares skip the queue (see the module docstring); a read after a press keeps it
+    if route is not None:                            # a press of the list as the others, read after it as they are
+        presses.append(written_above.click(changes_written, inputs=[rows, language], outputs=listed))
+    # the reads and the relabel that the language switch shares skip the queue (see the module docstring); a read after a press keeps it;
+    # the button into Exact is relabelled last, so that the outputs before it keep their places and the switch has no listener more
     language.change(hand_relabel, inputs=[language, rows, block],
-                    outputs=[*listed, refresh, entered_above, dropped_above, block_button], queue=False)
+                    outputs=[*listed, refresh, entered_above, dropped_above, block_button, *([written_above] if route is not None else [])],
+                    queue=False)
     gr.on(triggers=[app.load, hand_tab.select, refresh.click, language.change], fn=done_opened, inputs=[language, done_choice], outputs=under,
           queue=False)
     for press in presses:                            # a tick or a drop moves a change into the handled ones: read them after it
@@ -2498,7 +2786,8 @@ def _hand_tab(gr, app, language, hand_tab, live: _Live, tab: _Tab, cases_root: P
     # the label on the page's timer, never the rows (see hand_label_ticked), and its line of new changes gone once the list is read again
     ticker.tick(hand_label_ticked, inputs=[language, seen], outputs=[hand_tab, new_rows], show_progress="hidden")
     gr.on(triggers=[hand_tab.select, refresh.click, language.change, entered_above.click, dropped_above.click,
-                    block_button.click, pricelist_button.click, reopen_button.click, put_back_button.click],
+                    block_button.click, pricelist_button.click, reopen_button.click, put_back_button.click,
+                    *([written_above.click] if route is not None else [])],
           fn=hand_new_cleared, outputs=new_rows, show_progress="hidden", queue=False)
     return hand_label_read
 

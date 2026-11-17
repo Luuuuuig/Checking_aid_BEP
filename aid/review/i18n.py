@@ -97,6 +97,7 @@ name a screen reader reads for the button of that part (order, article, value; h
 the button, "hand_copied" the line that says what a press copied and "hand_copy_failed" the line of a press that could not copy, and
 "hand_copy_done" and "hand_copy_not_done" the word the pressed button itself shows for a moment;
 "hand_tick_ended" and "hand_tick_ended_unfound" are the note of a row whose tick a newer print of its order ended, and
+"hand_tick_ended_exact" and "hand_tick_ended_unfound_exact" that note when the tick was the aid's own, made through a route, and
 "hand_list_changed" what the tab says of a list whose file was changed outside the aid; "hand_done*" are
 the section of the changes handled in the last 14 days and how the aid knows each, "hand_reopen*" and "hand_put_back*" its two buttons
 and what they say ("hand_reopen_not", "hand_reopen_put_back", "hand_put_back_newer_open", "hand_put_back_newer_entered",
@@ -107,7 +108,20 @@ sentence behind the note of a put-back when the aid knows another value from bef
 "hand_confirmation*" and "hand_attach_only" the section of the confirmations to attach in Exact, "hand_confirmations" its heading and
 "hand_confirmations_one" and "hand_confirmations_many" the line that counts them, the supplier's own confirmations alone,
 "hand_confirmations_tryouts_only" that line when only try-out documents are listed, and "hand_confirmation_tryout" the mark behind the
-line of a try-out, which is not attached. The keys that begin with "exact" are
+line of a try-out, which is not attached. "hand_exact" is the button that puts the ticked changes into Exact, which the tab has only
+on a page built with a route into Exact (aid/execution/exact_route.py, none in this version): "hand_intro_route" is the intro in the
+place of "hand_intro" then, the keys that begin with "hand_exact_" and end in "_one" or "_many" count what a press did (put into Exact,
+in Exact but not ticked off, not put in, not sure, handed over, passed over), "hand_exact_stop:<cause>" says why a press sent nothing
+more (the settings, the test mode, a route to the live Exact, a route not available, the route's log), "hand_exact_unsure_row" and
+"hand_exact_handed_over_row" are the note of a row whose write is in doubt, "hand_done_written" how the handled changes name a change
+the aid put into Exact, and "hand_reopen_written" why such a change is not put on the list again; "hand_exact_stop:error" says that a
+press stopped at an error nobody foresaw, "hand_exact_replaced_one" and "hand_exact_replaced_many" count the changes put into Exact
+while a newer change of their line or article came on the list, "hand_exact_unticked_row" is the note of a row whose change is in
+Exact but was not ticked off, "hand_exact_put_back_hand_row" the note of a put-back, which the button never writes, and
+"hand_exact_put_back_other_row" (with {value}), "hand_exact_put_back_empty_row" and "hand_exact_put_back_unread_row" that note when
+the route read in Exact before its write another value, an empty field or nothing; "hand_put_back_source:route",
+"hand_put_back_other_route_empty" and "hand_put_back_other_route_unread" are what the note of "Terugdraaien in Exact" says of what the
+route read there. The keys that begin with "exact" are
 the strings of the block "Koppeling met Exact" of the settings tab (aid/review/exact_settings.py), one block in each language:
 "exact_save", "exact_export_save" and "exact_articles_save" the saves of its parts 1, 2 and 3, each named after what it saves,
 "exact_field:<field>" the label of a field of its form and "exact_help:<field>" its help, "exact_meaning:<meaning>" what a column of
@@ -268,6 +282,11 @@ STRINGS: dict[str, dict[str, str]] = {
                             "vink opnieuw af als zij er al in staat."),
         "hand_tick_ended_unfound": ("U vinkte dit af, maar in de inkooporder die daarna binnenkwam is deze regel niet terug te vinden. "
                                     "Kijk in Exact of de wijziging er staat en vink dan opnieuw af, of haal de regel van de lijst."),
+        "hand_tick_ended_exact": ("De assistent zette dit in Exact, maar de inkooporder die daarna binnenkwam toont {value}. Voer de "
+                                  "wijziging in Exact in, of vink de regel af als zij er al in staat."),
+        "hand_tick_ended_unfound_exact": ("De assistent zette dit in Exact, maar in de inkooporder die daarna binnenkwam is deze regel niet "
+                                          "terug te vinden. Kijk in Exact of de wijziging er staat en vink de regel dan af, of haal de "
+                                          "regel van de lijst."),
         "hand_list_changed": ("De lijst In Exact invoeren kan niet worden gelezen: het bestand is buiten de assistent gewijzigd. Geef dit "
                               "door aan de onderzoeker."),
         "hand_done": "Afgehandeld in de laatste 14 dagen",
@@ -312,6 +331,64 @@ STRINGS: dict[str, dict[str, str]] = {
         "hand_reopen_put_back": "Deze wijziging is teruggedraaid; zij komt niet terug op de lijst.",
         "hand_done_choose_first": "Kies eerst een wijziging bij Afgehandelde wijziging.",
         "hand_done_seen_export": "(gezien in een export uit Exact)",
+        "hand_exact": "Aangevinkte regels in Exact zetten",
+        "hand_intro_route": ("De assistent zet alleen iets in Exact als u daarom vraagt. Vink de regels aan en druk op Aangevinkte regels "
+                             "in Exact zetten, of voer de wijzigingen zelf in Exact in en vink aan wat u hebt ingevoerd."),
+        "hand_exact_written_one": "1 wijziging in Exact gezet.",
+        "hand_exact_written_many": "{n} wijzigingen in Exact gezet.",
+        "hand_exact_unmarked_one": ("1 wijziging staat in Exact, maar de regel is niet afgevinkt: hij stond niet meer open, of de lijst "
+                                    "kon niet worden bijgewerkt. Staat de regel nog op de lijst, vink hem dan zelf af."),
+        "hand_exact_unmarked_many": ("{n} wijzigingen staan in Exact, maar de regels zijn niet afgevinkt: zij stonden niet meer open, of "
+                                     "de lijst kon niet worden bijgewerkt. Staan de regels nog op de lijst, vink ze dan zelf af."),
+        "hand_exact_not_made_one": "1 wijziging is niet in Exact gezet.",
+        "hand_exact_not_made_many": "{n} wijzigingen zijn niet in Exact gezet.",
+        "hand_exact_unsure_one": "Van 1 wijziging is niet zeker of zij in Exact staat: kijk in Exact en vink de regel af als zij er staat.",
+        "hand_exact_unsure_many": "Van {n} wijzigingen is niet zeker of zij in Exact staan: kijk in Exact en vink af wat er staat.",
+        "hand_exact_handed_over_one": ("1 wijziging is aan Exact doorgegeven en nog niet verwerkt: kijk later in Exact en vink de regel "
+                                       "af als zij er staat."),
+        "hand_exact_handed_over_many": ("{n} wijzigingen zijn aan Exact doorgegeven en nog niet verwerkt: kijk later in Exact en vink af "
+                                        "wat er staat."),
+        "hand_exact_passed_one": ("1 aangevinkte regel is overgeslagen: de assistent zet die niet zelf in Exact. Staat de regel nog op de "
+                                  "lijst, handel hem dan zelf af."),
+        "hand_exact_passed_many": ("{n} aangevinkte regels zijn overgeslagen: de assistent zet die niet zelf in Exact. Staan de regels "
+                                   "nog op de lijst, handel ze dan zelf af."),
+        "hand_exact_stop:settings": ("De instellingen kunnen nu niet worden gelezen: de assistent zet niets in Exact. Geef dit door aan "
+                                     "de onderzoeker."),
+        "hand_exact_stop:test_mode": ("De assistent zet alleen in de proefstand iets in Exact, en dan alleen in het test-Exact; de "
+                                      "proefstand staat uit."),
+        "hand_exact_stop:live": "De koppeling leidt naar het echte Exact, en daarin zet de assistent niets.",
+        "hand_exact_stop:unavailable": ("De koppeling met Exact is nu niet beschikbaar. Probeer het later opnieuw, of voer de wijzigingen "
+                                        "zelf in Exact in."),
+        "hand_exact_stop:log": ("Het logboek van de koppeling met Exact kan nu niet worden gelezen of geschreven: de assistent zet niets "
+                                "in Exact. Geef dit door aan de onderzoeker."),
+        "hand_exact_unsure_row": "Niet zeker of dit in Exact staat: kijk in Exact en vink de regel af als het er staat.",
+        "hand_exact_handed_over_row": ("Aan Exact doorgegeven en nog niet verwerkt: kijk later in Exact en vink de regel af als het er "
+                                       "staat."),
+        "hand_done_written": "(door de assistent in Exact gezet op {date})",
+        "hand_reopen_written": ("Deze wijziging heeft de assistent zelf in Exact gezet. Kies Terugdraaien in Exact als de oude waarde "
+                                "terug moet."),
+        "hand_exact_stop:error": ("Er ging iets onverwachts mis: de assistent zet nu niets meer in Exact. Geef dit door aan de "
+                                  "onderzoeker."),
+        "hand_exact_replaced_one": ("1 wijziging is in Exact gezet, maar intussen staat er een nieuwere wijziging voor dezelfde regel of "
+                                    "hetzelfde artikel op de lijst, met een andere waarde: voer die in Exact in of laat die vallen."),
+        "hand_exact_replaced_many": ("{n} wijzigingen zijn in Exact gezet, maar intussen staan er nieuwere wijzigingen voor dezelfde "
+                                     "regels of artikelen op de lijst, met andere waarden: voer die in Exact in of laat ze vallen."),
+        "hand_exact_unticked_row": "De assistent heeft dit in Exact gezet, maar kon de regel niet afvinken: vink hem zelf af.",
+        "hand_exact_put_back_hand_row": "Dit terugzetten voert de assistent niet zelf in Exact in: voer het zelf in en vink de regel af.",
+        "hand_exact_put_back_other_row": ("Dit terugzetten voert de assistent niet zelf in Exact in. Voordat de assistent de wijziging in "
+                                          "Exact zette, stond daar {value}. Kijk in Exact welke waarde terug moet, zet die zelf terug en "
+                                          "vink de regel af."),
+        "hand_put_back_source:route": "Exact zelf (gelezen voordat de assistent de wijziging erin zette)",
+        "hand_exact_put_back_empty_row": ("Dit terugzetten voert de assistent niet zelf in Exact in. Voordat de assistent de wijziging in "
+                                          "Exact zette, was dit veld in Exact leeg. Kijk in Exact welke waarde terug moet, zet die zelf "
+                                          "terug en vink de regel af."),
+        "hand_exact_put_back_unread_row": ("Dit terugzetten voert de assistent niet zelf in Exact in. De koppeling heeft niet gelezen wat "
+                                           "er in Exact stond voordat de assistent de wijziging erin zette. Kijk in Exact welke waarde "
+                                           "terug moet, zet die zelf terug en vink de regel af."),
+        "hand_put_back_other_route_empty": ("Let op: voordat de assistent de wijziging in Exact zette, was dit veld in Exact leeg. Kijk in "
+                                            "Exact welke waarde terug moet."),
+        "hand_put_back_other_route_unread": ("Let op: de koppeling heeft niet gelezen wat er in Exact stond voordat de assistent de "
+                                             "wijziging erin zette. Kijk in Exact welke waarde terug moet."),
         "files_tab": "Bestanden",
         "files_title": "Een bestand aan de assistent geven",
         "files_intro": ("Komt een document niet vanzelf uit uw postvak, geef het dan hier: een inkooporder uit Exact (pdf) of een "
@@ -1334,6 +1411,11 @@ STRINGS: dict[str, dict[str, str]] = {
                             "tick again if it is already there."),
         "hand_tick_ended_unfound": ("You ticked this, but this line cannot be found in the purchase order that came in afterwards. Look in "
                                     "Exact whether the change is there and tick again, or take the row off the list."),
+        "hand_tick_ended_exact": ("The assistant put this into Exact, but the purchase order that came in afterwards shows {value}. Enter "
+                                  "the change in Exact, or tick the row off if it is already there."),
+        "hand_tick_ended_unfound_exact": ("The assistant put this into Exact, but this line cannot be found in the purchase order that came "
+                                          "in afterwards. Check in Exact whether the change is there and tick the row off, or take the row "
+                                          "off the list."),
         "hand_list_changed": ("The list Enter in Exact cannot be read: the file was changed outside the assistant. Pass this on to the "
                               "researcher."),
         "hand_done": "Handled in the last 14 days",
@@ -1374,6 +1456,64 @@ STRINGS: dict[str, dict[str, str]] = {
         "hand_reopen_put_back": "This change was put back; it does not come back on the list.",
         "hand_done_choose_first": "Choose a change under Handled change first.",
         "hand_done_seen_export": "(seen in an export from Exact)",
+        "hand_exact": "Put the ticked rows into Exact",
+        "hand_intro_route": ("The assistant puts something into Exact only when you ask it to. Tick the rows and press Put the ticked "
+                             "rows into Exact, or enter the changes in Exact yourself and tick what you have entered."),
+        "hand_exact_written_one": "1 change put into Exact.",
+        "hand_exact_written_many": "{n} changes put into Exact.",
+        "hand_exact_unmarked_one": ("1 change is in Exact, but its row was not ticked off: it was no longer open, or the list could not "
+                                    "be updated. If the row is still on the list, tick it off yourself."),
+        "hand_exact_unmarked_many": ("{n} changes are in Exact, but their rows were not ticked off: they were no longer open, or the list "
+                                     "could not be updated. If the rows are still on the list, tick them off yourself."),
+        "hand_exact_not_made_one": "1 change was not put into Exact.",
+        "hand_exact_not_made_many": "{n} changes were not put into Exact.",
+        "hand_exact_unsure_one": "It is not certain whether 1 change is in Exact: check in Exact and tick the row off if it is there.",
+        "hand_exact_unsure_many": "It is not certain whether {n} changes are in Exact: check in Exact and tick off what is there.",
+        "hand_exact_handed_over_one": ("1 change was handed over to Exact and has not been applied yet: check Exact later and tick the row "
+                                       "off once it is there."),
+        "hand_exact_handed_over_many": ("{n} changes were handed over to Exact and have not been applied yet: check Exact later and tick "
+                                        "off what is there."),
+        "hand_exact_passed_one": ("1 ticked row was passed over: the assistant does not put it into Exact itself. If the row is still on "
+                                  "the list, handle it yourself."),
+        "hand_exact_passed_many": ("{n} ticked rows were passed over: the assistant does not put them into Exact itself. If the rows are "
+                                   "still on the list, handle them yourself."),
+        "hand_exact_stop:settings": ("The settings cannot be read now: the assistant puts nothing into Exact. Pass this on to the "
+                                     "researcher."),
+        "hand_exact_stop:test_mode": ("The assistant puts changes into Exact in the test mode only, and then into the test Exact only; "
+                                      "the test mode is off."),
+        "hand_exact_stop:live": "The connection points to the live Exact; the assistant puts nothing into it.",
+        "hand_exact_stop:unavailable": ("The connection to Exact is not available now. Try again later, or enter the changes in Exact "
+                                        "yourself."),
+        "hand_exact_stop:log": ("The log of the connection to Exact cannot be read or written now: the assistant puts nothing into Exact. "
+                                "Pass this on to the researcher."),
+        "hand_exact_unsure_row": "It is not certain whether this is in Exact: check in Exact and tick the row off if it is there.",
+        "hand_exact_handed_over_row": ("Handed over to Exact but not applied yet: check Exact later and tick the row off once it is "
+                                       "there."),
+        "hand_done_written": "(put into Exact by the assistant on {date})",
+        "hand_reopen_written": "The assistant put this change into Exact itself. Choose Put back in Exact if the old value must return.",
+        "hand_exact_stop:error": ("Something unexpected went wrong: the assistant has stopped putting changes into Exact. Pass this on to "
+                                  "the researcher."),
+        "hand_exact_replaced_one": ("1 change was put into Exact, but by now a newer change for the same line or article is on the list, "
+                                    "with another value: enter that one in Exact or drop it."),
+        "hand_exact_replaced_many": ("{n} changes were put into Exact, but by now newer changes for the same lines or articles are on the "
+                                     "list, with other values: enter those in Exact or drop them."),
+        "hand_exact_unticked_row": "The assistant put this into Exact, but could not tick the row off: tick it off yourself.",
+        "hand_exact_put_back_hand_row": ("The assistant does not enter this put-back in Exact itself: enter it yourself and tick the row "
+                                         "off."),
+        "hand_exact_put_back_other_row": ("The assistant does not enter this put-back in Exact itself. Before the assistant put the change "
+                                          "into Exact, Exact showed {value}. Check in Exact which value should go back, put it back "
+                                          "yourself and tick the row off."),
+        "hand_put_back_source:route": "Exact itself (read before the assistant put the change in)",
+        "hand_exact_put_back_empty_row": ("The assistant does not enter this put-back in Exact itself. Before the assistant put the change "
+                                          "into Exact, this field in Exact was empty. Check in Exact which value should go back, put it "
+                                          "back yourself and tick the row off."),
+        "hand_exact_put_back_unread_row": ("The assistant does not enter this put-back in Exact itself. The connection did not read what "
+                                           "Exact showed before the assistant put the change in. Check in Exact which value should go "
+                                           "back, put it back yourself and tick the row off."),
+        "hand_put_back_other_route_empty": ("Note: before the assistant put the change into Exact, this field in Exact was empty. Check in "
+                                            "Exact which value should go back."),
+        "hand_put_back_other_route_unread": ("Note: the connection did not read what Exact showed before the assistant put the change in. "
+                                             "Check in Exact which value should go back."),
         "files_tab": "Files",
         "files_title": "Give a file to the assistant",
         "files_intro": ("If a document does not come from your mailbox by itself, give it here: a purchase order from Exact (PDF) or an "

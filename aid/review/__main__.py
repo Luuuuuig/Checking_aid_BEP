@@ -14,7 +14,10 @@ once the command is started again. The page is served on 127.0.0.1 only and answ
 public gradio link and is for the made-up set only: it is refused, with exit status 2 and the reason of refuse_share, when the
 settings hold company values, because the company's data are for internal use only. A settings file that is missing or not valid
 ends the command with exit status 2 and a message that names the file and the fields, never a value; one in which exact_base_url is
-set ends it with exit status 2 and the one sentence of aid/settings.py, since no command builds a write route into Exact. The Colab notebook asks
+set ends it with exit status 2 and the one sentence of aid/settings.py, since no command builds a write route into Exact. The page
+gets the route of the plug point as well (route_for of aid/execution/exact_route.py), as build_app's route when there is one; in
+this version there is none, so build_app is called as before and its tab "In Exact invoeren" has no button that puts a change into
+Exact. The Colab notebook asks
 refuse_share as well before it opens its link; refuse_share imports without gradio, which build_app imports when it builds the
 page. The page's settings tab writes into the settings file of the command, its tab "In Exact invoeren" lists the changes
 prepared in <cases_root>/prepared, and its tab "Prijslijst" keeps the article prices of the exports given on it in
@@ -60,6 +63,7 @@ from pydantic import ValidationError
 
 from aid.case import TEMPORARY, WORK      # the page's temporary folder under cases_root, and its folder work
 from aid.decider import NoDecider
+from aid.execution.exact_route import route_for
 from aid.execution.writer import PreparedWriter
 from aid.messaging import FileMailer, own_only
 from aid.pipeline import Deps, read_with_parser
@@ -271,7 +275,9 @@ def main(argv: list[str] | None = None) -> int:
     deps = Deps(settings=settings, store=PoStore(settings.po_store_root, settings.authorization_limit), reader=read_with_parser,
                 decider=NoDecider(), writer=PreparedWriter(cases / "prepared"),
                 mailer=FileMailer(cases / "outbox", sender=settings.aid_email, guard=own_only(settings)), clock=datetime.now)
-    page = build_app(deps, settings_file=args.settings, share=args.share, environ=os.environ)
+    route = route_for(settings)                              # the route into Exact of the plug point: none in this version
+    given = {"route": route} if route is not None else {}    # without one, build_app is called as before (its route is None then)
+    page = build_app(deps, settings_file=args.settings, share=args.share, environ=os.environ, **given)
     remove_empty_vibe_folder()
     page.launch(**launch_options(page, args.share), prevent_thread_lock=True)
     remove_empty_vibe_folder()                               # the launch makes the folder again

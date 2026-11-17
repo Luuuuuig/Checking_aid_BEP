@@ -5,7 +5,10 @@ written by the prepared writer (aid/execution/writer.py). The buyer enters in Ex
 review page's tab "In Exact invoeren" (aid/review/page.py, the list as it shows it in aid/review/hand_list.py), and the digest names
 the number still to enter (aid/notify.py). The ticks are kept in <cases_root>/prepared/marks.jsonl, appended and never rewritten. A
 change that a writer makes in a system one day never reaches prepared_changes.csv, so it never reaches the list. Nothing here changes
-a case's result, a write log, the disposition log or prepared_changes.csv: marks.jsonl is the only file this module writes.
+a case's result, a write log, the disposition log or prepared_changes.csv: marks.jsonl is the only file this module writes. On a page
+with a route into Exact (aid/execution/exact_route.py, which gives none in this version) the buyer can put a ticked change into Exact
+with a button of the tab: such a change is a change of this list, and the page marks it "entered" by "exact" (WRITTEN of that module)
+once the route read it back, a mark that every reader here counts as a tick.
 
 What a change is. A row is a change to enter when its kind is the price, the delivery date or the quantity of a PO line (LINE_KINDS)
 or the purchase price of an article; a row that attaches or detaches a document or sets a status is never a row to tick. The place
@@ -99,9 +102,9 @@ value there cannot be told (missing or uncertain, a price per another basis). Do
 "entered" and "seen" of its rows are taken away with the mark "reopened", by "version <n>" or "export", with the value the print
 showed ("shown", None for a line not found): the change is judged as if it had never been ticked, so it is open again, its value
 is laid over no version, and the next case finds the difference and asks it as any other. The open change says which print ended
-its tick and what it showed (Change.ended), for the note of its row on the tab. A print that shows the value, or was given at the
-time of the mark or before it, ends nothing; if the print was an older one given late, the buyer ticks again, and the later tick
-counts. The change of
+its tick and what it showed (Change.ended), and who had made that tick (Change.ended_by: the buyer, or the aid through a route), for
+the note of its row on the tab. A print that shows the value, or was given at the time of the mark or before it, ends nothing; if
+the print was an older one given late, the buyer ticks again, and the later tick counts. The change of
 a try-out is left as it is: its tick never counts in a supplier's case. The pipeline runs reconcile() for the PO of a case before
 it lays the entered values over the selected version, so that no case closes as confirmed on a tick that the newest print
 contradicts.
@@ -162,7 +165,9 @@ process is writing is the usual case. A line of prepared_changes.csv cannot be r
 parse it (a field longer than the reader's limit, a carriage return inside a field without quotes), when it does not have the
 columns of the file's header, or when it holds a kind, a version or a time that a row does not hold, or a change without its line or
 its article; a line of marks.jsonl when it is no JSON object with an entry id, a mark this module knows and a time (and, for the mark
-puts_back, the entry it puts back). A file that is not there holds nothing. A prepared_changes.csv whose first line lacks the
+puts_back, the entry it puts back), or when who made it is given and is no text. The lines of marks.jsonl are read by one function,
+mark_lines, which the button into Exact reads them through as well (aid/execution/exact_route.py), so that the list and the
+button's hold cannot disagree on a line. A file that is not there holds nothing. A prepared_changes.csv whose first line lacks the
 columns of the prepared writer (it was saved from a spreadsheet with another separator) has no line that can be read: that is a
 list that cannot be read, ListUnread, an OSError as for a file that another program holds, and never an empty list, so that no
 tick of it is taken as not made. A new mark after a last line that a crash cut off starts a
@@ -233,7 +238,8 @@ class Change(BaseModel):
     state: State
     marked_at: str | None = None                 # for entered, seen and dropped: the time of the latest mark that gives the state
     marked_by: str | None = None                 # and who made it: "buyer", "version <n>" for a change seen in version n of the PO
-                                                 # PDF, or "export" for one seen in a look from an export (EXPORT)
+                                                 # PDF, or "export" for one seen in a look from an export (EXPORT); "exact" for a change
+                                                 # the aid put into Exact through a route (WRITTEN of aid/execution/exact_route.py)
     marked_ids: list[str] = []                   # for entered, seen and dropped: the entry ids whose marks give the state
     puts_back: str | None = None                 # the entry id this change puts back in Exact, by the mark puts_back
     tryout: bool = False                         # whether cases made from a try-out asked it, by its place (see the module docstring)
@@ -242,6 +248,8 @@ class Change(BaseModel):
     ended: tuple[str, str | None] | None = None  # for an open change whose tick a print ended (contradict): what the mark calls that
                                                  # print ("version <n>" or "export") and the value it showed for the line, None when
                                                  # the line could not be found in it
+    ended_by: str | None = None                  # and who had made the tick that print ended (the `by` of its mark "entered" or
+                                                 # "seen"): "buyer", "exact" for a tick the aid made through a route, or a print
     withdrawn: bool = False                      # replaced by the mark "replaced": its supplier's newest document no longer asks it
 
 
@@ -505,10 +513,18 @@ def shown_now(change: Change, store: PoStore, cases_root: Path) -> str | None:
 def note_value(change: Change, store: PoStore, cases_root: Path) -> str | None:
     """What Exact shows now for a change of a PO line, when the PO as it stands, filed after the change was asked, shows neither its old
     nor its new value: the value of the note of its row on the list; None otherwise."""
+    noted = note_given(change, store, cases_root)
+    return noted[0] if noted is not None else None
+
+
+def note_given(change: Change, store: PoStore, cases_root: Path) -> tuple[str, datetime] | None:
+    """note_value with when the store was last given the print that shows that value (PoStore.given_at): (the value, that time), or
+    None when there is no such note. The row of a change that a route put into Exact without ticking it off keeps the note only when
+    that print came after the write (aid/review/hand_list.py)."""
     look = _look(change, store, cases_root)
     if look is None or _shows(change.kind, look.shown, change.old_value) or _shows(change.kind, look.shown, change.new_value):
         return None
-    return look.shown
+    return look.shown, look.filed
 
 
 def newest_version(store: PoStore, po_number: str) -> PoVersion | None:
@@ -1029,6 +1045,8 @@ def _change(run: list[_Row], marks: dict[str, _Mark], links: dict[str, str], las
     cancelled it, or that it is the undo that did. links are the put-back links of marks.jsonl, row -> the entry it puts back."""
     newest = run[-1]
     prints = getattr(marks, "ended", {})         # entry id -> the print that ended its tick, and what it showed (_marks)
+    ticked_by = getattr(marks, "ended_by", {})   # entry id -> who had made the tick that print ended (_marks)
+    ending = next((row.entry_id for row in reversed(run) if row.entry_id in prints), None)     # the newest row whose tick a print ended
     state, deciding = ("undone", []) if undone else _state(run, marks, last, held)
     latest = max((marks[entry_id] for entry_id in deciding), key=lambda one: one.line) if deciding else None
     return Change(ids=[row.entry_id for row in run], kind=newest.kind, po_number=newest.po_number, version=newest.version,
@@ -1038,7 +1056,8 @@ def _change(run: list[_Row], marks: dict[str, _Mark], links: dict[str, str], las
                   state=state, marked_at=latest.at if latest else None, marked_by=latest.by if latest else None, marked_ids=deciding,
                   puts_back=next((links[row.entry_id] for row in reversed(run) if row.entry_id in links), None), tryout=newest.tryout,
                   place=_place(newest), item=next((row.asked.code for row in reversed(run) if row.asked is not None and row.asked.code), None),
-                  ended=next((prints[row.entry_id] for row in reversed(run) if row.entry_id in prints), None) if state == "open" else None,
+                  ended=prints[ending] if ending is not None and state == "open" else None,
+                  ended_by=ticked_by.get(ending) if ending is not None and state == "open" else None,
                   withdrawn=state == "replaced" and newest.entry_id in marks and marks[newest.entry_id].what == WITHDRAWN)
 
 
@@ -1166,19 +1185,33 @@ def _row(values: dict[str, str]) -> _Row | None:
 
 class _Marks(dict):
     """The last mark of each entry (_marks), and beside it `ended`: for an entry whose last mark is a "reopened" that a print
-    wrote (contradict: the mark holds "shown"), what the mark calls that print and the value it showed."""
+    wrote (contradict: the mark holds "shown"), what the mark calls that print and the value it showed; and `ended_by`: for such
+    an entry, who had made the mark that the print ended (its `by`)."""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.ended: dict[str, tuple[str, str | None]] = {}
+        self.ended_by: dict[str, str | None] = {}
 
 
-def _marks(path: Path) -> tuple[dict[str, _Mark], dict[str, str], int]:
-    """The last mark of each entry of marks.jsonl, an entry whose last mark is "reopened" having none; the entry each put-back row
-    puts back, by the mark puts_back (row -> entry, the later line winning); and the number of lines passed over."""
-    found = _Marks()
-    links: dict[str, str] = {}
-    passed = 0
+class MarkLine(NamedTuple):
+    """A line of marks.jsonl that can be read (mark_lines): its entry id, its mark, its time and who made it, the whole line as read
+    (the entry a put-back puts back, what a print showed), and its place among the lines of the file that are not blank."""
+    entry_id: str
+    what: str
+    at: str
+    by: str | None
+    record: dict
+    number: int
+
+
+def mark_lines(path: Path) -> tuple[list[MarkLine], int]:
+    """The lines of a marks.jsonl that can be read, in the order of the file, and the number of lines passed over: a line is read
+    when it is one JSON object with an entry id (a text that is not empty), a time that can be read, who made it (a text, or none)
+    and a mark this module knows, the mark puts_back with the entry it puts back. A file that is not there holds none; one that
+    cannot be opened raises its OSError. The one reader of the file's lines: the list (_marks) and the hold of the button into
+    Exact (aid/execution/exact_route.py) both read them through it, so that the two cannot disagree on a line."""
+    found, passed = [], 0
     for number, line in enumerate(_lines(path)):
         try:
             record = json.loads(line.decode("utf-8"))
@@ -1194,18 +1227,34 @@ def _marks(path: Path) -> tuple[dict[str, _Mark], dict[str, str], int]:
         except ValueError:                       # also a line that is no JSON, or not UTF-8
             passed += 1
             continue
+        found.append(MarkLine(entry_id, what, at, by, record, number))
+    return found, passed
+
+
+def _marks(path: Path) -> tuple[dict[str, _Mark], dict[str, str], int]:
+    """The last mark of each entry of marks.jsonl, an entry whose last mark is "reopened" having none; the entry each put-back row
+    puts back, by the mark puts_back (row -> entry, the later line winning); and the number of lines passed over. The lines are
+    read by mark_lines."""
+    found = _Marks()
+    links: dict[str, str] = {}
+    lines, passed = mark_lines(path)
+    for entry_id, what, at, by, record, number in lines:
+        of = record.get("of")
         if what == PUTS_BACK:
             links.pop(entry_id, None)
             links[entry_id] = of
         elif what == "reopened":
-            found.pop(entry_id, None)
+            ticked = found.pop(entry_id, None)
             found.ended.pop(entry_id, None)
+            found.ended_by.pop(entry_id, None)
             if "shown" in record:                # a print ended the tick (contradict alone writes what the print showed, or null
                 shown = record.get("shown")      # for a line it did not have); any other take-back says nothing of a print
                 found.ended[entry_id] = (by, shown if isinstance(shown, str) else None)
+                found.ended_by[entry_id] = ticked.by if ticked is not None else None
         else:
             found[entry_id] = _Mark(what, at, by, number)
             found.ended.pop(entry_id, None)
+            found.ended_by.pop(entry_id, None)
     return found, links, passed
 
 

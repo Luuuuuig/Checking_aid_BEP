@@ -46,7 +46,9 @@ supplier's: judged a try-out, a real case would have its supplier's question hel
 
 The one exception is the close of the review page when it is about to send a message (aid/review/close.py): there a document that
 cannot be read is no supplier's either, and nothing is sent until it reads again (mark_for_sending), since the page's message goes
-to the address of the order's real supplier.
+to the address of the order's real supplier. The button that puts a change of the list into Exact, on a page with a route into
+Exact (aid/review/page.py), judges the same way at its press (mark_for_writing): a case whose case.json or document cannot be read,
+or whose folder is gone, may be a try-out's, and its change is not written.
 """
 from functools import lru_cache
 from pathlib import Path
@@ -112,6 +114,31 @@ def mark_for_sending(case: Case) -> bool | None:
         try:
             held = path.stat()
             return path.suffix.lower() == ".pdf" and _first_row_is_tryout(str(path), held.st_size, held.st_mtime_ns)
+        except FileNotFoundError:
+            return None
+        except Exception:                        # held for a moment, being written, or no file that can be read at all
+            if left:
+                sleep(READ_PAUSE)
+    return None
+
+
+def mark_for_writing(cases_root: Path, case_id: str) -> bool | None:
+    """Whether the document of the case <cases_root>/<case_id> bears the try-out mark, for the button of the tab "In Exact invoeren"
+    that is about to put a change of the case into Exact (aid/review/page.py): True for a try-out, False for a case whose case.json
+    and document were read at this moment and bear no mark, and None when that cannot be judged: its case.json cannot be read (held
+    by another program, or broken), its folder or its document is gone, it has no document, or the document cannot be read, each
+    tried READ_TRIES times. As for sending (mark_for_sending), nothing is guessed: case_is_tryout counts a case that cannot be read
+    as a supplier's, which is the wrong side to err on before a write into Exact. A try-out confirmation and a try-out cart page are
+    told as is_tryout tells them; a document of any other kind can bear no mark, and is judged by its file being there. The caller
+    tells a price list from a case (a price list has no case and is never a try-out)."""
+    for left in reversed(range(READ_TRIES)):
+        try:
+            case = load_case(cases_root, case_id)
+            if not case.input_files:
+                return None
+            path = Path(case.input_files[0])
+            held = path.stat()
+            return path.suffix.lower() in (".pdf", *PAGES) and _first_row_is_tryout(str(path), held.st_size, held.st_mtime_ns)
         except FileNotFoundError:
             return None
         except Exception:                        # held for a moment, being written, or no file that can be read at all

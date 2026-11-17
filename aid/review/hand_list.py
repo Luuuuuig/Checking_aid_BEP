@@ -38,13 +38,32 @@ given after the change was asked, neither its old nor its new value has the note
 12,50 → 12,70. Exact toont nu 12,80." (note_value of by_hand). A row whose tick a print ended (Change.ended of by_hand: the buyer
 had ticked it, and a print given after the tick contradicts it) says that in the place of that note, with the value the print
 showed, whatever it is: "... U vinkte dit af, maar de inkooporder die daarna binnenkwam toont 12,50. Voer de wijziging in Exact
-in, of vink opnieuw af als zij er al in staat."; or, when the line could not be found in that print, that it could not.
+in, of vink opnieuw af als zij er al in staat."; or, when the line could not be found in that print, that it could not. When the
+tick the print ended was the aid's own, made through a route (Change.ended_by "exact"), the note says so: "De assistent zette dit
+in Exact, maar de inkooporder die daarna binnenkwam toont 12,50. ...".
 
 copy_parts gives what the buyer copies from a row into Exact, and copy_buttons the buttons the page puts behind each row for it
 (aid/review/page.py; the page's script of aid/review/look.py draws them): one for the order number, one for the item or article
 code and one for the new value, each named by the text it copies, "Kopieer 250108", "Kopieer KM-0801", "Kopieer 12,70". The new
 value is offered only when it can be pasted as it stands (a price, a quantity, one day): a week or a range of days is the buyer's
-to choose a day from.
+to choose a day from (one_value).
+
+On a page built with a route into Exact (aid/execution/exact_route.py, which gives none in this version) the tab has a button that
+puts the ticked changes into Exact, and the list says so: intro begins with "De assistent zet alleen iets in Exact als u daarom
+vraagt. ..." in the place of the intro (hand_intro_route); a row that the button keeps off ends with a note after any other
+(blocks, given exact_route.doubts): a write in doubt, "Niet zeker of dit in Exact staat: kijk in Exact en vink de regel af als het er
+staat." or, for a change a route fed by a file took over, "Aan Exact doorgegeven en nog niet verwerkt: ..."; a write in Exact whose
+row was not ticked off, "De assistent heeft dit in Exact gezet, maar kon de regel niet afvinken: vink hem zelf af.", without the note
+of a print that ended an earlier tick of the row, which came before that write, and with the note of what Exact shows now only when
+the store was given the print that shows it after that write; a put-back, which the button never writes, "Dit
+terugzetten voert de assistent niet zelf in Exact in: voer het zelf in en vink de regel af.", or, while the change it puts back is
+still marked entered by the aid and the route read in Exact before its write another value than the put-back's, an empty field or
+nothing (exact_route.route_read), a note of its own for each that says what it read there; the button writes a change only when
+one_value holds for it, the rule of the copy buttons, and its value is in the normal form of the aid's own writers
+(exact_route.sendable); and among the handled changes a change the aid put into Exact reads "(door de assistent in Exact gezet op
+18-11-2026)" (the mark "entered" by "exact"), and the note of "Terugdraaien in Exact" on it names, under the same condition, what
+the route read in Exact before the aid's write when that is not the value the put-back names (_other_before). Without a route none
+of this shows.
 
 Under the list the tab has two sections. done_rows gives the section "Afgehandeld in de laatste 14 dagen": the changes entered, seen or
 dropped in that time, the newest first, each as label_of names it, followed by how the aid knows it, "(door u afgevinkt op 18-11-2026)",
@@ -79,13 +98,16 @@ last row that sets the status sets Bevestigd); confirmation_lines and confirmati
 line that counts them and says what to do.
 """
 import re
+from collections.abc import Mapping
 from datetime import datetime, timedelta
 from pathlib import Path, PureWindowsPath
 
 from aid.case import load_case, names_a_folder
 from aid.execution.by_hand import (ARTICLE_KIND, EXPORT, FOLDER, KINDS, LINE_KINDS, Change, changes, item_code, link_put_back,
-                                   newest_version, note_value, place_of, prepared_rows, put_back_of, put_back_state, reopen, same_value,
-                                   shown_now)
+                                   newest_version, note_given, note_value, place_of, prepared_rows, put_back_of, put_back_state, reopen,
+                                   same_value, shown_now)
+from aid.execution import exact_route
+from aid.execution.exact_route import BY_HAND, OTHER_BEFORE, UNTICKED, WRITTEN, Held
 from aid.execution.writer import LOG_FILE, UNDO_RULE_ID, WriteLog, WriteLogEntry, read_before, undo_entry
 from aid.pipeline import CaseResult, Deps
 from aid.po_store import PoStore, PoVersion
@@ -109,8 +131,12 @@ _WEEK = re.compile(r"(\d{4})-W(\d{2})")
 _MARKDOWN = re.compile(r"([\\`*_\[\]<>~])")      # the marks that change how Markdown shows a name in the middle of a line
 
 
-def blocks(open_: list[Change], store: PoStore, cases_root: Path, language: str) -> list[tuple[str, str, list[tuple[str, str]]]]:
-    """The open changes in blocks, as the tab shows them (see the module docstring): (block id, heading, [(row text, value)])."""
+def blocks(open_: list[Change], store: PoStore, cases_root: Path, language: str,
+           doubted: Mapping[str, Held | str] | None = None) -> list[tuple[str, str, list[tuple[str, str]]]]:
+    """The open changes in blocks, as the tab shows them (see the module docstring): (block id, heading, [(row text, value)]). On a
+    page with a route into Exact, doubted holds the changes that the button keeps off (exact_route.doubts: the first entry id of a
+    change, and why, as an exact_route.Held or as the kind alone), whose rows carry a note of it: a write in doubt, a write in Exact
+    whose row was not ticked off, a put-back for the buyer to enter."""
     strings = STRINGS[language]
     orders: dict[str, list[Change]] = {}
     articles = []
@@ -123,10 +149,10 @@ def blocks(open_: list[Change], store: PoStore, cases_root: Path, language: str)
     for po_number in sorted(orders, key=_natural):
         changes = sorted(orders[po_number], key=lambda change: (_natural(change.line_id or ""), LINE_KINDS.index(change.kind)))
         shown.append((f"{PO_BLOCK}{po_number}", _heading(po_number, changes, store, cases_root, strings),
-                      _rows(changes, store, cases_root, language)))
+                      _rows(changes, store, cases_root, language, doubted)))
     if articles:
         articles.sort(key=lambda change: change.article_code or "")
-        shown.append((ARTICLES, strings["hand_block_articles"], _rows(articles, store, cases_root, language)))
+        shown.append((ARTICLES, strings["hand_block_articles"], _rows(articles, store, cases_root, language, doubted)))
     return shown
 
 
@@ -200,10 +226,18 @@ def copy_parts(change: Change, cases_root: Path, language: str) -> list[tuple[st
         code = item_code(change, cases_root)
     if code:
         parts.append(("article", code))
-    new = change.new_value
-    if new is not None and (change.kind in _NUMBERS or _DAY.fullmatch(new)):
-        parts.append(("value", _value(new, change.kind, language)))
+    if one_value(change):
+        parts.append(("value", _value(change.new_value, change.kind, language)))
     return parts
+
+
+def one_value(change: Change) -> bool:
+    """Whether the change's new value is one value that can be pasted, or written, as it stands: a price or a quantity, or one day.
+    A week and a range of days are not (the buyer chooses the day), and neither is a value the aid does not know ("onbekend") or the
+    field that a put-back empties ("leeg"). The rule of the copy buttons (copy_parts), and of the button that puts a change into
+    Exact (aid/review/page.py)."""
+    new = change.new_value
+    return new is not None and bool(change.kind in _NUMBERS or _DAY.fullmatch(new))
 
 
 def copy_buttons(open_: list[Change], cases_root: Path, language: str) -> dict[str, list[tuple[str, str, str]]]:
@@ -251,12 +285,14 @@ def price_lists(open_: list[Change], cases_root: Path, language: str) -> list[tu
     return shown
 
 
-def intro(listed: list[tuple[str, str, list[tuple[str, str]]]], passed: int, language: str, test_mode: bool = False) -> str:
+def intro(listed: list[tuple[str, str, list[tuple[str, str]]]], passed: int, language: str, test_mode: bool = False,
+          routed: bool = False) -> str:
     """The text above the list, as Markdown: the intro, in the test mode the line that the changes go into the test Exact only, then a
     paragraph for each block with a hint (its first line in bold, then the hint), "Er is niets in te voeren." when no block is listed,
-    and how many lines of the list could not be read."""
+    and how many lines of the list could not be read. On a page with a route into Exact (routed) the intro says that the button
+    puts the ticked changes into Exact, or that the buyer enters them themselves (hand_intro_route)."""
     strings = STRINGS[language]
-    lines = [strings["hand_intro"], *([strings["hand_test_mode"]] if test_mode else [])]
+    lines = [strings["hand_intro_route" if routed else "hand_intro"], *([strings["hand_test_mode"]] if test_mode else [])]
     for _, heading, _ in listed:
         title, _, hint = heading.partition("\n")
         if hint:
@@ -270,22 +306,78 @@ def intro(listed: list[tuple[str, str, list[tuple[str, str]]]], passed: int, lan
 
 # --- the parts of a block and of a row ---
 
-def _rows(changes: list[Change], store: PoStore, cases_root: Path, language: str) -> list[tuple[str, str]]:
+def _rows(changes: list[Change], store: PoStore, cases_root: Path, language: str,
+          doubted: Mapping[str, Held | str] | None = None) -> list[tuple[str, str]]:
     """The rows of open changes: each row's text, with the note of what Exact shows now when there is one, and its value."""
-    return [(_noted(change, store, cases_root, language), "+".join(change.ids)) for change in changes]
+    return [(_noted(change, store, cases_root, language, doubted), "+".join(change.ids)) for change in changes]
 
 
-def _noted(change: Change, store: PoStore, cases_root: Path, language: str) -> str:
+def _noted(change: Change, store: PoStore, cases_root: Path, language: str, doubted: Mapping[str, Held | str] | None = None) -> str:
     """An open change's row with a note after it. A row that a print put back on the list (the buyer had ticked it, and the
     purchase order that came in afterwards contradicts the tick: Change.ended, by_hand.contradict) says so, with the value that
     print showed for the line, or that the line could not be found in it. Any other row has the note of what Exact shows now when
-    a newer version of its order shows neither its old nor its new value (note_value of aid/execution/by_hand.py)."""
+    a newer version of its order shows neither its old nor its new value (note_value of aid/execution/by_hand.py). On a page with a
+    route into Exact, a row that the button keeps off (doubted) ends with a note of its own after any other (_held_note), after one
+    space when the text before it ends with a full stop already, as the notes of the prints do. A row whose change the button put
+    into Exact without ticking it off (UNTICKED) leaves out the note of a print that ended an earlier tick of it: that print came
+    before the write, since the button writes only an open change, and its advice to enter the change no longer holds. Such a row
+    keeps the note of what Exact shows now only when the store was given the print that shows it after the button's verified line
+    (_noted_since)."""
+    held = (doubted or {}).get(change.ids[0])
+    unticked = held is not None and (held if isinstance(held, str) else held.kind) == UNTICKED
+    if unticked and change.ended is not None:    # the print's note is older than the button's write: left out
+        text = row_text(change, cases_root, language)
+    elif unticked:                               # what a print shows, only when it came after the button's write
+        text = _noted_since(change, store, cases_root, language, None if isinstance(held, str) else held.at)
+    else:
+        text = _noted_by_prints(change, store, cases_root, language)
+    if held is None:
+        return text
+    return f"{text}{' ' if text.endswith('.') else '. '}{_held_note(change, held, language)}"
+
+
+def _held_note(change: Change, held: Held | str, language: str) -> str:
+    """The note of a row that the button keeps off (exact_route.doubt_of), by why: a write in doubt, not sure whether it is in Exact
+    or handed over to Exact and not applied yet, to look in Exact and tick the row off once it is there; a write in Exact whose row
+    was not ticked off, to tick it off; a put-back, which the button never writes, to enter it and tick it off, and, when the route
+    read in Exact before its write of the change put back what is not the put-back's value, what it read there: the value, that the
+    field was empty, or that it read nothing, each a note of its own, to look in Exact which value goes back. A kind it does not
+    know is a write in doubt."""
+    kind, before = (held, None) if isinstance(held, str) else (held.kind, held.before)
+    strings = STRINGS[language]
+    if kind == UNTICKED:
+        return strings["hand_exact_unticked_row"]
+    if kind == BY_HAND:
+        return strings["hand_exact_put_back_hand_row"]
+    if kind == OTHER_BEFORE:
+        if before is None:
+            return strings["hand_exact_put_back_unread_row"]
+        if before == "":
+            return strings["hand_exact_put_back_empty_row"]
+        return strings["hand_exact_put_back_other_row"].format(value=_value(before, change.kind, language))
+    return strings["hand_exact_handed_over_row" if kind == "handed_over" else "hand_exact_unsure_row"]
+
+
+def _noted_since(change: Change, store: PoStore, cases_root: Path, language: str, since: datetime | None) -> str:
+    """The row of a change that the button put into Exact without ticking it off (UNTICKED, _noted), with the note of what Exact
+    shows now (note_value of by_hand) only when the store was given the print that shows it after `since`, the time of the button's
+    verified line (note_given): a print given before that write showed what Exact held before it, which the route's read back has
+    since replaced. Without a time to compare (None) the note is left out."""
+    text, noted = row_text(change, cases_root, language), note_given(change, store, cases_root)
+    if noted is None or since is None or noted[1].timestamp() <= since.timestamp():
+        return text
+    return f"{text}. {STRINGS[language]['hand_exact_shows'].format(value=_value(noted[0], change.kind, language))}"
+
+
+def _noted_by_prints(change: Change, store: PoStore, cases_root: Path, language: str) -> str:
+    """An open change's row with the note of the prints of its order, when there is one (_noted). A print that ended a tick the aid
+    made through a route (Change.ended_by "exact") says that the assistant put the change into Exact, not that the buyer ticked it."""
     text, strings = row_text(change, cases_root, language), STRINGS[language]
     if change.ended is not None:
-        shown = change.ended[1]
+        shown, suffix = change.ended[1], "_exact" if change.ended_by == WRITTEN else ""      # the aid's own tick, through a route
         if shown is None:
-            return f"{text}. {strings['hand_tick_ended_unfound']}"
-        return f"{text}. {strings['hand_tick_ended'].format(value=_value(shown, change.kind, language))}"
+            return f"{text}. {strings[f'hand_tick_ended_unfound{suffix}']}"
+        return f"{text}. {strings[f'hand_tick_ended{suffix}'].format(value=_value(shown, change.kind, language))}"
     other = note_value(change, store, cases_root)
     return text if other is None else f"{text}. {strings['hand_exact_shows'].format(value=_value(other, change.kind, language))}"
 
@@ -546,6 +638,8 @@ def _how(change: Change, strings: dict[str, str], language: str) -> str:
         return strings["hand_done_seen_export"]
     if change.state == "seen":
         return strings["hand_done_seen"].format(n=(change.marked_by or "").removeprefix("version "))
+    if change.state == "entered" and change.marked_by == WRITTEN:
+        return strings["hand_done_written"].format(date=day)                # the aid put it into Exact through a route
     return strings["hand_done_dropped" if change.state == "dropped" else "hand_done_ticked"].format(date=day)
 
 
@@ -598,12 +692,32 @@ def _other_before(deps: Deps, put: Change, found: list[Change], language: str) -
     put-back of a change of the list alone. The put-back of a write that a program made in a system names the value the program
     read there before it wrote, or none when the field was empty (read_before of aid/execution/writer.py): that is no reading of
     the purchase order that the aid's records could set right, so it has no such sentence, and neither has a put-back that names
-    no value."""
+    no value. A change that the aid put into Exact through a route, while the records still speak for it (exact_route.route_read:
+    still marked "entered" by "exact" by the list's own reading of `found`, and a verified line of the route's log for the entry put
+    back), is judged by what the route read in Exact before that write: the sentence names that value, with the route as its
+    source, when it differs from the put-back's, and when the route read an empty field or nothing, a sentence of its own says so;
+    the row of the put-back on the list names the same (exact_route.doubt_of), and the button of the tab never writes a put-back.
+    Without such a reading the records above are asked, as for any change."""
     strings = STRINGS[language]
     place = place_of(put)
     at = next((index for index, one in enumerate(found) if put.puts_back in one.ids), None)
     if at is None or put.new_value is None:      # no row of the list is put back, or no value is named
         return ""
+    if found[at].state == "entered" and found[at].marked_by == WRITTEN:        # put into Exact through a route: what it read there
+        try:
+            read = exact_route.route_read(put, found, exact_route.records(Path(deps.settings.cases_root) / FOLDER))
+        except OSError:                          # a log that cannot be read says nothing
+            read = None
+        if read is not None:
+            if read.before is None:
+                return " " + strings["hand_put_back_other_route_unread"]
+            if read.before == "":
+                return " " + strings["hand_put_back_other_route_empty"]
+            if same_value(put.kind, read.before, put.new_value):
+                return ""
+            return " " + strings["hand_put_back_other"].format(old=_value(put.new_value, put.kind, language),
+                                                               value=_value(read.before, put.kind, language),
+                                                               source=strings["hand_put_back_source:route"])
     held = [one.new_value for one in found[:at] if place_of(one) == place and one.state in _HELD]
     known, source = (held[-1], "marks") if held else (shown_now(put, deps.store, Path(deps.settings.cases_root)), "look")
     if known is None or same_value(put.kind, known, put.new_value) or (source == "look" and same_value(put.kind, known, put.old_value)):
