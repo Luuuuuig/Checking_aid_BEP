@@ -1972,13 +1972,15 @@ def test_the_price_list_tab_shows_the_view_and_puts_the_changes_on_the_list(tmp_
     assert viewed["table"] == {"headers": ["Artikel", "Inkoopprijs in Exact", "Prijs op de lijst", "Uitkomst"],
                                "data": [["KM-1001", "12,50", "12,70", "prijs verandert"], ["KM-1002", "8,00", "8,00", "ongewijzigd"],
                                         ["KM-9999", "", "", "artikel niet bekend in Exact"]]}
-    assert viewed["note"] == "1 prijs verandert, 1 blijft gelijk, 1 rij overgeslagen."
+    assert viewed["note"] == ("1 prijs verandert, 1 blijft gelijk, 1 rij overgeslagen. "
+                              f"{NL['pricelist_unknown_one'].format(articles='KM' + chr(92) + '-9999')}")   # the line of new articles (17 November)
     assert viewed["carry"] == {"__type__": "update", "interactive": True} and viewed["viewed"]["supplier"] == "S01"
     assert files_of(tmp_path) == before                                                    # rule 3: a view writes nothing anywhere
     clock.later(1)
     settings_before = (tmp_path / "settings.json").read_bytes()
     done = called(page, "pricelist_carried_out", CARRIED_OUT, listed, "S01", *OWN, viewed["viewed"], "nl")
-    assert done == {"table": viewed["table"], "note": "1 prijswijziging staat op de lijst In Exact invoeren.",
+    assert done == {"table": viewed["table"], "note": ("1 prijswijziging staat op de lijst In Exact invoeren. "
+                                                       f"{NL['pricelist_unknown_one'].format(articles='KM' + chr(92) + '-9999')}"),
                     "carry": {"__type__": "update", "interactive": False}, "viewed": None}
     [change] = open_changes(root / "prepared")
     assert (change.article_code, change.old_value, change.new_value, change.case_ids) == ("KM-1001", "12.50", "12.70", ["pricelist_S01_20261120T093100"])
@@ -1998,7 +2000,7 @@ def test_the_price_list_tab_shows_the_view_and_puts_the_changes_on_the_list(tmp_
     second = called(page, "pricelist_shown", PRICELIST_SHOWN, listed, "S01", *OWN, "nl")
     assert second["table"]["data"][0] == ["KM-1001", "12,50", "12,70", "prijs verandert"]     # not entered yet: Exact holds the old price
     assert called(page, "pricelist_carried_out", CARRIED_OUT, listed, "S01", *OWN, second["viewed"], "nl")["note"] == (
-        "1 prijswijziging staat op de lijst In Exact invoeren.")
+        f"1 prijswijziging staat op de lijst In Exact invoeren. {NL['pricelist_unknown_one'].format(articles='KM' + chr(92) + '-9999')}")
     [change] = open_changes(root / "prepared")
     assert len(change.ids) == 2 and shown(page, "list_opened", "nl")["tab"]["label"] == "In Exact invoeren (1)"
     # ticked as entered, the new price is the current price: the list then leaves it as it is
@@ -2010,9 +2012,9 @@ def test_the_price_list_tab_shows_the_view_and_puts_the_changes_on_the_list(tmp_
     assert third["table"] == {"headers": ["Article", "Purchase price in Exact", "Price on the list", "Outcome"],
                               "data": [["KM-1001", "12.70", "12.70", "unchanged"], ["KM-1002", "8.00", "8.00", "unchanged"],
                                        ["KM-9999", "", "", "article not known in Exact"]]}
-    assert third["note"] == "0 prices change, 2 stay the same, 1 row passed over."
+    assert third["note"] == f"0 prices change, 2 stay the same, 1 row passed over. {EN['pricelist_unknown_one'].format(articles='KM' + chr(92) + '-9999')}"
     assert called(page, "pricelist_carried_out", CARRIED_OUT, listed, "S01", *OWN, third["viewed"], "en")["note"] == (
-        "0 price changes are on the list Enter in Exact.")
+        f"0 price changes are on the list Enter in Exact. {EN['pricelist_unknown_one'].format(articles='KM' + chr(92) + '-9999')}")
     assert len(prepared_lines(root)) == 2
 
 

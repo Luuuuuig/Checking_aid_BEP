@@ -15,7 +15,7 @@ from aid.readers.po_export import ExportRefused
 from aid.review.i18n import STRINGS
 from aid.review.pricelist_page import (LIST_COLUMNS, ListRefused, carried_line, carry_out, checked_columns, checked_export, column_map,
                                        columns_for, count_line, filed_line, headers, list_titles, on_list, plan, preview, refusal_text,
-                                       shown, state_line)
+                                       shown, state_line, unknown_line)
 from aid.tests.helpers import wrong_dimensions, write_sheet
 from aid.tests.test_pricelist import ARTICLE_COLUMNS, HEADER, articles, item, prepared_rows, write_csv, write_xlsx
 
@@ -262,6 +262,48 @@ def test_the_lines_of_the_stored_prices_count_one_in_the_singular(tmp_path):
     assert filed_line([], 0, 2, "nl") == "Inkoopprijzen opgenomen van 0 leveranciers: 0 artikelen; 2 rijen overgeslagen."
 
 
+def test_the_articles_that_exact_does_not_know_have_a_line_of_their_own(tmp_path):
+    """Johan, 17 November (reported by Yijie): a price list sometimes holds new articles that Exact does not know. The rows that the
+    supplier's export does not hold ("artikel niet bekend in Exact") are named in a line of their own: how many articles, each item code
+    once in the order of the file, the first ten and then how many more, with what the buyer does with a new one. A row of such an
+    article that is expired is not named, its validity being checked first. No such row, no line."""
+    result = preview(write_csv(tmp_path / "lijst.csv", EVERY_OUTCOME), "S01", CURRENT, MAP, NOW)
+    assert unknown_line(result, "nl") == ("1 artikel van deze lijst is niet bekend in Exact: KM-9999. Kijk in Exact of het er al staat, "
+                                          "bijvoorbeeld bij een andere leverancier; is het nieuw, maak het dan zelf aan.")
+    assert unknown_line(result, "en") == ("1 article of this list is not known in Exact: KM-9999. Check in Exact whether it is there already, "
+                                          "for example with another supplier; if it is new, add it yourself.")
+    new = [item(f"KM-90{n:02d}", "1.00") for n in range(1, 13)]
+    rows = [new[0], item("KM-1001", "12.70"), *new[1:], item("KM-9001", "1.10"), item("KM-9013", "2.00", valid_to="2026-06-30")]
+    many = preview(write_csv(tmp_path / "nieuw.csv", rows), "S01", CURRENT, MAP, NOW)
+    first_ten = ", ".join(f"KM-90{n:02d}" for n in range(1, 11))
+    assert unknown_line(many, "nl") == (f"12 artikelen van deze lijst zijn niet bekend in Exact: {first_ten} en nog 2. Kijk in Exact of ze er "
+                                        "al staan, bijvoorbeeld bij een andere leverancier; zijn ze nieuw, maak ze dan zelf aan.")
+    assert unknown_line(many, "en") == (f"12 articles of this list are not known in Exact: {first_ten} and 2 more. Check in Exact whether they "
+                                        "are there already, for example with another supplier; if they are new, add them yourself.")
+    assert unknown_line(many, "nl", lambda code: f"<{code}>").startswith(
+        "12 artikelen van deze lijst zijn niet bekend in Exact: <KM-9001>, <KM-9002>, <KM-9003>")
+    eleven = preview(write_csv(tmp_path / "elf.csv", new[:11]), "S01", CURRENT, MAP, NOW)
+    assert unknown_line(eleven, "en").startswith(f"11 articles of this list are not known in Exact: {first_ten} and 1 more.")
+    ten = preview(write_csv(tmp_path / "tien.csv", new[:10]), "S01", CURRENT, MAP, NOW)
+    assert unknown_line(ten, "nl").startswith(f"10 artikelen van deze lijst zijn niet bekend in Exact: {first_ten}. Kijk")
+    # the order of the file, not of the codes: a later row of an article already named adds nothing
+    ordered = preview(write_csv(tmp_path / "volgorde.csv", [item("ZZ-9", "1.00"), item("AA-1", "1.00"), item("ZZ-9", "1.10")]), "S01",
+                      CURRENT, MAP, NOW)
+    assert unknown_line(ordered, "nl").startswith("2 artikelen van deze lijst zijn niet bekend in Exact: ZZ-9, AA-1. Kijk")
+    # rows without a price that can be read (headings in the column of the item code, a price on request) come after the priced
+    # articles, so that eleven headings above it do not hide the one new article of the list behind "en nog"
+    headings = [item(f"Groep {n}", "") for n in range(1, 12)]
+    grouped = preview(write_csv(tmp_path / "groepen.csv", [*headings, item("KM-9001", "1.00"), item("KM-9002", "op aanvraag")]), "S01",
+                      CURRENT, MAP, NOW)
+    assert grouped.unknown_priced == ["KM-9001"]
+    groups = ", ".join(f"Groep {n}" for n in range(1, 10))
+    assert unknown_line(grouped, "nl").startswith(f"13 artikelen van deze lijst zijn niet bekend in Exact: KM-9001, {groups} en nog 3. Kijk")
+    known = preview(write_csv(tmp_path / "bekend.csv", [item("KM-1001", "12.70"), item("KM-1002", "8.00")]), "S01", CURRENT, MAP, NOW)
+    assert unknown_line(known, "nl") == unknown_line(known, "en") == ""
+    for language in ("nl", "en"):
+        assert not re.search(r"unknown article|\bP01\b|—|–", unknown_line(many, language)), language
+
+
 # --- the tab on the page, through its handlers by name ---
 
 import os  # noqa: E402
@@ -467,6 +509,26 @@ def test_the_press_carries_out_the_view_or_nothing(tmp_path, madeup_out):
     assert (chosen["carry"], chosen["viewed"], chosen["note"], chosen["table"]["data"]) == (INACTIVE, None, "", [])
     again = called(page, "pricelist_supplier_chosen", SUPPLIER_CHOSEN, "S02", listed, "nl")
     assert (again["carry"], again["viewed"], again["table"]["data"]) == (INACTIVE, None, [])
+
+
+def test_the_view_and_the_press_name_the_articles_that_exact_does_not_know(tmp_path, madeup_out):
+    """The line of the articles that Exact does not know stands under the count of a view, before the warning of an older price, and in
+    the note of the press, so that it is still there once the press has replaced the view's note; its item codes are shown as text."""
+    page, d, clock = pricelist_page(tmp_path, madeup_out)
+    filed(page, tmp_path, "S01")
+    listed = price_list(tmp_path, "prijslijst.csv", [*LISTED, ("KM-1009", "3,10", "", "", "")])
+    clock.later(10)
+    new = _literal("KM-1009")
+    view = viewed(page, listed, "S01")
+    assert view["note"] == f"2 prijzen veranderen, 0 blijven gelijk, 1 rij overgeslagen. {NL['pricelist_unknown_one'].format(articles=new)}"
+    assert view["table"]["data"][2] == ["KM-1009", "", "", "artikel niet bekend in Exact"] and view["carry"] == ACTIVE
+    english = viewed(page, listed, "S01", language="en")
+    assert english["note"] == f"2 prices change, 0 stay the same, 1 row passed over. {EN['pricelist_unknown_one'].format(articles=new)}"
+    done = carried(page, listed, "S01", view["viewed"])
+    assert done["note"] == f"2 prijswijzigingen staan op de lijst In Exact invoeren. {NL['pricelist_unknown_one'].format(articles=new)}"
+    assert done["table"]["data"][2] == ["KM-1009", "", "", "artikel niet bekend in Exact"]
+    marked = price_list(tmp_path, "markup.csv", [("<b>KM</b>", "3,10", "", "", "")])
+    assert viewed(page, marked, "S01")["note"].endswith(NL["pricelist_unknown_one"].format(articles=_literal("<b>KM</b>")))
 
 
 def test_a_price_list_the_tab_cannot_view_is_named_by_a_sentence(tmp_path, madeup_out):
@@ -1286,8 +1348,9 @@ def test_the_table_says_what_became_of_each_row(tmp_path, madeup_out, monkeypatc
     assert done["table"]["data"] == [["KM-1001", "12,50", "12,70", "prijs verandert"], ["KM-1002", "8,00", "", "niet gelukt"],
                                      ["<b>KM</b>", "5,00", "", "niet gelukt"], ["KM-9999", "", "", "artikel niet bekend in Exact"]]
     marked = f"{_literal('KM-1002')}, {_literal('<b>KM</b>')}"                               # an item code is shown as text
+    new_nl = f" {NL['pricelist_unknown_one'].format(articles=_literal('KM-9999'))}"
     assert "<b>" not in marked.replace("\\<b\\>", "") and done["note"] == ("1 prijswijziging staat op de lijst In Exact invoeren. Niet op de lijst gezet: "
-                                                    f"{marked}. Bekijk de lijst opnieuw om het nog eens te proberen.")      # ruling Z25: no class
+                                                    f"{marked}. Bekijk de lijst opnieuw om het nog eens te proberen.{new_nl}")  # ruling Z25: no class
     assert rows_of(page) == ["artikel KM-1001: inkoopprijs 12,50 → 12,70"] and "made-up" not in json.dumps(done, ensure_ascii=False)
     assert not_prepared_line(preview(listed, "S01", CURRENT, MAP, NOW), "nl") == ""
     # viewed again, the rows that failed still change, and the press prepares them
@@ -1298,7 +1361,8 @@ def test_the_table_says_what_became_of_each_row(tmp_path, madeup_out, monkeypatc
         patched.setattr(PreparedWriter, "apply", failing)
         english = carried(page, listed, "S01", view["viewed"], language="en")
     assert english["note"] == (f"1 price change is on the list Enter in Exact. Not put on the list: {marked}. "
-                               "View the list again to try once more.") and english["table"]["data"][1][3] == "failed"
+                               f"View the list again to try once more. {EN['pricelist_unknown_one'].format(articles=_literal('KM-9999'))}")
+    assert english["table"]["data"][1][3] == "failed"
     # only the columns could not be kept: the changes are on the list, and a sentence of its own says so
     view = viewed(page, listed, "S01")
 
@@ -1308,7 +1372,7 @@ def test_the_table_says_what_became_of_each_row(tmp_path, madeup_out, monkeypatc
         patched.setattr(page_module, "keep_columns", refuse)
         done = carried(page, listed, "S01", view["viewed"])
     assert done["note"] == ("3 prijswijzigingen staan op de lijst In Exact invoeren. De kolommen van deze lijst konden niet worden bewaard: "
-                            "wijs ze de volgende keer opnieuw aan.")                         # ruling Z25: the count line says the rest
+                            f"wijs ze de volgende keer opnieuw aan.{new_nl}")                # ruling Z25: the count line says the rest
     assert [row[3] for row in done["table"]["data"]] == ["prijs verandert"] * 3 + ["artikel niet bekend in Exact"] and len(rows_of(page)) == 3
     assert EN["pricelist_columns_lost"] == "The columns of this list could not be kept: point them out again next time."
     assert "PermissionError" not in done["note"]
@@ -1320,7 +1384,7 @@ def test_the_table_says_what_became_of_each_row(tmp_path, madeup_out, monkeypatc
         patched.setattr(page_module, "keep_columns", refuse)
         both = carried(page, listed, "S01", view["viewed"])
     assert both["note"] == (f"1 prijswijziging staat op de lijst In Exact invoeren. Niet op de lijst gezet: {marked}. Bekijk de lijst opnieuw om "
-                            "het nog eens te proberen. De kolommen van deze lijst konden niet worden bewaard: wijs ze de volgende keer opnieuw aan.")
+                            f"het nog eens te proberen. De kolommen van deze lijst konden niet worden bewaard: wijs ze de volgende keer opnieuw aan.{new_nl}")
 
 
 def test_an_export_without_an_article_is_refused_on_the_tab(tmp_path, madeup_out):
@@ -1751,6 +1815,30 @@ def test_an_older_change_that_a_held_back_row_leaves_on_the_list_is_named(tmp_pa
     assert view["note"] == (f"1 prijs verandert, 0 blijven gelijk, 2 rijen overgeslagen. {DIFFERS_LINE} "
                             f"{OLDER_NL.format(articles=_literal('KM-1002'))}")
 
+
+def test_the_line_of_the_articles_exact_does_not_know_stands_before_the_warning_of_an_older_price(tmp_path, madeup_out):
+    """The order of the sentences under the table and in the note of the press: the count (with the strongly differing price), then the
+    articles that Exact does not know, and the warning of an older price last, in the view and after the press alike."""
+    page, d, clock = pricelist_page(tmp_path, madeup_out)
+    filed(page, tmp_path, "A", "a.csv", [["KM-1001", "Slang", "12,50"], ["KM-1002", "Klem", "8,00"], ["KM-1003", "Ring", "5,00"]])
+    clock.later(1)
+    first = price_list(tmp_path, "lijst A.csv", [("KM-1001", "12,70", "", "", ""), ("KM-1002", "8,40", "", "", "")])
+    assert carried(page, first, "A", viewed(page, first, "A")["viewed"])["note"] == "2 prijswijzigingen staan op de lijst In Exact invoeren."
+    clock.later(1)
+    filed(page, tmp_path, "B", "b.csv", [["KM-1001", "Slang", "11,90"]])
+    clock.later(1)
+    newer = price_list(tmp_path, "lijst A nieuw.csv", [("KM-1001", "12,90", "", "", ""), ("KM-1002", "80,00", "", "", ""),
+                                                       ("KM-1003", "5,10", "", "", ""), ("KM-9999", "1,00", "", "", "")])
+    both, new = f"{_literal('KM-1001')}, {_literal('KM-1002')}", _literal("KM-9999")
+    view = viewed(page, newer, "A")
+    assert view["note"] == (f"1 prijs verandert, 0 blijven gelijk, 3 rijen overgeslagen. {DIFFERS_LINE} "
+                            f"{NL['pricelist_unknown_one'].format(articles=new)} {OLDER_NL.format(articles=both)}")
+    english = viewed(page, newer, "A", language="en")
+    assert english["note"].endswith(f"{EN['pricelist_unknown_one'].format(articles=new)} {OLDER_EN.format(articles=both)}")
+    clock.later(1)
+    view = viewed(page, newer, "A")
+    done = carried(page, newer, "A", view["viewed"])
+    assert done["note"] == f"{ONE_LISTED} {NL['pricelist_unknown_one'].format(articles=new)} {OLDER_NL.format(articles=both)}"
 
 def test_no_price_list_takes_another_suppliers_open_change_off_the_list(tmp_path, madeup_out):
     """Ruling Z21 (the check's probes z3b.py run R1 and z3.py runs P2 and P4): the tab knows another supplier by an export given on
@@ -2201,6 +2289,20 @@ REDESIGN = {
     "pricelist_remove_no": ("Niet weghalen", "Keep them"),
 }
 
+# The line of the articles that Exact does not know (Johan, 17 November, reported by Yijie: a price list sometimes holds new articles),
+# word for word: for one article, for more, and the list of item codes that goes on after the tenth.
+NEW_ARTICLES = {
+    "pricelist_unknown_one": ("1 artikel van deze lijst is niet bekend in Exact: {articles}. Kijk in Exact of het er al staat, bijvoorbeeld bij "
+                              "een andere leverancier; is het nieuw, maak het dan zelf aan.",
+                              "1 article of this list is not known in Exact: {articles}. Check in Exact whether it is there already, for "
+                              "example with another supplier; if it is new, add it yourself."),
+    "pricelist_unknown_many": ("{n} artikelen van deze lijst zijn niet bekend in Exact: {articles}. Kijk in Exact of ze er al staan, "
+                               "bijvoorbeeld bij een andere leverancier; zijn ze nieuw, maak ze dan zelf aan.",
+                               "{n} articles of this list are not known in Exact: {articles}. Check in Exact whether they are there "
+                               "already, for example with another supplier; if they are new, add them yourself."),
+    "pricelist_unknown_more": ("{articles} en nog {n}", "{articles} and {n} more"),
+}
+
 
 def test_every_text_of_the_brief_and_the_amendments_stands_in_the_strings():
     """Amendment 6: every Dutch and English text of the brief and of its amendments stands in the page's strings word for word; a
@@ -2212,8 +2314,9 @@ def test_every_text_of_the_brief_and_the_amendments_stands_in_the_strings():
     assert {key: (NL[key], EN[key]) for key in RULED} == RULED
     assert {key: (NL[key], EN[key]) for key in RULED_AGAIN} == RULED_AGAIN
     assert {key: (NL[key], EN[key]) for key in REDESIGN} == REDESIGN
+    assert {key: (NL[key], EN[key]) for key in NEW_ARTICLES} == NEW_ARTICLES
     mine = {key for key in NL if key.startswith(("pricelist", "exact_articles", "exact_part_articles", "hand_pricelist"))}
-    assert mine == {key for key in (*TEXTS, *BEYOND, *RULED, *RULED_AGAIN, *REDESIGN)
+    assert mine == {key for key in (*TEXTS, *BEYOND, *RULED, *RULED_AGAIN, *REDESIGN, *NEW_ARTICLES)
                     if key.startswith(("pricelist", "exact_articles", "exact_part_articles", "hand_pricelist"))}
     for gone in ("ook bij een andere leverancier", "also with another supplier", "De wijzigingen staan op de lijst.", "Niet op de lijst gezet ("):
         assert not any(gone in text for text in (*NL.values(), *EN.values())), gone              # what the second round replaced
@@ -2304,7 +2407,8 @@ def test_the_documents_say_what_the_price_list_tab_does(tmp_path):
                   NL["pricelist_outcome:shared"].format(name="S01 B.V."), NL["pricelist_remove"], NL["pricelist_removed"].format(supplier="S01 B.V."),
                   NL["pricelist_older"].format(articles="KM-1001"), NL["pricelist_outcome:ticked"], NL["pricelist_outcome:dropped"],
                   NL["pricelist_log_lost"], NL["pricelist_refused:heading"], NL["pricelist_refused:name_row"].format(row=6),
-                  NL["exact_export_refused:surplus_cells"].format(row=3), NL["hand_dropped"], NL["hand_reopen"]):
+                  NL["exact_export_refused:surplus_cells"].format(row=3), NL["hand_dropped"], NL["hand_reopen"],
+                  NL["pricelist_unknown_one"].format(articles="KM-0400"), "en nog 2"):
         assert f"\"{quote}\"" in tab, quote
     assert f"\"{NL['exact_export_refused:surplus_cells'].format(row=4)}\"" in part
     # the third round (rulings Z30, Z31, Z33 and Z35): the comma file, the hidden sheet, the lines of the tab Bestanden, the README
@@ -2368,9 +2472,10 @@ def test_the_documents_say_what_the_price_list_tab_does(tmp_path):
     view = preview(listed, "S01", current_prices(root, "S01")[0], columns, NOW)
     assert [row[3] for row in shown(view, current_prices(root, "S01")[0], "nl")] == [
         "prijs verandert", "ongewijzigd", "prijs verandert", "prijs per ander aantal: niet vergeleken", "artikel niet bekend in Exact", "verlopen"]
-    assert f"\"{count_line(view, 'nl')}\"" in walk and "The table shows six rows" in walk
+    assert f"\"{count_line(view, 'nl')}\" and then \"{unknown_line(view, 'nl')}\"" in walk and "The table shows six rows" in walk
     done = carry_out(listed, "S01", current_prices(root, "S01")[0], columns, root, NOW)
-    assert f"\"{carried_line(on_list(done, root), 'nl')}\"" in walk
+    assert f"\"{carried_line(on_list(done, root), 'nl')}\", followed by the same line of KM-9999" in walk
+    assert unknown_line(done, "nl") == unknown_line(view, "nl") == NL["pricelist_unknown_one"].format(articles="KM-9999")
     [first, second] = open_changes(root / "prepared")
     for change in (first, second):
         row = hand.NL["hand_row:article_price"].format(item=change.article_code, old=change.old_value.replace(".", ","),

@@ -282,7 +282,8 @@ stored prices or by an open change on the list "In Exact invoeren", whose outcom
 times as high or as low as the purchase price in Exact; a price that the list holds as ticked after the supplier's export; and a
 price that the buyer took off the list. So what the view shows as changing, the press puts on the list. When a row kept off the
 list leaves an older price of the same supplier's earlier list on the list, the count line and the note name its article
-(pricelist_page.older_asked). A change that the list holds as entered from before the supplier's newer export is asked again by
+(pricelist_page.older_asked). Before that, both name the articles of the rows whose outcome is "artikel niet bekend in Exact",
+for the buyer to look them up in Exact and add a new one himself (pricelist_page.unknown_line). A change that the list holds as entered from before the supplier's newer export is asked again by
 the press (pricelist_page.ask_again). A supplier's name of more than 100 characters, or with a line
 break or a control character, is refused wherever the tab takes one. Both file fields, 140 px high, take any file, so that the page
 library refuses none in its own words: a file of another type, an empty file, a workbook with more than one visible sheet with data (one
@@ -2760,12 +2761,14 @@ def _pricelist_tab(gr, app, language, pricelist_tab, live: _Live, tab: _Tab, cas
 
     def pricelist_shown(list_now: str | None, supplier_now: str | None, *values) -> tuple:
         """"Bekijken": the price list compared with the supplier's current prices, with nothing written anywhere: (the table, the count
-        line, the press active, the view kept), or the table emptied and the note of why there is nothing to view."""
+        line, the press active, the view kept), or the table emptied and the note of why there is nothing to view. The count line is
+        followed by the line of the articles that Exact does not know and the warning of an older price, when there are such."""
         *chosen, language_now = values
         found, note = judged(list_now, supplier_now, tuple(chosen), language_now)
         if found is None:
             return unviewed(language_now, note)
-        lines = [pricelist_page.count_line(found.result, language_now), pricelist_page.older_line(found.older, language_now, _literal)]
+        lines = [pricelist_page.count_line(found.result, language_now), pricelist_page.unknown_line(found.result, language_now, _literal),
+                 pricelist_page.older_line(found.older, language_now, _literal)]
         return (table_of(pricelist_page.shown(found.result, found.current, language_now, found.shared), language_now),
                 " ".join(line for line in lines if line), gr.update(interactive=True), view_of(list_now, found))
 
@@ -2778,7 +2781,8 @@ def _pricelist_tab(gr, app, language, pricelist_tab, live: _Live, tab: _Tab, cas
         of each row: a change that could not be prepared reads "niet gelukt", and the note names the articles of those rows. When
         the price list's own write log could not be written, the changes stand on the list all the same: the table is shown, the
         columns are kept, and the note says after the count line that the aid cannot put these changes back itself. When the
-        columns could not be kept, the note says so after the count line. The settings file is never written."""
+        columns could not be kept, the note says so after the count line. The note ends as the view's line does, with the articles
+        that Exact does not know and the warning of an older price. The settings file is never written."""
         *chosen, viewed, language_now = values
         strings = STRINGS[language_now]
         if not isinstance(viewed, dict):
@@ -2801,7 +2805,8 @@ def _pricelist_tab(gr, app, language, pricelist_tab, live: _Live, tab: _Tab, cas
             keep_columns(cases_root, found.name, found.columns)
         except Exception:                                # the changes are on the list; only the columns were not kept
             notes.append(strings["pricelist_columns_lost"])
-        notes += [line for line in [pricelist_page.older_line(found.older, language_now, _literal)] if line]
+        notes += [line for line in [pricelist_page.unknown_line(done, language_now, _literal),
+                                    pricelist_page.older_line(found.older, language_now, _literal)] if line]
         return (table_of(pricelist_page.shown(done, found.current, language_now, found.shared), language_now), " ".join(notes),
                 gr.update(interactive=False), None)
 

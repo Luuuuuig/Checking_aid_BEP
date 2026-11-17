@@ -550,6 +550,11 @@ STRINGS: dict[str, dict[str, str]] = {
         "pricelist_changed": "De gegevens zijn veranderd sinds u de lijst bekeek. Bekijk de lijst opnieuw.",
         "pricelist_differs": ("Een prijs die meer dan drie keer zo hoog of zo laag is, zet de assistent niet op de lijst: controleer de "
                               "lijst, en voer een echte wijziging zelf in Exact in."),
+        "pricelist_unknown_one": ("1 artikel van deze lijst is niet bekend in Exact: {articles}. Kijk in Exact of het er al staat, "
+                                  "bijvoorbeeld bij een andere leverancier; is het nieuw, maak het dan zelf aan."),
+        "pricelist_unknown_many": ("{n} artikelen van deze lijst zijn niet bekend in Exact: {articles}. Kijk in Exact of ze er al staan, "
+                                   "bijvoorbeeld bij een andere leverancier; zijn ze nieuw, maak ze dan zelf aan."),
+        "pricelist_unknown_more": "{articles} en nog {n}",
         "pricelist_older": ("Let op: voor {articles} staat op de lijst In Exact invoeren nog de prijs van een eerdere prijslijst van deze "
                             "leverancier. Deze lijst vraagt een andere prijs, die de assistent niet op de lijst zet: haal die regel daar van "
                             "de lijst en voer de goede prijs zelf in Exact in."),
@@ -1601,6 +1606,11 @@ STRINGS: dict[str, dict[str, str]] = {
         "pricelist_changed": "The data changed since you viewed the list. View the list again.",
         "pricelist_differs": ("A price more than three times as high or as low is not put on the list by the assistant: check the list, "
                               "and enter a real change in Exact yourself."),
+        "pricelist_unknown_one": ("1 article of this list is not known in Exact: {articles}. Check in Exact whether it is there already, "
+                                  "for example with another supplier; if it is new, add it yourself."),
+        "pricelist_unknown_many": ("{n} articles of this list are not known in Exact: {articles}. Check in Exact whether they are there "
+                                   "already, for example with another supplier; if they are new, add them yourself."),
+        "pricelist_unknown_more": "{articles} and {n} more",
         "pricelist_older": ("Note: for {articles} the list Enter in Exact still holds the price of an earlier price list of this supplier. "
                             "This list asks another price, which the assistant does not put on the list: take that row off the list there "
                             "and enter the right price in Exact yourself."),

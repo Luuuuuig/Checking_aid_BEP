@@ -59,6 +59,10 @@ row without an item code is named by its row, and a price reads with the decimal
 shown for a price that changes and for one that stays the same; the import keeps no price of a row it passes over. count_line
 counts the prices that change, those that stay the same and the rows passed over, with the advice to ask for a current list when
 a row is expired, and with the sentence that no price which differs strongly is put on the list when such a row occurs;
+unknown_line names the articles of the rows whose outcome is "artikel niet bekend in Exact" (not in the supplier's export), those
+with a price on the list first, each once and in the order of the file within each group, the first UNKNOWN_NAMED of them with how
+many more, and asks the buyer to look in Exact before he adds a new one; a row not valid today has its own outcome and is not named;
+the view's count and the press's note carry it;
 carried_line says how many price changes stand on the list after a press, which on_list counts: the entries of the press that an
 open change of the list holds. After a press shown gives the table again from the press's own result, where a change that could
 not be prepared has the label "failed", and not_prepared_line names the articles of those rows for the note. A write log that
@@ -91,6 +95,7 @@ REQUIRED = ("item_code", "price")                # the columns that must be chos
 FACTOR = 3                                       # a list price more than this many times the purchase price in Exact, or less than
 #                                                  one part in this many of it, is not put on the list (see held_back)
 SHARED, DIFFERS = "with another supplier", "differs strongly"         # the reasons of the tab's own check of a price that would change
+UNKNOWN_NAMED = 10                               # the articles unknown in Exact that unknown_line names before it counts the rest
 TICKED, DROPPED = "ticked on the list", "taken off the list"          # (held_back): a row with one of them is kept off the list
 BY = "assistant"                                 # who a mark "reopened" of the press is by, in marks.jsonl (ask_again)
 # The label of each reason for which a row is passed over, by the part of its key after "pricelist_outcome:": the import's reasons
@@ -334,6 +339,26 @@ def count_line(result: ImportResult, language: str) -> str:
     lines += [strings["pricelist_expired"]] if result.expired else []
     lines += [strings["pricelist_differs"]] if any(reason == DIFFERS for _, reason in result.skipped) else []
     return " ".join(lines)
+
+
+def unknown_line(result: ImportResult, language: str, literal: Callable[[str], str] = str) -> str:
+    """The line of the articles of the rows whose outcome is "artikel niet bekend in Exact" (the import's "unknown article": not in the
+    supplier's export): how many, their item codes each once and as `literal` makes an item code showable, those whose row gives a
+    price that can be read first (ImportResult.unknown_priced), each group in the order of the file, the first UNKNOWN_NAMED and then
+    how many more, and what the buyer does: look in Exact first, and add a new one himself; "" for none. A row that is not valid today
+    has its own outcome and is not named. A row that is no article (a heading in the column of the item code) has no price as a rule,
+    so it comes after the articles that a list prices."""
+    strings = STRINGS[language]
+    unknown = list(dict.fromkeys(item for item, reason in result.skipped if reason == "unknown article"))
+    if not unknown:
+        return ""
+    priced = set(result.unknown_priced)
+    articles = [item for item in unknown if item in priced] + [item for item in unknown if item not in priced]
+    named = ", ".join(literal(item) for item in articles[:UNKNOWN_NAMED])
+    if len(articles) > UNKNOWN_NAMED:
+        named = strings["pricelist_unknown_more"].format(articles=named, n=len(articles) - UNKNOWN_NAMED)
+    key = "pricelist_unknown_one" if len(articles) == 1 else "pricelist_unknown_many"
+    return strings[key].format(n=len(articles), articles=named)
 
 
 def older_asked(result: ImportResult, supplier: str, asked: Mapping) -> list[str]:

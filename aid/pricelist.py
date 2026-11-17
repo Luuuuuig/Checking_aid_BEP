@@ -193,6 +193,7 @@ class ImportResult(BaseModel):
     supplier: str = ""                           # the supplier the list is from
     outcomes: list[WriteLogEntry | tuple[str, str]] = []     # the entry or the skip of each row, in the order of the file
     held: dict[str, str] = {}                    # item code -> the list price of the row that the caller's check held back
+    unknown_priced: list[str] = []               # the item codes of the "unknown article" rows whose list price can be read
 
     @property
     def errors(self) -> list[tuple[str, str]]:
@@ -251,6 +252,7 @@ def import_price_list(path: Path, supplier: str, current_prices: dict[str, str],
     outcomes: list[WriteLogEntry | tuple[str, str]] = []      # the entry or the (item, reason) of each row, in the order of the file
     settled: set[str] = set()                                 # the articles an earlier row of the file settled
     held: dict[str, str] = {}                                 # the list price of each row that the caller's check held back
+    unknown_priced: list[str] = []                            # the unknown articles whose row gives a price that can be read
     for number, raw in rows:
         code = raw["item_code"]
         if not code:
@@ -267,6 +269,8 @@ def import_price_list(path: Path, supplier: str, current_prices: dict[str, str],
                 reason = "duplicate row"
             elif check is not None and (reason := check(code, current[code], row["price"])) is not None:
                 held[code] = row["price"]
+        if reason == "unknown article" and row["price"] is not None:
+            unknown_priced.append(code)
         if reason is not None:
             outcomes.append((code, reason))
             continue
@@ -279,7 +283,8 @@ def import_price_list(path: Path, supplier: str, current_prices: dict[str, str],
     updated = [outcome for outcome in outcomes if isinstance(outcome, WriteLogEntry)]
     skipped = [outcome for outcome in outcomes if isinstance(outcome, tuple)]
     expired = any(reason == "expired" for _, reason in skipped)
-    return ImportResult(updated=updated, skipped=skipped, expired=expired, supplier=supplier, outcomes=outcomes, held=held)
+    return ImportResult(updated=updated, skipped=skipped, expired=expired, supplier=supplier, outcomes=outcomes, held=held,
+                        unknown_priced=unknown_priced)
 
 
 def _error_reason(exc: Exception) -> str:
