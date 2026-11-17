@@ -286,15 +286,14 @@ def test_an_order_above_the_authorization_shows_the_hint_and_no_amount(tmp_path,
 def test_switching_the_language_relabels_the_tab_and_keeps_what_is_ticked(tmp_path, madeup_out):
     page, prepared, d = tab_page(tmp_path, madeup_out)
     price = value_of(shown(page, "list_opened", "nl"), "prijs 12,50")
-    (tab, intro, rows, block, note, seen, refresh, entered_above, dropped_above, entered, dropped,
+    (tab, intro, rows, block, note, seen, refresh, entered_above, dropped_above,
      whole) = handler(page, "hand_relabel")("en", [price, "gone"], "po:250114")
     assert tab == {"__type__": "update", "label": "Enter in Exact (3)"} and (intro, note) == (EN["hand_intro"], "")
     assert [text for text, _ in rows["choices"]][0] == "Purchase order 250108 (S08), line 1 (KM-0801): price 12.50 → 12.70"
     assert rows["value"] == [price] and (block["value"], block["label"]) == ("po:250114", "Purchase order or article prices")   # a row no longer listed is let go
     assert seen["po:250108"] == [price]
-    assert [update["value"] for update in (refresh, entered_above, dropped_above, entered, dropped, whole)] == [
-        "Refresh the list", "The ticked rows have been entered", "Do not enter the ticked rows", "The ticked rows have been entered",
-        "Do not enter the ticked rows", "All of this has been entered"]
+    assert [update["value"] for update in (refresh, entered_above, dropped_above, whole)] == [
+        "Refresh the list", "The ticked rows have been entered", "Do not enter the ticked rows", "All of this has been entered"]
     assert handler(page, "hand_relabel")("nl", [], "po:999")[3]["value"] is None
 
 
@@ -329,24 +328,27 @@ def test_the_tab_is_wired_as_the_page_shows_it(tmp_path, madeup_out):
     order = [name(block) for block in inside(tab) if isinstance(block, (gr.Markdown, gr.Button, gr.CheckboxGroup, gr.Dropdown))]
     entered, dropped, whole, refresh = (f"button {NL[key]}" for key in ("hand_entered", "hand_dropped", "hand_block_entered", "refresh"))
     chooser = "Inkooporder of artikelprijzen"                                   # the dropdown of the blocks
-    assert order[:11] == ["hand-intro", refresh, "hand-new", entered, dropped, "hand-note", "hand-rows", entered, dropped, chooser,
-                          whole]                                              # the two above with their answer, and below
-    assert order[11:13] == ["Prijslijst", f"button {NL['hand_pricelist_entered']}"]                  # the press for one price list (Task 42)
-    assert order[13:] == ["hand-confirmations", "hand-done", "Afgehandelde wijziging", f"button {NL['hand_reopen']}",
+    assert order[:9] == ["hand-intro", refresh, "hand-new", entered, dropped, "hand-note", "hand-rows", chooser,
+                         whole]                                               # the pair above with its answer, and none under the rows
+    assert order[9:11] == ["Prijslijst", f"button {NL['hand_pricelist_entered']}"]                   # the press for one price list (Task 42)
+    assert order[11:] == ["hand-confirmations", "hand-done", "Afgehandelde wijziging", f"button {NL['hand_reopen']}",
                           f"button {NL['hand_put_back']}", "hand-done-note"]  # the two sections of Task 35 under the list
     listed = ["tab", "hand-intro", "hand-rows", chooser, "hand-note", "seen"]
     assert bound("list_opened") == (sorted([("page", "load"), ("tab", "select"), (refresh, "click")]), ["language"], listed)
-    assert bound("changes_entered") == ([(entered, "click")] * 2, ["hand-rows", "language"], listed)
-    assert bound("changes_dropped") == ([(dropped, "click")] * 2, ["hand-rows", "language"], listed)
+    assert bound("changes_entered") == ([(entered, "click")], ["hand-rows", "language"], listed)
+    assert bound("changes_dropped") == ([(dropped, "click")], ["hand-rows", "language"], listed)
     assert bound("block_entered") == ([(whole, "click")], [chooser, "seen", "language"], listed)
     assert bound("hand_relabel") == ([("language", "change")], ["language", "hand-rows", chooser],
-                                     [*listed, refresh, entered, dropped, entered, dropped, whole])
+                                     [*listed, refresh, entered, dropped, whole])
     [rows] = [block for block in inside(tab) if isinstance(block, gr.CheckboxGroup)]
     assert rows.show_label is False and rows.choices == [] and isinstance(tab.parent, gr.Tabs) and rows.elem_classes == ["hand-rows"]
     # one tick box under the other: a style rule given to the page through the head of an HTML block of the tab, for the group's class
     # (the other HTML block of the tab carries the copy buttons of the rows: test_each_row_has_its_copy_buttons_on_the_page)
     [style] = [block for block in inside(tab) if isinstance(block, gr.HTML) and block.elem_id != "hand-copy"]
     assert ".hand-rows .wrap" in style.head and "flex-direction: column" in style.head and style.head.startswith("<style>")
+    # a list without a row is not drawn as an empty bar under the pair: the rule hides it, and leaves it in the page for the script of
+    # the copy buttons, which looks for it there
+    assert ".form:has(> .block.hand-rows):not(:has(input)) { display: none; }" in style.head
 
 
 def copy_data(element: str) -> tuple[dict, str, str]:
@@ -715,7 +717,7 @@ def test_the_documents_say_what_the_review_round_settled():
     assert f"\"{NL['hand_nothing_noted']}\"" in manual["2.6"]
 
 
-def test_the_language_switch_relabels_the_buttons_above_and_below_as_gradio_applies_it(tmp_path, madeup_out):
+def test_the_language_switch_relabels_the_buttons_as_gradio_applies_it(tmp_path, madeup_out):
     """gradio takes the value out of an update as it applies it to its output, so one update given to two outputs would relabel only
     the first: each button of the tab gets its own update, and all of them read English after the switch (found in the browser)."""
     from gradio.blocks import postprocess_update_dict
@@ -725,7 +727,6 @@ def test_the_language_switch_relabels_the_buttons_above_and_below_as_gradio_appl
     applied = [postprocess_update_dict(output, update) if isinstance(update, dict) else update
                for output, update in zip(relabel.outputs, relabel.fn("en", [], None))]
     assert [update["value"] for update in applied[6:]] == ["Refresh the list", "The ticked rows have been entered", "Do not enter the ticked rows",
-                                                          "The ticked rows have been entered", "Do not enter the ticked rows",
                                                           "All of this has been entered"]
 
 
@@ -1192,9 +1193,9 @@ def test_the_answer_of_the_tick_buttons_stands_under_them_and_stays_in_view(tmp_
         """The child of the tab that holds the block (the page library puts a group of tick boxes in a form block of its own)."""
         return block if block.parent is tab else top(block.parent)
     assert children.index(new) + 1 == children.index(actions) == children.index(top(rows)) - 1  # under the intro and the new line
-    below = children[children.index(top(rows)) + 1]                                             # the same pair under the rows, small
-    assert isinstance(below, gr.Row) and [(button.value, button.variant, button.size) for button in below.children] == [
-        (NL["hand_entered"], "secondary", "sm"), (NL["hand_dropped"], "secondary", "sm")]
+    below = children[children.index(top(rows)) + 1]                    # no second pair under the rows: the pair above stays in view
+    assert not (isinstance(below, gr.Row) and any(getattr(button, "value", None) == NL["hand_entered"] for button in below.children))
+    assert sum(1 for block in inside(tab) if isinstance(block, gr.Button) and block.value == NL["hand_entered"]) == 1
     buttons = [block for block in inside(tab) if isinstance(block, gr.Button)]
     assert [button for button in buttons if button.variant == "primary"] == above[:1]           # the one filled button of the tab
     for name in ("changes_entered", "changes_dropped", "block_entered", "pricelist_entered"):      # every press of the list answers there
@@ -1277,7 +1278,7 @@ def test_the_hand_tab_label_follows_the_list_and_leaves_the_ticks(tmp_path, made
     presses = [target for f in page.fns.values() if getattr(f.fn, "__name__", "") in (
         "changes_entered", "changes_dropped", "block_entered", "pricelist_entered", "change_reopened", "change_put_back") for target in f.targets]
     assert sorted(cleared.targets) == sorted([*[target for target in fill.targets if target[0] != page._id], (language._id, "change"), *presses])
-    assert len(cleared.targets) == 11 and (tab._id, "select") in cleared.targets
+    assert len(cleared.targets) == 9 and (tab._id, "select") in cleared.targets
     # neither on a public share link nor without a settings file, where the tab keeps its one relabel
     for share, file, key in ((True, True, "settings_share"), (False, False, "settings_no_file")):
         other = tab_page(tmp_path / key, madeup_out, cases=(), share=share, file=file)[0]
@@ -2159,7 +2160,7 @@ def test_one_press_marks_the_article_prices_of_one_list(tmp_path, madeup_out):
     [row] = [block for block in inside(tab) if isinstance(block, gr.Row) and block.elem_id == "hand-pricelists"]
     assert button in inside(row) and choice in inside(row) and row.visible is False      # shown only while a price list has rows to enter
     order = [block for block in inside(tab) if isinstance(block, (gr.Markdown, gr.Button, gr.Dropdown))]
-    assert [getattr(block, "elem_id", None) or getattr(block, "label", None) or block.value for block in order][8:13] == [
+    assert [getattr(block, "elem_id", None) or getattr(block, "label", None) or block.value for block in order][6:11] == [
         "Inkooporder of artikelprijzen", NL["hand_block_entered"], "Prijslijst", NL["hand_pricelist_entered"], "hand-confirmations"]
     [press] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == "pricelist_entered"]
     [fill] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == "list_opened"]

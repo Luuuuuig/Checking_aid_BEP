@@ -202,8 +202,8 @@ behind each row its copy buttons, "Kopieer 250108", "Kopieer KM-0801" and "Kopie
 code and the new value for pasting into Exact and tick nothing: the tab gives them in a hidden element in the column of the two
 buttons (hand-copy: _copy_data, read by copies_opened with the list and after each press), the page's load script draws them and
 copies (PAGE_JS of aid/review/look.py), and the line under those two buttons, which stays in view, says what a press copied,
-"Gekopieerd: 12,70", while the pressed button itself reads "Gekopieerd" for a moment;
-the two buttons again under the rows, small, so that they stay in reach of a long list; the dropdown "Inkooporder of artikelprijzen"
+"Gekopieerd: 12,70", while the pressed button itself reads "Gekopieerd" for a moment (no second pair under the rows: the pair above
+stays in view, and a list without a row is not drawn as an empty bar); the dropdown "Inkooporder of artikelprijzen"
 with "Alles hiervan is ingevoerd" (block_entered), which marks the changes of the block chosen as the page showed them when the list
 was last read (kept per block in a gr.State that each read fills, with the dropdown's choices), each only while it is open, so that a
 change prepared after that read stays on the list; and under it, shown only while a price list has article prices to enter, the
@@ -642,7 +642,10 @@ from aid.tryout_mark import TRYOUT_NOT_SENT, case_is_tryout, offers_tryouts
 _REVIEW_ITEM = re.compile(r"RI\d+")              # the ids of the review items (aid/pipeline.py)
 # The ids of three tabs; "In Exact invoeren" has hand_list.TAB and "Prijslijst" pricelist_page.TAB.
 REVIEW_TAB, FILES_TAB, SETTINGS_TAB = "beoordelen", "bestanden", "instellingen"
-_ONE_PER_LINE = ".hand-rows .wrap { flex-direction: column; align-items: flex-start; }"    # the tick boxes of that tab, one under the other
+# the tick boxes of that tab, one under the other; the list without a row is not drawn as an empty bar (the form block the page library
+# puts it in is hidden while it holds no tick box), and stays in the page for its copy buttons' script
+_ONE_PER_LINE = (".hand-rows .wrap { flex-direction: column; align-items: flex-start; } "
+                 ".form:has(> .block.hand-rows):not(:has(input)) { display: none; }")
 # The two tables of part 2 of the block "Koppeling met Exact": a column title breaks between its words only, never inside one ("Rij" stays
 # whole), so that a table wider than the block scrolls sideways inside it, as the page library's table does when it is wider.
 _WHOLE_TITLES = "#export-head th, #export-head th *, #export-lines th, #export-lines th * { word-break: normal; overflow-wrap: normal; }"
@@ -2253,7 +2256,7 @@ def _hand_tab(gr, app, language, hand_tab, live: _Live, tab: _Tab, cases_root: P
             return unread(error, language_now)
 
     def changes_entered(ticked: list[str] | None, language_now: str) -> tuple:
-        """"Aangevinkte regels zijn ingevoerd", above or below the rows: the ticked changes marked as entered in Exact; with nothing
+        """"Aangevinkte regels zijn ingevoerd", above the rows: the ticked changes marked as entered in Exact; with nothing
         ticked nothing is written."""
         try:
             return marked(ticked, "entered", language_now) if ticked else shown(language_now, STRINGS[language_now]["hand_tick_first"])
@@ -2261,7 +2264,7 @@ def _hand_tab(gr, app, language, hand_tab, live: _Live, tab: _Tab, cases_root: P
             return unread(error, language_now)
 
     def changes_dropped(ticked: list[str] | None, language_now: str) -> tuple:
-        """"Aangevinkte regels niet invoeren", above or below the rows: the ticked changes marked as dropped, so that the aid no longer
+        """"Aangevinkte regels niet invoeren", above the rows: the ticked changes marked as dropped, so that the aid no longer
         asks for them; with nothing ticked nothing is written."""
         try:
             return marked(ticked, "dropped", language_now) if ticked else shown(language_now, STRINGS[language_now]["hand_tick_first"])
@@ -2323,7 +2326,7 @@ def _hand_tab(gr, app, language, hand_tab, live: _Live, tab: _Tab, cases_root: P
             listed = shown(language_now, "", ticked, chosen)
         except Exception as error:
             listed = unread(error, language_now)
-        buttons = ("refresh", "hand_entered", "hand_dropped", "hand_entered", "hand_dropped", "hand_block_entered")
+        buttons = ("refresh", "hand_entered", "hand_dropped", "hand_block_entered")
         return (*listed, *(gr.update(value=strings[key]) for key in buttons))      # an update each: gradio takes its value out as it applies it
 
     def sections(language_now: str, note: str = "", chosen: str | None = None) -> tuple:
@@ -2446,9 +2449,6 @@ def _hand_tab(gr, app, language, hand_tab, live: _Live, tab: _Tab, cases_root: P
         copies = gr.HTML(_copy_data({}, first), elem_id="hand-copy", container=False, padding=False, apply_default_css=False,
                          js_on_load=None)
     rows = gr.CheckboxGroup(choices=[], value=[], show_label=False, elem_id="hand-rows", elem_classes=["hand-rows"])
-    with gr.Row():                                   # the same pair under a long list, small
-        entered = gr.Button(first["hand_entered"], size="sm")
-        dropped = gr.Button(first["hand_dropped"], size="sm")
     with gr.Row():
         block = gr.Dropdown(choices=[], value=None, label=first["hand_block"], scale=4)
         block_button = gr.Button(first["hand_block_entered"], scale=1)
@@ -2474,13 +2474,13 @@ def _hand_tab(gr, app, language, hand_tab, live: _Live, tab: _Tab, cases_root: P
     gr.on(triggers=[app.load, hand_tab.select, refresh.click, language.change], fn=copies_opened, inputs=language, outputs=copies,
           show_progress="hidden", queue=False)
     gr.on(triggers=[app.load, hand_tab.select, refresh.click], fn=list_opened, inputs=language, outputs=listed)
-    presses = [gr.on(triggers=[entered_above.click, entered.click], fn=changes_entered, inputs=[rows, language], outputs=listed),
-               gr.on(triggers=[dropped_above.click, dropped.click], fn=changes_dropped, inputs=[rows, language], outputs=listed),
+    presses = [entered_above.click(changes_entered, inputs=[rows, language], outputs=listed),
+               dropped_above.click(changes_dropped, inputs=[rows, language], outputs=listed),
                block_button.click(block_entered, inputs=[block, seen, language], outputs=listed),
                pricelist_button.click(pricelist_entered, inputs=[pricelist, listed_prices, language], outputs=listed)]
     # the reads and the relabel that the language switch shares skip the queue (see the module docstring); a read after a press keeps it
     language.change(hand_relabel, inputs=[language, rows, block],
-                    outputs=[*listed, refresh, entered_above, dropped_above, entered, dropped, block_button], queue=False)
+                    outputs=[*listed, refresh, entered_above, dropped_above, block_button], queue=False)
     gr.on(triggers=[app.load, hand_tab.select, refresh.click, language.change], fn=done_opened, inputs=[language, done_choice], outputs=under,
           queue=False)
     for press in presses:                            # a tick or a drop moves a change into the handled ones: read them after it
@@ -2496,7 +2496,7 @@ def _hand_tab(gr, app, language, hand_tab, live: _Live, tab: _Tab, cases_root: P
         press.then(copies_opened, inputs=language, outputs=copies, show_progress="hidden")
     # the label on the page's timer, never the rows (see hand_label_ticked), and its line of new changes gone once the list is read again
     ticker.tick(hand_label_ticked, inputs=[language, seen], outputs=[hand_tab, new_rows], show_progress="hidden")
-    gr.on(triggers=[hand_tab.select, refresh.click, language.change, entered_above.click, entered.click, dropped_above.click, dropped.click,
+    gr.on(triggers=[hand_tab.select, refresh.click, language.change, entered_above.click, dropped_above.click,
                     block_button.click, pricelist_button.click, reopen_button.click, put_back_button.click],
           fn=hand_new_cleared, outputs=new_rows, show_progress="hidden", queue=False)
     return hand_label_read
