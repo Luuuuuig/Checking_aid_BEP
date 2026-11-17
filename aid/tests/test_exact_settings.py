@@ -243,9 +243,9 @@ def test_the_trial_reads_the_pdf_once(monkeypatch):
     import aid.review.exact_settings as exact
     calls, real = [], pdf_text.extract_rows
 
-    def counted(pdf, cut_cells=False):
+    def counted(pdf, cut_cells=False, pages=None):
         calls.append(Path(pdf).name)
-        return real(pdf, cut_cells)
+        return real(pdf, cut_cells, pages)
 
     for module in (exact, po_pdf):
         monkeypatch.setattr(module, "extract_rows", counted)

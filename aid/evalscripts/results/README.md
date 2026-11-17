@@ -102,3 +102,39 @@ For every `*_conf.pdf` of `--cases`, both readers read the confirmation: the par
 The summary gives, per layout, the field errors of the parser and of the LLM reader, the totals over all cases and the decision: **`keep_llm` when the LLM reader makes fewer than half the parser's field errors, `parser_only` otherwise** (also when neither makes an error). The decision goes into the settings (`reader: "llm"` or `"parser"`) and the status guide; with `parser_only` the thesis reports that AI was not needed for reading.
 
 **The check runs on the development cases.** They are company documents, so the LLM reader reads them only through the Microsoft client of Task 7b, on the company side (Task 21), and never through the Anthropic client or in Colab; their result files stay on the company side. A run on the made-up set (`--cases aid/madeup/out --spec aid/madeup/spec --recorded aid/tests/fixtures/recorded`) only tests the command: it is development evidence, not the check, and the summary says so when every case's spec is the made-up spec of that case. On the made-up set with the synthetic recorded answers, the parser fails on the two scans and the LLM reader reads every case, so the decision there is `keep_llm`.
+
+# The evaluation records: the made-up result
+
+The records command of the evaluation (`aid/evalscripts/records.py`; the aid's [manual](../../MANUAL.md), section 6) writes no file into this folder: its records go into the folder of `--out`, and the sheet of real cases stays in restricted storage. What stands here is its result on the made-up set, as development evidence of the command. It describes the aid's behaviour on made-up documents and makes no claim about real documents (protocol section 3, route 3).
+
+It was made on 16 November 2026 from two demo folders, one per reader, each made by `python3 -m aid.demo --out <demo> --reader parser|recorded`, against the made-up references `aid/madeup/references.csv`, one sheet per control point:
+
+```bash
+python3 -m aid.evalscripts.records sheet --out <records>/sheet_confirmation --set made-up --kind confirmation --case-list <demo>/cases.csv --cases-root <demo>/cases --references aid/madeup/references.csv
+python3 -m aid.evalscripts.records counts --out <records>/counts_confirmation --set made-up --classes mechanical --sheet <records>/sheet_confirmation/raw_output_scores.csv
+```
+
+and the same with `--kind cart`. The classes are the mechanical proposals of the sheet (`--classes mechanical`), not scored by a rater. The tests `test_the_counts_of_the_made_up_set_by_the_mechanical_proposals` (aid/tests/test_raw_output.py) and `test_the_three_subcommands_on_a_demo_folder_only_read_it` (aid/tests/test_records.py) make these counts again on every run of the suite.
+
+| Control point | Reader | Cases | Without output | Differences | Detected | Flags | False flags | Recall | Precision | Coverage |
+|---|---|---|---|---|---|---|---|---|---|---|
+| confirmation | recorded | 20 | 0 | 13 | 13 | 13 | 0 | 13 of 13 | 13 of 13 | 382 of 382 |
+| confirmation | parser | 20 | 2 | 13 | 12 | 12 | 0 | 12 of 13 | 12 of 12 | 355 of 382 |
+| cart | recorded | 2 | 0 | 2 | 2 | 2 | 0 | 2 of 2 | 2 of 2 | 21 of 21 |
+| cart | parser | 2 | 0 | 2 | 2 | 2 | 0 | 2 of 2 | 2 of 2 | 21 of 21 |
+
+The last line of `counts` for the confirmations reads "recall 13 of 13; precision 13 of 13" with the recorded reader and "recall 12 of 13; precision 12 of 12" with the parser. With the parser the two scans (MU05 and MU16) have no text layer and their reading fails, so they have no output; MU16 holds one difference (a delivery date), which is the one miss. MU05 holds none. The cart is read by the cart reader under both readers. No version-selection error, no abstention on the version and no line-matching error was found.
+
+The confirmations by field, recorded reader (the parser's differ only in the delivery date: 2 of 3, and in coverage):
+
+| Field | Reference items | Comparable | Differences | Detected | Recall |
+|---|---|---|---|---|---|
+| price | 75 | 68 | 4 | 4 | 4 of 4 |
+| quantity | 75 | 71 | 1 | 1 | 1 of 1 |
+| unit | 75 | 73 | 2 | 2 | 2 of 2 |
+| delivery_date | 75 | 73 | 3 | 3 | 3 of 3 |
+| line_presence | 77 | 77 | 2 | 2 | 2 of 2 |
+| required_info | 20 | 20 | 1 | 1 | 1 of 1 |
+| total | 397 | 382 | 13 | 13 | 13 of 13 |
+
+Six fields are counted where the protocol names five: it has quantity and unit as one field. The source of a value is checked for flags only. Attempts abandoned on a service failure leave no record in a case folder, so they are not in these counts.

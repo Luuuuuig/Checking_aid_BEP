@@ -192,7 +192,10 @@ with the same Microsoft account as the mailer and the mailbox: the reader is rea
 PNG document, and the cart reader (read_cart_html, which needs no model) for a cart page saved as HTML, as demo.live_reader wires
 them (llm_reader); the decider is LlmDecider over the same client. Company documents go to no other AI service. Copilot reads the
 text layer only: the case of a document without one (a scan) fails as unreadable, as with the parser, and the digest lists it for
-the buyer.
+the buyer. For a demonstration on the owner's own PC while Copilot has no licence, the stand-in for Copilot (aid/readers/stand_in.py)
+takes Copilot's place while the process has AID_STAND_IN=anthropic and the key in its environment and the settings have the test mode
+on: it reads with the Anthropic client, sends a document only when it is byte for byte a file of the made-up set, refuses every other
+document before anything is sent, and no model is asked for a decision (MadeUpDecider classes a made-up scan by its name).
 """
 import argparse
 import json
@@ -219,6 +222,7 @@ from aid.pipeline import _cut_off_after_writes      # whether a run cut off wrot
 from aid.po_store import PoStore
 from aid.readers.cart import is_cart_page, read_cart_html
 from aid.readers.copilot_client import CopilotClient, CopilotError
+from aid.readers import stand_in
 from aid.readers.llm_client import LlmClient, LlmRequest, LlmResponse, ReaderError
 from aid.readers.supplier_llm import read_supplier_document
 from aid.readers.supplier_parser import load_templates
@@ -1347,9 +1351,14 @@ def build_deps(settings: Settings, environ: Mapping[str, str], account: Microsof
     password is looked up in, `account` the Microsoft account that Copilot is asked with and a MicrosoftMailer sends through, made
     of the settings when none is given, and `session` the requests session that Copilot is called through (None: requests). The
     writer is the prepared writer, whatever the settings hold. Raises ValueError for reader "llm" without the tenant and the
-    client (NO_LLM)."""
+    client (NO_LLM). While `environ` switches the stand-in for Copilot on (AID_STAND_IN=anthropic, aid/readers/stand_in.py), reader
+    "llm" reads through the stand-in instead, which sends the made-up documents only, needs no tenant and no client, and is refused
+    with ValueError outside the test mode, without the key or without the Anthropic library; the decider is then MadeUpDecider, which
+    asks no model."""
     reader, decider = read_with_parser, NoDecider()
-    if settings.reader == "llm":
+    if settings.reader == "llm" and stand_in.active(environ):
+        reader, decider = llm_reader(stand_in.stand_in_for(settings, environ)), stand_in.MadeUpDecider()
+    elif settings.reader == "llm":
         if not (settings.ms_tenant_id and settings.ms_client_id):
             raise ValueError(NO_LLM)
         account = account or _microsoft_account(settings)

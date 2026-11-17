@@ -610,6 +610,7 @@ from aid.po_store import PoStore
 from aid.pricelist import (NameRefused, NoArticle, also_held, current_prices, is_supplier_name, keep_columns, kept_columns, others_asking,
                            remove_stored, store_current, stored_prices, supplier_named, with_others)
 from aid.readers.copilot_client import UNREACHABLE, CopilotClient, CopilotError
+from aid.readers import stand_in
 from aid.readers.llm_client import ReaderError
 from aid.readers.po_export import ExportRefused
 from aid.review import hand_list, intake, pricelist_page
@@ -4807,8 +4808,20 @@ def _ai_section(gr, app, language, tab: _Tab, tenant, client, mailbox, account_s
         yield _account_text(account, strings), strings["settings_ai_signed_in"]
 
     def test_copilot(tenant_now: str, client_now: str, language_now: str) -> str:
-        """One message to Copilot: the first 20 characters of its answer, or the error of the client (no token, no text of Microsoft)."""
+        """One message to Copilot: the first 20 characters of its answer, or the error of the client (no token, no text of Microsoft).
+        While the stand-in for Copilot is on (aid/readers/stand_in.py), the message goes to the stand-in, with no account."""
         strings = STRINGS[language_now]
+        if stand_in.active():
+            settings, line = read(strings)
+            if line is not None:
+                return line
+            try:
+                answer = stand_in.stand_in_for(settings, test_text=COPILOT_TEST).ask(COPILOT_TEST).text
+            except (ValueError, ReaderError) as error:
+                return strings["settings_ai_failed"].format(error=error)
+            except Exception as error:
+                return strings["settings_failed"].format(code=type(error).__name__)
+            return strings["settings_ai_answer"].format(answer=" ".join(answer.split())[:20])
         account, refused = begin(tenant_now, client_now, strings, elsewhere=True)
         if refused:
             return refused
@@ -4823,7 +4836,16 @@ def _ai_section(gr, app, language, tab: _Tab, tenant, client, mailbox, account_s
     def copilot_refusal(settings: Settings, strings: dict[str, str]) -> str | None:
         """None once Copilot answered the one test message of "Copilot testen" (COPILOT_TEST, nothing of a document), sent with the
         tenant and the client of the settings; else why it did not: the cause by a status code and its hint (_copilot_cause), never
-        Copilot's own words, or why no account could be made."""
+        Copilot's own words, or why no account could be made. While the stand-in for Copilot is on, the stand-in is asked instead,
+        and its refusal (outside the test mode, without the key or the library) is said in its own words, which name no document."""
+        if stand_in.active():
+            try:
+                stand_in.stand_in_for(settings, test_text=COPILOT_TEST).ask(COPILOT_TEST)
+            except (ValueError, ReaderError) as error:
+                return strings["settings_ai_failed"].format(error=error)
+            except Exception as error:
+                return strings["settings_failed"].format(code=type(error).__name__)
+            return None
         account, refused = begin(settings.ms_tenant_id, settings.ms_client_id, strings, elsewhere=True)
         if refused:
             return refused
@@ -4846,7 +4868,7 @@ def _ai_section(gr, app, language, tab: _Tab, tenant, client, mailbox, account_s
         if line is not None:
             return before.reader, line
         if reader_now == "llm":
-            if not (before.ms_tenant_id and before.ms_client_id):
+            if not (before.ms_tenant_id and before.ms_client_id) and not stand_in.active():     # the stand-in needs no ids
                 return before.reader, strings["settings_ai_ids_needed"]
             if (refused := copilot_refusal(before, strings)) is not None:
                 return before.reader, refused

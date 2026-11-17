@@ -29,6 +29,19 @@ overtook is refused. senders_from reads the senders, one address or one domain (
 separated by commas, by the rule of the setting po_senders itself; an entry that is neither is named in the problem, since it is what
 the owner typed.
 
+The proposal. proposal reads the first page of the sample once, and no other page, and proposes the form from it: Proposal(form, found,
+missing). What it looks for, and the word lists it knows the labels and the column titles by, stand in aid/review/layout_proposal.py.
+form has the shape of form_from_layout: each of LABELS that was found, "" for one that was not; the number convention when a number of
+the lines table proves it by the rule of the trial read (_DECIMAL_MARK) and no number proves the other, else None; the title row with
+the meaning of each of its words, None for a word left open for the owner; and a word by which the search of the title row
+(title_words) finds that row: the title of the item code, else the first word of the row that does, "" when an earlier line holds each
+of its words. The supplier's line, the end text and the tick are always None, and the form holds no senders: they are never proposed,
+and the page leaves a field on None as it is. found gives the line of page 1 that each proposed field was read from ("numbers": the
+line of the first number that proves the mark; "title_row": the title row itself), and missing the fields looked for and not found, in
+the order of the form: the labels, "numbers", then "title_row" for no title row (none found, or one in doubt) or "columns" for a title
+row with a word left open. A proposal is a guess that the owner checks with the trial read: nothing is saved, a first page without text
+gives None, and found and missing name fields and lines, never a value of the PDF.
+
 The trial read. trial reads the sample with a layout, from one extraction of the text of the PDF, and gives what it read (the reader's
 own reading, whatever it finds), the problems that keep the sample from being filed with the layout, the warnings of what the reader
 passes by, and whether the total of the PO can be worked out; check gives the problems alone. A problem is: a PDF without text; a first
@@ -144,6 +157,7 @@ from aid.readers.po_pdf import (after_label, folded, header_lines, header_values
                                 read_po_layout_rows)
 from aid.review.close import cases_waiting_for_po
 from aid.review.i18n import STRINGS
+from aid.review.layout_proposal import detect
 from aid.schema import DocLine, DocValue, Document
 from aid.settings import Settings
 from aid.sources.mailbox import titled_confirmation
@@ -198,6 +212,13 @@ class Trial(NamedTuple):
     total: bool                                  # whether the total of the PO can be worked out
 
 
+class Proposal(NamedTuple):
+    """What a sample proposes for the form of part 1 (proposal; see the module docstring)."""
+    form: dict                                   # the form as form_from_layout gives it; None for a field that is left as it is
+    found: dict[str, int]                        # each field proposed, with the line of page 1 it was read from
+    missing: list[str]                           # the fields looked for and not found, in the order of the form
+
+
 class ArticlesTrial(NamedTuple):
     """What a trial read of a sample of the export of articles gave (articles_trial)."""
     reading: Articles | None                     # what the reader read; None when it refused the file
@@ -226,6 +247,39 @@ def title_words(pdf: Path, word: str) -> list[str] | None:
         return None
     pattern = label_pattern(word)
     return next((row.line.text.split() for row in _page_one(_rows(pdf)) if pattern.search(row.line.text)), None)
+
+
+def proposal(pdf: Path) -> Proposal | None:
+    """What the first page of the sample proposes for the form (see the module docstring), from one extraction of the text of that
+    page alone (pages=[1], as the folder for purchase orders reads a PDF); None for a first page without text (a scan). A file that
+    is no PDF raises NotPdf, one that cannot be opened SampleUnreadable."""
+    page = _page_one(_rows(pdf, pages=[1]))
+    if not page:
+        return None
+    seen = detect(page, SLOTS)
+    proofs = {convention: next((line for line, text in seen.numbers if _DECIMAL_MARK[mark].search(text)), None)
+              for convention, mark in (("comma", ","), ("point", "."))}       # the line of the first number that proves each mark
+    proven = [convention for convention, line in proofs.items() if line is not None]
+    numbers = proven[0] if len(proven) == 1 else None                       # one mark proven and the other not
+    form = dict.fromkeys(FORM) | {label: seen.labels[label][0] if label in seen.labels else "" for label in LABELS}
+    form |= {"numbers": numbers, "title_word": _search_word(page, seen.title_line, seen.title_row, seen.columns),
+             "title_row": list(seen.title_row), "columns": list(seen.columns)}
+    found = {label: line for label, (_, line) in seen.labels.items()} | ({} if numbers is None else {"numbers": proofs[numbers]})
+    found |= {} if seen.title_line is None else {"title_row": seen.title_line}
+    missing = [label for label in LABELS if label not in seen.labels] + ["numbers"] * (numbers is None)
+    missing += ["title_row"] if not seen.title_row else ["columns"] * (None in seen.columns)
+    return Proposal(form, found, missing)
+
+
+def _search_word(page: list[TextRow], title_line: int | None, title_row: list[str], columns: list[str | None]) -> str:
+    """A word of the proposed title row by which title_words finds that row, which is the first line of page 1 that holds the word:
+    the title of the item code when it does, else the first word of the row that does; "" when none does, and for no title row."""
+    first = [title_row[columns.index("item_code")]] if "item_code" in columns else []
+    for word in (*first, *title_row):
+        pattern = label_pattern(word)
+        if next((row.line.line for row in page if pattern.search(row.line.text)), None) == title_line:
+            return word
+    return ""
 
 
 # --- the form ---
@@ -1067,13 +1121,14 @@ def _to_enter_line(settings: Settings, strings: dict[str, str]) -> str:
 
 # --- helpers ---
 
-def _rows(pdf: Path) -> list[TextRow]:
-    """The text rows of the PDF as the layout reader reads them. A file whose name does not end in .pdf (in any case) raises NotPdf; a
-    file that cannot be opened as a PDF (cut short, damaged, locked or gone) raises SampleUnreadable, whatever the PDF library raised."""
+def _rows(pdf: Path, pages: list[int] | None = None) -> list[TextRow]:
+    """The text rows of the PDF as the layout reader reads them; with `pages` (numbers from 1) those of these pages only, the words of
+    the other pages never read. A file whose name does not end in .pdf (in any case) raises NotPdf; a file that cannot be opened as a
+    PDF (cut short, damaged, locked or gone) raises SampleUnreadable, whatever the PDF library raised."""
     if Path(pdf).suffix.lower() != ".pdf":
         raise NotPdf(f"{Path(pdf).name}: its name does not end in .pdf")
     try:
-        return extract_rows(Path(pdf), cut_cells=True)
+        return extract_rows(Path(pdf), cut_cells=True, pages=pages)
     except Exception as error:
         raise SampleUnreadable(f"{Path(pdf).name} cannot be opened as a PDF ({type(error).__name__})") from error
 

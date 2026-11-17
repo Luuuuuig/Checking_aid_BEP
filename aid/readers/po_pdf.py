@@ -67,7 +67,9 @@ prices_per_piece changes nothing here: the lines keep the price basis the PDF pr
 
 Shared with the settings page. read_po_layout_rows does what read_po_layout does on text rows already extracted, so that the trial
 read of the settings page (aid/review/exact_settings.py) reads a PDF once. That page also uses read_layout, layout_labels,
-label_pattern, after_label, header_values and folded; their earlier names, with an underscore, stay as aliases.
+label_pattern, after_label, header_values and folded; their earlier names, with an underscore, stay as aliases. The proposal of a
+layout from a sample (aid/review/layout_proposal.py) cuts a row into the cells under a title row as the reader does, with
+title_spans and cells_under, the public names of _title_spans and _cells_under.
 """
 import re
 import unicodedata
@@ -467,6 +469,9 @@ def _cells_under(words: list[TextWord], spans: list[tuple[float, float]], decima
             column = max(bisect_right(starts, (word.x0 + word.x1) / 2) - 1, 0)
         cells[column].append(word.text)
     return [" ".join(cell) for cell in cells]
+
+
+title_spans, cells_under = _title_spans, _cells_under      # the names the proposal of a layout uses (aid/review/layout_proposal.py)
 
 
 _FIRST_GROUP = re.compile(r"[-+]?\d{1,3}")              # the digits before the first space of a number like "1 234,50"
