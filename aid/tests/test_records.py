@@ -1631,13 +1631,20 @@ def test_the_documents_say_how_the_records_command_is_run_and_what_it_only_reads
         assert words in part, words
     for subcommand in ("log", "sheet", "counts"):
         assert f'"<folder>\\python\\python.exe" -I -X utf8 {command} {subcommand} --out' in part
-    evaluation = (REPO_ROOT / "evaluation" / "README.md").read_text(encoding="utf-8")
-    assert evaluation.count(command) >= 3 and "timer_check.csv" in evaluation and "raw_output_scores" in evaluation
-    given = re.findall(r"--(?:out|sheet|case-list|seq) (<[^>]+>/\S+|\S+)", evaluation)  # run from the repository root: no path in it
-    assert len(given) >= 8 and all(path.startswith("<restricted folder>/") for path in given), given
-    templates = (REPO_ROOT / "evaluation" / "templates" / "README.md").read_text(encoding="utf-8")
-    row = next(line for line in templates.splitlines() if line.startswith("| `raw_output_scores.csv`"))
-    assert f"{command} sheet" in row and "pre-filled" in row
+    # the evaluation's two READMEs stand beside aid/ in the thesis repository; a copy of aid/ alone (the aid's own repository) has
+    # neither, and is checked without them
+    row = ""
+    evaluation_readme = REPO_ROOT / "evaluation" / "README.md"
+    if evaluation_readme.exists():
+        evaluation = evaluation_readme.read_text(encoding="utf-8")
+        assert evaluation.count(command) >= 3 and "timer_check.csv" in evaluation and "raw_output_scores" in evaluation
+        given = re.findall(r"--(?:out|sheet|case-list|seq) (<[^>]+>/\S+|\S+)", evaluation)  # run from the repository root: no path in it
+        assert len(given) >= 8 and all(path.startswith("<restricted folder>/") for path in given), given
+    templates_readme = REPO_ROOT / "evaluation" / "templates" / "README.md"
+    if templates_readme.exists():
+        templates = templates_readme.read_text(encoding="utf-8")
+        row = next(line for line in templates.splitlines() if line.startswith("| `raw_output_scores.csv`"))
+        assert f"{command} sheet" in row and "pre-filled" in row
     package = (REPO_ROOT / "aid" / "evalscripts" / "__init__.py").read_text(encoding="utf-8")
     assert "records" in package and "only reads" in package
     results = (REPO_ROOT / "aid" / "evalscripts" / "results" / "README.md").read_text(encoding="utf-8")
