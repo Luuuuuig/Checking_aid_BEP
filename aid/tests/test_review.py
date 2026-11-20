@@ -3699,15 +3699,20 @@ def test_a_language_switch_clears_the_answer_of_a_close(tmp_path, madeup_out):
     language = handler_of(page, "review_texts").inputs[0]
     close = handler_of(page, "close")
     status = close.outputs[0]
+    next_preview = by_elem_id(page)["review-next-preview"]
+    next_case = by_elem_id(page)["review-next"]
     cleared = handler_of(page, "close_answer_cleared")
-    assert cleared.targets == [(language._id, "change")] and cleared.inputs == [language] and cleared.outputs == [status]
+    assert cleared.targets == [(language._id, "change")] and cleared.inputs == [language] and cleared.outputs == [status, next_preview, next_case]
     assert cleared.queue is False and cleared.show_progress == "hidden"
     assert status.elem_classes == ["answer"] and handler_of(page, "handled_marked").outputs[0] is status
     case, _ = run(d, madeup_out, "MU07", "250107")
     decide(case, "RI1", "keep")
     text, _ = pressed_close(page, case)
     assert text.startswith("De zaak is nu: afgesloten.")
-    assert cleared.fn("en") == cleared.fn("nl") == ""
+    assert cleared.fn("en") == ("", {"__type__": "update", "value": "", "visible": False},
+                                {"__type__": "update", "value": STRINGS["en"]["review_open_next"], "visible": False})
+    assert cleared.fn("nl") == ("", {"__type__": "update", "value": "", "visible": False},
+                                {"__type__": "update", "value": STRINGS["nl"]["review_open_next"], "visible": False})
 
 
 def test_the_clear_of_the_answer_of_a_close_is_the_first_request_of_a_language_switch(tmp_path, madeup_out):
@@ -3725,9 +3730,9 @@ def test_a_close_and_the_tab_beoordelen_read_the_counts_again_at_once(tmp_path, 
     """Findings R1 and T2 of the rehearsal of 16 November: after "Zaak afsluiten" (and "Als afgehandeld noteren") the strip, the fold,
     the label "Beoordelen (n)" with the case list and the label "In Exact invoeren (n)" are read again at once, where they followed
     only at the timer, up to 30 seconds later; and the strip and the case list are read when the tab "Beoordelen" is selected, so
-    that a case the runner has just opened is listed without "Lijst vernieuwen". After the press the chain runs three thin handlers
-    with names of their own (strip_after_close, queue_after_close, hand_label_read), so that strip_ticked and queue_ticked stay bound
-    once each, and like them they skip the queue and never set the case chosen."""
+    that a case the runner has just opened is listed without "Lijst vernieuwen". After the press the chain runs thin handlers
+    with names of their own (strip_after_close, queue_after_close, hand_label_read, next_offered), so that strip_ticked and
+    queue_ticked stay bound once each, and like them they skip the queue and never set the case chosen."""
     nl = STRINGS["nl"]
     path, d, page, _ = sending_page(tmp_path, madeup_out, send_via="file")
     [review_tab] = [block for block in page.blocks.values() if isinstance(block, gradio.Tab) and block.label == nl["review_tab"]]
@@ -3741,13 +3746,14 @@ def test_a_close_and_the_tab_beoordelen_read_the_counts_again_at_once(tmp_path, 
         pressed = handler_of(page, name)
         chain = [f for f in page.fns.values() if f.trigger_after == pressed._id]
         names = [getattr(f.fn, "__name__", "") for f in chain]
-        assert names == ["strip_after_close", "queue_after_close", "hand_label_read", *(["<lambda>"] if name == "close" else [])], name
+        assert names == ["strip_after_close", "queue_after_close", "hand_label_read", "next_offered", *(["<lambda>"] if name == "close" else [])], name
         assert [chain_after(page, f) for f in chain] == [[]] * len(chain), name             # nothing waits for another
-        after_strip, after_queue, label = chain[:3]
+        after_strip, after_queue, label, offered = chain[:4]
         assert after_strip.inputs == strip.inputs and after_strip.outputs == strip.outputs, name
         assert after_queue.inputs == queue.inputs and after_queue.outputs == queue.outputs and after_queue.preprocess is False, name
         assert label.outputs == [hand_tab] and [block.label for block in label.inputs] == [nl["language"]], name
-        assert all(f.queue is False and f.show_progress == "hidden" for f in chain[:3]), name
+        assert offered.outputs == [by_elem_id(page)["review-next-preview"], by_elem_id(page)["review-next"]], name
+        assert all(f.queue is False and f.show_progress == "hidden" for f in chain[:4]), name
     assert review_tab in queue.outputs
     case, _ = run(d, madeup_out, "MU07", "250107")
     first = called(page, "queue_ticked", "nl", case.case_id, None)
@@ -3828,10 +3834,10 @@ def test_the_pick_line_and_the_oldest_case(tmp_path, madeup_out):
     and the button go once a case is chosen (case_framed, on the change of "Zaak" beside show)."""
     nl, en = STRINGS["nl"], STRINGS["en"]
     path, d, page, _ = sending_page(tmp_path, madeup_out)
-    assert bound(page, "oldest_opened") == ([("review-oldest", "click")], ["Taal"], ["Zaak"])
+    assert bound(page, "oldest_opened") == ([("review-next", "click"), ("review-oldest", "click")], ["Taal"], ["Zaak"])
     assert bound(page, "case_framed") == ([("Zaak", "change")], ["Zaak", "Taal"], ["review-pick-row", "review-pick", "review-oldest", "review-gone",
                                                                                  "review-failed", "Zaak afsluiten", "review-handled", "## Besluiten",
-                                                                                 "review-case", "review-evidence"])
+                                                                                 "review-case", "review-evidence", "review-next-preview", "review-next"])
     assert bound(page, "show")[0] == [("Zaak", "change")] and handler_of(page, "case_framed").show_progress == "hidden"
     none = called(page, "case_framed", None, "nl")
     assert none["review-pick-row"] == {"__type__": "update", "visible": True} and none["review-pick"] == nl["review_pick_none"]
@@ -4455,7 +4461,7 @@ def test_the_case_parts_show_with_a_case_and_the_close_answer_stays(tmp_path, ma
     assert status not in laid_out(case_part) + laid_out(evidence) and "answer" in status.elem_classes
     assert bound(page, "case_framed") == ([("Zaak", "change")], ["Zaak", "Taal"], [
         "review-pick-row", "review-pick", "review-oldest", "review-gone", "review-failed", "Zaak afsluiten", "review-handled", "## Besluiten",
-        "review-case", "review-evidence"])
+        "review-case", "review-evidence", "review-next-preview", "review-next"])
 
     def framed(case_id) -> tuple:
         given = called(page, "case_framed", case_id, "nl")
@@ -5578,3 +5584,83 @@ def test_show_close_and_do_undo_answer_cleanly_when_case_folder_cannot_be_read(t
         assert show_fn(c.case_id, lang, None)[-1] == expected
         assert close_fn(c.case_id, lang)[0] == expected
         assert undo_fn(c.case_id, "E1", lang)[0] == expected
+
+
+def test_after_closing_a_case_the_next_waiting_case_is_offered_beside_the_answer(tmp_path, madeup_out):
+    """After closing a case (or marking a failed case or document as handled), a completion card right beside the answer shows a
+    preview of the oldest waiting case and a primary button to open it at once without scrolling back to the top; while that button
+    shows, the duplicate pick row above it stays hidden. Both the preview and the button stay hidden when the case stays open, when
+    nothing waits, when a case is chosen, and after a language switch clears the answer."""
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    path, d, page, _ = sending_page(tmp_path, madeup_out, send_via="file")
+    parts = by_elem_id(page)
+    close_part, answer_row, answer_text = parts["review-close"], parts["review-answer-row"], parts["review-answer-text"]
+    next_preview, next_case = parts["review-next-preview"], parts["review-next"]
+    status = handler_of(page, "close").outputs[0]
+    assert isinstance(answer_row, gradio.Row) and answer_row in close_part.children
+    assert isinstance(answer_text, gradio.Column) and [child for child in answer_row.children if child in (answer_text, next_case)] == [answer_text, next_case]
+    assert [child for child in answer_text.children if child in (status, next_preview)] == [status, next_preview]
+    assert (next_preview.value, next_preview.visible) == ("", False)
+    assert (next_case.value, next_case.variant, next_case.visible) == (nl["review_open_next"], "primary", False)
+    assert (nl["review_open_next"], en["review_open_next"]) == ("Volgende zaak openen", "Open the next case")
+    assert (nl["review_next_preview"], en["review_next_preview"]) == ("Volgende in de wachtrij: {case}", "Next in queue: {case}")
+    assert "#review-pick-row:has(~ #review-close #review-next:not(.hidden)) { display: none; }" in look.PAGE_CSS
+
+    # chained after close and handled_marked, and opens the oldest waiting case on click
+    [after_close] = [f for f in page.fns.values() if f.trigger_after == handler_of(page, "close")._id
+                     and getattr(f.fn, "__name__", "") == "next_offered"]
+    [after_handled] = [f for f in page.fns.values() if f.trigger_after == handler_of(page, "handled_marked")._id
+                       and getattr(f.fn, "__name__", "") == "next_offered"]
+    assert after_close.inputs == after_handled.inputs == [handler_of(page, "close").outputs[1], handler_of(page, "review_texts").inputs[0]]
+    assert after_close.outputs == after_handled.outputs == [next_preview, next_case]
+    assert after_close.queue is False and after_close.show_progress == "hidden"
+
+    first_case, _ = run(d, madeup_out, "MU07", "250107", now=NOW)
+    second_case, _ = run(d, madeup_out, "MU09", "250109", now=LATER)
+    failed, _ = run(d, madeup_out, "MU05", "250105", now=LATER + timedelta(minutes=1))
+
+    # close that keeps the case open: preview and button stay hidden
+    assert after_close.fn(first_case.case_id, "nl") == ({"__type__": "update", "value": "", "visible": False},
+                                                        {"__type__": "update", "value": nl["review_open_next"], "visible": False})
+
+    # close first case: another review case waits, so the preview and button show beside the answer in both languages
+    from aid.review.page import _literal
+    decide(first_case, "RI1", "keep")
+    assert pressed_close(page, first_case)[1] is None
+    preview_nl, button_nl = after_close.fn(None, "nl")
+    assert preview_nl["visible"] is True and preview_nl["value"].startswith(nl["review_next_preview"].format(case=_literal("Inkooporder 250109 (S09):")))
+    assert button_nl == {"__type__": "update", "value": nl["review_open_next"], "visible": True}
+    preview_en, button_en = after_close.fn(None, "en")
+    assert preview_en["visible"] is True and preview_en["value"].startswith(en["review_next_preview"].format(case=_literal("Purchase order 250109 (S09):")))
+    assert button_en == {"__type__": "update", "value": en["review_open_next"], "visible": True}
+
+    # clicking the button opens the oldest waiting case (second_case, before failed)
+    assert called(page, "oldest_opened", "nl")["Zaak"]["value"] == second_case.case_id
+    # opening a case hides preview and button; clearing to None leaves them to next_offered
+    framed_open = called(page, "case_framed", second_case.case_id, "nl")
+    assert framed_open["review-next-preview"] == {"__type__": "update", "value": "", "visible": False}
+    assert framed_open["review-next"] == {"__type__": "update", "visible": False}
+    framed_none = called(page, "case_framed", None, "nl")
+    assert framed_none["review-next-preview"] == {"__type__": "update"} and framed_none["review-next"] == {"__type__": "update"}
+
+    # close second case: failed case still waits, so the preview names it and the button opens it
+    decide(second_case, "RI1", "keep")
+    assert pressed_close(page, second_case)[1] is None
+    preview_failed, button_failed = after_close.fn(None, "nl")
+    assert preview_failed["visible"] is True and _literal("Inkooporder 250105 (S05): mislukt, zelf bekijken") in preview_failed["value"]
+    assert button_failed["visible"] is True
+    assert called(page, "oldest_opened", "nl")["Zaak"]["value"] == failed.case_id
+
+    # mark the last waiting case handled: nothing waits anymore, so preview and button stay hidden
+    called(page, "handled_marked", failed.case_id, "nl")
+    assert after_handled.fn(None, "nl") == ({"__type__": "update", "value": "", "visible": False},
+                                            {"__type__": "update", "value": nl["review_open_next"], "visible": False})
+    assert after_handled.fn(None, "en") == ({"__type__": "update", "value": "", "visible": False},
+                                            {"__type__": "update", "value": en["review_open_next"], "visible": False})
+
+    # manual sections 2.2 and 7 mention the button
+    manual = Path("aid/MANUAL.md").read_text(encoding="utf-8")
+    sec2 = manual[manual.index("### 2.2 The review page"):manual.index("### 2.3 ")]
+    sec7 = manual[manual.index("## 7. Korte handleiding voor de inkoper"):]
+    assert f"\"{nl['review_open_next']}\"" in sec2 and f"\"{nl['review_open_next']}\"" in sec7
+

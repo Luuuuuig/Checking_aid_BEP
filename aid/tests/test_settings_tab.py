@@ -681,15 +681,14 @@ def test_the_palette_meets_its_contrast_ratios():
     text += [(look.MUTED, ground) for ground in (*grounds, look.LINE)]          # help, meta, heads, a filled button not to press yet
     text += [(look.CONTROL, ground) for ground in (look.SURFACE, look.TINT)]                     # placeholders, in a field or a notice
     text += [(look.ACCENT, ground) for ground in (*grounds, look.ACCENT_TINT)]                                    # links
-    # the head band: the tool's name and the chosen tab's white pill, the tabs not chosen and the edge of the "..." press, the words
-    # of a tab in hover, and the ink words of the chosen tab on its pill
-    text += [(look.SURFACE, look.BAND), (look.LINE_STRONG, look.BAND), (look.SURFACE, look.INK_HOVER), (look.INK, look.SURFACE)]
-    text += [(tone.text, tone.tint) for tone in look.TONES.values()] + [(look.TONES["done"].text, look.GROUND)]
+    # the light top chrome: app title, inactive tabs, hovered tab, active tab pill, segmented language switch, and overflow button
+    text += [(look.INK, look.BAND), (look.MUTED, look.BAND), (look.INK, look.INK_HOVER), (look.ACCENT, look.ACCENT_TINT), (look.INK, look.SURFACE)]
+    text += [(tone.text, tone.tint) for tone in look.TONES.values()] + [(look.TONES["done"].text, look.GROUND), (look.TONES["done"].text, look.SURFACE)]
     text += [(look.INK, tone.tint) for tone in look.TONES.values()]                                     # a notice in a tone
     problem = look.TONES["problem"]
     text += [(problem.mark, look.SURFACE)]                                       # the words of a button that takes something away
     marks = [(edge, ground) for edge in (look.CONTROL, look.ACCENT) for ground in grounds]               # a control's edge, the focus ring
-    marks += [(look.SURFACE, look.BAND), (look.LINE_STRONG, look.BAND)]          # the focus ring on the band, the edge of its "..." press
+    marks += [(look.ACCENT, look.BAND), (look.CONTROL, look.BAND)]               # the focus ring on the top bar, the edge of its "..." press
     marks += [(tone.mark, tone.tint) for tone in look.TONES.values()] + [(problem.mark, look.SURFACE)]
     assert [pair for pair in text if contrast(*pair) < 4.5] == [] and [pair for pair in marks if contrast(*pair) < 3] == []
     placed = {"body_background_fill": look.GROUND, "background_fill_primary": look.SURFACE, "background_fill_secondary": look.SURFACE_2,
@@ -713,7 +712,7 @@ def test_the_palette_meets_its_contrast_ratios():
 
 
 def test_a_dropdown_has_the_edge_of_a_field():
-    """Spec 3.1: the edge of a field is in the control colour (4.76:1 on white), and the line colour (1.23:1) is never the only edge of
+    """Spec 3.1: the edge of a field is in the control colour (>= 4.5:1 on white), and the line colour is never the only edge of
     a control. The theme gives the fields to type in that edge (input_border_color), but the page library draws the box of a dropdown
     in border_color_primary, the line colour of the blocks; so the style rules give the box that holds a dropdown's inner row
     (.wrap-inner, which the page library's dropdown and multiselect alone have) the edge of a field, its hover and its focus."""
@@ -733,7 +732,7 @@ def test_running_text_has_the_line_of_the_type_scale():
     the meta lines of a decision row (13/18) and the note of a row (14/20) keep their own, by rules that weigh more."""
     from aid.review import look
     assert ".prose p { line-height: 24px; }" in look.PAGE_CSS
-    assert ".block.decision-what .prose p:nth-of-type(n+3) { font-size: 13px; line-height: 18px; color: #475569; }" in look.PAGE_CSS
+    assert f".block.decision-what .prose p:nth-of-type(n+3) {{ font-size: 13px; line-height: 18px; color: {look.MUTED}; }}" in look.PAGE_CSS
     assert ".block.row-note .prose, .block.row-note .prose * { font-size: 14px; line-height: 20px;" in look.PAGE_CSS
 
 
@@ -761,49 +760,47 @@ def test_the_page_stays_light_in_dark_mode():
 
 
 def test_the_head_band_carries_the_name_the_language_switch_and_the_tabs_as_pills():
-    """The look the owner chose on 16 November: a dark band across the top of the window (BAND, the page's ink) with the tool's name
-    in white and the language switch on a white pill, the page's tabs on the band as pills, the chosen one white with ink words. The
-    band is painted by a border image outside the head and the tab bar, never by a clip-path or an overflow that cuts off what lies
-    over its edge: in a window of 683 px (a zoom of 200 percent) the page library folds the tabs that do not fit into a "..." menu that
-    opens below the band, and every tab must still be reachable there (checked in the browser). Every text and control on the band
-    stands at least 4.5:1 against it."""
+    """The unified light desktop top bar (BAND, white chrome with a hairline rule below) carries the tool's name in ink and the
+    language switch as a segmented pill control on SURFACE_2, with the page's tabs integrated below it as calm pills (accent tint
+    for the active tab). The chrome extends edge-to-edge by a border image without clip-path or overflow: hidden, so at 200 percent
+    zoom (683 px) the overflow "..." menu still opens cleanly over the page. Every text and control on the top bar stands at least
+    4.5:1 against it."""
     from aid.review import look
     css = look.PAGE_CSS
     band = f"border-image: linear-gradient({look.BAND}, {look.BAND}) fill 0 //"
-    assert look.BAND == look.INK
-    for rule in (f"#page-head {{ align-items: center; padding: 4px 0 0; {band} 100vmax 100vmax 16px; }}",
-                 f".prose h1 {{ font-size: 24px; line-height: 32px; font-weight: 600; margin: 0; color: {look.SURFACE}; }}",
-                 f".block.language-switch .wrap {{ flex-wrap: nowrap; gap: 4px; padding: 4px; background: {look.SURFACE}; border-radius: 999px; }}",
-                 f".page-tabs > .tab-wrapper {{ height: auto; margin-top: -8px; padding: 0 0 8px; {band} 0 100vmax; }}",
+    assert look.BAND == look.SURFACE
+    for rule in (f"#page-head {{ align-items: center; padding: 10px 0 4px; {band} 100vmax 100vmax 16px; }}",
+                 f".prose h1 {{ font-size: 20px; line-height: 28px; font-weight: 600; margin: 0; color: {look.INK}; letter-spacing: -0.025em; }}",
+                 f".block.language-switch .wrap {{ flex-wrap: nowrap; gap: 2px; padding: 3px; background: {look.SURFACE_2}; border-radius: 999px; }}",
+                 f".page-tabs > .tab-wrapper {{ height: auto; margin-top: -8px; padding: 4px 0 12px; border-bottom: 1px solid {look.LINE}; {band} 0 100vmax; }}",
                  ".page-tabs > .tab-wrapper > .tab-container { height: auto; gap: 4px; overflow: visible; }",
-                 f'.page-tabs > .tab-wrapper > .tab-container [role="tab"] {{ height: 36px; padding: 0 16px; border-radius: 999px; '
-                 f"color: {look.LINE_STRONG}; }}",
+                 f'.page-tabs > .tab-wrapper > .tab-container [role="tab"] {{ height: 34px; padding: 0 14px; border-radius: 999px; '
+                 f"font-size: 14px; color: {look.MUTED}; }}",
                  f'.page-tabs > .tab-wrapper > .tab-container [role="tab"]:hover:not([aria-selected="true"]) {{ background: {look.INK_HOVER}; '
-                 f"color: {look.SURFACE}; }}",
-                 f'.page-tabs > .tab-wrapper > .tab-container [role="tab"][aria-selected="true"] {{ background: {look.SURFACE}; color: {look.INK}; }}',
-                 f".page-tabs > .tab-wrapper > .overflow-menu > button {{ min-width: 44px; min-height: 36px; color: {look.SURFACE}; "
-                 f"background: none; border-color: {look.LINE_STRONG}; border-radius: 999px; }}"):
+                 f"color: {look.INK}; }}",
+                 f'.page-tabs > .tab-wrapper > .tab-container [role="tab"][aria-selected="true"] {{ background: {look.ACCENT_TINT}; color: {look.ACCENT}; font-weight: 600; }}',
+                 f".page-tabs > .tab-wrapper > .overflow-menu > button {{ min-width: 44px; min-height: 34px; color: {look.INK}; "
+                 f"background: {look.SURFACE}; border-color: {look.CONTROL}; border-radius: 999px; }}"):
         assert rule in css, rule
     rules = [rule for rule in css.splitlines() if "{" in rule]
     assert [rule for rule in rules if "clip-path" in rule or "overflow: hidden" in rule] == []
-    assert [rule for rule in css.splitlines() if "page-tabs" in rule and ":focus-visible" in rule and f"outline-color: {look.SURFACE}" in rule]
-    on_band = [look.SURFACE, look.LINE_STRONG]                     # the name, the white pills and the ring; the light tab words, the edge
+    assert [rule for rule in css.splitlines() if "page-tabs" in rule and ":focus-visible" in rule and f"outline-color: {look.ACCENT}" in rule]
+    on_band = [look.INK, look.MUTED, look.ACCENT]
     assert [colour for colour in on_band if contrast(colour, look.BAND) < 4.5] == []
-    assert contrast(look.SURFACE, look.INK_HOVER) >= 4.5 and contrast(look.INK, look.SURFACE) >= 4.5   # a tab in hover, the chosen one
+    assert contrast(look.INK, look.INK_HOVER) >= 4.5 and contrast(look.ACCENT, look.ACCENT_TINT) >= 4.5
 
 
 def test_the_parts_of_each_tab_lie_on_white_cards_on_a_grey_ground():
-    """The look the owner chose on 16 November ("refined"): the page's ground is the grey GROUND, and the parts of every tab lie on
-    white cards with an edge in the line colour, corners of 8 px and a soft shadow: the strip and the fold of Beoordelen, the decisions
-    and the documents of a case, the list of In Exact invoeren, the part of Prijslijst, the part of Bestanden and each section of
-    Instellingen. A notice is on the light TINT, so that it reads as a message and not as a card; the head cells of every table are
-    on the same tint; the one filled button of a view is the blue accent; and the five fields of the columns of a price list keep
-    their words clear of the dropdown's arrow (finding P3 of the rehearsal)."""
+    """The page's daylight canvas is GROUND (#F5F5F7), and the workspace sections lie on crisp white cards with a hairline edge,
+    12 px corners and a subtle layered shadow: the unified status bar (including its action button), the decisions and evidence of
+    a case, the list of In Exact invoeren, the parts of Prijslijst and Bestanden and each section of Instellingen. Notices and
+    table headers use TINT; the one filled button of a view uses ACCENT; and the five Prijslijst column fields stay clear of the
+    dropdown arrow."""
     from aid.review import look
     css = look.PAGE_CSS
-    cards = ("#review-strip .strip", "#review-all", "#review-case", "#review-evidence", ".form:has(> #hand-rows)", "#pricelist-body",
+    cards = ("#review-strip-row", "#review-case", "#review-evidence", ".form:has(> #hand-rows)", "#pricelist-body",
              ".column:has(> #files-title)", "#settings-sections > .tabitem")
-    assert (f"{', '.join(cards)} {{ background: {look.SURFACE}; border: 1px solid {look.LINE}; border-radius: 8px; "
+    assert (f"{', '.join(cards)} {{ background: {look.SURFACE}; border: 1px solid {look.LINE}; border-radius: 12px; "
             f"box-shadow: {look.CARD_SHADOW}; }}") in css
     assert look.GROUND != look.SURFACE and contrast(look.INK, look.GROUND) >= 4.5 and contrast(look.CONTROL, look.GROUND) >= 3
     assert ".block.notice, #pricelist-notice { background: " + look.TINT in css and look.TINT not in (look.GROUND, look.SURFACE)
@@ -816,7 +813,7 @@ def test_the_parts_of_each_tab_lie_on_white_cards_on_a_grey_ground():
     theme = look.page_theme(import_gradio())
     assert (theme.body_background_fill, theme.button_primary_background_fill, theme.button_primary_background_fill_hover) == (
         look.GROUND, look.ACCENT, look.ACCENT_HOVER)
-    assert (theme.block_radius, theme.table_radius, theme.input_radius, theme.button_large_radius) == ("8px", "8px", "6px", "6px")
+    assert (theme.block_radius, theme.table_radius, theme.input_radius, theme.button_large_radius) == ("12px", "12px", "8px", "8px")
     assert "anywhere" not in css and "prefers-color-scheme" not in css          # no word broken at any letter; light in dark mode too
 
 

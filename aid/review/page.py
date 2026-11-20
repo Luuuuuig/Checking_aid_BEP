@@ -1917,10 +1917,11 @@ def _page(gr, deps: Deps, tab: _Tab):
                 gr.update(), pick_text(lines, items, strings),
                 gr.update(value=strings["review_open_oldest"], visible=waits(lines, items)), gone_line, sent)
 
-    def close_answer_cleared(language_now: str) -> str:
+    def close_answer_cleared(language_now: str) -> tuple:
         """The page's language switched: the line under "Zaak afsluiten" emptied, which holds the answer of the last press in the
-        language it was given in; the next press answers in the new one."""
-        return ""
+        language it was given in, and the next-case preview and button beside it hidden and relabelled; the next press answers in
+        the new one."""
+        return "", gr.update(value="", visible=False), gr.update(value=STRINGS[language_now]["review_open_next"], visible=False)
 
     def strip_after_close(language_now: str) -> tuple:
         """A close, or a failed case noted as handled, ended: the strip and the fold read again at once, as strip_ticked reads them.
@@ -1931,6 +1932,35 @@ def _page(gr, deps: Deps, tab: _Tab):
         """A close, or a failed case noted as handled, ended: the label of the tab with its count and the case list read again at
         once, as queue_ticked reads them, which never sets the case chosen. A handler of its own, as strip_after_close."""
         return queue_ticked(language_now, case_id, listed)
+
+    def oldest_waiting(lines: list[aid_status.CaseLine], items: Sequence[aid_status.LookItem],
+                       offered: list[tuple[str, str]]) -> tuple[str, str] | None:
+        """The (label, case_id) of the oldest waiting case in review, else the oldest failed one, else the oldest waiting document
+        among those in `offered`; None when none waits."""
+        labels = {case_id: label for label, case_id in offered}
+        waiting = [line.case_id for line in sorted((line for line in lines if line.state in aid_status.NEEDS and line.case_id in labels),
+                                                   key=lambda line: (line.state != "review", line.opened_at, line.case_id))]
+        waiting += [item.item_id for item in items if item.state == "look" and item.item_id in labels]     # oldest first already
+        return (labels[waiting[0]], waiting[0]) if waiting else None
+
+    def next_offered(case_id: str | None, language_now: str) -> tuple:
+        """A close, or a failed case or document noted as handled, ended: the completion card beside the answer previews the oldest
+        waiting case and offers the button to open it at once while the case has left the review (no case chosen) and another case
+        or document waits; both stay hidden otherwise."""
+        strings = STRINGS[language_now]
+        hidden = gr.update(value="", visible=False), gr.update(value=strings["review_open_next"], visible=False)
+        if as_sent(case_id):
+            return hidden
+        try:
+            lines, items = lines_now(), items_now()
+            offered = choices(language_now, lines, items)
+        except (OSError, ValueError):
+            return hidden
+        found = oldest_waiting(lines, items, offered)
+        if found is None:
+            return hidden
+        return (gr.update(value=strings["review_next_preview"].format(case=_literal(found[0])), visible=True),
+                gr.update(value=strings["review_open_next"], visible=True))
 
     def gone_text(case_id: str, strings: dict[str, str]) -> str:
         """The line of a case on screen that left the list, by its PO number, saying why: noted as handled meanwhile, for a failed
@@ -1953,16 +1983,17 @@ def _page(gr, deps: Deps, tab: _Tab):
     def case_framed(case_id: str | None, language_now: str) -> tuple:
         """The case chosen, or none after a close that took it out of the review: the line and the button under "Zaak" shown while no
         case is chosen, the line of a case that left the list hidden, the case's parts review-case and review-evidence shown while one
-        is chosen (the close's part review-close always stands), and "Zaak afsluiten" with a case in review only; for a failed case
-        its notice, with "Als afgehandeld noteren" in place of "Zaak afsluiten" and of the title of the decisions; for a document the
-        intake left to the buyer, while it waits for him, its notice (item_text) in the same place, with the same button, and neither
-        "Zaak afsluiten" nor the title. A case offered for the undo of its write alone, not in review, keeps the title of its
-        decisions."""
+        is chosen (the close's part review-close always stands), "Zaak afsluiten" with a case in review only, and the next-case
+        preview and button beside the answer hidden once a case is chosen (left to next_offered when cleared to none); for a failed
+        case its notice, with "Als afgehandeld noteren" in place of "Zaak afsluiten" and of the title of the decisions; for a
+        document the intake left to the buyer, while it waits for him, its notice (item_text) in the same place, with the same
+        button, and neither "Zaak afsluiten" nor the title. A case offered for the undo of its write alone, not in review, keeps the
+        title of its decisions."""
         strings = STRINGS[language_now]
         try:
             lines, items = lines_now(), items_now()
         except (OSError, ValueError):
-            return (gr.update(),) * 10
+            return (gr.update(),) * 12
         if aid_status.is_item(case_id):
             item = aid_status.look_item(cases_root, case_id)
             closable, titled, handling = False, False, item is not None and item.state == "look"
@@ -1975,7 +2006,9 @@ def _page(gr, deps: Deps, tab: _Tab):
         chosen = gr.update(visible=bool(case_id))
         return (gr.update(visible=not case_id), pick_text(lines, items, strings),
                 gr.update(value=strings["review_open_oldest"], visible=waits(lines, items)), gr.update(value="", visible=False), notice,
-                gr.update(visible=closable), gr.update(visible=handling), gr.update(visible=titled), chosen, chosen)
+                gr.update(visible=closable), gr.update(visible=handling), gr.update(visible=titled), chosen, chosen,
+                gr.update(value="", visible=False) if case_id else gr.update(),
+                gr.update(visible=False) if case_id else gr.update())
 
     def record_shown(current: dict | None, language_now: str) -> tuple:
         """The state of the view changed (show), or the language switched: the comparison of the case chosen, each of its three lists
@@ -2022,19 +2055,16 @@ def _page(gr, deps: Deps, tab: _Tab):
         return (gr.update(value=failed_text(line, language_now)), go) if line is not None and line.state == "failed" else gone
 
     def oldest_opened(language_now: str) -> dict:
-        """"Oudste zaak openen": the oldest case in review, else the oldest failed one, else the oldest document the intake left to
-        the buyer that waits for him, chosen, with the case list as it is now, so that it is among its choices; nothing when none
-        waits."""
+        """"Oudste zaak openen" and "Volgende zaak openen": the oldest case in review, else the oldest failed one, else the oldest
+        document the intake left to the buyer that waits for him, chosen, with the case list as it is now, so that it is among its
+        choices; nothing when none waits."""
         try:
             lines, items = lines_now(), items_now()
             offered = choices(language_now, lines, items)
         except (OSError, ValueError):
             return gr.update()
-        ids = {case_id for _, case_id in offered}
-        waiting = [line.case_id for line in sorted((line for line in lines if line.state in aid_status.NEEDS and line.case_id in ids),
-                                                   key=lambda line: (line.state != "review", line.opened_at, line.case_id))]
-        waiting += [item.item_id for item in items if item.state == "look" and item.item_id in ids]       # oldest first already
-        return gr.update(choices=offered, value=waiting[0]) if waiting else gr.update()
+        found = oldest_waiting(lines, items, offered)
+        return gr.update(choices=offered, value=found[1]) if found is not None else gr.update()
 
     def handled_marked(case_id: str | None, language_now: str) -> tuple:
         """"Als afgehandeld noteren" on a failed case: its mark, handled_by_hand.json in its folder with the time of the page's clock,
@@ -2123,9 +2153,9 @@ def _page(gr, deps: Deps, tab: _Tab):
                                                  min_width=240, elem_id="review-strip-action")
                 with gr.Accordion(first_strip.fold, open=False, elem_id="review-all") as fold:
                     fold_table = gr.HTML(first_strip.table, apply_default_css=False, js_on_load=None, elem_id="review-all-table")
-                with gr.Row():
+                with gr.Row(elem_id="review-picker-row"):
                     case_choice = gr.Dropdown(choices=choices("nl", first_lines, first_items), value=None, label=first["case"], scale=4)
-                    refresh = gr.Button(first["refresh"], scale=1)
+                    refresh = gr.Button(first["refresh"], scale=0, min_width=160)
                 gone = gr.Markdown("", visible=False, elem_id="review-gone")
                 with gr.Row(elem_id="review-pick-row") as pick_row:
                     pick = gr.Markdown(pick_text(first_lines, first_items, first), elem_id="review-pick", elem_classes=["notice"])
@@ -2175,11 +2205,17 @@ def _page(gr, deps: Deps, tab: _Tab):
                     with gr.Row():                   # a failed case has the second in place of the first
                         close_button = gr.Button(first["close"], variant="primary", visible=False)
                         handled = gr.Button(first["handled_go"], visible=False, elem_id="review-handled")
-                    status = gr.Markdown("", elem_classes=["answer"])
+                    with gr.Row(elem_id="review-answer-row"):
+                        with gr.Column(elem_id="review-answer-text"):
+                            status = gr.Markdown("", elem_classes=["answer"])
+                            next_preview = gr.Markdown("", visible=False, elem_id="review-next-preview")
+                        next_case = gr.Button(first["review_open_next"], variant="primary", visible=False, scale=0, min_width=200,
+                                              elem_id="review-next")
                     # the clear of its answer on a switch, bound here, before every other listener of the switch that skips the
                     # queue: the browser sends a switch's requests in the order of their binding, a few at a time, and a close
                     # pressed during the switch must not have its fresh answer wiped by a clear answered after it
-                    language.change(close_answer_cleared, inputs=language, outputs=status, show_progress="hidden", queue=False)
+                    language.change(close_answer_cleared, inputs=language, outputs=[status, next_preview, next_case],
+                                    show_progress="hidden", queue=False)
                     with gr.Column(visible=False, elem_id="review-undo") as undo_part:     # its answer is the status line, above it
                         undo_title = gr.Markdown(f"### {first['undo_title']}")
                         with gr.Row():
@@ -2236,15 +2272,17 @@ def _page(gr, deps: Deps, tab: _Tab):
               outputs=[review_tab, case_choice, pick_row, pick, oldest, gone, listed], show_progress="hidden", preprocess=False,
               queue=False)
         case_choice.change(case_framed, inputs=[case_choice, language],
-                           outputs=[pick_row, pick, oldest, gone, failed_notice, close_button, handled, decisions_title, case_part, evidence_part],
+                           outputs=[pick_row, pick, oldest, gone, failed_notice, close_button, handled, decisions_title, case_part, evidence_part,
+                                    next_preview, next_case],
                            show_progress="hidden")
         language.change(failed_relabel, inputs=[language, case_choice], outputs=[failed_notice, handled], show_progress="hidden",
                         preprocess=False, queue=False)
-        oldest.click(oldest_opened, inputs=language, outputs=case_choice, show_progress="hidden")
+        gr.on(triggers=[oldest.click, next_case.click], fn=oldest_opened, inputs=language, outputs=case_choice, show_progress="hidden")
         marked = handled.click(handled_marked, inputs=[case_choice, language], outputs=[status, case_choice], show_progress="hidden")
-        # a close, or a failed case noted as handled, changes the counts: the strip, the fold, the case list and the label of each tab
-        # with a count follow at once, through handlers of their own (see strip_after_close), without the queue as on the timer
-        # each straight after the press, which the browser sends together, so that none waits for another or for the view of the case
+        # a close, or a failed case noted as handled, changes the counts: the strip, the fold, the case list, the label of each tab
+        # with a count and the next-case preview and button beside the answer follow at once, through handlers of their own (see
+        # strip_after_close), without the queue as on the timer, each straight after the press, which the browser sends together,
+        # so that none waits for another or for the view of the case
         for pressed in (closed, marked):
             pressed.then(strip_after_close, inputs=language, outputs=[strip, *([strip_action] if acting else []), fold, fold_table],
                          show_progress="hidden", queue=False)
@@ -2253,6 +2291,7 @@ def _page(gr, deps: Deps, tab: _Tab):
                          queue=False)
             if hand_label_read is not None:
                 pressed.then(hand_label_read, inputs=language, outputs=hand_tab, show_progress="hidden", queue=False)
+            pressed.then(next_offered, inputs=[case_choice, language], outputs=[next_preview, next_case], show_progress="hidden", queue=False)
         # the view of the case after a close, bound after the counts: the counts take a few hundredths of a second, the view may
         # render the documents again
         closed.then(lambda case_id, language_now: show(case_id, language_now)[:-1], inputs=[case_choice, language], outputs=view)

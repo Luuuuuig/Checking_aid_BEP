@@ -23,7 +23,8 @@ that handles it ("assistant" for the runner and its launcher, "connections" for 
 begin with "strip_" are its last line. "review_all" labels the fold of every case of the last 7 days under it, "all_column:<column>"
 the columns of its table and "todo:<state>" what the buyer does for a case of that state ("todo:closed_changes" for a closed case
 whose changes stand on the list In Exact invoeren, "todo:nothing" for one with nothing left to do). "review_pick" and
-"review_pick_none" are the line under the field "Zaak" while no case is chosen, "review_open_oldest" its button and "review_gone"
+"review_pick_none" are the line under the field "Zaak" while no case is chosen, "review_open_oldest" its button, "review_open_next"
+the button beside the answer of a close that opens the oldest waiting case with "review_next_preview" naming that case, and "review_gone"
 the line of a case on screen that left the list ("review_gone_handled" for a failed case noted as handled meanwhile). A failed case
 reads "case_failed_look" in the case list ("case_failed_handled" once it is noted as handled while it is on screen),
 "failed_notice" above its documents, with its "fail:<reason>", and "handled_go" on its
@@ -458,6 +459,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "review_pick": "Kies een zaak bij Zaak, of open de oudste.",
         "review_pick_none": "Er wachten geen zaken op uw besluit. Een nieuwe zaak verschijnt hier vanzelf.",
         "review_open_oldest": "Oudste zaak openen",
+        "review_open_next": "Volgende zaak openen",
+        "review_next_preview": "Volgende in de wachtrij: {case}",
         "review_gone": "Inkooporder {po} staat niet meer op de lijst: de zaak is intussen afgesloten of vervangen. Kies een andere zaak.",
         "review_gone_handled": ("Inkooporder {po} staat niet meer op de lijst: de zaak is intussen als afgehandeld genoteerd. Kies een "
                                 "andere zaak."),
@@ -1600,6 +1603,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "review_pick": "Choose a case under Case, or open the oldest.",
         "review_pick_none": "No cases wait for your decision. A new case appears here by itself.",
         "review_open_oldest": "Open the oldest case",
+        "review_open_next": "Open the next case",
+        "review_next_preview": "Next in queue: {case}",
         "review_gone": "Purchase order {po} is no longer on the list: the case was closed or replaced meanwhile. Choose another case.",
         "review_gone_handled": "Purchase order {po} is no longer on the list: it was noted as handled meanwhile. Choose another case.",
         "case_failed_look": "failed, look yourself",
