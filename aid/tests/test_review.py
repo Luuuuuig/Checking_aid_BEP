@@ -1035,14 +1035,17 @@ def test_the_hint_follows_a_decision_and_the_refresh(tmp_path, madeup_out):
     state = shown[[type(block).__name__ for block in show.outputs].index("State")]
     saves = rendered_saves(app, state)
     assert len(saves) == 2 and {app.default_config.blocks[target[0]].__class__.__name__ for f in saves for target in f.targets} == {"Radio", "Checkbox"}
-    for f in saves:                                                          # the radio's and the tick's outputs: the row's note and the hint
-        assert [type(block).__name__ for block in f.outputs] == ["Markdown", "Markdown"] and f.outputs[1] is hint_block
+    for f in saves:                                                          # the radio updates note, hint and tick; the tick updates note and hint
+        target = app.default_config.blocks[f.targets[0][0]].__class__.__name__
+        expected = ["Markdown", "Markdown", "Checkbox"] if target == "Radio" else ["Markdown", "Markdown"]
+        assert [type(block).__name__ for block in f.outputs] == expected and f.outputs[1] is hint_block
     [radio] = [f for f in saves if app.default_config.blocks[f.targets[0][0]].__class__.__name__ == "Radio"]
-    assert radio.fn(None, False, "nl", state) == ({"__type__": "update"}, {"__type__": "update"})          # nothing chosen: nothing changes
-    message, hint = radio.fn("unresolved", False, "nl", state)
+    assert radio.fn(None, False, "nl", state) == ({"__type__": "update"}, {"__type__": "update"}, {"__type__": "update"})
+    message, hint, tick = radio.fn("unresolved", False, "nl", state)
     nl = STRINGS["nl"]
     assert message == {"__type__": "update", "value": f"{nl['row_saved']} {nl['row_open']} {nl['row_all_decided']}", "elem_classes": ["row-note"]}
     assert hint == {"__type__": "update", "value": "", "visible": False}
+    assert tick == {"__type__": "update", "visible": False}
     assert waiting_for_po(waiting) is None
     [refresh] = [f for f in app.fns.values() if getattr(f.fn, "__name__", "") == "refreshed"]
     assert [getattr(block, "label", None) for block in refresh.inputs] == [STRINGS["nl"]["language"], STRINGS["nl"]["case"]]
@@ -4948,10 +4951,11 @@ def test_a_decision_answers_in_its_own_row_with_what_is_left(tmp_path, madeup_ou
         assert row.note.key == f"note-{two.case_id}-{item}" and row.note.elem_classes == ["row-note"] and row.note.value == ""
         assert isinstance(row.note, gradio.Markdown) and [bare(child) for child in row.foot.children] == [row.tick, row.note]
         assert row.note.preserved_by_key == [] and len(row.right.children) == 2
+        assert row.radio_save.outputs == [row.note, hint, row.tick] and row.tick_save.outputs == [row.note, hint]
         for save in (row.radio_save, row.tick_save):
-            assert save.outputs == [row.note, hint] and status not in save.outputs and save.show_progress == "hidden"
+            assert status not in save.outputs and save.show_progress == "hidden"
     assert rows["RI1"].radio_save.fn("keep", False, "nl", shown_state(page, two)) == (noted(nl["row_saved"], nl["row_left_one"]), {
-        "__type__": "update", "value": "", "visible": False})
+        "__type__": "update", "value": "", "visible": False}, {"__type__": "update", "visible": False})
     state = shown_state(page, two)
     assert rows["RI2"].radio_save.fn("confirm", False, "nl", state)[0] == noted(nl["row_saved"], nl["row_all_decided"])
     assert rows["RI2"].radio_save.fn("unresolved", False, "en", state)[0] == noted(en["row_saved"], en["row_open"], en["row_all_decided"])
@@ -4973,11 +4977,12 @@ def test_a_decision_answers_in_its_own_row_with_what_is_left(tmp_path, madeup_ou
     assert (en["row_left_one"], en["row_left_many"], en["row_all_decided"], en["row_open"]) == (
         "1 item left to decide.", "{n} items left to decide.", "Everything is decided: you can close the case.",
         "This item stays open: when you close, the case stays for review.")
-    # a price row: the tick saves the decision that stands with it
+    # a price row: the tick hides until "Overnemen" is chosen, and saves the decision that stands with it
     priced, _ = run(d, madeup_out, "MU07", "250107", now=LATER + timedelta(minutes=1))
     [row] = decision_rows(page, shown_state(page, priced)).values()
-    assert row.tick.visible is True and row.radio_save.fn("confirm", False, "nl", shown_state(page, priced))[0] == noted(
-        "Opgeslagen.", "Alles is besloten: u kunt de zaak afsluiten.")
+    note_out, _, tick_out = row.radio_save.fn("confirm", False, "nl", shown_state(page, priced))
+    assert row.tick.visible is False and tick_out == {"__type__": "update", "visible": True}
+    assert note_out == noted("Opgeslagen.", "Alles is besloten: u kunt de zaak afsluiten.")
     assert row.tick_save.fn("confirm", True, "nl", shown_state(page, priced))[0] == noted("Opgeslagen.", "Alles is besloten: u kunt de zaak afsluiten.")
     assert json.loads((priced.root / "decisions.jsonl").read_text(encoding="utf-8").splitlines()[-1])["article_update"] is True
     # a refusal: "Leverancier vragen" on a try-out writes nothing and says why, as a refusal
@@ -4991,7 +4996,7 @@ def test_a_decision_answers_in_its_own_row_with_what_is_left(tmp_path, madeup_ou
                                  writer=PreparedWriter(settings.cases_root / "prepared"), mailer=None, clock=lambda: MADE))
     [row] = [row for row in decision_rows(tryout_page, shown_state(tryout_page, tried)).values() if "ask" in [v for _, v in row.radio.choices]]
     assert row.radio_save.fn("ask", False, "nl", shown_state(tryout_page, tried)) == (noted(nl["tryout_nothing_sent"], refused=True),
-                                                                                      {"__type__": "update"})
+                                                                                      {"__type__": "update"}, {"__type__": "update"})
     assert not (tried.root / "decisions.jsonl").exists()
 
 
@@ -5009,7 +5014,8 @@ def test_a_decision_to_ask_says_where_the_question_goes(tmp_path, madeup_out):
     path, d, page, _ = sending_page(tmp_path, madeup_out, environ={PASSWORD_ENV: "made-up"}, **smtp)   # a way to send; S07's address
     c, _ = run(d, madeup_out, "MU07", "250107")
     [row] = decision_rows(page, shown_state(page, c)).values()
-    note, hint = row.radio_save.fn("ask", False, "nl", shown_state(page, c))
+    note, hint, tick_out = row.radio_save.fn("ask", False, "nl", shown_state(page, c))
+    assert tick_out == {"__type__": "update", "visible": False}
     assert note == noted("Opgeslagen.", "Bij afsluiten gaat er een vraag naar S07.", "Alles is besloten: u kunt de zaak afsluiten.")
     assert SUPPLIER not in str(note) and hint == {"__type__": "update", "value": "", "visible": False}
     assert row.radio_save.fn("ask", False, "en", shown_state(page, c))[0] == noted(
@@ -5663,4 +5669,45 @@ def test_after_closing_a_case_the_next_waiting_case_is_offered_beside_the_answer
     sec2 = manual[manual.index("### 2.2 The review page"):manual.index("### 2.3 ")]
     sec7 = manual[manual.index("## 7. Korte handleiding voor de inkoper"):]
     assert f"\"{nl['review_open_next']}\"" in sec2 and f"\"{nl['review_open_next']}\"" in sec7
+
+
+def test_article_price_tick_shows_only_when_supplier_value_is_chosen_on_a_price_row(tmp_path, madeup_out):
+    """On a price row, the tick "Ook de artikelprijs bijwerken" is shown only when "Waarde van de leverancier overnemen" (confirm)
+    is chosen, both on live radio clicks and when rendered from saved state (including after a language switch); on any non-price
+    row it stays hidden even when confirm is chosen."""
+    d = deps(tmp_path, madeup_out)
+    mixed, _ = run(d, madeup_out, "MU12", "250112")                    # RI1: price, RI2: quantity
+    page = build_app(d)
+    state = shown_state(page, mixed)
+    rows = decision_rows(page, state)
+    assert rows["RI1"].tick.visible is False and rows["RI2"].tick.visible is False
+
+    # live radio selection on price row: hidden for keep/ask/unresolved, shown only for confirm
+    for choice in ("keep", "ask", "unresolved"):
+        assert rows["RI1"].radio_save.fn(choice, False, "nl", state)[2] == {"__type__": "update", "visible": False}
+    assert rows["RI1"].radio_save.fn("confirm", False, "nl", state)[2] == {"__type__": "update", "visible": True}
+
+    # after re-render (e.g. language switch) with confirm saved on RI1, tick stays visible in both languages
+    for lang in ("nl", "en"):
+        rendered = decision_rows(page, shown_state(page, mixed, lang), lang)
+        assert rendered["RI1"].tick.visible is True and rendered["RI2"].tick.visible is False
+
+    # live radio selection on non-price row (quantity): stays hidden even when confirm is chosen
+    assert rows["RI2"].radio_save.fn("confirm", False, "nl", state)[2] == {"__type__": "update", "visible": False}
+    assert decision_rows(page, shown_state(page, mixed))["RI2"].tick.visible is False
+
+    # switching price row away from confirm hides the tick again, both live and after re-render
+    assert rows["RI1"].radio_save.fn("keep", False, "nl", state)[2] == {"__type__": "update", "visible": False}
+    assert decision_rows(page, shown_state(page, mixed))["RI1"].tick.visible is False
+
+    # empty decision leaves tick unchanged
+    assert rows["RI1"].radio_save.fn(None, False, "nl", state) == ({"__type__": "update"}, {"__type__": "update"}, {"__type__": "update"})
+
+    # manual sections 2.2 and 7 describe that the tick appears only when taking the supplier's value
+    manual = Path("aid/MANUAL.md").read_text(encoding="utf-8")
+    sec2 = manual[manual.index("### 2.2 The review page"):manual.index("### 2.3 ")]
+    sec7 = manual[manual.index("## 7. Korte handleiding voor de inkoper"):]
+    assert 'appears only when you choose "Waarde van de leverancier overnemen"' in sec2
+    assert 'verschijnt bij deze keuze het vinkje "Ook de artikelprijs bijwerken"' in sec7
+
 

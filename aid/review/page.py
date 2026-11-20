@@ -1804,25 +1804,28 @@ def _page(gr, deps: Deps, tab: _Tab):
                 gr.update(label=strings["undo_choice"], choices=undo_choices, value=None), gr.update(value=strings["undo"]),
                 hint_of(case, language), entered_of(*(state or {}).get("entered", ([], False)), language))
 
-    def saver(case_id: str, item_id: str) -> Callable:
+    def saver(case_id: str, item_id: str, is_price: bool = False, with_tick: bool = False) -> Callable:
         def save(decision: str | None, article: bool, language: str, current: dict | None) -> tuple:
-            """A decision saved at once: the note of its row (row_note), and the hint of the case as it is now, which a decision
-            hides, since the runner no longer checks the case again. A decision that is not saved says why in the note, as a
-            refusal (class refused): decision_text's own sentence."""
+            """A decision saved at once: the note of its row (row_note), the hint of the case as it is now (which a decision hides,
+            since the runner no longer checks the case again), and when bound to the radio (with_tick) the visibility of the article
+            price tick, shown on a price row only while "confirm" is chosen. A decision that is not saved says why in the note, as a
+            refusal (class refused): decision_text's own sentence, leaving the tick unchanged."""
+            unchanged = (gr.update(),) if with_tick else ()
             if not decision:
-                return gr.update(), gr.update()
+                return gr.update(), gr.update(), *unchanged
             if aid_status.is_item(case_id):      # a document left to the buyer has no decision
-                return noted(STRINGS[language]["refused"], refused=True), gr.update()
+                return noted(STRINGS[language]["refused"], refused=True), gr.update(), *unchanged
             try:
                 case = load_case(cases_root, case_id)
             except ValueError:
-                return noted(STRINGS[language]["refused"], refused=True), gr.update()
+                return noted(STRINGS[language]["refused"], refused=True), gr.update(), *unchanged
             text, saved = decision_text(case, item_id, decision, bool(article), language)
             if not saved:
-                return noted(text, refused=True), gr.update()
+                return noted(text, refused=True), gr.update(), *unchanged
             if current and current["case_id"] == case_id:      # the state the radios are shown from follows the decision
                 current["decisions"][item_id] = {"item_id": item_id, "decision": decision, "article_update": bool(article)}
-            return noted(row_note(case, decision, language)), hint_of(case, language)
+            tick_update = (gr.update(visible=is_price and decision == "confirm"),) if with_tick else ()
+            return noted(row_note(case, decision, language)), hint_of(case, language), *tick_update
         return save
 
     def noted(text: str, refused: bool = False) -> dict:
@@ -2190,17 +2193,21 @@ def _page(gr, deps: Deps, tab: _Tab):
                                     # it does not know yet, for a display only, and greys out a row on which a choice stands
                                     radio = gr.Radio(choices=_decision_choices(row, current["kind"], strings, again), value=chosen.get("decision"),
                                                      label=strings["decision"], key=f"decision-{current['case_id']}-{row.item_id}", interactive=True)
+                                    is_price = row.field == "price"
                                     with gr.Row(elem_classes=["decision-foot"]):
-                                        tick = gr.Checkbox(value=chosen.get("article_update", row.item_id in current["articles"]), label=strings["article_update"], visible=row.field == "price",
+                                        tick = gr.Checkbox(value=chosen.get("article_update", row.item_id in current["articles"]),
+                                                           label=strings["article_update"],
+                                                           visible=is_price and chosen.get("decision") == "confirm",
                                                            key=f"article-{current['case_id']}-{row.item_id}", interactive=True)
                                         # its key begins with "note-", and it keeps none of its last answer when the rows are
                                         # rendered again (the language switch, the case shown again): a decision that stands says
                                         # "Opgeslagen." in the language of the page
                                         note = gr.Markdown(strings["row_saved"] if chosen.get("decision") else "", elem_classes=["row-note"],
                                                            key=f"note-{current['case_id']}-{row.item_id}", preserved_by_key=None)
-                            save = saver(current["case_id"], row.item_id)
-                            radio.input(save, inputs=[radio, tick, language, state], outputs=[note, hint], show_progress="hidden")
-                            tick.input(save, inputs=[radio, tick, language, state], outputs=[note, hint], show_progress="hidden")
+                            radio.input(saver(current["case_id"], row.item_id, is_price=is_price, with_tick=True),
+                                        inputs=[radio, tick, language, state], outputs=[note, hint, tick], show_progress="hidden")
+                            tick.input(saver(current["case_id"], row.item_id),
+                                       inputs=[radio, tick, language, state], outputs=[note, hint], show_progress="hidden")
                 with gr.Column(elem_id="review-close"):
                     with gr.Row():                   # a failed case has the second in place of the first
                         close_button = gr.Button(first["close"], variant="primary", visible=False)
