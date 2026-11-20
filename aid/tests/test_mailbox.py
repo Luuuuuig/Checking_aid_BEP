@@ -12,7 +12,7 @@ import tempfile
 import unicodedata
 from datetime import datetime, timedelta
 from email.message import EmailMessage
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import pytest
 from openpyxl import Workbook
@@ -38,17 +38,18 @@ from aid.tryout_mark import TRYOUT_OUTSIDE
 SPECS = {spec.case_id: spec for spec in load_specs(Path(__file__).resolve().parents[1] / "madeup" / "spec")}
 
 
-def write_eml(path: Path, subject: str = "", body: str | None = "", html: str | None = None, attachments: list = (),
+def write_eml(path: Path, subject: str | None = "", body: str | None = "", html: str | None = None, attachments: list = (),
               sender: str | None = "supplier@example.com") -> Path:
-    """An e-mail at `path`, built with the standard library from made-up addresses: this subject, this plain-text body (None for
-    none), this HTML body (None for none) and these attachments, from this sender (None for an e-mail without a From header). An
-    attachment is a file, attached under its own name, or a pair (name, bytes), where the name None attaches the bytes without a
+    """An e-mail at path, built with made-up addresses. None leaves out the subject, plain-text body, HTML body or From header.
+    An attachment is a file, attached under its own name, or a pair (name, bytes), where the name None attaches the bytes without a
     name, or a triple (name, bytes, content type). Without a type, the type is the one the name suggests, else PDF. A pair
     (name, EmailMessage) attaches the message itself, as a mail client does when it forwards a message as an attachment."""
     message = EmailMessage()
     if sender is not None:
         message["From"] = sender
-    message["To"], message["Subject"] = "aid@example.com", subject
+    message["To"] = "aid@example.com"
+    if subject is not None:
+        message["Subject"] = subject
     if body is not None:
         message.set_content(body)
         if html is not None:
@@ -73,6 +74,26 @@ def test_classify(madeup_out):
 
 def test_find_po_numbers():
     assert find_po_numbers("Uw inkooporder 250101 en PO 250102", SETTINGS.po_number_pattern) == ["250101", "250102"]
+
+
+def test_a_po_number_pattern_skips_a_windows_device_name():
+    assert find_po_numbers("Ref CON\nRef 250101", r"Ref (\w+)") == ["250101"]
+
+
+@pytest.mark.parametrize("name, expected", [
+    ("NUL.pdf", "_NUL.pdf"),
+    ("con.PDF", "_con.PDF"),
+    ("COM1 .pdf", "_COM1 .pdf"),
+    ("AUX.order.pdf", "_AUX.order.pdf"),
+    ("CONTRACT.pdf", "CONTRACT.pdf"),
+])
+def test_windows_device_names_are_prefixed_for_attachments(name, expected):
+    assert mailbox.safe_name(name, "attachment") == expected
+
+
+def test_shortening_a_name_keeps_the_windows_device_prefix_within_the_byte_limit():
+    name = mailbox.safe_name("COM1" + " " * mailbox.NAME_BYTES + "tail.pdf", "attachment")
+    assert name == "_COM1" + " " * (mailbox.NAME_BYTES - len("_COM1.pdf")) + ".pdf"
 
 
 def test_scan_opens_one_case_and_skips_duplicate(tmp_path, madeup_out):
@@ -407,6 +428,21 @@ def test_extract_eml_gives_the_subject_and_the_body_and_writes_the_attachments_i
     assert text == "Bevestiging PO 250101\nBeste inkoper,\nbijgaand onze bevestiging."
     assert attachments == [folder / "MU02_conf.pdf", folder / "MU01_conf.pdf"]
     assert [a.read_bytes() for a in attachments] == [(madeup_out / "MU02_conf.pdf").read_bytes(), (madeup_out / "MU01_conf.pdf").read_bytes()]
+
+
+def test_windows_device_names_keep_older_attachment_references_working(tmp_path, madeup_out):
+    first = (madeup_out / "MU05_conf.pdf").read_bytes()
+    second = (madeup_out / "MU16_conf.pdf").read_bytes()
+    mail = write_eml(tmp_path / "m.eml", attachments=[("NUL.pdf", first), ("_NUL.pdf", second)])
+
+    _, documents = extract_eml(mail, tmp_path / "out")
+
+    assert [(document.name, document.read_bytes()) for document in documents] == [
+        ("_NUL_2.pdf", first), ("_NUL.pdf", second),
+    ]
+    assert mailbox.attachment_of(mail, "NUL.pdf") == first
+    assert mailbox.attachment_of(mail, "_NUL_2.pdf") == first
+    assert mailbox.attachment_of(mail, "_NUL.pdf") == second
 
 
 def test_an_html_only_body_is_turned_into_text_by_stripping_the_tags(tmp_path):
@@ -803,6 +839,36 @@ def test_an_e_mail_with_a_confirmation_attached_opens_a_case_for_the_po_on_its_p
     assert [f.name for f in case.input_files] == ["MU01_conf.pdf"]                    # the document is the input, not the e-mail
     assert sha256_file(case.input_files[0]) == sha256_file(madeup_out / "MU01_conf.pdf")
     assert (inbox / "processed" / "m.eml").exists() and list(inbox.iterdir()) == [inbox / "processed"]
+
+
+def test_an_e_mail_without_a_subject_or_body_opens_a_case_from_its_pdf(tmp_path, madeup_out):
+    inbox = inbox_of(tmp_path)
+    confirmation = (madeup_out / "MU01_conf.pdf").read_bytes()
+    write_eml(inbox / "m.eml", subject=None, body=None, attachments=[("document.pdf", confirmation)])
+
+    result = scan(tmp_path, inbox)
+
+    [case_id] = result.new_cases
+    case = load_case(tmp_path / "cases", case_id)
+    [document] = case.input_files
+    assert (case.kind, case.po_number) == ("confirmation", "250101")
+    assert document.name == "document.pdf" and document.read_bytes() == confirmation
+    assert result.skipped == [] and review_items(tmp_path) == []
+
+
+def test_a_scan_in_an_e_mail_without_a_subject_or_body_is_listed_for_the_buyer(tmp_path, madeup_out):
+    inbox = inbox_of(tmp_path)
+    attachment = madeup_out / "MU05_conf.pdf"
+    write_eml(inbox / "m.eml", subject=None, body=None, attachments=[attachment])
+    label, reason = "m.eml/MU05_conf.pdf", "no text layer; class unknown"
+
+    result = scan(tmp_path, inbox)
+
+    assert result.new_cases == [] and case_names(tmp_path) == []
+    assert result.skipped == [(label, reason)]
+    [item] = review_items(tmp_path)
+    assert (item["file"], item["reason"], item["sha256"]) == (label, reason, sha256_file(attachment))
+    assert (inbox / "processed" / "m.eml").is_file()
 
 
 @pytest.mark.parametrize("fields", [
@@ -1257,6 +1323,27 @@ def test_processed_files_keep_their_name_and_a_taken_name_gets_a_number_before_t
     drawn(inbox / "doc.pdf", page_of("Pakbon 6"))
     scan(tmp_path, inbox)
     assert (processed / "doc_4.pdf").exists()
+
+
+def test_the_scan_sorts_file_names_as_text_even_with_windows_paths(tmp_path, monkeypatch):
+    inbox = inbox_of(tmp_path)
+
+    class WindowsEntry(type(inbox)):
+        def __lt__(self, other):
+            return PureWindowsPath(self.name) < PureWindowsPath(other.name)
+
+        def is_file(self):
+            return True
+
+    # These two names cannot coexist in a normal Windows folder. Give the scan both without writing them to disk.
+    entries = [WindowsEntry(inbox / name) for name in ("note.txt", "Note.txt")]
+    monkeypatch.setattr(Path, "iterdir", lambda _: iter(entries))
+    monkeypatch.setattr(mailbox, "to_processed", lambda _: None)
+
+    assert scan(tmp_path, inbox).skipped == [
+        ("Note.txt", "unsupported file type: .txt"),
+        ("note.txt", "unsupported file type: .txt"),
+    ]
 
 
 def test_folders_in_the_folder_are_not_scanned(tmp_path, madeup_out):

@@ -85,7 +85,7 @@ def test_the_blocks_are_by_order_and_line_then_the_article_prices(tmp_path, made
     assert [text for text, _ in shown[1][2]] == ["regel 2 (KM-0402): prijs 2,00 → 2,10", "regel 2 (KM-0402): leverdatum 16-11-2026 → 20-11-2026",
                                                  "regel 2 (KM-0402): aantal 5 → 6", "regel 10 (KM-0410): prijs 1,00 → 1,10"]
     assert shown[0][2] == [("regel 1 (onbekend): aantal 1 → 2", unknown[0])]
-    assert [text for text, _ in shown[4][2]] == ["artikel KM-0402: inkoopprijs onbekend → 2,10", "artikel KM-0801: inkoopprijs onbekend → 12,70"]
+    assert [text for text, _ in shown[4][2]] == ["artikel KM-0402: nieuwe inkoopprijs 2,10 (geen vorige prijs in deze wijziging)", "artikel KM-0801: nieuwe inkoopprijs 12,70 (geen vorige prijs in deze wijziging)"]
     english = blocks(asking.open(), d.store, asking.root, "en")
     assert [heading for _, heading, _ in english] == ["Purchase order 99999", "Purchase order 250104 (S04)", "Purchase order 250108 (S08)",
                                                       "Purchase order 250114 (S14)", "Article prices"]
@@ -129,12 +129,12 @@ def test_values_in_dutch_and_in_english(tmp_path, madeup_out):
                            "regel 1 (KM-1001): leverdatum 16-11-2026 → week 47 (2026)",
                            "regel 2 (KM-1002): leverdatum 16-11-2026 → 16-11-2026/20-11-2026",
                            "regel 3 (KM-1003): leverdatum week 7 (2026) → 13-02-2026",
-                           "artikel KM-1001: inkoopprijs onbekend → 12,70", "artikel KM-1002: inkoopprijs 12,50 → 12,7"]
+                           "artikel KM-1001: nieuwe inkoopprijs 12,70 (geen vorige prijs in deze wijziging)", "artikel KM-1002: inkoopprijs 12,50 → 12,7"]
     assert texts["en"] == ["line 1 (KM-1001): price 1234.50 → 1240.00", "line 1 (KM-1001): quantity 2.5 → 3",
                            "line 1 (KM-1001): delivery date 16-11-2026 → week 47 (2026)",
                            "line 2 (KM-1002): delivery date 16-11-2026 → 16-11-2026/20-11-2026",
                            "line 3 (KM-1003): delivery date week 7 (2026) → 13-02-2026",
-                           "article KM-1001: purchase price unknown → 12.70", "article KM-1002: purchase price 12.50 → 12.7"]
+                           "article KM-1001: new purchase price 12.70 (no previous price recorded for this change)", "article KM-1002: purchase price 12.50 → 12.7"]
     assert (STRINGS["nl"]["hand_unknown"], STRINGS["en"]["hand_unknown"]) == ("onbekend", "unknown")
     assert ids_of("e1+e2") == ["e1", "e2"] and ids_of("e1") == ["e1"] and ids_of("") == []
 
@@ -327,7 +327,7 @@ def test_an_open_row_notes_what_exact_shows_now(tmp_path, madeup_out):
     filed_on(d.store, "250108", "v3", datetime(2026, 11, 13, 10, 0))
     assert listed_rows(d)[0] == "Inkooporder 250108 (S08), regel 1 (KM-0801): prijs 12,50 → 12,70. Exact toont nu 12,80."
     assert listed_rows(d, "en")[0] == "Purchase order 250108 (S08), line 1 (KM-0801): price 12.50 → 12.70. Exact now shows 12.80."
-    assert listed_rows(d)[1] == "artikel KM-0801: inkoopprijs onbekend → 12,70"                    # an article price has no such note
+    assert listed_rows(d)[1] == "artikel KM-0801: nieuwe inkoopprijs 12,70 (geen vorige prijs in deze wijziging)"                    # an article price has no such note
 
 
 def test_the_done_rows_say_how_the_aid_knows(tmp_path, madeup_out):
@@ -348,13 +348,13 @@ def test_the_done_rows_say_how_the_aid_knows(tmp_path, madeup_out):
     rows = done_rows(changes(prepared)[0], LATER, "nl", store=d.store, cases_root=d.settings.cases_root)
     assert rows == [("Inkooporder 250114 (S14), regel 1 (KM-1401): leverdatum 16-11-2026 → week 48 (2026) (gezien in versie 2 van de inkooporder)",
                      "+".join(date.ids)),
-                    ("artikel KM-0801: inkoopprijs onbekend → 12,70 (niet ingevoerd, op 18-11-2026)", "+".join(article.ids)),
+                    ("artikel KM-0801: nieuwe inkoopprijs 12,70 (geen vorige prijs in deze wijziging) (niet ingevoerd, op 18-11-2026)", "+".join(article.ids)),
                     ("Inkooporder 250108 (S08), regel 1 (KM-0801): prijs 12,50 → 12,70 (door u afgevinkt op 18-11-2026)", "+".join(price.ids)),
                     ("Inkooporder 250108 (S08), regel 2 (KM-0802): leverdatum 16-11-2026 → 23-11-2026 (gezien in een export uit Exact)", exported)]
     english = done_rows(changes(prepared)[0], LATER, "en", store=d.store, cases_root=d.settings.cases_root)
     assert [text for text, _ in english] == [
         "Purchase order 250114 (S14), line 1 (KM-1401): delivery date 16-11-2026 → week 48 (2026) (seen in version 2 of the purchase order)",
-        "article KM-0801: purchase price unknown → 12.70 (not entered, on 18-11-2026)",
+        "article KM-0801: new purchase price 12.70 (no previous price recorded for this change) (not entered, on 18-11-2026)",
         "Purchase order 250108 (S08), line 1 (KM-0801): price 12.50 → 12.70 (ticked by you on 18-11-2026)",
         "Purchase order 250108 (S08), line 2 (KM-0802): delivery date 16-11-2026 → 23-11-2026 (seen in an export from Exact)"]
     assert [text for text, _ in done_rows(changes(prepared)[0], datetime(2026, 11, 20, 9, 0), "nl", days=1)] == []   # one day back: none
@@ -1023,9 +1023,11 @@ def test_a_newer_change_that_can_never_be_put_back_says_so(tmp_path, madeup_out)
     mark(prepared, newer.ids, "entered", datetime(2026, 11, 12, 10, 30))
     listed = next(change for change in changes(prepared)[0] if change.ids == [entry.entry_id])
     kept = files_of(d)
-    said = {"nl": ("Terugdraaien kan nu niet: er is een nieuwere wijziging ingevoerd, artikel KM-0801: inkoopprijs onbekend → 12,90, die de "
+    said = {"nl": ("Terugdraaien kan nu niet: er is een nieuwere wijziging ingevoerd, artikel KM-0801: nieuwe inkoopprijs 12,90 "
+                   "(geen vorige prijs in deze wijziging), die de "
                    "assistent niet kan terugdraaien. Zet de oude waarde zelf terug in Exact."),
-            "en": ("Cannot put back now: a newer change was entered, article KM-0801: purchase price unknown → 12.90, which the assistant "
+            "en": ("Cannot put back now: a newer change was entered, article KM-0801: new purchase price 12.90 "
+                   "(no previous price recorded for this change), which the assistant "
                    "cannot put back. Put the old value back in Exact yourself.")}
     for language in ("nl", "en"):
         assert press(d, listed, 11, 0, language) == said[language]

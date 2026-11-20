@@ -57,7 +57,9 @@ LEESMIJ = ("Deze map is de inkoopassistent. Buiten deze map zet de assistent all
            "Bekijken. In de map "
            "data staan de instellingen en alle documenten die de assistent verwerkt: kopieer of verstuur die map niet. Zet deze map op "
            "de eigen schijf van de pc, niet in een map die met OneDrive wordt gesynchroniseerd; verplaatst u de map, dubbelklik dan "
-           "opnieuw op Inkoopassistent starten. Bijwerken: stop de assistent, verwijder in deze map alles behalve de map data, zet "
+           "opnieuw op Inkoopassistent starten. "
+           r"Kies een kort pad zoals C:\Inkoopassistent, want Windows kan paden van meer dan 260 tekens weigeren. "
+           "Bijwerken: stop de assistent, verwijder in deze map alles behalve de map data, zet "
            "alles wat in de map van de nieuwe versie staat in deze map, ook de bestanden waarop u dubbelklikt, en start opnieuw; de "
            "map data blijft staan. Het zip-bestand van een nieuwe versie bevat een map Inkoopassistent: pak het eerst uit op een "
            "andere plek, bijvoorbeeld in Downloads, en zet wat in die map Inkoopassistent staat in deze map, niet die map zelf. "
@@ -363,6 +365,13 @@ def test_the_start_files_call_the_python_of_their_own_folder_and_hold_no_absolut
     assert files["Demonstratie stoppen.cmd"] == '@"%~dp0python\\python.exe" -I -X utf8 -m aid.portable --demo-stop "%~dp0demo" & pause\r\n'
     readme = files["LEESMIJ.txt"]
     assert " ".join(readme.split()) == LEESMIJ and readme.isascii() and "\r\n" in readme and "\n" not in readme.replace("\r\n", "")
+
+
+def test_the_manual_recommends_a_short_path_for_the_windows_folder():
+    manual = (REPO_ROOT / "aid" / "MANUAL.md").read_text(encoding="utf-8")
+    carry = manual.split("**Carry.**", 1)[1].split("**Start.**", 1)[0]
+    assert r"Use a short path such as `C:\Inkoopassistent`" in carry
+    assert "Windows can refuse paths longer than 260 characters" in carry
 
 
 def test_leesmij_says_how_the_buyer_unblocks_starts_and_updates_the_folder():

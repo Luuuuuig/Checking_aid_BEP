@@ -223,7 +223,7 @@ from aid.pipeline import file_answer
 from aid.po_store import PoStore, VersionHeld
 from aid.po_store import _item_codes            # the item codes of a PO's Document, as find_by_lines takes them
 from aid.readers.pdf_text import extract_lines, extract_rows
-from aid.readers.po_export import EXPORT_SUFFIXES, ExportRefused, is_export
+from aid.readers.po_export import EXPORT_SUFFIXES, ExportRefused, _DEVICES, is_export, is_folder_name
 from aid.readers.po_layout import PoLayout
 from aid.readers.po_pdf import fits, header_lines, layout_first_page
 from aid.readers.supplier_parser import LayoutTemplate, detect_template, load_templates, read_with_template
@@ -450,12 +450,12 @@ def find_po_numbers(text: str, pattern: str) -> list[str]:
     group gives the whole match. A number that a digit follows directly in the text, at the end of the group, is passed over whatever
     the pattern, since a number cut short is never a PO number. So under the default pattern and the pattern of the fields
     (aid/review/exact_settings.py), whose match starts after a word, a longer number is taken whole or not at all; a pattern of another
-    form whose match can start inside a number may still take the tail of a longer one."""
+    form whose match can start inside a number may still take the tail of a longer one. A number must work as a folder name."""
     numbers: list[str] = []
     for found in re.finditer(pattern, text, re.IGNORECASE):
         group = 1 if found.re.groups else 0
         number = found.group(group)
-        if number and _DIGIT.match(text, found.end(group)) is None and number not in numbers:
+        if is_folder_name(number) and _DIGIT.match(text, found.end(group)) is None and number not in numbers:
             numbers.append(number)
     return numbers
 
@@ -590,8 +590,8 @@ def extract_eml(path: Path, out_dir: Path) -> tuple[str, list[Path]]:
     safe to write: no folders, none of the characters that file systems refuse, no dots or spaces at the ends, at most NAME_BYTES
     bytes. A name without an extension takes the extension of the type of its part (application/pdf, image/png, message/rfc822 and the
     types the system knows), and an attachment without a name is called attachment_<n>. A name that an earlier attachment of the same
-    e-mail has taken gets _2, _3 and so on before its extension. They are returned in the order of the e-mail. Reading the same e-mail
-    again writes the same files again."""
+    e-mail has taken gets _2, _3 and so on before its extension. Windows device names get a leading underscore without taking a
+    name that another attachment had before that rule. The attachments are returned in the order of the e-mail."""
     data = Path(path).read_bytes()
     message = BytesParser(policy=policy.default).parsebytes(data)
     subject = " ".join(str(message["subject"] or "").split())
@@ -607,19 +607,34 @@ def extract_eml(path: Path, out_dir: Path) -> tuple[str, list[Path]]:
 
 def attachment_of(eml: Path, name: str) -> bytes | None:
     """The bytes of the attachment of the e-mail file that extract_eml writes under `name`, the name that follows the e-mail's own
-    in the list of skipped items ("PO.eml/<name>"); None when the e-mail has no attachment of that name. Nothing is written: the
-    review page shows such an attachment that the scan left to the buyer from the e-mail in processed/."""
+    in the list of skipped items ("PO.eml/<name>"). A review item from before device names got an underscore can still refer to the
+    old name. Nothing is written: the review page shows the attachment from the e-mail in processed/."""
     message = BytesParser(policy=policy.default).parsebytes(Path(eml).read_bytes())
-    return next((_payload(part) for named, part in _named_attachments(message) if named == name), None)
+    return next((_payload(part) for named, part in _named_attachments(message, include_old_names=True) if named == name), None)
 
 
-def _named_attachments(message: EmailMessage) -> Iterator[tuple[str, EmailMessage]]:
-    """The attachments of the e-mail in its order, each with the name extract_eml writes it under (see extract_eml)."""
+def _named_attachments(message: EmailMessage, *, include_old_names: bool = False) -> Iterator[tuple[str, EmailMessage]]:
+    """Each attachment in e-mail order with its safe name. Reserve previous names before adding prefixes. Include old names
+    as aliases for looking up earlier review items when requested."""
+    old_attachments: list[tuple[str, EmailMessage]] = []
     taken: set[str] = set()
+
+    def is_taken(candidate: str) -> bool:
+        return candidate.casefold() in taken
+
     for number, part in enumerate(_attachments(message), 1):
-        name = _free_name(_attachment_name(part, number), lambda candidate: candidate.casefold() in taken)
-        taken.add(name.casefold())
+        old_name = _free_name(_attachment_name(part, number), is_taken)
+        taken.add(old_name.casefold())
+        old_attachments.append((old_name, part))
+
+    for old_name, part in old_attachments:
+        name = old_name
+        if _is_device_name(old_name):
+            name = _free_name(safe_name(old_name, ""), is_taken)
+            taken.add(name.casefold())
         yield name, part
+        if include_old_names and name != old_name:
+            yield old_name, part
 
 
 def sender_of(eml: Path) -> str | None:
@@ -744,24 +759,38 @@ _EXTENSIONS = {"application/pdf": ".pdf", "image/png": ".png", "message/rfc822":
 
 
 def _attachment_name(part: EmailMessage, number: int) -> str:
-    """The name an attachment is written under, before a name that is taken gets a number (see extract_eml)."""
+    """The name an attachment used before device names got a prefix, before a name that is taken gets a number."""
     content_type = part.get_content_type()
-    return safe_name(part.get_filename() or "", f"attachment_{number}",
-                     _EXTENSIONS.get(content_type) or mimetypes.guess_extension(content_type) or "")
+    extension = _EXTENSIONS.get(content_type) or mimetypes.guess_extension(content_type) or ""
+    return _safe_name(part.get_filename() or "", f"attachment_{number}", extension, prefix_devices=False)
 
 
 def safe_name(name: str, fallback: str, extension: str = "") -> str:
     """A name made safe to write a file under, as an attachment's name is (see extract_eml): its last part after any folder, each
     character that file systems refuse made "_", no dots or spaces at its ends, `fallback` when nothing is left, `extension` added when
-    it has none, and at most NAME_BYTES bytes, cut on a character boundary before its extension of at most 16 characters.
+    it has none, an underscore before a Windows device name, and at most NAME_BYTES bytes, cut on a character boundary before
+    its extension of at most 16 characters.
     aid/sources/dropin.py names a file given to the watched folder by this rule as well."""
+    return _safe_name(name, fallback, extension, prefix_devices=True)
+
+
+def _is_device_name(name: str) -> bool:
+    return name.split(".", 1)[0].rstrip(" ").upper() in _DEVICES
+
+
+def _safe_name(name: str, fallback: str, extension: str, *, prefix_devices: bool) -> str:
     last = re.split(r"[\\/]", name or "")[-1]                                         # a path in the name leaves only its last part
     name = re.sub(r"[\x00-\x1f\x7f:*?\"<>|]", "_", last).strip(" .") or fallback
     if not os.path.splitext(name)[1]:
         name += extension
     stem, suffix = os.path.splitext(name)
     suffix = suffix[:16]
-    return stem.encode()[:NAME_BYTES - len(suffix.encode())].decode(errors="ignore") + suffix       # cut on a character boundary
+    stem_bytes = stem.encode()
+    limit = NAME_BYTES - len(suffix.encode())
+    stem = stem_bytes[:limit].decode(errors="ignore")                # cut on a character boundary
+    if prefix_devices and _is_device_name(stem + suffix):
+        stem = "_" + stem_bytes[:limit - 1].decode(errors="ignore")
+    return stem + suffix
 
 
 def _free_name(name: str, is_taken: Callable[[str], bool]) -> str:
@@ -805,7 +834,10 @@ def scan_folder(folder: Path, store: PoStore, cases_root: Path, settings: Settin
     that names a question is the buyer's own message and no supplier's answer. A file whose name starts with a dot (".DS_Store")
     is neither read, skipped nor moved, and so is a folder. Raises FileNotFoundError if the folder does not exist."""
     folder = Path(folder)
-    files = sorted(path for path in folder.iterdir() if path.is_file() and not path.name.startswith("."))
+    files = sorted(
+        (path for path in folder.iterdir() if path.is_file() and not path.name.startswith(".")),
+        key=lambda path: path.name,
+    )
     modified = {path: _modified(path) for path in files}
     scan = _Scan(folder, store, Path(cases_root), settings, now, decider, own)
     with _unpacking(Path(cases_root), files) as scratch:          # the attachments of the e-mails, until the scan is done

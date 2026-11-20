@@ -307,9 +307,9 @@ button.primary:disabled {{ background: {LINE}; border-color: {LINE}; color: {MUT
    at the top; the library lays out such a row as the fields in a form block of their own, then the buttons */
 .row > .form ~ button {{ align-self: flex-end; }}
 
-/* In Exact invoeren: the top pair of buttons and their answer stay at the top of the window while the list scrolls, and a box that
-   the keyboard reaches never hides under them */
-#hand-actions {{ position: sticky; top: 0; z-index: 5; background: {GROUND}; padding: 8px 0; }}
+/* In Exact invoeren: the top pair of buttons and their answer stay above the form labels (z-index 40) while the list scrolls,
+   and a box that the keyboard reaches never hides under them */
+#hand-actions {{ position: sticky; top: 0; z-index: 41; background: {GROUND}; padding: 8px 0; }}
 .block.hand-rows input, .hand-copy button {{ scroll-margin-top: 148px; }}
 
 /* In Exact invoeren: behind each row its copy buttons, which the page's script draws (PAGE_JS) and which name the text they copy:

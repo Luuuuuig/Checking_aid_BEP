@@ -19,6 +19,7 @@ from aid.execution.writer import PREPARED_FILE, PreparedWriter, WriteLog, WriteL
 from aid.notify import list_link
 from aid.pipeline import record_dispositions, run_case
 from aid.po_store import PoStore
+from aid.pricelist import store_current
 from aid.review.hand_list import ids_of
 from aid.review.i18n import STRINGS
 from aid.review.page import _undo_choices, build_app, import_gradio
@@ -37,7 +38,7 @@ LIST_HANDLERS = {"list_opened", "changes_entered", "changes_dropped", "block_ent
                  "change_put_back"}
 ROWS = ["Inkooporder 250108 (S08), regel 1 (KM-0801): prijs 12,50 → 12,70",
         "Inkooporder 250114 (S14), regel 1 (KM-1401): leverdatum 16-11-2026 → week 48 (2026)",
-        "artikel KM-0801: inkoopprijs onbekend → 12,70"]
+        "artikel KM-0801: nieuwe inkoopprijs 12,70 (geen vorige prijs in deze wijziging)"]
 
 
 def settings_file(tmp_path: Path, **values) -> Path:
@@ -114,6 +115,24 @@ def test_the_label_counts_the_open_changes(tmp_path, madeup_out):
     assert listed["tab"]["label"] == "In Exact invoeren" and listed["rows"]["choices"] == [] and listed["block"]["choices"] == []
     assert listed["intro"] == f"{NL['hand_intro']}\n\n{NL['hand_nothing']}" and NL["hand_nothing"] == "Er is niets in te voeren."
     assert shown(page, "list_opened", "en")["intro"].endswith("\n\nThere is nothing to enter.")
+
+
+def test_an_article_price_from_a_case_does_not_take_its_old_value_from_the_export(tmp_path, madeup_out):
+    page, prepared, d = tab_page(tmp_path, madeup_out, cases=("MU08",))
+    root = d.settings.cases_root
+    exported = articles_export(tmp_path, "artikelen.csv", [["KM-0801", "Ring", "12,40"]])
+    store_current(root, Path(exported), ARTICLE_COLUMNS, True, datetime(2026, 11, 11, 9), "S08")
+    before = (prepared / PREPARED_FILE).read_bytes()
+    [change] = [change for change in open_changes(prepared) if change.article_code == "KM-0801"]
+
+    for language, expected in (
+        ("nl", "artikel KM-0801: nieuwe inkoopprijs 12,70 (geen vorige prijs in deze wijziging)"),
+        ("en", "article KM-0801: new purchase price 12.70 (no previous price recorded for this change)"),
+    ):
+        rows = shown(page, "list_opened", language)["rows"]["choices"]
+        assert (expected, "+".join(change.ids)) in rows
+    assert (change.old_value, change.new_value) == (None, "12.70")
+    assert (prepared / PREPARED_FILE).read_bytes() == before
 
 
 def test_ticked_rows_are_entered_or_dropped(tmp_path, madeup_out):
@@ -1136,7 +1155,7 @@ def test_the_documents_say_what_the_third_review_round_settled():
     assert "the sign-in of the mailbox had lapsed, check in Exact" in two_six
     newer = "Inkooporder 250108 (S08), regel 1 (KM-0801): prijs 12,70 → 12,50"
     assert f"\"{NL['hand_put_back_not_needed'].format(row=newer)}\"" in two_six
-    article = "artikel KM-0801: inkoopprijs onbekend → 12,90"
+    article = "artikel KM-0801: nieuwe inkoopprijs 12,90 (geen vorige prijs in deze wijziging)"
     assert f"\"{NL['hand_put_back_newer_never'].format(row=article)}\"" in two_six
     assert "A put-back is a row of its own" in two_six and "makes a new put-back" in two_six
     assert "unless the marks say that Exact holds this change's old value already" in two_six
@@ -1307,7 +1326,7 @@ def test_the_style_keeps_the_pair_in_view_and_gives_each_standing_line_its_look(
     by_id = {block.elem_id: block for block in page.blocks.values() if getattr(block, "elem_id", None)}
     css = look.PAGE_CSS
     for rule in (".gradio-container { overflow: clip; }",
-                 f"#hand-actions {{ position: sticky; top: 0; z-index: 5; background: {look.GROUND}; padding: 8px 0; }}",
+                 f"#hand-actions {{ position: sticky; top: 0; z-index: 41; background: {look.GROUND}; padding: 8px 0; }}",
                  ".block.hand-rows input, .hand-copy button { scroll-margin-top: 148px; }",
                  f".block.notice, #pricelist-notice {{ background: {look.TINT}; border: 0; border-left: 4px solid {look.CONTROL}; border-radius: 6px; "
                  "padding: 12px 16px; }",

@@ -871,7 +871,7 @@ def test_a_try_out_whose_case_cannot_be_read_at_the_press_is_passed_over(tmp_pat
 
 def test_the_press_reads_a_try_out_cart_page_as_a_try_out_and_a_suppliers_document_as_none(tmp_path, madeup_out):
     """S1: the press judges a case by its document as is_tryout tells a try-out, a try-out confirmation and a try-out cart page
-    alike (a close's mark_for_sending reads a PDF only); a supplier's document read now bears no mark, and a case that is not there
+    alike, as mark_for_sending does for a close. A supplier's document read now bears no mark, and a case that is not there
     cannot be judged."""
     from datetime import date
 

@@ -340,6 +340,32 @@ def carried(page, listed: str, supplier: str | None, view: dict | None, columns:
     return called(page, "pricelist_carried_out", CARRIED_OUT, listed, supplier, *(OWN if columns is None else columns), view, language)
 
 
+@pytest.mark.parametrize("language, old, new, precise", [
+    ("nl", "0,60", "0,70", "1,2345"),
+    ("en", "0.60", "0.70", "1.2345"),
+])
+def test_numeric_workbook_prices_show_at_least_two_decimals_on_the_page(tmp_path, madeup_out, language, old, new, precise):
+    page, d, clock = pricelist_page(tmp_path, madeup_out)
+    filed(page, tmp_path, "S01", name="artikelen.xlsx", rows=[["KM-1001", "Slang", 0.6], ["KM-1002", "Klem", 1]])
+    listed = write_xlsx(tmp_path / "lijst.xlsx", [
+        ("KM-1001", 0.7, 1, None, None, None, None),
+        ("KM-1002", 1.2345, 1, None, None, None, None),
+        ("KM-9999", 2, 1, None, None, None, None),
+    ])
+    clock.later(1)
+
+    view = viewed(page, str(listed), "S01", language=language)
+    assert [row[1:3] for row in view["table"]["data"]] == [
+        [old, new], ["1,00" if language == "nl" else "1.00", precise], ["", ""],
+    ]
+    assert current_prices(d.settings.cases_root, "S01")[0] == {"KM-1001": "0.6", "KM-1002": "1"}
+    done = carried(page, str(listed), "S01", view["viewed"], language=language)
+    assert done["table"] == view["table"]
+    assert [(row["old_value"], row["new_value"]) for row in prepared_rows(d.settings.cases_root / "prepared")] == [
+        ("0.6", "0.7"), ("1", "1.2345"),
+    ]
+
+
 def test_two_suppliers_exports_one_after_the_other_keep_each_others_prices(tmp_path, madeup_out):
     """Amendment 1 on the page: the export of a second supplier leaves the first supplier's prices as they are, the dropdown offers both
     suppliers, and a newer export of the first replaces its own prices only."""
@@ -603,7 +629,7 @@ def test_the_columns_of_a_list_are_kept_for_the_supplier_and_filled_again(tmp_pa
     columns = ["Artikelnummer", "Nettoprijs", "Per", "Ingangsdatum", ""]
     clock.later(10)
     view = viewed(page, listed, "S01", columns)
-    assert view["table"]["data"] == [["KM-1001", "12,50", "12,7", "prijs verandert"],
+    assert view["table"]["data"] == [["KM-1001", "12,50", "12,70", "prijs verandert"],
                                      ["KM-1002", "8,00", "", "prijs per ander aantal: niet vergeleken"]]            # rule 6: per one only
     before = (path.read_bytes(), path.stat().st_mtime_ns)
     assert carried(page, listed, "S01", view["viewed"], columns)["note"] == "1 prijswijziging staat op de lijst In Exact invoeren."
@@ -864,7 +890,7 @@ def test_only_the_sheet_the_buyer_sees_is_read(tmp_path, madeup_out):
     fields = called(page, "pricelist_file_chosen", LIST_CHOSEN, listed, "S01", "nl")
     assert fields["note"] == "" and [fields[name]["value"] for name in COLUMN_FIELDS] == ["item_code", "price", "", "", ""]
     view = viewed(page, listed, "S01", ["item_code", "price", "", "", ""])
-    assert view["table"]["data"] == [["KM-1001", "12,5", "12,7", "prijs verandert"]]
+    assert view["table"]["data"] == [["KM-1001", "12,50", "12,70", "prijs verandert"]]
     assert view["note"] == "1 prijs verandert, 0 blijven gelijk, 0 rijen overgeslagen."
     # two sheets with rows: no row of either is compared, at the choice of the file and at the view, and the press has nothing
     both = sheets_file(tmp_path, "lijsten.xlsx", [("Slangen", [head, ["KM-1001", 12.7]], "visible"),

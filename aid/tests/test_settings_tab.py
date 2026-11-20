@@ -1337,19 +1337,101 @@ def test_the_copilot_test_sends_one_chat_and_shows_the_first_20_characters_of_th
     assert ACCESS_TOKEN not in note and handler(page, "test_copilot")("", CLIENT_ID, "nl") == STRINGS["nl"]["settings_ids_needed"]
 
 
-@pytest.mark.parametrize("app, session, error", [
+def unreachable_service(request):
+    raise requests.ConnectionError("made-up transport detail")
+
+
+@pytest.mark.parametrize("app, session, detail, dutch, english", [
+    (FakeApp(accounts=[USERNAME]), copilot_session(created=FakeResponse(400, json_data={"error": {"code": "BadRequest"}})),
+     "400 BadRequest", "Controleer of uw werkaccount de vereiste licentie heeft en test de verbinding opnieuw.",
+     "Check that your work account has the required licence and test the connection again."),
     (FakeApp(accounts=[USERNAME]), copilot_session(created=FakeResponse(403, json_data={"error": {"code": "Forbidden", "message": "made-up"}})),
-     "Copilot refused: 403 Forbidden"),
-    (FakeApp(accounts=[USERNAME]), copilot_session(lambda request: copilot_answer(None, sent_text(request))),      # the recap alone
-     "Copilot gave no answer"),
+     "403 Forbidden", "Controleer de machtigingen en de toestemming van uw beheerder en test de verbinding opnieuw.",
+     "Check the permissions and your administrator's consent and test the connection again."),
+    (FakeApp(accounts=[USERNAME]), copilot_session(created=FakeResponse(429)),
+     "429", "De dienst heeft te veel verzoeken ontvangen, dus probeer het later opnieuw.",
+     "The service received too many requests, so try again later."),
+    (FakeApp(accounts=[USERNAME]), copilot_session(created=FakeResponse(500, json_data={"error": {"code": "MadeUp"}})),
+     "500 MadeUp", "Geef de weigering van de verbindingstest (code 500) door aan de onderzoeker.",
+     "Report the rejected connection test (code 500) to the researcher."),
+    (FakeApp(accounts=[USERNAME]), copilot_session(created=unreachable_service),
+     "ConnectionError", "Probeer het later opnieuw, want de dienst is niet bereikbaar.",
+     "Try again later because the service is unreachable."),
+    (FakeApp(accounts=[USERNAME]), copilot_session(lambda request: copilot_answer(None, sent_text(request))),
+     "gave no answer", "De dienst gaf geen bruikbaar antwoord op de verbindingstest.",
+     "The service gave no usable answer to the connection test."),
     (FakeApp(accounts=[USERNAME]), copilot_session(lambda request: copilot_answer("Sorry.", sent_text(request), state="disengagedForRai")),
-     "Copilot ended the conversation: disengagedForRai"),
-    (FakeApp(), copilot_session("OK"), "no Microsoft account is signed in: sign in again on the Settings tab of the review page"),
+     "disengagedForRai", "De dienst gaf geen bruikbaar antwoord op de verbindingstest.",
+     "The service gave no usable answer to the connection test."),
+    (FakeApp(accounts=[USERNAME]), copilot_session(lambda request: copilot_answer("Sorry.", sent_text(request), state="403")),
+     "ended the conversation: 403", "De dienst gaf geen bruikbaar antwoord op de verbindingstest.",
+     "The service gave no usable answer to the connection test."),
+    (FakeApp(), copilot_session("OK"), "no Microsoft account is signed in",
+     "Meld u opnieuw aan en voer de verbindingstest opnieuw uit.", "Sign in again and repeat the connection test."),
 ])
-def test_the_copilot_test_shows_the_error_text_and_never_a_message_of_microsoft(tmp_path, madeup_out, app, session, error):
-    path, page, made = tab(tmp_path, madeup_out, app=app, session=session)
+def test_the_service_test_localises_errors_and_logs_the_client_detail(tmp_path, madeup_out, caplog, app, session, detail, dutch, english):
+    _, page, _ = tab(tmp_path, madeup_out, app=app, session=session)
+    test = handler(page, "test_copilot")
+    assert test(TENANT_ID, CLIENT_ID, "nl") == dutch
+    assert test(TENANT_ID, CLIENT_ID, "en") == english
+    assert [record.name for record in caplog.records if detail in record.getMessage()] == ["aid.review.page"] * 2
+    assert "made-up" not in caplog.text and ACCESS_TOKEN not in caplog.text
+
+
+def test_the_service_test_reports_a_local_failure_without_exposing_its_text(tmp_path, madeup_out, caplog, monkeypatch):
+    def broken(*args):
+        raise RuntimeError("private local detail")
+
+    monkeypatch.setattr("aid.review.page.CopilotClient.ask", broken)
+    _, page, _ = tab(tmp_path, madeup_out, app=FakeApp(accounts=[USERNAME]))
     note = handler(page, "test_copilot")(TENANT_ID, CLIENT_ID, "en")
-    assert note == STRINGS["en"]["settings_ai_failed"].format(error=error) and "made-up" not in note
+    assert note == "The connection test failed due to a local error."
+    assert "RuntimeError" in caplog.text and "private local detail" not in caplog.text
+
+
+@pytest.mark.parametrize("reason, message", [
+    ("NO_TEST_MODE", "Turn on test mode before testing the demonstration service."),
+    ("NO_KEY", "Set the key for the demonstration service before testing it."),
+    ("NO_LIBRARY", "Install the library for the demonstration service before testing it."),
+])
+def test_the_service_test_localises_demonstration_setup_errors(tmp_path, madeup_out, caplog, monkeypatch, reason, message):
+    from aid.readers import stand_in
+
+    detail = getattr(stand_in, reason)
+
+    def unavailable(*args, **kwargs):
+        raise ValueError(detail)
+
+    monkeypatch.setattr(stand_in, "active", lambda: True)
+    monkeypatch.setattr(stand_in, "stand_in_for", unavailable)
+    _, page, _ = tab(tmp_path, madeup_out)
+    assert handler(page, "test_copilot")("", "", "en") == message
+    assert " ".join(detail.split()) in caplog.text
+
+
+@pytest.mark.parametrize("error_name, status, message", [
+    ("APIConnectionError", None, "Try again later because the service is unreachable."),
+    ("APITimeoutError", None, "Try again later because the service is unreachable."),
+    ("RateLimitError", 429, "The service received too many requests, so try again later."),
+    ("AuthenticationError", 401, "Check the key for the demonstration service and test the connection again."),
+    ("APIStatusError", 503, "Report the rejected connection test (code 503) to the researcher."),
+])
+def test_the_demonstration_service_test_reports_connection_and_status_errors(
+        tmp_path, madeup_out, caplog, monkeypatch, error_name, status, message):
+    from aid.readers import stand_in
+
+    class Unavailable:
+        name = "example"
+
+        def complete(self, request):
+            error = type(error_name, (Exception,), {"status_code": status})
+            raise error("private service detail")
+
+    monkeypatch.setattr(stand_in, "active", lambda: True)
+    monkeypatch.setattr(stand_in, "stand_in_for", lambda settings, test_text: stand_in.StandIn(Unavailable(), test_text=test_text))
+    _, page, _ = tab(tmp_path, madeup_out)
+    assert handler(page, "test_copilot")("", "", "en") == message
+    assert error_name in caplog.text and "private service detail" not in caplog.text
 
 
 def test_the_choice_of_the_reader_is_written_to_the_settings_file_and_shown_when_the_tab_opens(tmp_path, madeup_out):

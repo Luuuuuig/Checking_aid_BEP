@@ -439,14 +439,15 @@ def test_another_mailbox_is_read_by_its_address_with_the_shared_scopes_and_start
 
 # --- the trigger in the runner's pass ---
 
-def confirmation_email() -> bytes:
-    """A made-up supplier's e-mail with the confirmation of the made-up PO 250101 (aid/madeup/out) attached, as Graph gives it ($value)."""
+def confirmation_email(attachment: Path = REPO_ROOT / "aid" / "madeup" / "out" / "MU01_conf.pdf", *, with_text: bool = True) -> bytes:
+    """A made-up supplier's e-mail with a PDF attached, as Graph gives it ($value). By default it confirms PO 250101."""
     mail = EmailMessage()
-    mail["From"], mail["To"], mail["Subject"] = "s01@example.com", USERNAME, "Orderbevestiging"
+    mail["From"], mail["To"] = "s01@example.com", USERNAME
     mail["Message-ID"] = "<made-up-0001@example.com>"
-    mail.set_content("Bijgaand onze orderbevestiging.")
-    mail.add_attachment((REPO_ROOT / "aid" / "madeup" / "out" / "MU01_conf.pdf").read_bytes(), maintype="application", subtype="pdf",
-                        filename="MU01_conf.pdf")
+    if with_text:
+        mail["Subject"] = "Orderbevestiging"
+        mail.set_content("Bijgaand onze orderbevestiging.")
+    mail.add_attachment(attachment.read_bytes(), maintype="application", subtype="pdf", filename=attachment.name)
     return bytes(mail)
 
 
@@ -457,12 +458,13 @@ def mail_deps(tmp_path, madeup_out, clock=None):
     return d.model_copy(update={"settings": mail_settings(tmp_path), "clock": clock or (lambda: NOW)})
 
 
-def test_the_pass_reads_the_mailbox_before_the_scan_so_that_a_confirmation_opens_its_case_in_that_pass(tmp_path, madeup_out):
+@pytest.mark.parametrize("with_text", [True, False], ids=["with-subject-and-body", "without-subject-or-body"])
+def test_the_pass_reads_the_mailbox_before_the_scan_so_that_a_confirmation_opens_its_case_in_that_pass(tmp_path, madeup_out, with_text):
     d = mail_deps(tmp_path, madeup_out)
     received = "2026-11-12T08:00:30Z"
     session = FakeSession({("GET", baseline()): page([], delta_link=DELTA_1),
                            ("GET", DELTA_1): page([message("M1", received)], delta_link=DELTA_2),
-                           ("GET", value_url("M1")): FakeResponse(content=confirmation_email())})
+                           ("GET", value_url("M1")): FakeResponse(content=confirmation_email(with_text=with_text))})
     account, stop, root = signed_in_account(tmp_path), tmp_path / "STOP", tmp_path / "cases"
     assert run_loop(d, stop, poll_seconds=0, max_passes=1, account=account, session=session) == 1     # the baseline is taken
     assert not list(root.glob("250101_*"))
@@ -474,6 +476,26 @@ def test_the_pass_reads_the_mailbox_before_the_scan_so_that_a_confirmation_opens
     # the e-mail the mailbox saved is a file of the watched folder: the tab 'Bestanden' names what came of its attachment (Task 37)
     assert [(line["file"], line["outcome"], line["detail"]) for line in recent(root)] == [
         (f"{eml_name('M1', received)}/MU01_conf.pdf", "case", case.name)]
+
+
+def test_a_scan_from_the_signed_in_mailbox_without_subject_or_body_is_listed_for_the_buyer(tmp_path, madeup_out):
+    d = mail_deps(tmp_path, madeup_out)
+    attachment = madeup_out / "MU05_conf.pdf"
+    received = "2026-11-12T08:00:30Z"
+    session = FakeSession({("GET", baseline()): page([], delta_link=DELTA_1),
+                           ("GET", DELTA_1): page([message("M1", received)], delta_link=DELTA_2),
+                           ("GET", value_url("M1")): FakeResponse(content=confirmation_email(attachment, with_text=False))})
+    account, stop, root = signed_in_account(tmp_path), tmp_path / "STOP", tmp_path / "cases"
+
+    assert run_loop(d, stop, poll_seconds=0, max_passes=2, account=account, session=session) == 2
+
+    name = eml_name("M1", received)
+    label, reason = f"{name}/MU05_conf.pdf", "no text layer; class unknown"
+    assert list(root.glob("*/case.json")) == []
+    assert [(line["file"], line["outcome"], line["detail"]) for line in recent(root)] == [(label, "skipped", reason)]
+    [item] = [json.loads(line) for line in (root / "review_items.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert (item["file"], item["reason"], item["sha256"]) == (label, reason, hashlib.sha256(attachment.read_bytes()).hexdigest())
+    assert (d.settings.watched_folder / "processed" / name).is_file()
 
 
 def mailbox_lines(root: Path) -> list[str]:

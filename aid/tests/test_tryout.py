@@ -803,7 +803,7 @@ def test_the_list_marks_the_changes_of_try_out_documents(tmp_path, madeup_out, m
             for language in ("nl", "en")}
     assert rows["nl"] == ["Inkooporder 250101 (S01), regel 1 (KM-1001): prijs 12,50 → 12,63 (proefdocument)",
                           "Inkooporder 250108 (S08), regel 1 (KM-0801): prijs 12,50 → 12,70",
-                          "artikel KM-0801: inkoopprijs onbekend → 12,70", "artikel KM-1001: inkoopprijs onbekend → 12,63 (proefdocument)"]
+                          "artikel KM-0801: nieuwe inkoopprijs 12,70 (geen vorige prijs in deze wijziging)", "artikel KM-1001: nieuwe inkoopprijs 12,63 (geen vorige prijs in deze wijziging) (proefdocument)"]
     assert [text.endswith(" (try-out document)") for text in rows["en"]] == [True, False, False, True] and passed == 0
     assert sum(change.tryout for change in open_changes(settings.cases_root / "prepared")) == 2
     before = {path: path.read_bytes() for path in tryout.root.rglob("*") if path.is_file()}
@@ -930,8 +930,8 @@ def test_a_try_out_has_a_place_of_its_own_on_the_list(tmp_path, madeup_out):
             runner_pass(settings, d.store)
         prepared = settings.cases_root / "prepared"
         listed = sorted((change.state, change.tryout, hand_list.row_text(change, settings.cases_root, "nl")) for change in changes(prepared)[0])
-        assert listed == [("open", False, "artikel KM-0801: inkoopprijs onbekend → 12,70"), ("open", False, "regel 1 (KM-0801): prijs 12,50 → 12,70"),
-                          ("open", True, "artikel KM-0801: inkoopprijs onbekend → 12,63 (proefdocument)"),
+        assert listed == [("open", False, "artikel KM-0801: nieuwe inkoopprijs 12,70 (geen vorige prijs in deze wijziging)"), ("open", False, "regel 1 (KM-0801): prijs 12,50 → 12,70"),
+                          ("open", True, "artikel KM-0801: nieuwe inkoopprijs 12,63 (geen vorige prijs in deze wijziging) (proefdocument)"),
                           ("open", True, "regel 1 (KM-0801): prijs 12,50 → 12,63 (proefdocument)")], order
         made_up = [entry_id for change in open_changes(prepared) if change.tryout for entry_id in change.ids]
         assert mark(prepared, made_up, "dropped", NOW) == 2
@@ -1490,7 +1490,7 @@ def test_the_case_of_a_try_out_cart_takes_its_orders_supplier_and_never_the_page
     assert r.supplier is None and r.digest_line == "voorcontrole PO 250150: afgesloten, 2 voorbereide wijzigingen"
     assert load_case(settings.cases_root, answer.case_id).read_step("route")["context"]["supplier"] == ""
     listed = sorted(hand_list.row_text(change, settings.cases_root, "nl") for change in changes(settings.cases_root / "prepared")[0])
-    assert listed == ["artikel KM-0801: inkoopprijs onbekend → 12,63 (proefdocument)", "regel 1 (KM-0801): prijs 12,50 → 12,63 (proefdocument)"]
+    assert listed == ["artikel KM-0801: nieuwe inkoopprijs 12,63 (geen vorige prijs in deze wijziging) (proefdocument)", "regel 1 (KM-0801): prijs 12,50 → 12,63 (proefdocument)"]
     assert CART_HEADING not in (settings.cases_root / answer.case_id / "steps" / "08_result.json").read_text(encoding="utf-8")
     real = precheck(html.replace(CART_HEADING, "S08"), "https://shop.example.com/cart", capture_deps(settings, d.store), settings)
     assert next(r for r in results(settings) if r.case_id == real.case_id).supplier == "S08"       # a webshop's cart: the page's name
@@ -1575,8 +1575,8 @@ def test_a_case_made_from_a_try_out_cart_has_every_guard_of_a_try_out(tmp_path, 
         assert precheck(page, SHOP_URL, capture_deps(settings, d.store), settings).verdict == "match"
     prepared = settings.cases_root / "prepared"
     listed = sorted((change.state, change.tryout, hand_list.row_text(change, settings.cases_root, "nl")) for change in changes(prepared)[0])
-    assert listed == [("open", False, "artikel KM-0801: inkoopprijs onbekend → 12,63"), ("open", False, "regel 1 (KM-0801): prijs 12,50 → 12,63"),
-                      ("open", True, "artikel KM-0801: inkoopprijs onbekend → 12,63 (proefdocument)"),
+    assert listed == [("open", False, "artikel KM-0801: nieuwe inkoopprijs 12,63 (geen vorige prijs in deze wijziging)"), ("open", False, "regel 1 (KM-0801): prijs 12,50 → 12,63"),
+                      ("open", True, "artikel KM-0801: nieuwe inkoopprijs 12,63 (geen vorige prijs in deze wijziging) (proefdocument)"),
                       ("open", True, "regel 1 (KM-0801): prijs 12,50 → 12,63 (proefdocument)")]
 
 
@@ -1605,6 +1605,31 @@ def test_a_try_out_cart_page_is_known_by_its_bytes_and_its_first_heading(tmp_pat
     assert read == ["tryout.html", "copy.htm", "later.html", "text.html", "split.html"]     # only a page that holds the text is read
     assert not asked("page.txt", page) and not aid.tryout_mark.is_tryout(tmp_path / "missing.html")
     assert aid.tryout_mark.is_tryout(tmp_path / "tryout.html") and len(read) == 5            # asked again: the answer is kept
+
+
+@pytest.mark.parametrize("suffix, heading, held, expected", [
+    (".html", aid.tryout_mark.CART_HEADING, False, True),
+    (".htm", "Made-up supplier shop", False, False),
+    (".HTM", aid.tryout_mark.CART_HEADING, True, None),
+    (".htm", "Made-up supplier shop", True, None),
+], ids=["try-out cart", "supplier cart", "held try-out cart", "held supplier cart"])
+def test_sending_judges_a_cart_page_by_its_contents(tmp_path, monkeypatch, suffix, heading, held, expected):
+    """Before sending, the case's cart must be readable and its first heading tells whether it is a try-out."""
+    cart = tmp_path / f"cart{suffix}"
+    cart.write_text(f"<html><body><h1>{heading}</h1></body></html>", encoding="utf-8")
+    case = open_upload_case(tmp_path / "cases", [cart], "250108", "cart", NOW)
+    if held:
+        assert tryout_case(case) is (heading == aid.tryout_mark.CART_HEADING)   # the close checks the case before it needs to send
+        read_bytes = Path.read_bytes
+
+        def held_read(path):
+            if path == case.input_files[0]:
+                raise PermissionError("made-up: another program holds the cart page")
+            return read_bytes(path)
+
+        monkeypatch.setattr(Path, "read_bytes", held_read)
+        monkeypatch.setattr(aid.tryout_mark, "READ_PAUSE", 0)
+    assert aid.tryout_mark.mark_for_sending(case) is expected
 
 
 def test_the_digest_marks_a_try_out_cart_and_it_is_no_suppliers_first_case(tmp_path, madeup_out):

@@ -362,7 +362,8 @@ LEESMIJ = ("Deze map is de inkoopassistent. Buiten deze map zet de assistent all
            "het tabblad is al ingesteld: kies S04, geef de prijslijst en druk op Bekijken.",
            "In de map data staan de instellingen en alle documenten die de assistent verwerkt: kopieer of verstuur die map niet.",
            "Zet deze map op de eigen schijf van de pc, niet in een map die met OneDrive wordt gesynchroniseerd; verplaatst u de map, "
-           "dubbelklik dan opnieuw op Inkoopassistent starten.",
+           "dubbelklik dan opnieuw op Inkoopassistent starten. "
+           r"Kies een kort pad zoals C:\Inkoopassistent, want Windows kan paden van meer dan 260 tekens weigeren.",
            "Bijwerken: stop de assistent, verwijder in deze map alles behalve de map data, zet alles wat in de map van de nieuwe versie "
            "staat in deze map, ook de bestanden waarop u dubbelklikt, en start opnieuw; de map data blijft staan. Het zip-bestand van "
            "een nieuwe versie bevat een map Inkoopassistent: pak het eerst uit op een andere plek, bijvoorbeeld in Downloads, en zet "

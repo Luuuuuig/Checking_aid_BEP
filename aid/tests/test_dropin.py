@@ -71,6 +71,12 @@ def test_drop_gives_a_safe_free_name_and_never_half_a_file(tmp_path, monkeypatch
     assert sorted(path.name for path in inbox.iterdir()) == before
 
 
+def test_a_file_given_to_the_watched_folder_cannot_take_a_windows_device_name(tmp_path):
+    inbox = tmp_path / "inbox"
+    given = drop(source(tmp_path), "NUL.pdf", inbox)
+    assert given.name == "_NUL.pdf" and given.read_bytes() == CONTENT
+
+
 def test_an_empty_file_is_refused(tmp_path):
     """An empty file is refused with ValueError, which names no file and no value, and nothing is written: no file and no folder."""
     inbox = tmp_path / "inbox"

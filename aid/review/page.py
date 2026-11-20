@@ -187,7 +187,7 @@ invoeren" (hand_list.TAB, "invoeren"), "Prijslijst" (pricelist_page.TAB, "prijsl
 The tab "In Exact invoeren" lists what the buyer enters in Exact by hand: the open changes of <cases_root>/prepared
 (aid/execution/by_hand.py), as aid/review/hand_list.py shows them: the rows of the purchase orders, by order, each named
 "Inkooporder 250108 (S08), regel 1 (KM-0801): prijs 12,50 → 12,70", and after them the article prices, each named "artikel KM-0801:
-inkoopprijs onbekend → 12,70". Its label is "In Exact invoeren (3)" with the number of open changes, without a number when none is
+nieuwe inkoopprijs 12,70 (geen vorige prijs in deze wijziging)". Its label is "In Exact invoeren (3)" with the number of open changes, without a number when none is
 open, and "In Exact invoeren (?)" while the list cannot be read. Its controls are fixed, none made in a rendered function and every
 button outside the rows, so that each handler is one of the page's functions (the tests find them by name): the intro, with under it
 the line of the test mode while the setting test_mode is true ("Proefstand: voer deze wijzigingen alleen in het test-Exact in."), the
@@ -628,7 +628,9 @@ import asyncio
 import hashlib
 import io
 import json
+import logging
 import math
+import os
 import re
 import tempfile
 import threading
@@ -706,7 +708,8 @@ SEND_VIA = get_args(Settings.model_fields["send_via"].annotation)     # the valu
 READERS = get_args(Settings.model_fields["reader"].annotation)        # the values of reader: "llm" (Copilot) and "parser"
 COPILOT_TEST = "Answer with the word OK only."                         # the message of "Copilot testen"
 MAIL_STEPS = ("ids", "sign_in", "mailbox", "send", "read")             # the five numbered steps of "Postvak en AI" ("mail_step:<step>")
-_STATUS_CODE = re.compile(r"\b[1-5][0-9]{2}\b")  # a status code of HTTP in an error of Copilot: three digits, standing on their own
+_STATUS_CODE = re.compile(r"^[A-Za-z]+ refused: ([1-5][0-9]{2})\b")
+_LOG = logging.getLogger(__name__)
 # The label on the tab of each setting the tab writes, by which a refused field is named, never by its value: the eight of the mailbox,
 # the reader, the twelve of the buyer's form, the four supplier settings by the heading of the suppliers, the three fields of the
 # supplier form (the keys of with_supplier's problems), the layout of the purchase order and its senders of the block "Koppeling met
@@ -1053,10 +1056,12 @@ def _local(moment: datetime) -> datetime:
 def _formed(value: str, field: str, language: str) -> str:
     """A value of a row in the form of the language, as the tab "In Exact invoeren" shows a value (hand_list._value): a price or a
     quantity in normal form (aid/schema.py) with the decimal mark of the language, 12,50 in Dutch and 12.50 in English, and a day, a
-    week or a range of days as 16-11-2026, "week 47 (2026)" or its two days joined by "/", in both languages; a value that is not in
-    normal form (the text as printed, where the reader could not read a value) and a value of any other field, as it is."""
+    week or a range of days as 16-11-2026, "week 47 (2026)" or its two days joined by "/", in both languages; the unit for pieces
+    by its label. Leave a value that the reader could not read or that has no label as it is."""
     if field in ("price", "quantity") and _NUMBER.fullmatch(value):
         return hand_list._value(value, "po_line_price", language)
+    if field == "unit" and value == "pc":
+        return STRINGS[language]["unit:pc"]
     return hand_list._value(value, "po_line_date", language) if field == "delivery_date" else value
 
 
@@ -1275,7 +1280,7 @@ def close_text(case: Case, deps: Deps, language: str) -> tuple[str, bool]:
         causes = dict.fromkeys(f"not_sent:{message.get('cause')}" for message in unsent)
         text += " " + " ".join([strings["message_not_sent"], *(strings[cause] for cause in causes if cause in strings)])
     if folder is not None and any(message["status"] == SENT for message in record["messages"]):
-        text += " " + strings["message_filed"].format(folder=folder)
+        text += " " + strings["message_filed"].format(folder=hand_list._markdown(folder))
     if any(message.get("unconfirmed") for message in record["messages"]):
         text += " " + strings["message_unconfirmed"]
     if record.get("question_open"):
@@ -1287,12 +1292,14 @@ def _files_folder(deps: Deps) -> str | None:
     """The folder that a message of a close is written into as a file, in the words the page names it by; None when the mailer
     sends, or has no route (it then writes nothing: aid/review/close.py). That is the file mailer of send_via "file", or the
     one of the Deps the page was given; the mailer of send_via "auto" never writes a file by choice. A folder inside the cases
-    folder is named by its path from there, the cases folder's own name first ("cases/outbox"); any other by its name."""
+    folder is named by its path from there, the cases folder's own name first, with the system's path separator; any other by its name."""
     mailer = deps.mailer
     if not isinstance(mailer, FileMailer) or mailer.unrouted is not None:
         return None
     cases, out = Path(deps.settings.cases_root).resolve(), mailer.out_dir.resolve()
-    return f"{cases.name}/{out.relative_to(cases).as_posix()}" if out.is_relative_to(cases) and out != cases else out.name
+    if out.is_relative_to(cases) and out != cases:
+        return os.sep.join((cases.name, *out.relative_to(cases).parts))
+    return out.name
 
 
 def _unrouted(deps: Deps) -> str | None:
@@ -1441,13 +1448,13 @@ class _Live:
     opened or looked at (missing, or held by another program for a moment), also when it comes back with the time it had. take()
     puts the settings a save of the settings tab wrote into the Deps at once, and settings() gives the settings in use, which the
     settings tab shows when its file cannot be read. The Deps the page was given are never changed: a new copy carries the new
-    settings. sending() gives the Deps of a close: those of now(), with the mailer that `mailer` makes of their settings at that
+    settings. sending() gives the Deps of a close: those of look(), with the mailer that `mailer` makes of their settings at that
     moment, when the page builds its own (see "The mailer of a close" in the module docstring); without `mailer` the Deps keep
     the mailer they were given. While the settings file cannot be read (unread: its last look failed), the Deps of a close carry
     a mailer that sends nothing and writes nothing (NoRoute of aid/messaging), so that no message goes out by settings the owner
     has since changed: the route and the supplier's address of the settings read before may be the very thing the edit was to
     correct. look() gives the Deps of one look together with whether the file could not be read at that look, taken under the
-    lock, for the button into Exact, which judges its gate by that pair."""
+    lock. Both the close and the button into Exact judge by that pair."""
 
     def __init__(self, deps: Deps, file: Path | None, mailer: Callable[[Deps], Mailer] | None = None):
         self.deps, self.file, self.modified, self.mailer = deps, file, _modified(file), mailer
@@ -1460,8 +1467,7 @@ class _Live:
 
     def look(self) -> tuple[Deps, bool]:
         """The Deps of one look, as now() gives them, and whether the settings file could not be read at that very look (unread),
-        taken together under the lock, so that another look between the two cannot give the one without the other: the button
-        into Exact judges its gate by this pair."""
+        taken together under the lock, so that another look between the two cannot give the one without the other."""
         with self.lock:
             deps = self._looked()
             return deps, self.unread
@@ -1483,10 +1489,10 @@ class _Live:
         return self.deps
 
     def sending(self) -> Deps:
-        deps = self.now()
+        deps, unread = self.look()
         if self.mailer is None:
             return deps
-        return deps.model_copy(update={"mailer": NoRoute("settings") if self.unread else self.mailer(deps)})
+        return deps.model_copy(update={"mailer": NoRoute("settings") if unread else self.mailer(deps)})
 
     def take(self, settings: Settings) -> None:
         with self.lock:
@@ -2826,7 +2832,17 @@ def _pricelist_tab(gr, app, language, pricelist_tab, live: _Live, tab: _Tab, cas
             return {}, False
 
     def table_of(rows: list[list[str]], language_now: str) -> dict:
-        return {"headers": pricelist_page.headers(language_now), "data": rows}
+        """Pad prices in the table to two decimal places while keeping any further digits."""
+        mark = "," if language_now == "nl" else "."
+
+        def with_decimals(price: str) -> str:
+            if not price:
+                return ""
+            whole, _, fraction = price.partition(mark)
+            return f"{whole}{mark}{fraction.ljust(2, '0')}"
+
+        return {"headers": pricelist_page.headers(language_now),
+                "data": [[article, with_decimals(old), with_decimals(new), outcome] for article, old, new, outcome in rows]}
 
     def state_of(name: str, stored: dict, language_now: str) -> str:
         """The state line of the supplier, its name and the file of its export shown as they are (_literal); for a name that is no
@@ -5102,8 +5118,7 @@ def _ai_section(gr, app, language, tab: _Tab, tenant, client, mailbox, account_s
         yield _account_text(account, strings), strings["settings_ai_signed_in"]
 
     def test_copilot(tenant_now: str, client_now: str, language_now: str) -> str:
-        """One message to Copilot: the first 20 characters of its answer, or the error of the client (no token, no text of Microsoft).
-        While the stand-in for Copilot is on (aid/readers/stand_in.py), the message goes to the stand-in, with no account."""
+        """Test the connection with one message and show the start of the answer or a sentence for the kind of failure."""
         strings = STRINGS[language_now]
         if stand_in.active():
             settings, line = read(strings)
@@ -5111,20 +5126,16 @@ def _ai_section(gr, app, language, tab: _Tab, tenant, client, mailbox, account_s
                 return line
             try:
                 answer = stand_in.stand_in_for(settings, test_text=COPILOT_TEST).ask(COPILOT_TEST).text
-            except (ValueError, ReaderError) as error:
-                return strings["settings_ai_failed"].format(error=error)
             except Exception as error:
-                return strings["settings_failed"].format(code=type(error).__name__)
+                return _service_test_failure(error, strings, demonstration=True)
             return strings["settings_ai_answer"].format(answer=" ".join(answer.split())[:20])
         account, refused = begin(tenant_now, client_now, strings, elsewhere=True)
         if refused:
             return refused
         try:
             answer = CopilotClient(account, session=tab.session).ask(COPILOT_TEST).text
-        except (CopilotError, ReaderError, SignInNeeded) as error:
-            return strings["settings_ai_failed"].format(error=error)
         except Exception as error:
-            return strings["settings_failed"].format(code=type(error).__name__)
+            return _service_test_failure(error, strings)
         return strings["settings_ai_answer"].format(answer=" ".join(answer.split())[:20])
 
     def copilot_refusal(settings: Settings, strings: dict[str, str]) -> str | None:
@@ -5295,6 +5306,36 @@ def _refusal_text(error: Exception, strings: dict[str, str]) -> str:
     return strings["settings_store_refused"]
 
 
+def _service_test_failure(error: Exception, strings: dict[str, str], *, demonstration: bool = False) -> str:
+    """Put client details in the page process log and give the buyer one sentence for the kind of failure."""
+    kind, code = "local", None
+    detail = type(error).__name__
+    if isinstance(error, (CopilotError, ReaderError, SignInNeeded)):
+        kind, code = _copilot_cause(error)
+        if kind == "code":
+            kind = code if f"settings_ai_test:{code}" in strings else "refused"
+        detail = str(error)
+    elif demonstration:
+        kind, code, detail = _demonstration_test_failure(error)
+    _LOG.warning("Service test failed: %s", " ".join(detail.split()))
+    return strings[f"settings_ai_test:{kind}"].format(code=code)
+
+
+def _demonstration_test_failure(error: Exception) -> tuple[str, str | None, str]:
+    """Classify demonstration client errors using their class or status, without logging the response body."""
+    name = type(error).__name__
+    if isinstance(error, ValueError):
+        setup = {stand_in.NO_TEST_MODE: "test_mode", stand_in.NO_KEY: "missing_key", stand_in.NO_LIBRARY: "missing_library"}
+        if (kind := setup.get(str(error))) is not None:
+            return kind, None, str(error)
+    if name in ("APIConnectionError", "APITimeoutError"):
+        return "unreachable", None, name
+    if isinstance(status := getattr(error, "status_code", None), int) and 400 <= status <= 599:
+        kind = {401: "key_refused", 403: "key_refused", 429: "429"}.get(status, "refused")
+        return kind, str(status), f"{name} ({status})"
+    return "local", None, name
+
+
 def _copilot_cause(error: Exception) -> tuple[str, str | None]:
     """Why Copilot did not answer the test of a choice, by the error of its client (aid/readers/copilot_client.py), as the status
     module tells the runner's note of it: "sign_in" for a sign-in to make (SignInNeeded), "unreachable" for a Copilot not reached,
@@ -5304,8 +5345,8 @@ def _copilot_cause(error: Exception) -> tuple[str, str | None]:
     if isinstance(error, CopilotError):
         if str(error).startswith(UNREACHABLE.partition(":")[0]):
             return "unreachable", None
-        if (code := _STATUS_CODE.search(str(error))) is not None:
-            return "code", code.group()
+        if (code := _STATUS_CODE.match(str(error))) is not None:
+            return "code", code[1]
     return "other", None
 
 

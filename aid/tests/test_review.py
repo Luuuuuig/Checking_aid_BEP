@@ -2,6 +2,7 @@
 close and the undo, the strings of the page, the construction of the page and its command, on the made-up set."""
 import inspect
 import json
+import ntpath
 import os
 import re
 import shutil
@@ -9,6 +10,7 @@ import socket
 import subprocess
 import sys
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from email import message_from_bytes, policy
 from pathlib import Path
@@ -19,7 +21,7 @@ import pytest
 from aid.case import load_case
 from aid.comparison import Detail, Findings, Flag, Reason
 from aid.execution.writer import PreparedWriter, RetryingWriter, UnknownWrite, UnverifiedWrite, WriteLog, WriteLogEntry, WriterError
-from aid.messaging import FileMailer
+from aid.messaging import FileMailer, NoRoute
 from aid.pipeline import CaseResult, ReviewItem, escalate_pending, run_case
 from aid.po_store import PoStore
 from aid.readers.pdf_text import render_page
@@ -28,7 +30,7 @@ from aid.review.__main__ import main as review_main
 from aid.review.app import (CaseSummary, FlagRow, build_app, close_case, decide, import_gradio, list_open_cases, load_case_view, page_rows,
                             undo)
 from aid.review.i18n import STRINGS
-from aid.review.page import _article_items, _decision_choices, close_text, undo_text
+from aid.review.page import _Live, _article_items, _decision_choices, close_text, undo_text
 from aid.schema import DocValue
 from aid.settings import load_settings
 from aid.sources.upload import open_upload_case
@@ -1506,8 +1508,8 @@ STORE = (f"{NOT_SENT} De beveiligde opslag van de aanmelding op deze pc is gewei
          "en AI, staat waarom en wat u kunt doen; sluit de zaak daarna opnieuw af.")
 
 
-def filed(language: str, folder: str = "cases/outbox") -> str:
-    return STRINGS[language]["message_filed"].format(folder=folder)
+def filed(language: str, folder: str = os.sep.join(("cases", "outbox"))) -> str:
+    return STRINGS[language]["message_filed"].format(folder=folder.replace("\\", "\\\\"))
 
 
 @pytest.fixture
@@ -1971,8 +1973,9 @@ UNREAD = {"nl": "Een antwoord bij deze zaak kan nu niet worden gelezen: sluit de
 OPEN = {"nl": "Vraag aan de leverancier staat open.", "en": "A question to the supplier is open."}
 
 
-def written(language: str, folder: str = "cases/outbox") -> str:
+def written(language: str, folder: str = os.sep.join(("cases", "outbox"))) -> str:
     """The page's sentence after a close whose message was written as a file into this folder, by the owner's choice."""
+    folder = folder.replace("\\", "\\\\")
     return {"nl": f"Het bericht is niet verstuurd maar als bestand klaargezet ({folder}): de instellingen laten berichten als bestand schrijven.",
             "en": f"The message was not sent but written as a file ({folder}): the settings have messages written as files."}[language]
 
@@ -2212,6 +2215,42 @@ def test_a_failed_look_at_the_settings_file_does_not_stick(tmp_path, madeup_out,
     assert len(smtp_server) == 1 and len(sent_lines(c)) == 1
 
 
+def test_sending_keeps_the_read_status_of_its_own_settings_look(tmp_path, madeup_out, monkeypatch):
+    """A look that reads the edited file after the close unlocks must not let that close send with earlier settings."""
+    earlier = deps(tmp_path, madeup_out)
+    settings = earlier.settings.model_copy(update={"supplier_emails": {"S07": "new-orders@example.org"}})
+    current = earlier.model_copy(update={"settings": settings})
+    reads = iter(((earlier, True), (current, False)))
+    mailer = FileMailer(tmp_path / "outbox", sender="aid@example.org", clock=earlier.clock)
+    routed = []
+
+    def make_mailer(deps):
+        routed.append(deps)
+        return mailer
+
+    def looked(state):
+        state.deps, state.unread = next(reads, (current, False))
+        return state.deps
+
+    live = _Live(earlier, None, make_mailer)
+    lock = live.lock
+
+    @contextmanager
+    def another_look_after_unlock():
+        with lock:
+            yield
+        live.lock = lock
+        live.now()
+
+    monkeypatch.setattr(_Live, "_looked", looked)
+    live.lock = another_look_after_unlock()
+    first = live.sending()
+    assert first.settings is earlier.settings and live.deps is current
+    assert isinstance(first.mailer, NoRoute) and first.mailer.unrouted == "settings"
+    assert routed == []
+    assert live.sending().mailer is mailer and routed == [current]
+
+
 def test_with_send_via_auto_the_route_is_judged_once_per_message(tmp_path, madeup_out):
     """Ruling C8. send_via "auto", a folder chosen and the account signed in: the close judges the route once, and the mailer that
     judgement gives is the one that sends. When the store of the sign-in cannot be read at the next look (or the account is signed
@@ -2343,8 +2382,9 @@ def test_a_message_written_as_a_file_by_choice_counts_and_names_its_folder(tmp_p
     [eml] = (tmp_path / "cases" / "outbox").glob("*.eml")
     assert (read_eml(eml)["To"], read_eml(eml)["X-Aid-Case"]) == (SUPPLIER, c.case_id)
     assert [line["message_id"] for line in sent_lines(c)] == [eml.stem] and c.read_step("result")["status"] == "waiting"
-    assert STRINGS[language]["message_filed"].format(folder="cases/outbox") == written(language) and not (tmp_path / "given").exists()
-    for folder, words in ((tmp_path / "given", "given"), (tmp_path / "cases" / "uit" / "post", "cases/uit/post")):       # a page given its own mailer
+    assert filed(language) == written(language)
+    assert not (tmp_path / "given").exists()
+    for folder, words in ((tmp_path / "given", "given"), (tmp_path / "cases" / "uit" / "post", os.sep.join(("cases", "uit", "post")))):
         own = d.model_copy(update={"mailer": FileMailer(folder, sender="aid@example.com", clock=lambda: NOW)})
         second = asked_on_the_page(own, madeup_out, now=LATER + timedelta(minutes=len(words)))
         assert close_text(second, own, language) == (f"{WAITING[language]} {written(language, words)}", False)
@@ -2352,6 +2392,28 @@ def test_a_message_written_as_a_file_by_choice_counts_and_names_its_folder(tmp_p
     kept, _ = run(d, madeup_out, "MU07", "250107", now=LATER)
     decide(kept, "RI1", "keep")
     assert pressed_close(page, kept, language) == (CLOSED[language], None)
+
+
+def test_a_filed_messages_folder_uses_the_windows_separator(tmp_path, madeup_out, monkeypatch):
+    from types import SimpleNamespace
+
+    from markdown_it import MarkdownIt
+
+    from aid.review import page as review_page
+
+    _, d, page, _ = sending_page(tmp_path, madeup_out, send_via="file", **MAILBOX)
+    case = asked_on_the_page(d, madeup_out)
+    monkeypatch.setattr(review_page, "os", SimpleNamespace(sep=ntpath.sep), raising=False)
+
+    expected = written("nl", ntpath.join("cases", "outbox"))
+    assert pressed_close(page, case, "nl") == (f"{WAITING['nl']} {expected}", None)
+    assert len(list((tmp_path / "cases" / "outbox").glob("*.eml"))) == 1
+    folder = tmp_path / "cases" / "_mail" / "(archive)"
+    own = d.model_copy(update={"mailer": FileMailer(folder, sender="aid@example.com", clock=lambda: NOW)})
+    second = asked_on_the_page(own, madeup_out, now=LATER)
+    text, _ = close_text(second, own, "nl")
+    assert ntpath.join("cases", "_mail", "(archive)") in MarkdownIt().renderInline(text)
+    assert len(list(folder.glob("*.eml"))) == 1
 
 
 @pytest.mark.parametrize("language", ["nl", "en"])
@@ -3316,6 +3378,13 @@ def test_no_text_says_that_a_message_is_written_as_a_file_for_want_of_a_way_to_s
     assert STRINGS["nl"]["settings_via:auto"].endswith("anders de SMTP-server als die is ingesteld; anders wordt niets verzonden")
     assert STRINGS["en"]["settings_via:auto"].endswith("else the SMTP server when it is set up; else nothing is sent")
     assert "only the digest is written into `cases/outbox/`" in texts["MANUAL.md"] and "message not sent" in texts["README.md"]
+
+
+def test_the_review_page_manual_explains_the_browser_language_for_uploads():
+    manual = (REPO_ROOT / "aid" / "MANUAL.md").read_text(encoding="utf-8")
+    review_page = manual.split("### 2.2 The review page\n", 1)[1].split("\n### 2.3 ", 1)[0]
+    assert "Set your browser's display language to Dutch" in review_page
+    assert '"Drop File Here"' in review_page
 
 
 def test_the_manual_says_what_a_write_made_and_not_verified_is_and_what_an_undo_restores():
@@ -5089,7 +5158,9 @@ def test_the_lists_show_numbers_and_days_in_the_language_form(tmp_path, madeup_o
     matches = {language: {(row[1], row[2]): row[3:5] for row in page_rows(view.matches, language)} for language in ("nl", "en")}
     assert matches["nl"][("Prijs", "1")] == ["980,00", "980,00"] and matches["en"][("Price", "1")] == ["980.00", "980.00"]
     assert matches["nl"][("Leverdatum", "2")] == matches["en"][("Delivery date", "2")] == ["16-11-2026", "16-11-2026"]
-    assert matches["nl"][("Aantal", "2")] == ["4", "4"] and matches["nl"][("Eenheid", "2")] == ["pc", "pc"]
+    assert matches["nl"][("Aantal", "2")] == ["4", "4"]
+    assert matches["nl"][("Eenheid", "2")] == ["st", "st"]
+    assert matches["en"][("Unit", "2")] == ["pc", "pc"]
     assert matches["nl"][("Regel aanwezig", "2")] == ["aanwezig", "aanwezig"] and matches["en"][("Line present", "2")] == ["present", "present"]
     printed = FlagRow(item_id="RI1", field="price", line="1", po_value="1.234,50", doc_value="12,50 EUR", po_source="", doc_source="",
                       thumbnail=None, reason="price above threshold")
@@ -5098,6 +5169,9 @@ def test_the_lists_show_numbers_and_days_in_the_language_form(tmp_path, madeup_o
         assert page_rows([printed], language)[0][3:5] == ["1.234,50", "12,50 EUR"]              # as printed: not read as a value
     assert page_rows([week], "nl")[0][3:5] == ["week 47 (2026)", "eind november"] and page_rows([week], "en")[0][3] == "week 47 (2026)"
     assert page_rows([printed.model_copy(update={"field": "quantity", "po_value": "2.5", "doc_value": "-1.25"})], "nl")[0][3:5] == ["2,5", "-1,25"]
+    units = printed.model_copy(update={"field": "unit", "po_value": "kg", "doc_value": "doos"})
+    for language in ("nl", "en"):
+        assert page_rows([units], language)[0][3:5] == ["kg", "doos"]
 
 
 def test_the_case_list_names_the_order_the_count_and_the_day(tmp_path, madeup_out):

@@ -106,14 +106,18 @@ def mark_for_sending(case: Case) -> bool | None:
     cannot be judged, because the case has no document, its file is gone or its first page cannot be read in READ_TRIES tries.
     tryout_case counts a document that cannot be read as a supplier's, so that a real case is never held back; for sending that
     is the wrong side to err on, since a message about a made-up document would reach a real supplier, so here nothing is
-    guessed. A document that is no PDF can bear no mark, and is judged by its file being there."""
+    guessed. A PDF or cart page has the same marks as in is_tryout. The close reads a cart page again before sending, even when
+    an earlier check has read it. A document of any other kind can bear no mark, and is judged by its file being there."""
     if not case.input_files:
         return None
     path = Path(case.input_files[0])
+    suffix = path.suffix.lower()
     for left in reversed(range(READ_TRIES)):
         try:
+            if suffix in PAGES:
+                return _cart_page_is_tryout(path)
             held = path.stat()
-            return path.suffix.lower() == ".pdf" and _first_row_is_tryout(str(path), held.st_size, held.st_mtime_ns)
+            return suffix == ".pdf" and _first_row_is_tryout(str(path), held.st_size, held.st_mtime_ns)
         except FileNotFoundError:
             return None
         except Exception:                        # held for a moment, being written, or no file that can be read at all
@@ -181,11 +185,16 @@ def _tried(read) -> bool:
     return False
 
 
+def _cart_page_is_tryout(path: Path) -> bool:
+    return CART_HEADING.encode("utf-8") in path.read_bytes() and first_heading(path) == CART_HEADING
+
+
 @lru_cache(maxsize=4096)
 def _first_row_is_tryout(path: str, size: int, modified: int) -> bool:
     """is_tryout for a file of this size and modification time: the size and the time are part of the key, so that a file written
     again is read again. A read that fails raises, and lru_cache keeps no exception: the cache never holds a failure."""
-    if Path(path).suffix.lower() in PAGES:
-        return CART_HEADING.encode("utf-8") in Path(path).read_bytes() and first_heading(Path(path)) == CART_HEADING
-    lines = extract_lines(Path(path))
+    document = Path(path)
+    if document.suffix.lower() in PAGES:
+        return _cart_page_is_tryout(document)
+    lines = extract_lines(document)
     return is_tryout_text("\n".join(line.text for line in lines if line.page == 1))

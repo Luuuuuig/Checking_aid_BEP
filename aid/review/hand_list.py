@@ -159,7 +159,8 @@ def blocks(open_: list[Change], store: PoStore, cases_root: Path, language: str,
 def row_text(change: Change, cases_root: Path, language: str) -> str:
     """One change as its row shows it (see the module docstring), with "Terugzetten: " before the row of a put-back and
     "(proefdocument)" behind the row of a change of try-out documents. A put-back without a value to put back shows "leeg" for it
-    when the field was empty before the write it puts back (_emptied), and "onbekend" when the aid knows no old value."""
+    when the field was empty before the write it puts back (_emptied), and "onbekend" when the aid knows no old value. A new
+    article price without a recorded previous value uses its own label."""
     strings = STRINGS[language]
     old, new = (_value(value, change.kind, language) for value in (change.old_value, change.new_value))
     emptied = _emptied(change, cases_root)
@@ -167,7 +168,12 @@ def row_text(change: Change, cases_root: Path, language: str) -> str:
     mark = f" {strings['hand_tryout']}" if change.tryout else ""
     if change.kind == ARTICLE_KIND:
         back = change.rule_id == UNDO_RULE_ID and change.new_value is None and not emptied
-        text = strings["hand_row:article_price_back" if back else "hand_row:article_price"].format(item=change.article_code, old=old, new=new)
+        key = "hand_row:article_price"
+        if back:
+            key = "hand_row:article_price_back"
+        elif change.old_value is None and change.new_value is not None:
+            key = "hand_row:article_price_unrecorded"
+        text = strings[key].format(item=change.article_code, old=old, new=new)
     else:
         item = item_code(change, cases_root) or strings["hand_unknown"]
         text = strings[f"hand_row:{change.kind}"].format(line=change.line_id, item=item, old=old, new=new)
