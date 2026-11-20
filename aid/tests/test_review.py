@@ -3749,14 +3749,16 @@ def test_a_close_and_the_tab_beoordelen_read_the_counts_again_at_once(tmp_path, 
         pressed = handler_of(page, name)
         chain = [f for f in page.fns.values() if f.trigger_after == pressed._id]
         names = [getattr(f.fn, "__name__", "") for f in chain]
-        assert names == ["strip_after_close", "queue_after_close", "hand_label_read", "next_offered", *(["<lambda>"] if name == "close" else [])], name
+        assert names == ["frame_after_close", "strip_after_close", "queue_after_close", "hand_label_read", "next_offered",
+                         *(["<lambda>"] if name == "close" else [])], name
         assert [chain_after(page, f) for f in chain] == [[]] * len(chain), name             # nothing waits for another
-        after_strip, after_queue, label, offered = chain[:4]
+        after_frame, after_strip, after_queue, label, offered = chain[:5]
+        assert after_frame.inputs == handler_of(page, "case_framed").inputs, name
         assert after_strip.inputs == strip.inputs and after_strip.outputs == strip.outputs, name
         assert after_queue.inputs == queue.inputs and after_queue.outputs == queue.outputs and after_queue.preprocess is False, name
         assert label.outputs == [hand_tab] and [block.label for block in label.inputs] == [nl["language"]], name
         assert offered.outputs == [by_elem_id(page)["review-next-preview"], by_elem_id(page)["review-next"]], name
-        assert all(f.queue is False and f.show_progress == "hidden" for f in chain[:4]), name
+        assert all(f.queue is False and f.show_progress == "hidden" for f in chain[:5]), name
     assert review_tab in queue.outputs
     case, _ = run(d, madeup_out, "MU07", "250107")
     first = called(page, "queue_ticked", "nl", case.case_id, None)
@@ -5723,4 +5725,33 @@ def test_review_tab_has_one_primary_action_in_idle_review_and_failed_states(tmp_
     assert close_btn.variant == "primary"
 
 
-
+def test_closing_a_case_hides_the_closed_case_block_immediately(tmp_path, madeup_out):
+    """WP19 item 6: after Zaak afsluiten (or Als afgehandeld noteren), the closed case's block (review-case, review-evidence,
+    close button, handled button, undo block and rendered decision state) clears immediately through unqueued handlers instead of
+    standing visibly behind the queued view refresh; a case that stays open in review remains visible."""
+    _, d, page, _ = sending_page(tmp_path, madeup_out, send_via="file")
+    review, _ = run(d, madeup_out, "MU07", "250107")
+    assert handler_of(page, "case_framed").queue is False
+    for press_name in ("close", "handled_marked"):
+        pressed = handler_of(page, press_name)
+        framed_after = [f for f in page.fns.values() if f.trigger_after == pressed._id and getattr(f.fn, "__name__", "") == "frame_after_close"]
+        assert len(framed_after) == 1, press_name
+        assert framed_after[0].queue is False and framed_after[0].show_progress == "hidden", press_name
+    frame_after = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == "frame_after_close"][0]
+    out_names = [getattr(b, "elem_id", None) or getattr(b, "label", None) or getattr(b, "value", None) or type(b).__name__
+                 for b in frame_after.outputs]
+    closed_map = dict(zip(out_names, frame_after.fn(None, "nl")))
+    assert closed_map["review-case"] == HIDDEN
+    assert closed_map["review-evidence"] == HIDDEN
+    assert closed_map[STRINGS["nl"]["close"]] == HIDDEN
+    assert closed_map["review-handled"] == HIDDEN
+    assert closed_map["review-undo"] == HIDDEN
+    assert closed_map["State"] is None
+    assert closed_map["review-next-preview"] == {"__type__": "update"}
+    assert closed_map["review-next"] == {"__type__": "update"}
+    still_open_map = dict(zip(out_names, frame_after.fn(review.case_id, "nl")))
+    assert still_open_map["review-case"] == SHOWN
+    assert still_open_map["review-evidence"] == SHOWN
+    assert still_open_map[STRINGS["nl"]["close"]] == SHOWN
+    assert still_open_map["review-undo"] == {"__type__": "update"}
+    assert still_open_map["State"] == {"__type__": "update"}

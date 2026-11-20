@@ -2725,3 +2725,18 @@ def test_pricelist_table_shows_empty_state_until_viewed(tmp_path, madeup_out):
         {"__type__": "update", "value": EN["pricelist_table_empty"], "visible": False},
     )
 
+
+def test_pricelist_five_column_fields_align_on_one_line_at_1366_px(tmp_path, madeup_out):
+    """WP19 item 6: the five column dropdowns on Prijslijst sit inside #pricelist-columns-row, styled as a five-column
+    bottom-aligned grid at 1366 px so a two-line label never pushes its dropdown below the others, with responsive wrap."""
+    from aid.review import look
+    gr = import_gradio()
+    page, d, clock = pricelist_page(tmp_path, madeup_out)
+    by_id = {block.elem_id: block for block in inside(pricelist_tab(page)) if getattr(block, "elem_id", None)}
+    row = by_id["pricelist-columns-row"]
+    assert isinstance(row, gr.Row)
+    columns = [by_id[f"pricelist-column-{column}"] for column in LIST_COLUMNS]
+    assert len(columns) == 5 and all(col in inside(row) for col in columns)
+    css = look.PAGE_CSS
+    assert "#pricelist-columns-row > .form { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); align-items: end;" in css
+    assert "@media (max-width: 1024px)" in css and "grid-template-columns: repeat(2, minmax(0, 1fr));" in css

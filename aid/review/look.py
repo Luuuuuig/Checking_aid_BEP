@@ -359,9 +359,17 @@ button.secondary:disabled {{ background: {SURFACE_2}; border-color: {LINE_STRONG
 #pricelist-remove {{ flex: 0 0 auto; width: auto; }}
 #pricelist-remove-confirm {{ align-items: center; background: {TINT}; border-left: 4px solid {CONTROL}; border-radius: 6px; padding: 12px 16px; }}
 
-/* Prijslijst: the five fields of the columns of a price list keep their words clear of the dropdown's arrow, and end a long title
-   with "..." */
+/* Prijslijst: the five fields of the columns of a price list align level on one line at desktop width, wrap cleanly when zoomed,
+   keep their words clear of the dropdown's arrow, and end a long title with "..." */
+#pricelist-columns-row > .form {{ display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); align-items: end; gap: 12px; width: 100%; }}
+#pricelist-columns-row > .form > .block {{ min-width: 0; }}
 #pricelist-column-item_code input, #pricelist-column-price input, #pricelist-column-basis input, #pricelist-column-valid_from input, #pricelist-column-valid_to input {{ padding-right: 28px; text-overflow: ellipsis; }}
+@media (max-width: 1024px) {{
+  #pricelist-columns-row > .form {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
+}}
+@media (max-width: 560px) {{
+  #pricelist-columns-row > .form {{ grid-template-columns: 1fr; }}
+}}
 
 /* short fields (a percentage, an amount, a number of days, a time) at most 16 rem wide */
 .block.short-field textarea, .block.short-field input {{ max-width: 16rem; }}

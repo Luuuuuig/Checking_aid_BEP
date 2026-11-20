@@ -2013,6 +2013,17 @@ def _page(gr, deps: Deps, tab: _Tab):
                 gr.update(value="", visible=False) if case_id else gr.update(),
                 gr.update(visible=False) if case_id else gr.update())
 
+    def frame_after_close(case_id: str | None, language_now: str) -> tuple:
+        """After "Zaak afsluiten" or "Als afgehandeld noteren": hide the closed case's parts, its undo block and its rendered
+        decision state at once without waiting for the queue or the view; when the case stayed open in review (case_id is still set),
+        frame it as case_framed does and leave the undo block and state untouched."""
+        if not case_id:
+            return (gr.update(visible=True), gr.update(), gr.update(), gr.update(value="", visible=False),
+                    gr.update(value="", visible=False), gr.update(visible=False), gr.update(visible=False),
+                    gr.update(visible=True), gr.update(visible=False), gr.update(visible=False),
+                    gr.update(), gr.update(), gr.update(visible=False), None)
+        return (*case_framed(case_id, language_now), gr.update(), gr.update())
+
     def record_shown(current: dict | None, language_now: str) -> tuple:
         """The state of the view changed (show), or the language switched: the comparison of the case chosen, each of its three lists
         as its table or, while it has no row, one sentence in its place ("empty:<list>"), and the part to undo a write, shown while the
@@ -2282,16 +2293,19 @@ def _page(gr, deps: Deps, tab: _Tab):
         case_choice.change(case_framed, inputs=[case_choice, language],
                            outputs=[pick_row, pick, oldest, gone, failed_notice, close_button, handled, decisions_title, case_part, evidence_part,
                                     next_preview, next_case],
-                           show_progress="hidden")
+                           show_progress="hidden", queue=False)
         language.change(failed_relabel, inputs=[language, case_choice], outputs=[failed_notice, handled], show_progress="hidden",
                         preprocess=False, queue=False)
         gr.on(triggers=[oldest.click, next_case.click], fn=oldest_opened, inputs=language, outputs=case_choice, show_progress="hidden")
         marked = handled.click(handled_marked, inputs=[case_choice, language], outputs=[status, case_choice], show_progress="hidden")
-        # a close, or a failed case noted as handled, changes the counts: the strip, the fold, the case list, the label of each tab
-        # with a count and the next-case preview and button beside the answer follow at once, through handlers of their own (see
-        # strip_after_close), without the queue as on the timer, each straight after the press, which the browser sends together,
-        # so that none waits for another or for the view of the case
+        # a close, or a failed case noted as handled, clears the closed case's parts and changes the counts: frame_after_close hides
+        # the closed case's block at once without waiting for the queue or the view, and the strip, the fold, the case list, the
+        # label of each tab with a count and the next-case preview and button beside the answer follow at once alongside it
         for pressed in (closed, marked):
+            pressed.then(frame_after_close, inputs=[case_choice, language],
+                         outputs=[pick_row, pick, oldest, gone, failed_notice, close_button, handled, decisions_title, case_part, evidence_part,
+                                  next_preview, next_case, undo_part, state],
+                         show_progress="hidden", queue=False)
             pressed.then(strip_after_close, inputs=language, outputs=[strip, *([strip_action] if acting else []), fold, fold_table],
                          show_progress="hidden", queue=False)
             pressed.then(queue_after_close, inputs=[language, case_choice, listed],
@@ -3259,7 +3273,7 @@ def _pricelist_tab(gr, app, language, pricelist_tab, live: _Live, tab: _Tab, cas
         export_note = gr.Markdown("", elem_id="pricelist-export-note", elem_classes=["answer"], latex_delimiters=[])
         with gr.Column(visible=False, elem_id="pricelist-list-part") as list_part:
             list_file = gr.File(label=first["pricelist_list"], type="filepath", elem_id="pricelist-list", height=140)   # any file, as the export's
-            with gr.Row():
+            with gr.Row(elem_id="pricelist-columns-row"):
                 chosen = [gr.Dropdown(choices=offered([], first), value="", label=first[f"pricelist_column:{column}"],
                                       elem_id=f"pricelist-column-{column}") for column in columns_of]
             hint = gr.Markdown(first["pricelist_columns_hint"], elem_id="pricelist-columns-hint")
