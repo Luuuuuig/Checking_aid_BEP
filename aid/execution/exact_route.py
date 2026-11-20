@@ -280,7 +280,7 @@ def route_read(put: Change, found: Iterable[Change], logged: list[dict], latest:
     marked entered by WRITTEN by the list's own reading (`found`, every change of the list as by_hand.changes gives them: no later
     mark of that entry ended, replaced or overrode the aid's tick, such as a print's "reopened" or the buyer's tick after it), and
     the last line of the route's log that names that entry is a verified write (written_line). None otherwise. The note of the
-    put-back's row (_put_back_held) and the note of "Terugdraaien in Exact" (aid/review/hand_list.py) both read it."""
+    put-back's row (_put_back_held) and the note of "Oude waarde op de lijst zetten" (aid/review/hand_list.py) both read it."""
     if put.puts_back is None:
         return None
     owner = next((one for one in found if put.puts_back in one.ids), None)

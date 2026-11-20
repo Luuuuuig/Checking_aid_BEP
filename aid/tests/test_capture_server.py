@@ -1886,7 +1886,7 @@ def test_main_gives_the_server_its_settings_file_and_a_rebuild_as_main_builds_th
 
 def test_a_put_back_waiting_on_the_list_is_no_undo_until_it_is_entered(capture_server, madeup_out):
     """The reviewers' sequence (Task 35's review round, K3): a cart case closed with the cart's price confirmed (B01), the change
-    ticked as entered on the list and then put back ("Terugdraaien in Exact"). While the put-back waits on the list, the pre-check
+    ticked as entered on the list and then put back ("Oude waarde op de lijst zetten"). While the put-back waits on the list, the pre-check
     keeps the write and says that the put-back is on the list, never "wijziging ongedaan gemaakt"; once the put-back is ticked as
     entered, the write is undone and the line is a difference again."""
     from aid.execution.by_hand import changes, mark
@@ -1943,7 +1943,7 @@ def _cart_01(capture_server, madeup_out) -> tuple:
 
 def test_a_put_back_of_a_change_asked_again_waits_on_the_list_and_the_pre_check_says_so(capture_server, madeup_out):
     """The checkers' sequence (second review round, K10): CART02's line 2 confirmed by the buyer (B01 40.00 -> 41.00) and ticked; a
-    newer change of the line that the buyer drops; then 41.00 asked once more by another document ("already"). "Terugdraaien in Exact"
+    newer change of the line that the buyer drops; then 41.00 asked once more by another document ("already"). "Oude waarde op de lijst zetten"
     makes a put-back that stands open on the list, and until it is entered the pre-check keeps the write with "terugzetten staat op de
     lijst In Exact invoeren", never "wijziging ongedaan gemaakt"; once it is entered, the line is a difference again."""
     from aid.execution.by_hand import changes, mark

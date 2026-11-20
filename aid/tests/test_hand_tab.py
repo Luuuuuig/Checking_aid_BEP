@@ -113,8 +113,9 @@ def test_the_label_counts_the_open_changes(tmp_path, madeup_out):
         mark(prepared, change.ids, "entered", datetime(2026, 11, 12, 10, 0))
     listed = shown(page, "list_opened", "nl")
     assert listed["tab"]["label"] == "In Exact invoeren" and listed["rows"]["choices"] == [] and listed["block"]["choices"] == []
-    assert listed["intro"] == f"{NL['hand_intro']}\n\n{NL['hand_nothing']}" and NL["hand_nothing"] == "Er is niets in te voeren."
-    assert shown(page, "list_opened", "en")["intro"].endswith("\n\nThere is nothing to enter.")
+    assert listed["intro"] == f"{NL['hand_intro']}\n\n{NL['hand_nothing']}"
+    assert NL["hand_nothing"] == "Er is niets in te voeren. Nieuwe wijzigingen komen hier vanzelf na een controle of een besluit op Beoordelen."
+    assert shown(page, "list_opened", "en")["intro"].endswith(f"\n\n{EN['hand_nothing']}")
 
 
 def test_an_article_price_from_a_case_does_not_take_its_old_value_from_the_export(tmp_path, madeup_out):
@@ -191,7 +192,7 @@ def test_nothing_ticked_writes_nothing(tmp_path, madeup_out):
         for name in ("changes_entered", "changes_dropped"):
             result = shown(page, name, nothing, language)
             assert result["note"] == strings["hand_tick_first"] and result["tab"]["label"] == strings["hand_tab_count"].format(n=3)
-        assert shown(page, "block_entered", None if language == "nl" else "", {}, language)["note"] == strings["hand_tick_first"]
+        assert shown(page, "block_entered", None if language == "nl" else "", {}, language)["note"] == strings["hand_choose_first"]
     assert (NL["hand_tick_first"], EN["hand_tick_first"]) == ("Vink eerst aan wat u bedoelt.", "Tick what you mean first.")
     assert not (prepared / MARKS_FILE).exists() and len(open_changes(prepared)) == 3
 
@@ -312,8 +313,14 @@ def test_switching_the_language_relabels_the_tab_and_keeps_what_is_ticked(tmp_pa
     assert rows["value"] == [price] and (block["value"], block["label"]) == ("po:250114", "Purchase order or article prices")   # a row no longer listed is let go
     assert seen["po:250108"] == [price]
     assert [update["value"] for update in (refresh, entered_above, dropped_above, whole)] == [
-        "Refresh the list", "The ticked rows have been entered", "Do not enter the ticked rows", "All of this has been entered"]
-    assert handler(page, "hand_relabel")("nl", [], "po:999")[3]["value"] is None
+        "Refresh the list", "The ticked rows have been entered (1)", "Do not enter the ticked rows (1)", "All of this has been entered"]
+    assert entered_above["interactive"] is True and dropped_above["interactive"] is True
+    empty_relabel = handler(page, "hand_relabel")("nl", [], "po:999")
+    assert empty_relabel[3]["value"] is None
+    assert (empty_relabel[7], empty_relabel[8]) == (
+        {"__type__": "update", "value": NL["hand_entered"], "interactive": False},
+        {"__type__": "update", "value": NL["hand_dropped"], "interactive": False},
+    )
 
 
 def test_the_tab_is_wired_as_the_page_shows_it(tmp_path, madeup_out):
@@ -535,7 +542,10 @@ def test_the_texts_of_the_tab_in_both_languages():
     brief = {"hand_tab": ("In Exact invoeren", "Enter in Exact"), "hand_tab_count": ("In Exact invoeren ({n})", "Enter in Exact ({n})"),
              "hand_intro": ("De assistent verandert zelf niets in Exact. Voer deze wijzigingen in Exact in en vink aan wat u hebt ingevoerd.",
                             "The assistant changes nothing in Exact itself. Enter these changes in Exact and tick what you have entered."),
-             "hand_nothing": ("Er is niets in te voeren.", "There is nothing to enter."),
+             "hand_nothing": ("Er is niets in te voeren. Nieuwe wijzigingen komen hier vanzelf na een controle of een besluit op Beoordelen.",
+                              "There is nothing to enter. New changes appear here automatically after a check or a decision on Review."),
+             "hand_done_empty": ("Nog geen afgehandelde wijzigingen in de laatste 14 dagen. Wijzigingen die u afvinkt of laat vallen, verschijnen hier.",
+                                 "No handled changes in the last 14 days yet. Changes you tick off or drop appear here."),
              "hand_block_po": ("Inkooporder {number} ({supplier})", "Purchase order {number} ({supplier})"),
              "hand_block_articles": ("Artikelprijzen", "Article prices"),
              "hand_row:po_line_price": ("regel {line} ({item}): prijs {old} → {new}", "line {line} ({item}): price {old} → {new}"),
@@ -546,7 +556,9 @@ def test_the_texts_of_the_tab_in_both_languages():
              "hand_hint": ("Let op: na deze wijziging moet de inkooporder opnieuw gefiatteerd worden.",
                            "Note: after this change the purchase order must be approved again."),
              "hand_entered": ("Aangevinkte regels zijn ingevoerd", "The ticked rows have been entered"),
+             "hand_entered_count": ("Aangevinkte regels zijn ingevoerd ({n})", "The ticked rows have been entered ({n})"),
              "hand_dropped": ("Aangevinkte regels niet invoeren", "Do not enter the ticked rows"),
+             "hand_dropped_count": ("Aangevinkte regels niet invoeren ({n})", "Do not enter the ticked rows ({n})"),
              "hand_block_entered": ("Alles hiervan is ingevoerd", "All of this has been entered"),
              "hand_block": ("Inkooporder of artikelprijzen", "Purchase order or article prices"),
              "hand_tick_first": ("Vink eerst aan wat u bedoelt.", "Tick what you mean first."),
@@ -810,7 +822,7 @@ def chosen_of(sections: dict, words: str) -> str:
 
 def test_a_tick_and_a_drop_are_taken_back_and_a_seen_change_is_not(tmp_path, madeup_out):
     """'Weer op de lijst zetten' puts a change the buyer ticked or dropped himself on the list again (the mark reopened); for a change
-    the aid saw in a newer purchase order it writes nothing and says to choose 'Terugdraaien in Exact'."""
+    the aid saw in a newer purchase order it writes nothing and says to choose 'Oude waarde op de lijst zetten'."""
     page, prepared, d = tab_page(tmp_path, madeup_out)
     listed = shown(page, "list_opened", "nl")
     price, date = value_of(listed, "prijs 12,50"), value_of(listed, "leverdatum")
@@ -826,7 +838,7 @@ def test_a_tick_and_a_drop_are_taken_back_and_a_seen_change_is_not(tmp_path, mad
     assert [text for text, _ in again["rows"]["choices"]] == [ROWS[0], ROWS[2]] and [v for _, v in again["done_choice"]["choices"]] == [date]
     back = done_of(page, "change_reopened", date, "en")
     assert back["done_note"] == "The row is on the list again." and back["tab"]["label"] == "Enter in Exact (3)"
-    assert back["done"] == "**Handled in the last 14 days**" and back["done_choice"]["choices"] == []
+    assert back["done"] == f"**Handled in the last 14 days**\n\n{EN['hand_done_empty']}" and back["done_choice"]["choices"] == []
     marks = [json.loads(line) for line in (prepared / MARKS_FILE).read_text(encoding="utf-8").splitlines()]
     assert [(line["entry_id"], line["mark"]) for line in marks[-2:]] == [(ids_of(price)[0], "reopened"), (ids_of(date)[0], "reopened")]
     # a change the aid saw itself is not taken back: nothing is written, and the note says what to do instead
@@ -837,7 +849,7 @@ def test_a_tick_and_a_drop_are_taken_back_and_a_seen_change_is_not(tmp_path, mad
     for language in ("nl", "en"):
         refused = done_of(page, "change_reopened", price, language)
         assert refused["done_note"] == STRINGS[language]["hand_reopen_seen"] and refused["tab"]["label"] == STRINGS[language]["hand_tab_count"].format(n=2)
-    assert NL["hand_reopen_seen"] == ("Deze wijziging heeft de assistent zelf in Exact gezien. Kies Terugdraaien in Exact als de oude waarde "
+    assert NL["hand_reopen_seen"] == ("Deze wijziging heeft de assistent zelf in Exact gezien. Kies Oude waarde op de lijst zetten als de oude waarde "
                                       "terug moet.")
     assert (prepared / MARKS_FILE).read_bytes() == before
     assert done_of(page, "change_reopened", None, "nl")["done_note"] == "Kies eerst een wijziging bij Afgehandelde wijziging."   # nothing chosen
@@ -846,7 +858,7 @@ def test_a_tick_and_a_drop_are_taken_back_and_a_seen_change_is_not(tmp_path, mad
 
 
 def test_the_put_back_note_never_says_undone(tmp_path, madeup_out):
-    """'Terugdraaien in Exact' prepares the old value: the note says that it is not put back in Exact yet and names the row the list now
+    """'Oude waarde op de lijst zetten' prepares the old value: the note says that it is not put back in Exact yet and names the row the list now
     holds, never that the change is undone, and the change stays among the handled ones. The review tab's own undo, which the page's
     writer only prepares, says the same."""
     page, prepared, d = tab_page(tmp_path, madeup_out)
@@ -883,7 +895,7 @@ def test_the_sections_under_the_list_are_wired(tmp_path, madeup_out):
     language = [block for block in page.blocks.values() if isinstance(block, gr.Radio) and block.label == NL["language"]][0]
     order = [block for block in inside(tab) if isinstance(block, (gr.Markdown, gr.Button, gr.CheckboxGroup, gr.Dropdown))]
     names = [getattr(block, "elem_id", None) or getattr(block, "label", None) or block.value for block in order]
-    assert names[-6:] == ["hand-confirmations", "hand-done", "Afgehandelde wijziging", "Weer op de lijst zetten", "Terugdraaien in Exact",
+    assert names[-6:] == ["hand-confirmations", "hand-done", "Afgehandelde wijziging", "Weer op de lijst zetten", "Oude waarde op de lijst zetten",
                           "hand-done-note"]
     confirmations_md, done_md, choice, reopen, put_back, note = order[-6:]
     fills = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == "done_opened"]
@@ -901,7 +913,7 @@ def test_the_sections_under_the_list_are_wired(tmp_path, madeup_out):
         assert f.targets == [(button._id, "click")] and f.inputs == [choice, language] and f.outputs == [*list_fill.outputs, *outputs]
     english = done_of(page, "done_opened", "en", None)
     assert (english["done_choice"]["label"], english["reopen"]["value"], english["put_back"]["value"]) == (
-        "Handled change", "Put on the list again", "Put back in Exact")
+        "Handled change", "Put on the list again", "Put old value on the list")
     assert english["confirmations"].startswith("## Confirmations to attach\n\n2 confirmations of the last 7 days: attach them in Exact and set "
                                                "the status to Bevestigd.\n\n- 12-11-2026: purchase order 250108 (S08), file MU08\\_conf.pdf")
 
@@ -913,7 +925,7 @@ def test_the_confirmations_section_lists_what_to_attach_in_exact(tmp_path, madeu
                                          "2 bevestigingen van de laatste 7 dagen: voeg ze in Exact bij en zet de status op Bevestigd.\n\n"
                                          "- 12-11-2026: inkooporder 250108 (S08), bestand MU08\\_conf.pdf\n"
                                          "- 12-11-2026: inkooporder 250114 (S14), bestand MU14\\_conf.pdf")
-    assert sections["done"] == "**Afgehandeld in de laatste 14 dagen**" and sections["done_note"] == ""
+    assert sections["done"] == f"**Afgehandeld in de laatste 14 dagen**\n\n{NL['hand_done_empty']}" and sections["done_note"] == ""
     late = d.model_copy(update={"clock": lambda: datetime(2026, 11, 20, 9, 0)})
     later_page = build_app(late, settings_file=tmp_path / "settings.json")
     assert done_of(later_page, "done_opened", "nl", None)["confirmations"] == ""                     # more than 7 days later: none
@@ -927,11 +939,11 @@ def test_the_texts_of_the_sections_in_both_languages():
              "hand_done_seen": ("(gezien in versie {n} van de inkooporder)", "(seen in version {n} of the purchase order)"),
              "hand_done_dropped": ("(niet ingevoerd, op {date})", "(not entered, on {date})"),
              "hand_reopen": ("Weer op de lijst zetten", "Put on the list again"),
-             "hand_put_back": ("Terugdraaien in Exact", "Put back in Exact"),
+             "hand_put_back": ("Oude waarde op de lijst zetten", "Put old value on the list"),
              "hand_done_choice": ("Afgehandelde wijziging", "Handled change"),
              "hand_reopened": ("De regel staat weer op de lijst.", "The row is on the list again."),
-             "hand_reopen_seen": ("Deze wijziging heeft de assistent zelf in Exact gezien. Kies Terugdraaien in Exact als de oude waarde terug moet.",
-                                  "The assistant saw this change in Exact itself. Choose Put back in Exact if the old value must return."),
+             "hand_reopen_seen": ("Deze wijziging heeft de assistent zelf in Exact gezien. Kies Oude waarde op de lijst zetten als de oude waarde terug moet.",
+                                  "The assistant saw this change in Exact itself. Choose Put old value on the list if the old value must return."),
              "hand_put_back_listed": ("Nog niet teruggedraaid in Exact. Op de lijst staat nu: {row}. Voer de oude waarde in Exact in en vink de regel af.",
                                       "Not put back in Exact yet. The list now holds: {row}. Enter the old value in Exact and tick the row."),
              "hand_put_back_on_list": ("Het terugzetten staat al op de lijst.", "The put-back is on the list already."),
@@ -1004,7 +1016,7 @@ def test_the_documents_say_what_task_35_added():
     assert ("Laat u Exact de inkooporder na de wijziging opnieuw versturen, dan vinkt de assistent de wijziging zelf af. Doet u dat niet, "
             "vink de wijziging dan af op het tabblad In Exact invoeren: de assistent vergelijkt latere documenten dan met de waarde die u "
             "hebt ingevoerd.") in manual["7"]
-    assert "\"Weer op de lijst zetten\"" in manual["7"] and "\"Terugdraaien in Exact\"" in manual["7"]
+    assert "\"Weer op de lijst zetten\"" in manual["7"] and "\"Oude waarde op de lijst zetten\"" in manual["7"]
     for words in ("A tick cannot be taken back on the page", "niet terugnemen", "lists them nowhere yet", "on no list yet",
                   "nog op geen lijst", "which it lists nowhere yet"):
         assert words not in whole, words
@@ -1086,7 +1098,7 @@ def test_the_documents_say_what_the_review_round_of_task_35_settled():
 
 def test_a_tick_of_a_change_two_confirmations_asked_is_not_taken_back_after_its_put_back(tmp_path, madeup_out):
     """The checkers' sequence through the page's handlers (second review round, K11): MU08's confirmation came in twice, so its price
-    is one row of two cases. The buyer ticks it and presses "Terugdraaien in Exact"; "Weer op de lijst zetten" on the change then says
+    is one row of two cases. The buyer ticks it and presses "Oude waarde op de lijst zetten"; "Weer op de lijst zetten" on the change then says
     K4's note in both languages and writes nothing, and the put-back stays on the list; the same once the put-back was dropped."""
     page, prepared, d = tab_page(tmp_path, madeup_out)
     again = open_upload_case(d.settings.cases_root, [madeup_out / "MU08_conf.pdf"], "250108", "confirmation", datetime(2026, 11, 12, 9, 30))
@@ -1168,7 +1180,7 @@ def test_the_documents_say_what_the_fourth_review_round_settled():
     """The manual and the writer's docstring after the fourth review round: 2.5 says that while the list cannot be read no prepared
     change counts as made, with the line's reason (K30), in place of the sentence that only a waiting put-back counts as entered; 2.6's
     advice after a stop or a lapsed sign-in says when to check (K33); 3.10, in both its paragraphs on the undo, and the writer's
-    docstring say that "Terugdraaien in Exact" undoes an entry a second time (K33), and 3.10 names the recipe's limits (K33)."""
+    docstring say that "Oude waarde op de lijst zetten" undoes an entry a second time (K33), and 3.10 names the recipe's limits (K33)."""
     import aid.execution.writer as writer
 
     manual = manual_sections()
@@ -1182,7 +1194,7 @@ def test_the_documents_say_what_the_fourth_review_round_settled():
     assert second in undo and "Each change is undone once." not in undo
     assert second in tab and "a second press does not prepare it again." not in tab
     assert ("an undo made with it that a later case's request for the same value joins, or whose change's tick is taken back, may be "
-            "passed over by the list; prefer \"Terugdraaien in Exact\" on the tab") in three_ten
+            "passed over by the list; prefer \"Oude waarde op de lijst zetten\" on the tab") in three_ten
     doc = " ".join((writer.__doc__ or "").split())
     assert "undoes an entry a second time once its first put-back was replaced or dropped and nothing newer stands in the way" in doc
 
@@ -1901,7 +1913,7 @@ LIST_CHOSEN = (*COLUMN_FIELDS, "table", "note", "carry", "viewed")
 PRICELIST_SHOWN = ("table", "note", "carry", "viewed")
 CARRIED_OUT = ("table", "note", "carry", "viewed")
 PRICELIST_RELABEL = ("tab", "notice", "intro", "supplier", "remove", "state", "export", "file_button", "export_note", "list", *COLUMN_FIELDS, "hint",
-                     "view", "table", "note", "carry", "viewed")
+                     "view", "table_empty", "table", "note", "carry", "viewed")
 PRICELIST_HANDLERS = {"pricelist_opened", "pricelist_supplier_chosen", "pricelist_export_chosen", "prices_filed", "prices_removed", "pricelist_file_chosen",
                       "pricelist_column_chosen", "pricelist_shown", "pricelist_carried_out", "pricelist_relabel"}
 ARTICLE_COLUMNS = {"item_code": "Artikel", "price": "Inkoopprijs"}                              # as part 3 of the block saves them
@@ -2159,7 +2171,7 @@ def test_one_press_marks_the_article_prices_of_one_list(tmp_path, madeup_out):
     english = dict(zip(lists, opened("en", s02), strict=True))
     assert (english["choice"]["label"], english["choice"]["value"], english["button"]["value"]) == (
         "Price list", s02, "All article prices of this price list have been entered")
-    assert shown(page, "pricelist_entered", None, offered["kept"], "nl")["note"] == "Vink eerst aan wat u bedoelt."
+    assert shown(page, "pricelist_entered", None, offered["kept"], "nl")["note"] == NL["hand_choose_first"]
     assert not (prepared / MARKS_FILE).exists()
     done = shown(page, "pricelist_entered", s01, offered["kept"], "nl")
     assert done["note"] == "2 wijzigingen genoteerd als ingevoerd in Exact." and done["tab"]["label"] == "In Exact invoeren (4)"
@@ -2192,3 +2204,76 @@ def test_one_press_marks_the_article_prices_of_one_list(tmp_path, madeup_out):
     assert sorted(target for f in fills for target in f.targets if target[0] is not None) == sorted([*fill.targets, (language._id, "change")])
     assert (NL["hand_pricelist_entered"], EN["hand_pricelist_entered"]) == ("Alle artikelprijzen van deze prijslijst zijn ingevoerd",
                                                                             "All article prices of this price list have been entered")
+
+
+def test_step6_put_back_label_dropdown_empty_and_readme_command(tmp_path, madeup_out):
+    """WP18 step 6: the put-back button says it prepares a row on the list rather than changing Exact, the two dropdown
+    buttons have their own empty-selection message, and aid/README.md gives the Part 3 test command."""
+    assert NL["hand_put_back"] == "Oude waarde op de lijst zetten"
+    assert EN["hand_put_back"] == "Put old value on the list"
+    assert "Terugdraaien in Exact" not in NL["hand_reopen_seen"] and NL["hand_put_back"] in NL["hand_reopen_seen"]
+    assert "Put back in Exact" not in EN["hand_reopen_seen"] and EN["hand_put_back"] in EN["hand_reopen_seen"]
+    assert "Terugdraaien in Exact" not in NL["hand_reopen_written"] and NL["hand_put_back"] in NL["hand_reopen_written"]
+    assert "Put back in Exact" not in EN["hand_reopen_written"] and EN["hand_put_back"] in EN["hand_reopen_written"]
+    page, prepared, d = tab_page(tmp_path, madeup_out)
+    for language in ("nl", "en"):
+        strings = STRINGS[language]
+        assert strings["hand_choose_first"] != strings["hand_tick_first"]
+        assert shown(page, "block_entered", None, {}, language)["note"] == strings["hand_choose_first"]
+        assert shown(page, "pricelist_entered", None, {}, language)["note"] == strings["hand_choose_first"]
+        assert shown(page, "changes_entered", [], language)["note"] == strings["hand_tick_first"]
+        assert shown(page, "changes_dropped", [], language)["note"] == strings["hand_tick_first"]
+    manual = manual_sections()
+    put_back_q = chr(34) + NL["hand_put_back"] + chr(34)
+    choose_q = chr(34) + NL["hand_choose_first"] + chr(34)
+    assert put_back_q in manual["2.2"] and "Terugdraaien in Exact" not in manual["2.2"]
+    assert put_back_q in manual["2.6"] and "Terugdraaien in Exact" not in manual["2.6"]
+    assert choose_q in manual["2.6"]
+    readme = Path("aid/README.md").read_text(encoding="utf-8")
+    part3_cmd = "python -B -W error -m pytest aid/tests -q -p no:cacheprovider --basetemp " + chr(60) + "a temporary folder" + chr(62) + " -k " + chr(34) + "not real_launcher" + chr(34)
+    assert part3_cmd in readme
+    assert (chr(10) + "python3 -m pytest aid/tests -q" + chr(10)) not in readme
+
+
+def test_tick_buttons_stay_inactive_until_a_row_is_ticked_and_show_the_count(tmp_path, madeup_out):
+    """WP19 item 3: on In Exact invoeren, the two buttons that act on ticked rows start inactive, become active with the count
+    once at least one row is ticked, keep the count on a language switch, and return to inactive without a count when cleared."""
+    gr = import_gradio()
+    page, prepared, d = tab_page(tmp_path, madeup_out)
+    tab = hand_tab(page)
+    by_id = {block.elem_id: block for block in inside(tab) if getattr(block, "elem_id", None)}
+    pair = by_id["hand-actions"].children[0]
+    entered_btn, dropped_btn = pair.children
+    rows = by_id["hand-rows"]
+    language = [block for block in page.blocks.values() if isinstance(block, gr.Radio) and block.label == NL["language"]][0]
+
+    assert (entered_btn.value, entered_btn.interactive) == (NL["hand_entered"], False)
+    assert (dropped_btn.value, dropped_btn.interactive) == (NL["hand_dropped"], False)
+
+    [sync] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == "tick_buttons"]
+    assert sync.targets == [(rows._id, "change")]
+    assert sync.inputs == [rows, language] and sync.outputs == [entered_btn, dropped_btn]
+    assert sync.queue is False and sync.show_progress == "hidden"
+
+    listed = shown(page, "list_opened", "nl")
+    price = value_of(listed, "prijs 12,50")
+    date = value_of(listed, "leverdatum")
+
+    for lang, strings in (("nl", NL), ("en", EN)):
+        assert sync.fn([], lang) == (
+            {"__type__": "update", "value": strings["hand_entered"], "interactive": False},
+            {"__type__": "update", "value": strings["hand_dropped"], "interactive": False},
+        )
+        assert sync.fn([price], lang) == (
+            {"__type__": "update", "value": strings["hand_entered_count"].format(n=1), "interactive": True},
+            {"__type__": "update", "value": strings["hand_dropped_count"].format(n=1), "interactive": True},
+        )
+        assert sync.fn([price, date], lang) == (
+            {"__type__": "update", "value": strings["hand_entered_count"].format(n=2), "interactive": True},
+            {"__type__": "update", "value": strings["hand_dropped_count"].format(n=2), "interactive": True},
+        )
+
+    manual = manual_sections()
+    assert "inactive until" in manual["2.6"].lower() and "how many" in manual["2.6"].lower()
+    assert "pas actief" in manual["7"].lower() and "hoeveel" in manual["7"].lower()
+

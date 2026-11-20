@@ -20,7 +20,7 @@ The invariants, after every step:
   counts as made and none as waiting (K30);
 - taking a tick back never cancels an undo of one of the change's cases that was entered or seen (K26), and a change with a put-back
   never returns to the list (K11, by the invariant above);
-and, for each press of "Terugdraaien in Exact", that its note, read by its whole text, is true:
+and, for each press of "Oude waarde op de lijst zetten", that its note, read by its whole text, is true:
 - the note that sends the buyer to the researcher never comes (K20);
 - a note that writes nothing wrote nothing, but for the one line of marks.jsonl that links an undo made with the recipe, which
   take_back writes before it says that the put-back is on the list or does not return to it;

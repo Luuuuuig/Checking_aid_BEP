@@ -555,14 +555,10 @@ def test_the_senders_are_checked_as_the_settings_check_them_and_the_help_advises
         assert senders_from(entry, "nl")[0] is None, entry
     assert NL["exact_field:senders"] == "Afzender van de e-mails met inkooporders uit Exact" and "mag leeg" not in NL["exact_field:senders"]
     assert EN["exact_field:senders"] == "Sender of the e-mails with purchase orders from Exact"
-    assert NL["exact_help:senders"] == ("Het e-mailadres waarvan Exact de inkooporders stuurt, of alleen het deel na het apenstaartje; meer dan "
-                                        "een met een komma ertussen. Vul dit in: een pdf in deze opmaak van een andere afzender behandelt de "
-                                        "assistent dan als orderbevestiging, zodat een bevestiging die op uw inkooporder lijkt nooit als "
-                                        "inkooporder wordt opgenomen.")
-    assert EN["exact_help:senders"] == ("The e-mail address from which Exact sends the purchase orders, or only the part after the at sign; "
-                                        "several with a comma between them. Fill this in: a PDF in this layout from another sender is then "
-                                        "handled as an order confirmation, so that a confirmation that looks like your purchase order is never "
-                                        "filed as a purchase order.")
+    assert NL["exact_help:senders"] == ("Afzenders waarvan Exact inkooporders stuurt, met een komma ertussen, bijvoorbeeld "
+                                        "exact@example.com, example.com; andere afzenders gelden als orderbevestiging.")
+    assert EN["exact_help:senders"] == ("Senders from which Exact mails purchase orders, separated by commas, for example "
+                                        "exact@example.com, example.com; other senders are handled as order confirmations.")
 
 
 def test_the_help_of_the_end_text_names_the_row_under_the_last_line_and_the_page_subtotal():

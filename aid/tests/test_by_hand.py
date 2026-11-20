@@ -736,7 +736,7 @@ def test_a_put_back_belongs_to_the_run_of_the_entry_it_puts_back(tmp_path):
     assert states(tmp_path) == [(ids, "entered"), (other, "dropped"), (again, "already")]
     back = undone(tmp_path, case_root, *ids, now=LATER)                       # the operator's undo, linked to nothing
     assert states(tmp_path) == [(ids, "entered"), (other, "dropped"), (again, "already"), (back, "undone")]
-    link_put_back(tmp_path, back[0], ids[0], LATER)                           # linked, as "Terugdraaien in Exact" links it
+    link_put_back(tmp_path, back[0], ids[0], LATER)                           # linked, as "Oude waarde op de lijst zetten" links it
     assert states(tmp_path) == [(ids, "entered"), (other, "dropped"), (again, "replaced"), (back, "open")]
     [put] = open_changes(tmp_path)
     assert (put.ids, put.old_value, put.new_value, put.rule_id, put.puts_back) == (back, "12.70", "12.50", UNDO_RULE_ID, ids[0])
@@ -775,7 +775,7 @@ def test_put_back_state_works_out_a_put_back_without_writing(tmp_path):
 
 
 def test_reopen_writes_nothing_for_a_change_with_a_put_back_whichever_case_it_undid(tmp_path):
-    """Two cases asked the same price, one change with two entries, ticked; "Terugdraaien in Exact" puts back the newest entry, the
+    """Two cases asked the same price, one change with two entries, ticked; "Oude waarde op de lijst zetten" puts back the newest entry, the
     second case's. reopen then writes nothing and returns "undone" whatever the put-back's state, open, dropped or entered, and
     whatever rows of other cases the run holds: the buyer asked for the value from before (second review round, K11)."""
     first = logged(tmp_path, tmp_path / "first", case(18), price("12.70"))
@@ -1009,7 +1009,7 @@ def test_an_entered_put_back_gives_the_old_value_again(tmp_path):
     ids = logged(tmp_path, case_root, case(18), price("12.70"))
     mark(tmp_path, ids, "entered", NOW)
     back = undone(tmp_path, case_root, *ids, now=LATER)
-    link_put_back(tmp_path, back[0], ids[0], LATER)                               # as "Terugdraaien in Exact" prepares it: open
+    link_put_back(tmp_path, back[0], ids[0], LATER)                               # as "Oude waarde op de lijst zetten" prepares it: open
     assert states(tmp_path) == [(ids, "entered"), (back, "open")]
     assert as_entered(first, tmp_path, BEFORE, None)[1] == [record("1", "price", "12.50", "12.70")]
     mark(tmp_path, back, "dropped", LATER)

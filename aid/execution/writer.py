@@ -26,7 +26,7 @@ where the field was empty before the write, or nothing was read, a writer into a
 undo is refused with a WriterError, and the prepared writer prepares a row without a new value, for the buyer to put the
 field back himself. It reverses a case's entries one at a time, newest first, so that a case that stops half way has logged
 each undo it made and a second call carries on with the rest. An entry is undone once (an undo that came back "failed"
-reversed nothing, so it does not count), but for the review page's "Terugdraaien in Exact", which undoes an entry a second
+reversed nothing, so it does not count), but for the review page's "Oude waarde op de lijst zetten", which undoes an entry a second
 time once its first put-back was replaced or dropped and nothing newer stands in the way (undo_entry's again); an entry that
 wrote nothing (status "failed") is not undone, and an undo entry is never undone.
 """
@@ -287,7 +287,7 @@ def undo_entry(case_root: Path, entry_id: str, writer: Writer, now: datetime, ag
     It returns None, and writes and logs nothing, when the id is not in the log, when an undo entry with undo_of naming it
     exists (it was undone already; an undo that came back with status "failed" reversed nothing and does not count), when
     its status is "failed" (nothing was written) or when it is an undo entry itself (an undo is never undone). With again,
-    an entry undone already is undone once more: the review page's "Terugdraaien in Exact" asks it when the put-back it
+    an entry undone already is undone once more: the review page's "Oude waarde op de lijst zetten" asks it when the put-back it
     prepared before can no longer return to the list (newer rows came after it) and those rows no longer ask anything
     (aid/review/hand_list.py). A WriterError from the writer propagates and nothing is logged."""
     log = WriteLog(case_root)

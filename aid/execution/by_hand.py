@@ -118,7 +118,7 @@ note_value gives what Exact shows now for
 an open row whose line shows, in a look that counts, neither its old nor its new value; shown_now gives what the PO as it stands
 shows, whatever it is and whenever it came.
 
-A put-back. A row that puts a change back in Exact (the review page's "Terugdraaien in Exact", aid/review/hand_list.py) is linked to the
+A put-back. A row that puts a change back in Exact (the review page's "Oude waarde op de lijst zetten", aid/review/hand_list.py) is linked to the
 entry it puts back by one more line of marks.jsonl, {"entry_id": the new row, "mark": "puts_back", "of": the entry, "at": ...}, written
 by link_put_back. The link gives the row no state of its own; Change.puts_back holds it, and put_back_of follows it from the entry put
 back. It does decide which run the undo row belongs to: a put-back belongs to the run that holds the entry it puts back, whatever

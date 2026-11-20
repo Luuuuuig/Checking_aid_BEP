@@ -735,7 +735,7 @@ def test_the_refused_undo_names_the_article_and_a_file_is_detached_as_before(tmp
 
 
 def test_a_second_undo_of_a_change_made_in_a_system_writes_back_the_value_read_too(tmp_path):
-    """The review page's "Terugdraaien in Exact" undoes an entry once more (again); that undo is the same undo."""
+    """The review page's "Oude waarde op de lijst zetten" undoes an entry once more (again); that undo is the same undo."""
     WriteLog(tmp_path).append(make_entry("e1", make_op(old="10", new="11"), status="done", previous="12"))
     live = FakeLive()
     first = undo_entry(tmp_path, "e1", live, NOW)

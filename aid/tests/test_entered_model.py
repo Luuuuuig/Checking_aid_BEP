@@ -12,7 +12,7 @@ price, which never count.
 
 The events: a case prepares a change of one value, from the value it was compared with (the version with the model's values laid
 over it, as the pipeline compares) to another; the buyer ticks an open change as entered, or drops it; he takes a tick or a drop
-back; he puts an entered change back ("Terugdraaien in Exact", whatever the tab answers) and may tick the put-back; and a new PDF
+back; he puts an entered change back ("Oude waarde op de lijst zetten", whatever the tab answers) and may tick the put-back; and a new PDF
 version or a new look is filed, showing what the model says Exact holds or other values, after which the runner's pass compares the
 open changes with the order as it stands (reconcile), which may mark changes as seen, and ends each tick of a supplier's change that
 the order as it stands, filed after the tick, contradicts (the mark "reopened"). Now and then the buyer ticks a change in the

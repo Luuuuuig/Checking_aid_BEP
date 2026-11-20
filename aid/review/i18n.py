@@ -23,7 +23,8 @@ that handles it ("assistant" for the runner and its launcher, "connections" for 
 begin with "strip_" are its last line. "review_all" labels the fold of every case of the last 7 days under it, "all_column:<column>"
 the columns of its table and "todo:<state>" what the buyer does for a case of that state ("todo:closed_changes" for a closed case
 whose changes stand on the list In Exact invoeren, "todo:nothing" for one with nothing left to do). "review_pick" and
-"review_pick_none" are the line under the field "Zaak" while no case is chosen, "review_open_oldest" its button and "review_gone"
+"review_pick_none" are the line under the field "Zaak" while no case is chosen, "review_open_oldest" its button, "review_open_next"
+the button beside the answer of a close that opens the oldest waiting case with "review_next_preview" naming that case, and "review_gone"
 the line of a case on screen that left the list ("review_gone_handled" for a failed case noted as handled meanwhile). A failed case
 reads "case_failed_look" in the case list ("case_failed_handled" once it is noted as handled while it is on screen),
 "failed_notice" above its documents, with its "fail:<reason>", and "handled_go" on its
@@ -120,7 +121,7 @@ while a newer change of their line or article came on the list, "hand_exact_unti
 Exact but was not ticked off, "hand_exact_put_back_hand_row" the note of a put-back, which the button never writes, and
 "hand_exact_put_back_other_row" (with {value}), "hand_exact_put_back_empty_row" and "hand_exact_put_back_unread_row" that note when
 the route read in Exact before its write another value, an empty field or nothing; "hand_put_back_source:route",
-"hand_put_back_other_route_empty" and "hand_put_back_other_route_unread" are what the note of "Terugdraaien in Exact" says of what the
+"hand_put_back_other_route_empty" and "hand_put_back_other_route_unread" are what the note of "Oude waarde op de lijst zetten" says of what the
 route read there. The keys that begin with "exact" are
 the strings of the block "Koppeling met Exact" of the settings tab (aid/review/exact_settings.py), one block in each language:
 "exact_save", "exact_export_save" and "exact_articles_save" the saves of its parts 1, 2 and 3, each named after what it saves,
@@ -191,6 +192,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "doc_source": "Bron leverancier",
         "saved": "Besluit over {item} opgeslagen.",
         "refused": "Dit besluit kan hier niet worden genomen.",
+        "case_closed": "Deze zaak is al afgesloten: er is geen besluit opgeslagen.",
+        "case_unreadable": "Deze zaak kan nu niet worden gelezen: vernieuw de lijst en probeer het zo opnieuw.",
         "new_status": "De zaak is nu: {status}.",
         "write_stopped": "Een schrijfactie is niet gelukt ({write}): {error}. De zaak blijft ter beoordeling.",
         "not_closed": "Deze zaak kan niet worden afgesloten: zij is niet meer ter beoordeling.",
@@ -240,7 +243,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "hand_tab_count": "In Exact invoeren ({n})",
         "hand_tab_unread": "In Exact invoeren (?)",
         "hand_intro": "De assistent verandert zelf niets in Exact. Voer deze wijzigingen in Exact in en vink aan wat u hebt ingevoerd.",
-        "hand_nothing": "Er is niets in te voeren.",
+        "hand_nothing": "Er is niets in te voeren. Nieuwe wijzigingen komen hier vanzelf na een controle of een besluit op Beoordelen.",
         "hand_block_po": "Inkooporder {number} ({supplier})",
         "hand_block_po_alone": "Inkooporder {number}",
         "hand_block_articles": "Artikelprijzen",
@@ -263,12 +266,15 @@ STRINGS: dict[str, dict[str, str]] = {
         "hand_week": "week {week} ({year})",
         "hand_hint": "Let op: na deze wijziging moet de inkooporder opnieuw gefiatteerd worden.",
         "hand_entered": "Aangevinkte regels zijn ingevoerd",
+        "hand_entered_count": "Aangevinkte regels zijn ingevoerd ({n})",
         "hand_dropped": "Aangevinkte regels niet invoeren",
+        "hand_dropped_count": "Aangevinkte regels niet invoeren ({n})",
         "hand_block": "Inkooporder of artikelprijzen",
         "hand_block_entered": "Alles hiervan is ingevoerd",
         "hand_pricelist": "Prijslijst",
         "hand_pricelist_entered": "Alle artikelprijzen van deze prijslijst zijn ingevoerd",
         "hand_tick_first": "Vink eerst aan wat u bedoelt.",
+        "hand_choose_first": "Kies eerst wat u bedoelt.",
         "hand_entered_one": "1 wijziging genoteerd als ingevoerd in Exact.",
         "hand_entered_many": "{n} wijzigingen genoteerd als ingevoerd in Exact.",
         "hand_dropped_one": "1 wijziging vervalt: de assistent vraagt er niet meer om.",
@@ -291,15 +297,16 @@ STRINGS: dict[str, dict[str, str]] = {
         "hand_list_changed": ("De lijst In Exact invoeren kan niet worden gelezen: het bestand is buiten de assistent gewijzigd. Geef dit "
                               "door aan de onderzoeker."),
         "hand_done": "Afgehandeld in de laatste 14 dagen",
+        "hand_done_empty": "Nog geen afgehandelde wijzigingen in de laatste 14 dagen. Wijzigingen die u afvinkt of laat vallen, verschijnen hier.",
         "hand_done_ticked": "(door u afgevinkt op {date})",
         "hand_done_seen": "(gezien in versie {n} van de inkooporder)",
         "hand_done_dropped": "(niet ingevoerd, op {date})",
         "hand_done_choice": "Afgehandelde wijziging",
         "hand_reopen": "Weer op de lijst zetten",
-        "hand_put_back": "Terugdraaien in Exact",
+        "hand_put_back": "Oude waarde op de lijst zetten",
         "hand_reopened": "De regel staat weer op de lijst.",
-        "hand_reopen_seen": ("Deze wijziging heeft de assistent zelf in Exact gezien. Kies Terugdraaien in Exact als de oude waarde terug "
-                             "moet."),
+        "hand_reopen_seen": ("Deze wijziging heeft de assistent zelf in Exact gezien. Kies Oude waarde op de lijst zetten als de oude waarde "
+                             "terug moet."),
         "hand_reopen_not": ("De wijziging komt niet terug op de lijst: er is intussen een andere wijziging voor dezelfde regel of hetzelfde "
                             "artikel."),
         "hand_put_back_listed": ("Nog niet teruggedraaid in Exact. Op de lijst staat nu: {row}. Voer de oude waarde in Exact in en vink de "
@@ -366,8 +373,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "hand_exact_handed_over_row": ("Aan Exact doorgegeven en nog niet verwerkt: kijk later in Exact en vink de regel af als het er "
                                        "staat."),
         "hand_done_written": "(door de assistent in Exact gezet op {date})",
-        "hand_reopen_written": ("Deze wijziging heeft de assistent zelf in Exact gezet. Kies Terugdraaien in Exact als de oude waarde "
-                                "terug moet."),
+        "hand_reopen_written": ("Deze wijziging heeft de assistent zelf in Exact gezet. Kies Oude waarde op de lijst zetten als de oude "
+                                "waarde terug moet."),
         "hand_exact_stop:error": ("Er ging iets onverwachts mis: de assistent zet nu niets meer in Exact. Geef dit door aan de "
                                   "onderzoeker."),
         "hand_exact_replaced_one": ("1 wijziging is in Exact gezet, maar intussen staat er een nieuwere wijziging voor dezelfde regel of "
@@ -392,11 +399,10 @@ STRINGS: dict[str, dict[str, str]] = {
                                              "wijziging erin zette. Kijk in Exact welke waarde terug moet."),
         "files_tab": "Bestanden",
         "files_title": "Een bestand aan de assistent geven",
-        "files_intro": ("Komt een document niet vanzelf uit uw postvak, geef het dan hier: een inkooporder uit Exact (pdf) of een "
-                        "orderbevestiging (pdf of e-mail). De assistent verwerkt het bij de volgende ronde, binnen een minuut."),
-        "files_intro_export": ("Komt een document niet vanzelf uit uw postvak, geef het dan hier: een inkooporder uit Exact (pdf), een "
-                               "orderbevestiging (pdf of e-mail) of een export uit Exact (Excel of csv). De assistent verwerkt het bij de "
-                               "volgende ronde, binnen een minuut."),
+        "files_intro": ("Geef hier een inkooporder uit Exact (pdf) of een orderbevestiging (pdf of e-mail); de assistent verwerkt het "
+                        "binnen een minuut."),
+        "files_intro_export": ("Geef hier een inkooporder uit Exact (pdf), een orderbevestiging (pdf of e-mail) of een export uit Exact "
+                               "(Excel of csv); de assistent verwerkt het binnen een minuut."),
         "files_choose": "Kies een bestand",
         "files_give": "Aan de assistent geven",
         "files_accepted": ("{name} is aangenomen. De assistent leest het bij de volgende ronde, binnen een minuut; wat ermee gebeurt, komt "
@@ -455,6 +461,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "review_pick": "Kies een zaak bij Zaak, of open de oudste.",
         "review_pick_none": "Er wachten geen zaken op uw besluit. Een nieuwe zaak verschijnt hier vanzelf.",
         "review_open_oldest": "Oudste zaak openen",
+        "review_open_next": "Volgende zaak openen",
+        "review_next_preview": "Volgende in de wachtrij: {case}",
         "review_gone": "Inkooporder {po} staat niet meer op de lijst: de zaak is intussen afgesloten of vervangen. Kies een andere zaak.",
         "review_gone_handled": ("Inkooporder {po} staat niet meer op de lijst: de zaak is intussen als afgehandeld genoteerd. Kies een "
                                 "andere zaak."),
@@ -552,9 +560,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "pricelist_tab": "Prijslijst",
         "pricelist_unset": ("De kolommen van de export van de artikelen zijn nog niet ingesteld. Dat gebeurt bij de installatie: Instellingen, "
                             "Koppeling met Exact, deel 3."),
-        "pricelist_intro": ("Een prijslijst van een leverancier vergelijkt u hier met de inkoopprijzen in Exact. De assistent heeft daarvoor de "
-                            "export van de artikelen van die leverancier uit Exact nodig. Wat verandert, zet u met een druk op de knop op de "
-                            "lijst In Exact invoeren; in Exact verandert de assistent niets."),
+        "pricelist_intro": ("Vergelijk hier een prijslijst met uw inkoopprijzen uit Exact en zet de wijzigingen op de lijst In Exact invoeren; in "
+                            "Exact verandert de assistent zelf niets."),
         "pricelist_supplier": "Leverancier",
         "pricelist_supplier_help": "Kies de leverancier, of typ de naam bij een nieuwe leverancier.",
         "pricelist_state": "Inkoopprijzen van {supplier} opgenomen op {time} uit {file}: {articles}.",
@@ -594,6 +601,7 @@ STRINGS: dict[str, dict[str, str]] = {
                                    "leest de assistent elke prijs als een prijs per stuk."),
         "pricelist_problem:price": "Kies de kolom met de prijs.",
         "pricelist_view": "Bekijken",
+        "pricelist_table_empty": "Nog geen prijslijst bekeken. Kies een prijslijst, wijs de kolommen aan en druk op Bekijken.",
         "pricelist_carry_out": "Op de lijst In Exact invoeren zetten",
         "pricelist_header:article": "Artikel",
         "pricelist_header:current": "Inkoopprijs in Exact",
@@ -672,6 +680,7 @@ STRINGS: dict[str, dict[str, str]] = {
                                      "is."),
         "pricelist_remove_yes": "Ja, weghalen",
         "pricelist_remove_no": "Niet weghalen",
+        "pricelist_remove_changed": "Er is niets weggehaald: de gekozen leverancier komt niet overeen met de vraag. Druk opnieuw op weghalen.",
         "files_empty": "Nog geen bestanden verwerkt. Wat de assistent met een bestand doet, komt hier vanzelf.",
         "mail_step:ids": "1. Gegevens van de app-registratie",
         "mail_step:sign_in": "2. Aanmelden bij Microsoft",
@@ -726,6 +735,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "assistant_waiting_copilot": "Wachten op Copilot: inkooporder {orders}.",
         "assistant_store": "Aanmelden kan niet: de beveiligde opslag is geweigerd. Onder Postvak en AI staat waarom.",
         "assistant_refresh": "Stand van de assistent vernieuwen",
+        "assistant_refreshed": "Stand bijgewerkt om {time}.",
         "assistant_log": "Laatste meldingen van de assistent (runner.log), de nieuwste bovenaan",
         "assistant_log_none": "Er staan nog geen meldingen in runner.log.",
         "assistant_log_help": "Deze regels zijn voor de onderzoeker. Ze staan alleen op deze pc.",
@@ -772,11 +782,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "settings_order_unread": "Map voor inkooporders: verbonden sinds {since}; nog niet gelezen.",
         "settings_order_on": "Map voor inkooporders: verbonden sinds {since}; laatst gelezen: {last}; opgehaalde inkooporders: {saved}.",
         "settings_ai": "Microsoft 365 Copilot",
-        "settings_ai_needs": ("Copilot heeft nodig: een licentie voor Microsoft 365 Copilot op het account; de zeven machtigingen "
-                              "Sites.Read.All, Mail.Read, People.Read.All, OnlineMeetingTranscript.Read.All, Chat.Read, "
-                              "ChannelMessage.Read.All en ExternalItem.Read.All op de app-registratie; en voor vier daarvan "
-                              "(People.Read.All, OnlineMeetingTranscript.Read.All, ChannelMessage.Read.All en ExternalItem.Read.All) "
-                              "eenmalig de toestemming van een beheerder."),
+        "settings_ai_needs": ("Copilot heeft een Microsoft 365 Copilot-licentie op het account nodig, zeven Graph-machtigingen op de "
+                              "app-registratie en voor vier daarvan eenmalig beheerderstoestemming."),
         "settings_ai_sign_in": "Aanmelden voor Copilot",
         "settings_ai_signed_in": "Aangemeld voor het postvak en voor Copilot.",
         "settings_ai_test": "Copilot testen",
@@ -813,19 +820,14 @@ STRINGS: dict[str, dict[str, str]] = {
         "settings_group:digest": "Dagoverzicht en taal",
         "settings_group:approval": "Fiattering",
         "settings_field:price_pct": "Prijsverschil: hoogstens dit percentage",
-        "settings_help:price_pct": ("De drempel voor de prijs: is een prijsverschil hoogstens dit percentage van de prijs op de "
-                                    "inkooporder en hoogstens het bedrag hieronder per regel, dan neemt de assistent de prijs van de "
-                                    "leverancier over op de inkooporder en verandert ook de prijs van het artikel; een verschil boven de "
-                                    "drempel komt naar u."),
+        "settings_help:price_pct": ("Drempel voor de prijs: blijft een verschil binnen dit percentage en het bedrag hieronder, dan past de "
+                                    "assistent de orderprijs en de prijs van het artikel aan, bijvoorbeeld 2."),
         "settings_field:price_abs": "Prijsverschil: hoogstens dit bedrag per regel (euro)",
         "settings_help:price_abs": ("Het bedrag van de drempel: het verschil per stuk maal het aantal van de regel; is dat meer dan "
                                     "dit bedrag, dan komt het verschil naar u, ook als het binnen het percentage blijft."),
         "settings_field:lead_time_tolerance_days": "Leverdatum: dagen bovenop de levertijd",
-        "settings_help:lead_time_tolerance_days": ("De marge in dagen: een latere leverdatum neemt de assistent over tot en met de "
-                                                   "levertijd van de leverancier plus deze marge, geteld vanaf de leverdatum van de "
-                                                   "regel op de inkooporder; een nog latere datum komt naar u, en zonder bekende "
-                                                   "levertijd van de leverancier komt elke latere datum naar u. Een eerdere leverdatum "
-                                                   "neemt de assistent over, ook zonder bekende levertijd."),
+        "settings_help:lead_time_tolerance_days": ("Marge in dagen boven op de levertijd van de leverancier: een latere leverdatum binnen deze "
+                                                   "marge neemt de assistent over, bijvoorbeeld 3."),
         "settings_field:first_cases_review": "Eerste zaken van een leverancier",
         "settings_help:first_cases_review": ("Tot zoveel zaken van een leverancier zijn afgesloten, komt elke zaak van die leverancier naar u, "
                                              "wat er ook in staat; 0 zet dit uit. Op het tabblad \"Beoordelen\" heet de reden "
@@ -834,9 +836,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "settings_help:ask_wait_working_days": ("Zoveel werkdagen wacht de assistent op het antwoord van een leverancier op een vraag; "
                                                 "komt er geen antwoord, dan komt de zaak naar u."),
         "settings_field:buyer_name": "Uw naam onder de berichten",
-        "settings_help:buyer_name": ("Deze naam staat onder \"Inkoop\", of onder \"Purchasing\" als de taal van de assistent English is, "
-                                     "in de vragen aan leveranciers en in het verzoek aan de fiatteur; leeg: alleen \"Inkoop\" of "
-                                     "\"Purchasing\"."),
+        "settings_help:buyer_name": ("Uw naam onder \"Inkoop\" in vragen en fiatteringsverzoeken, bijvoorbeeld J. Jansen (leeg: alleen "
+                                     "\"Inkoop\")."),
         "settings_field:digest": "Dagoverzicht",
         "settings_help:digest": "Eén overzicht per dag vanaf de tijd hieronder, of een overzicht na elke zaak.",
         "settings_digest:daily": "Elke dag op een vaste tijd",
@@ -847,10 +848,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "settings_help:buyer_email": ("Hierheen gaat het dagoverzicht, en u staat in de kopie van elke vraag aan een leverancier en van "
                                       "het verzoek aan de fiatteur."),
         "settings_field:own_addresses": "Uw eigen adressen in de proefstand",
-        "settings_help:own_addresses": ("In de proefstand gaat een bericht van de assistent alleen weg als elk adres erop, ook dat in de "
-                                        "kopie, hier staat of het adres is van het account waarmee de assistent via uw postvak verstuurt. "
-                                        "Vul uw eigen e-mailadressen in, met een komma ertussen, ook uw e-mailadres hierboven. Het adres "
-                                        "van een echte leverancier, of van een fiatteur die niet u zelf bent, hoort hier niet."),
+        "settings_help:own_addresses": ("Uw eigen e-mailadressen met een komma ertussen, bijvoorbeeld inkoper@example.com, test@example.com; "
+                                        "in de proefstand stuurt de assistent berichten alleen hierheen."),
         "settings_field:language": "Taal van de assistent",
         "settings_help:language": ("De taal van het dagoverzicht, van de berichten aan leveranciers en aan de fiatteur, en van de balk in "
                                    "de webshop."),
@@ -867,11 +866,10 @@ STRINGS: dict[str, dict[str, str]] = {
                                     "wijziging opnieuw in en sla dan op."),
         "settings_buyer_refused": "Niet opgeslagen: {fields}.",
         "settings_suppliers": "Leveranciers",
-        "settings_suppliers_help": ("Per leverancier, met de naam zoals op de inkooporder: het e-mailadres voor de vragen van de "
-                                    "assistent (zonder adres stelt de assistent geen vragen en komt de zaak naar u), de levertijd in "
-                                    "dagen, of elke zaak naar u komt, en of de assistent deze leverancier uit zichzelf geen vragen "
-                                    "stuurt: die vragen komen dan naar u, en een vraag die u zelf op het tabblad \"Beoordelen\" kiest, "
-                                    "gaat wel naar de leverancier."),
+        "settings_suppliers_help": ("Stel per leverancier (naam zoals op de inkooporder, bijvoorbeeld S01) het e-mailadres, de levertijd en "
+                                    "de beoordelingskeuzes in."),
+        "settings_suppliers_empty": ("Nog geen leveranciers ingesteld. Kies \"Leverancier toevoegen\" hieronder en vul het e-mailadres of de "
+                                     "levertijd in."),
         "settings_supplier_column:name": "Leverancier",
         "settings_supplier_column:email": "E-mailadres",
         "settings_supplier_column:lead_time": "Levertijd (dagen)",
@@ -962,10 +960,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "exact_numbers:point": "1,234.50 (punt voor de decimalen)",
         "exact_field:per_piece": "De pdf heeft geen kolom prijs per: elke prijs is per 1 stuk",
         "exact_field:senders": "Afzender van de e-mails met inkooporders uit Exact",
-        "exact_help:senders": ("Het e-mailadres waarvan Exact de inkooporders stuurt, of alleen het deel na het apenstaartje; meer dan een "
-                               "met een komma ertussen. Vul dit in: een pdf in deze opmaak van een andere afzender behandelt de assistent "
-                               "dan als orderbevestiging, zodat een bevestiging die op uw inkooporder lijkt nooit als inkooporder wordt "
-                               "opgenomen."),
+        "exact_help:senders": ("Afzenders waarvan Exact inkooporders stuurt, met een komma ertussen, bijvoorbeeld "
+                               "exact@example.com, example.com; andere afzenders gelden als orderbevestiging."),
         "exact_test": "Testen",
         "exact_save": "Opmaak opslaan",
         "exact_export_save": "Exportkolommen opslaan",
@@ -1139,8 +1135,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "exact_export_changed": ("Niet opgeslagen: de koppeling is intussen op een andere plek gewijzigd. Open het tabblad Instellingen "
                                  "opnieuw en kijk de kolommen na."),
         "exact_part_articles": "3. Inkoopprijzen van artikelen als export uit Exact (voor de prijslijst)",
-        "exact_articles_intro": ("Kies een voorbeeld van de export van artikelen uit Exact en wijs de kolommen aan. Heeft de export geen "
-                                 "kolom met de leverancier, dan kiest u de leverancier wanneer u de export op het tabblad Prijslijst geeft."),
+        "exact_articles_intro": ("Kies een voorbeeld van de artikelexport uit Exact en wijs de kolommen aan; ontbreekt een leverancierskolom, "
+                                 "dan kiest u die op het tabblad Prijslijst."),
         "exact_articles_sample": "Voorbeeld: een export van artikelen uit Exact",
         "exact_articles_columns": "Kolommen van de export van de artikelen",
         "exact_articles_field:item_code": "Artikelcode (verplicht)",
@@ -1160,9 +1156,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "hand_test_mode": "Proefstand: voer deze wijzigingen alleen in het test-Exact in.",
         "hand_tryout": "(proefdocument)",
         "tryout_title": "Proefdraaien met een inkooporder uit Exact",
-        "tryout_intro": ("Zonder leverancier kunt u de assistent toch proberen: bij een inkooporder die de assistent kent, maakt de "
-                         "assistent een verzonnen orderbevestiging. Voor de voorcontrole in de browser maakt de assistent van dezelfde "
-                         "inkooporder een verzonnen winkelwagen. U kiest wat er afwijkt. Het proefdocument blijft op deze pc."),
+        "tryout_intro": ("Maak hier voor een bekende inkooporder een verzonnen bevestiging of winkelwagen met een gekozen afwijking; "
+                         "het proefdocument blijft op deze pc."),
         "tryout_switch": "Proefstand: de assistent werkt met het test-Exact",
         "tryout_switch_help": ("In de proefstand verstuurt de assistent alleen berichten aan uw eigen adressen (Instellingen, Uw regels). "
                                "Zet u de proefstand uit, dan vervalt dat: elk bericht gaat dan naar het adres dat de instellingen geven."),
@@ -1338,6 +1333,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "doc_source": "Supplier source",
         "saved": "Decision on {item} saved.",
         "refused": "This decision cannot be taken here.",
+        "case_closed": "This case is already closed: no decision was saved.",
+        "case_unreadable": "This case cannot be read now: refresh the list and try again in a moment.",
         "new_status": "The case is now: {status}.",
         "write_stopped": "A write did not go through ({write}): {error}. The case stays for review.",
         "not_closed": "This case cannot be closed: it is no longer for review.",
@@ -1383,7 +1380,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "hand_tab_count": "Enter in Exact ({n})",
         "hand_tab_unread": "Enter in Exact (?)",
         "hand_intro": "The assistant changes nothing in Exact itself. Enter these changes in Exact and tick what you have entered.",
-        "hand_nothing": "There is nothing to enter.",
+        "hand_nothing": "There is nothing to enter. New changes appear here automatically after a check or a decision on Review.",
         "hand_block_po": "Purchase order {number} ({supplier})",
         "hand_block_po_alone": "Purchase order {number}",
         "hand_block_articles": "Article prices",
@@ -1406,12 +1403,15 @@ STRINGS: dict[str, dict[str, str]] = {
         "hand_week": "week {week} ({year})",
         "hand_hint": "Note: after this change the purchase order must be approved again.",
         "hand_entered": "The ticked rows have been entered",
+        "hand_entered_count": "The ticked rows have been entered ({n})",
         "hand_dropped": "Do not enter the ticked rows",
+        "hand_dropped_count": "Do not enter the ticked rows ({n})",
         "hand_block": "Purchase order or article prices",
         "hand_block_entered": "All of this has been entered",
         "hand_pricelist": "Price list",
         "hand_pricelist_entered": "All article prices of this price list have been entered",
         "hand_tick_first": "Tick what you mean first.",
+        "hand_choose_first": "Choose what you mean first.",
         "hand_entered_one": "1 change noted as entered in Exact.",
         "hand_entered_many": "{n} changes noted as entered in Exact.",
         "hand_dropped_one": "1 change is dropped: the assistant no longer asks for it.",
@@ -1434,14 +1434,15 @@ STRINGS: dict[str, dict[str, str]] = {
         "hand_list_changed": ("The list Enter in Exact cannot be read: the file was changed outside the assistant. Pass this on to the "
                               "researcher."),
         "hand_done": "Handled in the last 14 days",
+        "hand_done_empty": "No handled changes in the last 14 days yet. Changes you tick off or drop appear here.",
         "hand_done_ticked": "(ticked by you on {date})",
         "hand_done_seen": "(seen in version {n} of the purchase order)",
         "hand_done_dropped": "(not entered, on {date})",
         "hand_done_choice": "Handled change",
         "hand_reopen": "Put on the list again",
-        "hand_put_back": "Put back in Exact",
+        "hand_put_back": "Put old value on the list",
         "hand_reopened": "The row is on the list again.",
-        "hand_reopen_seen": "The assistant saw this change in Exact itself. Choose Put back in Exact if the old value must return.",
+        "hand_reopen_seen": "The assistant saw this change in Exact itself. Choose Put old value on the list if the old value must return.",
         "hand_reopen_not": "The change does not return to the list: there is another change for the same line or article by now.",
         "hand_put_back_listed": "Not put back in Exact yet. The list now holds: {row}. Enter the old value in Exact and tick the row.",
         "hand_put_back_other": ("Note: {old} is the value of the purchase order as the assistant read it; {source} showed {value}. "
@@ -1505,7 +1506,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "hand_exact_handed_over_row": ("Handed over to Exact but not applied yet: check Exact later and tick the row off once it is "
                                        "there."),
         "hand_done_written": "(put into Exact by the assistant on {date})",
-        "hand_reopen_written": "The assistant put this change into Exact itself. Choose Put back in Exact if the old value must return.",
+        "hand_reopen_written": "The assistant put this change into Exact itself. Choose Put old value on the list if the old value must return.",
         "hand_exact_stop:error": ("Something unexpected went wrong: the assistant has stopped putting changes into Exact. Pass this on to "
                                   "the researcher."),
         "hand_exact_replaced_one": ("1 change was put into Exact, but by now a newer change for the same line or article is on the list, "
@@ -1531,11 +1532,10 @@ STRINGS: dict[str, dict[str, str]] = {
                                              "Check in Exact which value should go back."),
         "files_tab": "Files",
         "files_title": "Give a file to the assistant",
-        "files_intro": ("If a document does not come from your mailbox by itself, give it here: a purchase order from Exact (PDF) or an "
-                        "order confirmation (PDF or e-mail). The assistant handles it at its next pass, within a minute."),
-        "files_intro_export": ("If a document does not come from your mailbox by itself, give it here: a purchase order from Exact (PDF), "
-                               "an order confirmation (PDF or e-mail) or an export from Exact (Excel or CSV). The assistant handles it at "
-                               "its next pass, within a minute."),
+        "files_intro": ("Give a purchase order from Exact (PDF) or an order confirmation (PDF or e-mail) here; the assistant handles it "
+                        "within a minute."),
+        "files_intro_export": ("Give a purchase order from Exact (PDF), an order confirmation (PDF or e-mail) or an export from Exact "
+                               "(Excel or CSV) here; the assistant handles it within a minute."),
         "files_choose": "Choose a file",
         "files_give": "Give to the assistant",
         "files_accepted": ("{name} was accepted. The assistant reads it at its next pass, within a minute; what happens to it then appears "
@@ -1593,6 +1593,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "review_pick": "Choose a case under Case, or open the oldest.",
         "review_pick_none": "No cases wait for your decision. A new case appears here by itself.",
         "review_open_oldest": "Open the oldest case",
+        "review_open_next": "Open the next case",
+        "review_next_preview": "Next in queue: {case}",
         "review_gone": "Purchase order {po} is no longer on the list: the case was closed or replaced meanwhile. Choose another case.",
         "review_gone_handled": "Purchase order {po} is no longer on the list: it was noted as handled meanwhile. Choose another case.",
         "case_failed_look": "failed, look yourself",
@@ -1687,9 +1689,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "pricelist_tab": "Price list",
         "pricelist_unset": ("The columns of the export of the articles are not set yet. That is done at the installation: Settings, "
                             "Connection to Exact, part 3."),
-        "pricelist_intro": ("Here you compare a supplier's price list with the purchase prices in Exact. For that the assistant needs the "
-                            "export of that supplier's articles from Exact. What changes, you put on the list Enter in Exact with one press; "
-                            "the assistant changes nothing in Exact."),
+        "pricelist_intro": ("Compare a supplier's price list with your Exact purchase prices and put the changes on the list Enter in Exact; the "
+                            "assistant changes nothing in Exact itself."),
         "pricelist_supplier": "Supplier",
         "pricelist_supplier_help": "Choose the supplier, or type the name for a new supplier.",
         "pricelist_state": "Purchase prices of {supplier} filed on {time} from {file}: {articles}.",
@@ -1727,6 +1728,7 @@ STRINGS: dict[str, dict[str, str]] = {
                                    "assistant reads every price as a price per piece."),
         "pricelist_problem:price": "Choose the column with the price.",
         "pricelist_view": "View",
+        "pricelist_table_empty": "No price list viewed yet. Choose a price list, map the columns and press View.",
         "pricelist_carry_out": "Put on the list Enter in Exact",
         "pricelist_header:article": "Article",
         "pricelist_header:current": "Purchase price in Exact",
@@ -1802,6 +1804,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "pricelist_remove_ask_one": "The stored purchase price of {supplier} will be taken away. The list Enter in Exact stays as it is.",
         "pricelist_remove_yes": "Yes, take them away",
         "pricelist_remove_no": "Keep them",
+        "pricelist_remove_changed": "Nothing was removed: the supplier in the field does not match the question. Press remove again.",
         "files_empty": "No files handled yet. What the assistant does with a file appears here by itself.",
         "mail_step:ids": "1. The app registration",
         "mail_step:sign_in": "2. Sign in with Microsoft",
@@ -1856,6 +1859,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "assistant_waiting_copilot": "Waiting for Copilot: purchase order {orders}.",
         "assistant_store": "Signing in is not possible: the protected store is refused. Mailbox and AI says why.",
         "assistant_refresh": "Refresh the assistant's state",
+        "assistant_refreshed": "Status refreshed at {time}.",
         "assistant_log": "Latest messages of the assistant (runner.log), the newest first",
         "assistant_log_none": "There are no messages in runner.log yet.",
         "assistant_log_help": "These lines are for the researcher. They stay on this PC.",
@@ -1902,11 +1906,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "settings_order_unread": "Folder for purchase orders: connected since {since}; not read yet.",
         "settings_order_on": "Folder for purchase orders: connected since {since}; last read: {last}; purchase orders fetched: {saved}.",
         "settings_ai": "Microsoft 365 Copilot",
-        "settings_ai_needs": ("Copilot needs: a Microsoft 365 Copilot licence on the account; the seven permissions "
-                              "Sites.Read.All, Mail.Read, People.Read.All, OnlineMeetingTranscript.Read.All, Chat.Read, "
-                              "ChannelMessage.Read.All and ExternalItem.Read.All on the app registration; and for four of them "
-                              "(People.Read.All, OnlineMeetingTranscript.Read.All, ChannelMessage.Read.All and ExternalItem.Read.All) "
-                              "an administrator's consent, once."),
+        "settings_ai_needs": ("Copilot needs a Microsoft 365 Copilot licence on the account, seven Graph permissions on the app "
+                              "registration, and one-time administrator consent for four of them."),
         "settings_ai_sign_in": "Sign in for Copilot",
         "settings_ai_signed_in": "Signed in for the mailbox and for Copilot.",
         "settings_ai_test": "Test Copilot",
@@ -1942,18 +1943,14 @@ STRINGS: dict[str, dict[str, str]] = {
         "settings_group:digest": "Digest and language",
         "settings_group:approval": "Approval",
         "settings_field:price_pct": "Price difference: at most this percentage",
-        "settings_help:price_pct": ("The threshold for the price: when a price difference is at most this percentage of the purchase "
-                                    "order's price and at most the amount below per line, the aid takes the supplier's price over on the "
-                                    "purchase order and changes the article's price too; a difference above the threshold comes to you."),
+        "settings_help:price_pct": ("Threshold for the price: within this percentage and the amount below, the assistant updates the order "
+                                    "price and the article's price, for example 2."),
         "settings_field:price_abs": "Price difference: at most this amount per line (euro)",
         "settings_help:price_abs": ("The amount of the threshold: the difference per piece times the quantity of the line; if that is "
                                     "more than this amount, the difference comes to you, even when it stays within the percentage."),
         "settings_field:lead_time_tolerance_days": "Delivery date: days on top of the lead time",
-        "settings_help:lead_time_tolerance_days": ("The margin in days: a later delivery date is taken over up to and including the "
-                                                   "supplier's lead time plus this margin, counted from the delivery date of the purchase "
-                                                   "order's line; a still later date comes to you, and without a known lead time of the "
-                                                   "supplier every later date comes to you. An earlier delivery date is taken over, also "
-                                                   "without a known lead time."),
+        "settings_help:lead_time_tolerance_days": ("Margin in days on top of the supplier's lead time: a later delivery date within this "
+                                                   "margin is taken over, for example 3."),
         "settings_field:first_cases_review": "First cases of a supplier",
         "settings_help:first_cases_review": ("Until this many cases of a supplier are closed, every case of that supplier comes to you, "
                                              "whatever it holds; 0 turns this off. On the tab \"Review\" the reason reads \"New supplier\"."),
@@ -1961,9 +1958,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "settings_help:ask_wait_working_days": ("This many working days the aid waits for a supplier's answer to a question; without "
                                                 "an answer the case comes to you."),
         "settings_field:buyer_name": "Your name under the messages",
-        "settings_help:buyer_name": ("This name stands under \"Purchasing\", or under \"Inkoop\" when the language of the aid is "
-                                     "Nederlands, in the questions to suppliers and in the request to the approver; empty: \"Purchasing\" "
-                                     "or \"Inkoop\" alone."),
+        "settings_help:buyer_name": ("Your name under \"Purchasing\" in questions and approval requests, for example J. Jansen (empty: "
+                                     "\"Purchasing\" alone)."),
         "settings_field:digest": "Digest",
         "settings_help:digest": "One digest a day from the time below, or a digest after every case.",
         "settings_digest:daily": "Every day at a set time",
@@ -1974,11 +1970,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "settings_help:buyer_email": ("The digest goes here, and you are in copy of every question to a supplier and of the request to "
                                       "the approver."),
         "settings_field:own_addresses": "Your own addresses in the test mode",
-        "settings_help:own_addresses": ("In the test mode a message of the aid goes out only when every address on it, the one in copy "
-                                        "included, stands here or is the address of the account the aid sends through your mailbox with. "
-                                        "Fill in your own e-mail addresses, with a comma between them, your e-mail address above "
-                                        "included. The address of a real supplier, or of an approver who is not you, does not belong "
-                                        "here."),
+        "settings_help:own_addresses": ("Your own e-mail addresses separated by commas, for example buyer@example.com, test@example.com; in "
+                                        "the test mode the assistant sends messages here only."),
         "settings_field:language": "Language of the aid",
         "settings_help:language": ("The language of the digest, of the messages to suppliers and to the approver, and of the banner in the "
                                    "webshop."),
@@ -1995,11 +1988,9 @@ STRINGS: dict[str, dict[str, str]] = {
                                     "again and then save."),
         "settings_buyer_refused": "Not saved: {fields}.",
         "settings_suppliers": "Suppliers",
-        "settings_suppliers_help": ("Per supplier, with the name as the purchase order gives it: the e-mail address for the aid's "
-                                    "questions (without an address the aid asks nothing and the case comes to you), the lead time in "
-                                    "days, whether every case comes to you, and whether the aid sends this supplier no questions by "
-                                    "itself: those questions then come to you, and a question you choose yourself on the tab "
-                                    "\"Review\" is still sent to the supplier."),
+        "settings_suppliers_help": ("Set per supplier (name as on the purchase order, for example S01) the e-mail address, lead time and "
+                                    "review choices."),
+        "settings_suppliers_empty": ("No suppliers set yet. Choose \"Add a supplier\" below and enter the e-mail address or lead time."),
         "settings_supplier_column:name": "Supplier",
         "settings_supplier_column:email": "E-mail address",
         "settings_supplier_column:lead_time": "Lead time (days)",
@@ -2089,10 +2080,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "exact_numbers:point": "1,234.50 (decimal point)",
         "exact_field:per_piece": "The PDF has no price-per column: every price is per one unit",
         "exact_field:senders": "Sender of the e-mails with purchase orders from Exact",
-        "exact_help:senders": ("The e-mail address from which Exact sends the purchase orders, or only the part after the at sign; several with "
-                               "a comma between them. Fill this in: a PDF in this layout from another sender is then handled as an order "
-                               "confirmation, so that a confirmation that looks like your purchase order is never filed as a purchase "
-                               "order."),
+        "exact_help:senders": ("Senders from which Exact mails purchase orders, separated by commas, for example "
+                               "exact@example.com, example.com; other senders are handled as order confirmations."),
         "exact_test": "Test",
         "exact_save": "Save the layout",
         "exact_export_save": "Save the export columns",
@@ -2260,8 +2249,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "exact_export_saved": "Saved.",
         "exact_export_changed": "Not saved: the connection was changed elsewhere meanwhile. Open the tab Settings again and check the columns.",
         "exact_part_articles": "3. Purchase prices of articles as an export from Exact (for the price list)",
-        "exact_articles_intro": ("Choose a sample of the export of articles from Exact and point out the columns. If the export has no column "
-                                 "with the supplier, you choose the supplier when you give the export on the tab Price list."),
+        "exact_articles_intro": ("Choose a sample of the Exact article export and map the columns; without a supplier column, you choose the "
+                                 "supplier on the tab Price list."),
         "exact_articles_sample": "Sample: an export of articles from Exact",
         "exact_articles_columns": "Columns of the export of the articles",
         "exact_articles_field:item_code": "Item code (required)",
@@ -2281,9 +2270,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "hand_test_mode": "Test mode: enter these changes in the test Exact only.",
         "hand_tryout": "(try-out document)",
         "tryout_title": "Trying out with a purchase order from Exact",
-        "tryout_intro": ("Without a supplier you can still try the assistant: for a purchase order it knows, the assistant makes a made-up "
-                         "order confirmation. For the pre-check in the browser the assistant makes a made-up cart of the same purchase "
-                         "order. You choose what differs. The try-out document stays on this PC."),
+        "tryout_intro": ("Make a made-up confirmation or cart with a chosen difference for a known purchase order here; the try-out "
+                         "document stays on this PC."),
         "tryout_switch": "Test mode: the assistant works with the test Exact",
         "tryout_switch_help": ("In the test mode the assistant sends messages to your own addresses only (Settings, Your rules). Switching "
                                "the test mode off ends that: every message then goes to the address the settings give."),

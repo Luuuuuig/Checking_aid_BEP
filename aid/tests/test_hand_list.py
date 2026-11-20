@@ -363,7 +363,7 @@ def test_the_done_rows_say_how_the_aid_knows(tmp_path, madeup_out):
 
 
 def test_a_put_back_of_a_case_change_is_logged_recorded_and_listed(tmp_path, madeup_out):
-    """'Terugdraaien in Exact' on an entered price prepares the old value through the undo of the review page's close: the case's write
+    """'Oude waarde op de lijst zetten' on an entered price prepares the old value through the undo of the review page's close: the case's write
     log holds the undo, step 09 and the audit record its record; the new row is linked by the mark puts_back and stands on the list
     with 'Terugzetten:' before it, and the price stays entered (rule 8)."""
     d, prepared, cases = ran(tmp_path, madeup_out, "MU08")
@@ -609,7 +609,7 @@ def newer_confirmation(path: Path, case_id: str, version: int, prices: dict[str,
 
 def test_a_put_back_never_replaces_a_newer_change(tmp_path, madeup_out):
     """The reviewers' sequence (K2): the buyer ticks MU08's price, Exact sends version 2 with it, and a newer confirmation of S08 that
-    quotes version 2 asks 12,90 for the line. "Terugdraaien in Exact" on the first price is refused, with nothing written and the newer
+    quotes version 2 asks 12,90 for the line. "Oude waarde op de lijst zetten" on the first price is refused, with nothing written and the newer
     change named, while that change is open or entered, and the note says how to lift the refusal (second review round, K13); once
     the buyer dropped it, the put-back is made."""
     d, prepared, _ = ran(tmp_path, madeup_out, "MU08")
@@ -650,7 +650,7 @@ def test_a_put_back_never_replaces_a_newer_change(tmp_path, madeup_out):
 def test_a_put_back_that_a_newer_change_replaced_does_not_return(tmp_path, madeup_out):
     """The put-back came first: the buyer ticks MU08's price and puts it back, and then a newer confirmation asks 12,90 for the line,
     which replaces the put-back on the list, as a newer value replaces any older change (the cost of runs, accepted in the review
-    round). While that newer change is open or entered, "Terugdraaien in Exact" on the first price says that the change does not
+    round). While that newer change is open or entered, "Oude waarde op de lijst zetten" on the first price says that the change does not
     return to the list and writes nothing, so the note of K2, which asks to handle the newer change first, is not given here. Once the
     buyer dropped the newer change, nothing stands in the put-back's way any more, and the press makes it again (third review round,
     K22)."""
@@ -690,7 +690,7 @@ def files_of(d) -> dict:
 def test_a_put_back_stands_when_the_change_was_asked_again(tmp_path, madeup_out):
     """The checkers' sequence (second review round, K10), every row from a case run: MU08's price ticked; Exact sends version 2 with it;
     a newer confirmation that quotes version 2 asks 12,90, which the buyer drops; then MU08's first confirmation comes in again, quoting
-    version 1, and asks 12,50 → 12,70 once more, which the marks say Exact holds ("already"). "Terugdraaien in Exact" on the ticked
+    version 1, and asks 12,50 → 12,70 once more, which the marks say Exact holds ("already"). "Oude waarde op de lijst zetten" on the ticked
     price puts it back: the put-back stands open on the list, the later run is replaced by it, and the page says so truly."""
     d, prepared, opened = ran(tmp_path, madeup_out, "MU08")
     mark(prepared, one(prepared, "po_line_price").ids, "entered", datetime(2026, 11, 12, 9, 30))
@@ -718,7 +718,7 @@ def test_a_put_back_stands_when_the_change_was_asked_again(tmp_path, madeup_out)
 
 def test_a_put_back_that_exact_holds_already_is_not_made_and_the_researcher_note_is_left_for_the_unforeseen(tmp_path, madeup_out,
                                                                                                             monkeypatch):
-    """"Terugdraaien in Exact" first works out, without writing, the state the put-back would have (K10, and the third review round's
+    """"Oude waarde op de lijst zetten" first works out, without writing, the state the put-back would have (K10, and the third review round's
     K20): here another case's put-back of the line (an undo row, which never blocks as a newer change does) was entered with the old
     price, so the marks say that Exact holds 12,50 already: the press writes nothing and says "Deze wijziging is al teruggedraaid.".
     The note for the researcher is left for a state the rules cannot give, here one that put_back_state is made to give."""
@@ -769,7 +769,7 @@ def test_a_tick_of_a_change_two_cases_asked_is_not_taken_back_once_it_was_put_ba
 
 def test_the_refusal_for_a_newer_change_lifts_once_that_change_is_put_back(tmp_path, madeup_out):
     """The checkers' sequence (second review round, K13): MU08's price entered; Exact sends version 2; a newer confirmation asks 12,90,
-    entered too. "Terugdraaien in Exact" on 12,70 is refused, and says how to go on: put the newer change back and tick its put-back
+    entered too. "Oude waarde op de lijst zetten" on 12,70 is refused, and says how to go on: put the newer change back and tick its put-back
     off. While that put-back waits, the refusal stays; once it is entered, Exact holds 12,70 again, the newer change no longer blocks,
     and the put-back of 12,70 is made and stands open on the list."""
     d, prepared, _ = ran(tmp_path, madeup_out, "MU08")
@@ -864,7 +864,7 @@ def line_change(prepared: Path, old: str, new: str, rule_id: str = "R04"):
 
 
 def press(d, change, hour: int, minute: int, language: str = "nl") -> str:
-    """"Terugdraaien in Exact" on the change at that time of 12 November, with the page's clock at that time too: the note."""
+    """"Oude waarde op de lijst zetten" on the change at that time of 12 November, with the page's clock at that time too: the note."""
     moment = datetime(2026, 11, 12, hour, minute)
     return take_back(d.model_copy(update={"clock": lambda: moment}), change, moment, language)
 
@@ -884,7 +884,7 @@ PUT_BACK_ROW = "Inkooporder 250108 (S08), Terugzetten: regel 1 (KM-0801): prijs 
 
 def test_a_newer_change_that_asks_the_old_value_needs_no_put_back(tmp_path, madeup_out):
     """The checkers' f2 and at7 (third review round, K20 and K21): MU08's 12,50 -> 12,70 ticked; Exact sends version 2; a newer
-    confirmation that quotes it asks 12,50 again (12,70 -> 12,50). "Terugdraaien in Exact" writes nothing and says that the list
+    confirmation that quotes it asks 12,50 again (12,70 -> 12,50). "Oude waarde op de lijst zetten" writes nothing and says that the list
     already asks the old value. Once the buyer dropped that change, the press makes the put-back, which stands open on the list: it no
     longer joins the dropped row of its own value. With the newer change entered instead (at7's variant), Exact holds the old value,
     and the press says "Deze wijziging is al teruggedraaid." and writes nothing."""
@@ -922,7 +922,7 @@ def test_a_newer_change_that_asks_the_old_value_needs_no_put_back(tmp_path, made
 
 def test_a_put_back_that_exact_holds_already_by_the_marks_is_not_made(tmp_path, madeup_out):
     """The checkers' f1 (third review round, K20): MU08's 12,50 -> 12,70 ticked; a second confirmation that quotes version 1 asks
-    12,50 -> 12,60, ticked too. "Terugdraaien in Exact" on 12,70 is refused, naming 12,60; the buyer puts 12,60 back and ticks that
+    12,50 -> 12,60, ticked too. "Oude waarde op de lijst zetten" on 12,70 is refused, naming 12,60; the buyer puts 12,60 back and ticks that
     put-back off, so Exact holds 12,50, the old value of 12,70. The next press on 12,70 writes nothing and says "Deze wijziging is al
     teruggedraaid.", where it sent the buyer to the researcher before."""
     d, prepared, _ = ran(tmp_path, madeup_out, "MU08")
@@ -1362,3 +1362,17 @@ def test_the_sentence_of_another_old_value_keeps_to_the_line_of_the_put_back(tmp
     filed_on(d.store, "250108", "v1", datetime(2026, 11, 1, 9, 0))
     mark(prepared, one(prepared, "po_line_price").ids, "entered", datetime(2026, 11, 12, 10, 0))
     assert press(d, one(prepared, "po_line_price"), 11, 0) == listed_note(PUT_BACK_ROW.format(old="12,70", new="12,50"))
+
+
+def test_intro_omits_nothing_to_enter_when_unreadable_rows_exist():
+    """WP18 step 4: when no row could be listed because rows were unreadable, intro does not claim that nothing is to enter."""
+    from aid.review.hand_list import intro
+
+    for lang in ("nl", "en"):
+        strings = STRINGS[lang]
+        partial_one = intro([], passed=1, language=lang)
+        assert strings["hand_nothing"] not in partial_one and strings["hand_unreadable_one"] in partial_one
+        partial_many = intro([], passed=3, language=lang)
+        assert strings["hand_nothing"] not in partial_many and strings["hand_unreadable_many"].format(n=3) in partial_many
+        complete_empty = intro([], passed=0, language=lang)
+        assert strings["hand_nothing"] in complete_empty

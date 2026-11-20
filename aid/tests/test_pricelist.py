@@ -1068,7 +1068,7 @@ def test_a_mark_in_the_second_of_the_export_does_not_count_and_a_put_back_gives_
     assert mark(prepared, [entry.entry_id], "reopened", STORED + timedelta(seconds=1)) == 1
     assert mark(prepared, [entry.entry_id], "entered", STORED + timedelta(seconds=2)) == 1
     assert current_prices(root, "S01")[0] == {"KM-1001": "12.70"}
-    # the put-back, as "Terugdraaien in Exact" prepares it from the price list's own write log
+    # the put-back, as "Oude waarde op de lijst zetten" prepares it from the price list's own write log
     folder = root / "pricelists" / "2026-11-20"
     folder.mkdir(parents=True)
     WriteLog(folder).append(entry)

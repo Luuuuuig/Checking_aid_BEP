@@ -89,9 +89,9 @@ TEXTS = {
     "hand_exact_handed_over_row": ("Aan Exact doorgegeven en nog niet verwerkt: kijk later in Exact en vink de regel af als het er staat.",
                                    "Handed over to Exact but not applied yet: check Exact later and tick the row off once it is there."),
     "hand_done_written": ("(door de assistent in Exact gezet op {date})", "(put into Exact by the assistant on {date})"),
-    "hand_reopen_written": ("Deze wijziging heeft de assistent zelf in Exact gezet. Kies Terugdraaien in Exact als de oude waarde terug "
-                            "moet.",
-                            "The assistant put this change into Exact itself. Choose Put back in Exact if the old value must return."),
+    "hand_reopen_written": ("Deze wijziging heeft de assistent zelf in Exact gezet. Kies Oude waarde op de lijst zetten als de oude waarde "
+                            "terug moet.",
+                            "The assistant put this change into Exact itself. Choose Put old value on the list if the old value must return."),
     # the review round of 17 November: the safety items
     "hand_exact_stop:error": ("Er ging iets onverwachts mis: de assistent zet nu niets meer in Exact. Geef dit door aan de onderzoeker.",
                               "Something unexpected went wrong: the assistant has stopped putting changes into Exact. Pass this on to the "
@@ -126,7 +126,7 @@ TEXTS = {
                                       "The assistant put this into Exact, but this line cannot be found in the purchase order that came in "
                                       "afterwards. Check in Exact whether the change is there and tick the row off, or take the row off "
                                       "the list."),
-    # the second review round of 17 November: the button writes no put-back, and the row and the note of Terugdraaien in Exact say
+    # the second review round of 17 November: the button writes no put-back, and the row and the note of Oude waarde op de lijst zetten say
     # what the connection read in Exact when that is an empty field or nothing
     "hand_exact_put_back_empty_row": ("Dit terugzetten voert de assistent niet zelf in Exact in. Voordat de assistent de wijziging in Exact "
                                       "zette, was dit veld in Exact leeg. Kijk in Exact welke waarde terug moet, zet die zelf terug en vink "
@@ -692,7 +692,7 @@ def test_the_buyers_other_ticks_are_kept(tmp_path, madeup_out):
 
 
 def test_weer_op_de_lijst_zetten_refuses_a_change_the_aid_put_into_exact_and_terugdraaien_still_prepares(tmp_path, madeup_out):
-    """A change the aid put into Exact is not put on the list again: the press says to choose "Terugdraaien in Exact", which prepares
+    """A change the aid put into Exact is not put on the list again: the press says to choose "Oude waarde op de lijst zetten", which prepares
     the old value as a row, as for a tick, and calls no route. Since the second review round (R1) the button does not put that row
     into Exact: it passes it over, and the buyer enters it."""
     route = StandIn()
@@ -908,7 +908,7 @@ def test_a_price_lists_article_price_is_no_try_out_and_is_put_into_exact(tmp_pat
 
 def written_and_put_back(tmp_path: Path, madeup_out: Path, before: str | None, by_hand: bool = False) -> tuple:
     """MU08's price row put into Exact through a stand-in route that read `before` there (or, by_hand, ticked by the buyer), and then
-    "Terugdraaien in Exact" on it: (the page, the folder of the list, the route, the clock, the value of the put-back row, the note of
+    "Oude waarde op de lijst zetten" on it: (the page, the folder of the list, the route, the clock, the value of the put-back row, the note of
     Terugdraaien)."""
     route = StandIn(outcome("verified", "read_back", before))
     page, prepared, d, clock = route_page(tmp_path, madeup_out, route, cases=("MU08",))
@@ -932,7 +932,7 @@ def test_the_button_never_writes_a_put_back_and_its_row_says_what_the_route_read
     """R1 of the second review round: the button writes no put-back, whatever the route read in Exact before the aid's write of the
     change it puts back. The put-back is passed over, and nothing is sent or logged for it. Its row says, before any press, that the
     buyer enters it, and also what the connection read in Exact there when that differs from the put-back's value: another value,
-    an empty field or nothing. The note of Terugdraaien in Exact names the same, after the note of the put-back made."""
+    an empty field or nothing. The note of Oude waarde op de lijst zetten names the same, after the note of the put-back made."""
     page, prepared, route, clock, back, note = written_and_put_back(tmp_path, madeup_out, before)
     lines = log_lines(prepared)
     shown_rows = [texts_of(listed_by(page, "list_opened", language)) for language in ("nl", "en")]
@@ -1515,7 +1515,7 @@ def test_an_undo_row_of_the_manuals_recipe_is_not_written(tmp_path, madeup_out, 
 
 
 def test_a_put_back_whose_link_could_not_be_written_is_not_written(tmp_path, madeup_out, monkeypatch):
-    """R1: "Terugdraaien in Exact" prepares the put-back of a change the aid put into Exact and then cannot link it (another program
+    """R1: "Oude waarde op de lijst zetten" prepares the put-back of a change the aid put into Exact and then cannot link it (another program
     holds marks.jsonl at that moment), so the row stands on the list without the mark puts_back. The button judges it by its rows
     all the same: it holds an undo row, so nothing is sent or logged, and its row says that the buyer enters it."""
     from aid.review import hand_list
@@ -1552,7 +1552,7 @@ def test_a_put_back_of_a_change_the_buyer_ticked_after_a_print_ended_the_aids_ti
     """R1, the sequence of the second safety review's finding 2: the route put 12.70 into Exact, having read 12.50 there (the
     put-back's own value), 12.40, an empty field or nothing. Version 2 of the order, filed after that write, shows 12.60 for the line,
     so the real contradict of by_hand ends the aid's tick; the buyer then enters the change in Exact and ticks it off, as the row
-    asks, and presses Terugdraaien in Exact. The put-back is not written and nothing is logged; its row carries the plain note in
+    asks, and presses Oude waarde op de lijst zetten. The put-back is not written and nothing is logged; its row carries the plain note in
     both languages, whatever the route read before the aid's write, since the change it puts back is no longer marked entered by the
     aid (T12 of the third review round: the condition of R1 for the row's note)."""
     from aid.execution.by_hand import contradict

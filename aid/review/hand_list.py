@@ -61,14 +61,14 @@ still marked entered by the aid and the route read in Exact before its write ano
 nothing (exact_route.route_read), a note of its own for each that says what it read there; the button writes a change only when
 one_value holds for it, the rule of the copy buttons, and its value is in the normal form of the aid's own writers
 (exact_route.sendable); and among the handled changes a change the aid put into Exact reads "(door de assistent in Exact gezet op
-18-11-2026)" (the mark "entered" by "exact"), and the note of "Terugdraaien in Exact" on it names, under the same condition, what
+18-11-2026)" (the mark "entered" by "exact"), and the note of "Oude waarde op de lijst zetten" on it names, under the same condition, what
 the route read in Exact before the aid's write when that is not the value the put-back names (_other_before). Without a route none
 of this shows.
 
 Under the list the tab has two sections. done_rows gives the section "Afgehandeld in de laatste 14 dagen": the changes entered, seen or
 dropped in that time, the newest first, each as label_of names it, followed by how the aid knows it, "(door u afgevinkt op 18-11-2026)",
 "(gezien in versie 2 van de inkooporder)", "(gezien in een export uit Exact)" or "(niet ingevoerd, op 18-11-2026)"; done_text makes the
-section's text of them. take_back is its button "Terugdraaien in Exact": on a change entered or seen it prepares the old value as the
+section's text of them. take_back is its button "Oude waarde op de lijst zetten": on a change entered or seen it prepares the old value as the
 value to enter, through the undo of the review page's close (aid/review/close.py, undo) for a change of a case, so that the case's
 write log, step 09 and audit record hold it, and through undo_entry on the price list's own write-log folder for a change of a price
 list (<cases_root>/pricelists/<day>, where the import's command keeps it); it links the new row to the entry it puts back and says
@@ -303,7 +303,7 @@ def intro(listed: list[tuple[str, str, list[tuple[str, str]]]], passed: int, lan
         title, _, hint = heading.partition("\n")
         if hint:
             lines.append(f"**{_markdown(title)}** {_markdown(hint)}")
-    if not listed:
+    if not listed and not passed:
         lines.append(strings["hand_nothing"])
     if passed:
         lines.append(strings["hand_unreadable_one"] if passed == 1 else strings["hand_unreadable_many"].format(n=passed))
@@ -468,9 +468,11 @@ def done_rows(all_: list[Change], now: datetime, language: str, days: int = DONE
 
 
 def done_text(rows: list[tuple[str, str]], language: str) -> str:
-    """The section of the handled changes as Markdown: its heading in bold, then a line per change of done_rows."""
+    """The section of the handled changes as Markdown: its heading in bold, then a line per change of done_rows, or an empty-state
+    sentence telling the buyer what appears here when none was handled in the last 14 days."""
     heading = f"**{STRINGS[language]['hand_done']}**"
-    return f"{heading}\n\n" + "\n".join(f"- {_markdown(text)}" for text, _ in rows) if rows else heading
+    body = "\n".join(f"- {_markdown(text)}" for text, _ in rows) if rows else STRINGS[language]["hand_done_empty"]
+    return f"{heading}\n\n{body}"
 
 
 def label_of(change: Change, store: PoStore | None, cases_root: Path | None, language: str) -> str:
@@ -488,7 +490,7 @@ def label_of(change: Change, store: PoStore | None, cases_root: Path | None, lan
 
 
 def take_back(deps: Deps, change: Change, now: datetime, language: str) -> str:
-    """"Terugdraaien in Exact" on a handled change (see the module docstring), with the Deps of the page, whose writer prepares into
+    """"Oude waarde op de lijst zetten" on a handled change (see the module docstring), with the Deps of the page, whose writer prepares into
     <cases_root>/prepared: prepare the old value as the value to enter, link the new row to the entry it puts back, and return the
     note of what happened. The entry put back is the newest row of the change whose mark gives its state and whose old value the aid
     knows; a change of a case is put back through undo() of aid/review/close.py, one of a price list through undo_entry on the
@@ -650,7 +652,7 @@ def _how(change: Change, strings: dict[str, str], language: str) -> str:
 
 
 def _put_back_note(deps: Deps, row_id: str, now: datetime, language: str, fresh: bool) -> str:
-    """The note of a press of "Terugdraaien in Exact" by the state of the put-back row `row_id`: open, the row on the list when it was
+    """The note of a press of "Oude waarde op de lijst zetten" by the state of the put-back row `row_id`: open, the row on the list when it was
     made now (fresh), else that the put-back is on the list already; dropped, put on the list again; entered or seen, or held by Exact
     by the marks, or not on the list at all (a writer that made it in a system), the change was put back already. Replaced by newer
     rows of its place, or dropped with newer rows after it, so that it cannot return to the list: the change was put back already
