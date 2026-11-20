@@ -2471,16 +2471,30 @@ def _hand_tab(gr, app, language, hand_tab, live: _Live, tab: _Tab, cases_root: P
         except Exception:
             return gr.update()
 
+    def tick_buttons(ticked: list[str] | None, language_now: str) -> tuple[dict, dict]:
+        """The two buttons that act on ticked rows: inactive until at least one row is ticked, with the ticked count once one is."""
+        strings = STRINGS[language_now]
+        count = len(ticked or [])
+        if not count:
+            return (gr.update(value=strings["hand_entered"], interactive=False),
+                    gr.update(value=strings["hand_dropped"], interactive=False))
+        return (gr.update(value=strings["hand_entered_count"].format(n=count), interactive=True),
+                gr.update(value=strings["hand_dropped_count"].format(n=count), interactive=True))
+
     def hand_relabel(language_now: str, ticked: list[str] | None, chosen: str | None) -> tuple:
         """The page's language switched: the tab in that language, with the rows ticked and the block chosen kept while they are
-        listed, and the note cleared."""
+        listed, the two ticked-row buttons carrying their count and active state, and the note cleared."""
         strings = STRINGS[language_now]
         try:
             listed = shown(language_now, "", ticked, chosen)
+            kept = listed[2]["value"]
         except Exception as error:
             listed = unread(error, language_now)
-        buttons = ("refresh", "hand_entered", "hand_dropped", "hand_block_entered", *(("hand_exact",) if route is not None else ()))
-        return (*listed, *(gr.update(value=strings[key]) for key in buttons))      # an update each: gradio takes its value out as it applies it
+            kept = list(ticked or [])
+        entered_now, dropped_now = tick_buttons(kept, language_now)
+        return (*listed, gr.update(value=strings["refresh"]), entered_now, dropped_now,
+                gr.update(value=strings["hand_block_entered"]),
+                *((gr.update(value=strings["hand_exact"]),) if route is not None else ()))
 
     def sections(language_now: str, note: str = "", chosen: str | None = None) -> tuple:
         """The two sections under the list as the files are now: the handled changes (their text, the dropdown with the change chosen
@@ -2792,8 +2806,8 @@ def _hand_tab(gr, app, language, hand_tab, live: _Live, tab: _Tab, cases_root: P
         with gr.Row():
             # with a route into Exact its button comes first and is the one filled button of the tab; without one there is none
             written_above = gr.Button(first["hand_exact"], variant="primary") if route is not None else None
-            entered_above = gr.Button(first["hand_entered"], variant="primary" if route is None else "secondary")  # else the one filled button
-            dropped_above = gr.Button(first["hand_dropped"])
+            entered_above = gr.Button(first["hand_entered"], variant="primary" if route is None else "secondary", interactive=False)
+            dropped_above = gr.Button(first["hand_dropped"], interactive=False)
         note = gr.Markdown("", elem_id="hand-note", elem_classes=["answer"])           # the answer of every press of the list
         # what the page's script needs to draw the copy buttons behind the rows, and the line of what a press copied: in this
         # column, so that the line is in view wherever in a long list the press was
@@ -2825,6 +2839,7 @@ def _hand_tab(gr, app, language, hand_tab, live: _Live, tab: _Tab, cases_root: P
     gr.on(triggers=[app.load, hand_tab.select, refresh.click, language.change], fn=copies_opened, inputs=language, outputs=copies,
           show_progress="hidden", queue=False)
     gr.on(triggers=[app.load, hand_tab.select, refresh.click], fn=list_opened, inputs=language, outputs=listed)
+    rows.change(tick_buttons, inputs=[rows, language], outputs=[entered_above, dropped_above], show_progress="hidden", queue=False)
     presses = [entered_above.click(changes_entered, inputs=[rows, language], outputs=listed),
                dropped_above.click(changes_dropped, inputs=[rows, language], outputs=listed),
                block_button.click(block_entered, inputs=[block, seen, language], outputs=listed),

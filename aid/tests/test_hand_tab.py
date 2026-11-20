@@ -312,8 +312,14 @@ def test_switching_the_language_relabels_the_tab_and_keeps_what_is_ticked(tmp_pa
     assert rows["value"] == [price] and (block["value"], block["label"]) == ("po:250114", "Purchase order or article prices")   # a row no longer listed is let go
     assert seen["po:250108"] == [price]
     assert [update["value"] for update in (refresh, entered_above, dropped_above, whole)] == [
-        "Refresh the list", "The ticked rows have been entered", "Do not enter the ticked rows", "All of this has been entered"]
-    assert handler(page, "hand_relabel")("nl", [], "po:999")[3]["value"] is None
+        "Refresh the list", "The ticked rows have been entered (1)", "Do not enter the ticked rows (1)", "All of this has been entered"]
+    assert entered_above["interactive"] is True and dropped_above["interactive"] is True
+    empty_relabel = handler(page, "hand_relabel")("nl", [], "po:999")
+    assert empty_relabel[3]["value"] is None
+    assert (empty_relabel[7], empty_relabel[8]) == (
+        {"__type__": "update", "value": NL["hand_entered"], "interactive": False},
+        {"__type__": "update", "value": NL["hand_dropped"], "interactive": False},
+    )
 
 
 def test_the_tab_is_wired_as_the_page_shows_it(tmp_path, madeup_out):
@@ -546,7 +552,9 @@ def test_the_texts_of_the_tab_in_both_languages():
              "hand_hint": ("Let op: na deze wijziging moet de inkooporder opnieuw gefiatteerd worden.",
                            "Note: after this change the purchase order must be approved again."),
              "hand_entered": ("Aangevinkte regels zijn ingevoerd", "The ticked rows have been entered"),
+             "hand_entered_count": ("Aangevinkte regels zijn ingevoerd ({n})", "The ticked rows have been entered ({n})"),
              "hand_dropped": ("Aangevinkte regels niet invoeren", "Do not enter the ticked rows"),
+             "hand_dropped_count": ("Aangevinkte regels niet invoeren ({n})", "Do not enter the ticked rows ({n})"),
              "hand_block_entered": ("Alles hiervan is ingevoerd", "All of this has been entered"),
              "hand_block": ("Inkooporder of artikelprijzen", "Purchase order or article prices"),
              "hand_tick_first": ("Vink eerst aan wat u bedoelt.", "Tick what you mean first."),
@@ -2221,3 +2229,47 @@ def test_step6_put_back_label_dropdown_empty_and_readme_command(tmp_path, madeup
     part3_cmd = "python -B -W error -m pytest aid/tests -q -p no:cacheprovider --basetemp " + chr(60) + "a temporary folder" + chr(62) + " -k " + chr(34) + "not real_launcher" + chr(34)
     assert part3_cmd in readme
     assert (chr(10) + "python3 -m pytest aid/tests -q" + chr(10)) not in readme
+
+
+def test_tick_buttons_stay_inactive_until_a_row_is_ticked_and_show_the_count(tmp_path, madeup_out):
+    """WP19 item 3: on In Exact invoeren, the two buttons that act on ticked rows start inactive, become active with the count
+    once at least one row is ticked, keep the count on a language switch, and return to inactive without a count when cleared."""
+    gr = import_gradio()
+    page, prepared, d = tab_page(tmp_path, madeup_out)
+    tab = hand_tab(page)
+    by_id = {block.elem_id: block for block in inside(tab) if getattr(block, "elem_id", None)}
+    pair = by_id["hand-actions"].children[0]
+    entered_btn, dropped_btn = pair.children
+    rows = by_id["hand-rows"]
+    language = [block for block in page.blocks.values() if isinstance(block, gr.Radio) and block.label == NL["language"]][0]
+
+    assert (entered_btn.value, entered_btn.interactive) == (NL["hand_entered"], False)
+    assert (dropped_btn.value, dropped_btn.interactive) == (NL["hand_dropped"], False)
+
+    [sync] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == "tick_buttons"]
+    assert sync.targets == [(rows._id, "change")]
+    assert sync.inputs == [rows, language] and sync.outputs == [entered_btn, dropped_btn]
+    assert sync.queue is False and sync.show_progress == "hidden"
+
+    listed = shown(page, "list_opened", "nl")
+    price = value_of(listed, "prijs 12,50")
+    date = value_of(listed, "leverdatum")
+
+    for lang, strings in (("nl", NL), ("en", EN)):
+        assert sync.fn([], lang) == (
+            {"__type__": "update", "value": strings["hand_entered"], "interactive": False},
+            {"__type__": "update", "value": strings["hand_dropped"], "interactive": False},
+        )
+        assert sync.fn([price], lang) == (
+            {"__type__": "update", "value": strings["hand_entered_count"].format(n=1), "interactive": True},
+            {"__type__": "update", "value": strings["hand_dropped_count"].format(n=1), "interactive": True},
+        )
+        assert sync.fn([price, date], lang) == (
+            {"__type__": "update", "value": strings["hand_entered_count"].format(n=2), "interactive": True},
+            {"__type__": "update", "value": strings["hand_dropped_count"].format(n=2), "interactive": True},
+        )
+
+    manual = manual_sections()
+    assert "inactive until" in manual["2.6"].lower() and "how many" in manual["2.6"].lower()
+    assert "pas actief" in manual["7"].lower() and "hoeveel" in manual["7"].lower()
+
