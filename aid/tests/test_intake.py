@@ -321,16 +321,14 @@ def test_the_texts_of_the_tab_in_both_languages():
     from aid.review.i18n import STRINGS
     nl, en = STRINGS["nl"], STRINGS["en"]
     texts = {"files_tab": ("Bestanden", "Files"), "files_title": ("Een bestand aan de assistent geven", "Give a file to the assistant"),
-             "files_intro": ("Komt een document niet vanzelf uit uw postvak, geef het dan hier: een inkooporder uit Exact (pdf) of een "
-                             "orderbevestiging (pdf of e-mail). De assistent verwerkt het bij de volgende ronde, binnen een minuut.",
-                             "If a document does not come from your mailbox by itself, give it here: a purchase order from Exact (PDF) "
-                             "or an order confirmation (PDF or e-mail). The assistant handles it at its next pass, within a minute."),
-             "files_intro_export": ("Komt een document niet vanzelf uit uw postvak, geef het dan hier: een inkooporder uit Exact (pdf), een "
-                                    "orderbevestiging (pdf of e-mail) of een export uit Exact (Excel of csv). De assistent verwerkt het bij "
-                                    "de volgende ronde, binnen een minuut.",
-                                    "If a document does not come from your mailbox by itself, give it here: a purchase order from Exact "
-                                    "(PDF), an order confirmation (PDF or e-mail) or an export from Exact (Excel or CSV). The assistant "
-                                    "handles it at its next pass, within a minute."),
+             "files_intro": ("Geef hier een inkooporder uit Exact (pdf) of een orderbevestiging (pdf of e-mail); de assistent verwerkt het "
+                             "binnen een minuut.",
+                             "Give a purchase order from Exact (PDF) or an order confirmation (PDF or e-mail) here; the assistant handles it "
+                             "within a minute."),
+             "files_intro_export": ("Geef hier een inkooporder uit Exact (pdf), een orderbevestiging (pdf of e-mail) of een export uit Exact "
+                                    "(Excel of csv); de assistent verwerkt het binnen een minuut.",
+                                    "Give a purchase order from Exact (PDF), an order confirmation (PDF or e-mail) or an export from Exact "
+                                    "(Excel or CSV) here; the assistant handles it within a minute."),
              "files_choose": ("Kies een bestand", "Choose a file"), "files_give": ("Aan de assistent geven", "Give to the assistant"),
              "files_accepted": ("{name} is aangenomen. De assistent leest het bij de volgende ronde, binnen een minuut; wat ermee "
                                 "gebeurt, komt dan vanzelf in Laatst verwerkt.",

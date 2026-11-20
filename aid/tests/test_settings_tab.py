@@ -1566,9 +1566,11 @@ def test_the_reader_line_says_what_reads_the_documents_now(tmp_path, madeup_out)
 
 
 def test_the_ai_section_says_what_copilot_needs_in_both_languages():
+    manual_ai = manual_sections()["3.15"]
+    assert all(scope in manual_ai for scope in COPILOT_SCOPES)
     for language in ("nl", "en"):
         strings = STRINGS[language]
-        assert all(scope in strings["settings_ai_needs"] for scope in COPILOT_SCOPES) and "Microsoft 365 Copilot" in strings["settings_ai_needs"]
+        assert "Microsoft 365 Copilot" in strings["settings_ai_needs"] and len(strings["settings_ai_needs"]) <= 200
     nl = STRINGS["nl"]
     assert (nl["settings_ai_sign_in"], nl["settings_ai_test"], nl["settings_ai_reader"]) == (
         "Aanmelden voor Copilot", "Copilot testen", "Documenten lezen met")
@@ -2234,11 +2236,14 @@ def test_a_question_the_buyer_chooses_on_the_review_tab_goes_to_a_supplier_the_a
     handler(page, "close")(c.case_id, "nl")
     [eml] = out.glob("*.eml")
     assert message_from_bytes(eml.read_bytes(), policy=policy.default)["To"] == "orders@s11.example.org"
-    for language, itself, chosen in (("nl", "uit zichzelf", "zelf op het tabblad \"Beoordelen\" kiest"), ("en", "by itself", "choose yourself on the tab \"Review\"")):
+    manual = manual_sections()
+    for language, itself, chosen in (("nl", "uit zichzelf", "zelf op het tabblad \"Beoordelen\" kiest"), ("en", "by itself", "choose yourself on the review tab")):
         strings = STRINGS[language]
         assert itself in strings["settings_supplier_messages_off"] and itself in strings["settings_supplier_column:messages_off"]
-        assert itself in strings["settings_suppliers_help"] and chosen in strings["settings_suppliers_help"]
         assert "nooit" not in strings["settings_suppliers_help"] and "never" not in strings["settings_suppliers_help"]
+        assert len(strings["settings_suppliers_help"]) <= 200
+    assert "uit zichzelf geen vragen" in manual["7"] and "zelf op het tabblad \"Beoordelen\" kiest" in manual["7"]
+    assert "choose yourself on the review tab" in manual["2.8"]
 
 
 def test_the_helps_say_what_the_rules_do(tmp_path):
@@ -2266,17 +2271,19 @@ def test_the_helps_say_what_the_rules_do(tmp_path):
     assert (date("2026-12-03", 10, 7), date("2026-12-04", 10, 7)) == ("AUTO", "REVIEW")
     assert (date("2026-11-17", None, 7), date("2026-01-05", None, 7), date("2026-01-05", 10, 0)) == ("REVIEW", "AUTO", "AUTO")
     nl, en = STRINGS["nl"]["settings_help:lead_time_tolerance_days"], STRINGS["en"]["settings_help:lead_time_tolerance_days"]
-    assert "geteld vanaf de leverdatum van de regel op de inkooporder" in nl and "counted from the delivery date of the purchase order's line" in en
-    assert "Een eerdere leverdatum neemt de assistent over, ook zonder bekende levertijd" in nl and "de marge" in nl.lower()
-    assert "An earlier delivery date is taken over, also without a known lead time" in en and "the margin" in en.lower()
+    assert "marge" in nl.lower() and "margin" in en.lower() and len(nl) <= 200 and len(en) <= 200
     assert "na de datum op de inkooporder" not in nl and "after the purchase order's date" not in en
+    manual = manual_sections()
+    assert "counted from the delivery date of the purchase order's line" in manual["2.8"]
+    assert "An earlier delivery date is taken over, also without a known lead time." in manual["2.8"]
+    assert "geteld vanaf de leverdatum van de regel op de inkooporder" in manual["7"]
     price = Flag(flag_id="F1", field="price", po_line_ids=["1"], doc_line_ids=["1"], po_value=value("10.00"), doc_value=value("10.15"), detail="different")
     quantity = Match(field="quantity", po_line_ids=["1"], doc_line_ids=["1"], value="100")
     action = route(Findings(version=1, flags=[price], matches=[quantity], uncompared=[]), context(10), SETTINGS.model_copy(update={"authorization_limit": None}))[0]
     assert [op.kind for op in action.ops] == ["po_line_price", "article_price"]             # the article's price is changed too
     assert "prijs van het artikel" in STRINGS["nl"]["settings_help:price_pct"] and "the article's price" in STRINGS["en"]["settings_help:price_pct"]
-    assert "drempel" in STRINGS["nl"]["settings_help:price_pct"] and "drempel" in STRINGS["nl"]["settings_help:price_abs"]
-    assert "threshold" in STRINGS["en"]["settings_help:price_pct"] and "threshold" in STRINGS["en"]["settings_help:price_abs"]
+    assert "drempel" in STRINGS["nl"]["settings_help:price_pct"].lower() and "drempel" in STRINGS["nl"]["settings_help:price_abs"].lower()
+    assert "threshold" in STRINGS["en"]["settings_help:price_pct"].lower() and "threshold" in STRINGS["en"]["settings_help:price_abs"].lower()
     for name, status in (("a", "closed"), ("b", "closed"), ("c", "review"), ("d", "waiting"), ("e", "failed")):
         (tmp_path / name / "steps").mkdir(parents=True)
         (tmp_path / name / "steps" / "08_result.json").write_text(json.dumps({"status": status, "supplier": "S01"}), encoding="utf-8")
@@ -2301,11 +2308,10 @@ def test_the_helps_of_the_name_the_address_and_the_language_say_what_the_message
             request = render_reapproval(change, context, SETTINGS.model_copy(update={"language": language, "buyer_name": name}))
             assert (request.to, request.cc) == ([SETTINGS.approver_email], [SETTINGS.buyer_email]) and request.body.endswith(end), language
     nl, en = STRINGS["nl"], STRINGS["en"]
-    # both signatures, on the page of either language, each with the language of the aid that gives it
-    assert nl["settings_help:buyer_name"].startswith("Deze naam staat onder \"Inkoop\", of onder \"Purchasing\" als de taal van de assistent English is,")
-    assert en["settings_help:buyer_name"].startswith("This name stands under \"Purchasing\", or under \"Inkoop\" when the language of the aid is Nederlands,")
-    assert nl["settings_help:buyer_name"].endswith("leeg: alleen \"Inkoop\" of \"Purchasing\".")
-    assert en["settings_help:buyer_name"].endswith("empty: \"Purchasing\" or \"Inkoop\" alone.")
+    assert "\"Inkoop\"" in nl["settings_help:buyer_name"] and len(nl["settings_help:buyer_name"]) <= 200
+    assert "\"Purchasing\"" in en["settings_help:buyer_name"] and len(en["settings_help:buyer_name"]) <= 200
+    manual = manual_sections()
+    assert "under \"Inkoop\" in the questions and in the request to the approver, or under \"Purchasing\"" in manual["2.8"]
     assert "fiatteur" in nl["settings_help:buyer_email"] and "approver" in en["settings_help:buyer_email"]
     assert "fiatteur" in nl["settings_help:language"] and "approver" in en["settings_help:language"]
 
@@ -4272,13 +4278,10 @@ def test_the_try_out_part_stands_at_the_end_of_the_exact_block(tmp_path, madeup_
         "Nothing: everything agrees", "The price of the first line is 1 percent higher", "The price of the first line is 10 percent higher",
         "The delivery date of the first line is three days later", "The delivery date of the first line is sixty days later"]
     assert (nl["tryout_title"], en["tryout_title"]) == ("Proefdraaien met een inkooporder uit Exact", "Trying out with a purchase order from Exact")
-    assert nl["tryout_intro"] == ("Zonder leverancier kunt u de assistent toch proberen: bij een inkooporder die de assistent kent, maakt de "
-                                  "assistent een verzonnen orderbevestiging. Voor de voorcontrole in de browser maakt de assistent van "
-                                  "dezelfde inkooporder een verzonnen winkelwagen. U kiest wat er afwijkt. Het proefdocument blijft op deze "
-                                  "pc.")
-    assert en["tryout_intro"] == ("Without a supplier you can still try the assistant: for a purchase order it knows, the assistant makes a "
-                                  "made-up order confirmation. For the pre-check in the browser the assistant makes a made-up cart of the "
-                                  "same purchase order. You choose what differs. The try-out document stays on this PC.")
+    assert nl["tryout_intro"] == ("Maak hier voor een bekende inkooporder een verzonnen bevestiging of winkelwagen met een gekozen "
+                                  "afwijking; het proefdocument blijft op deze pc.")
+    assert en["tryout_intro"] == ("Make a made-up confirmation or cart with a chosen difference for a known purchase order here; the try-out "
+                                  "document stays on this PC.")
     assert (nl["tryout_po"], en["tryout_po"], nl["tryout_change"], en["tryout_change"]) == ("Inkooporder", "Purchase order", "Wat wijkt af?",
                                                                                             "What differs?")
     assert (nl["tryout_make"], en["tryout_make"]) == ("Proefbevestiging maken (pdf)", "Make try-out confirmation (PDF)")
@@ -4776,8 +4779,8 @@ def test_part_3_is_wired_as_the_page_shows_it_and_switches_its_language(tmp_path
     sample = articles_sample(tmp_path)
     shown = named(ARTICLES_RELABEL, handler(page, "articles_relabel")("en", str(sample), 3, "Artikel", "Inkoopprijs", NO_COLUMN, ARTICLE_TITLES, "comma"))
     assert shown["part"] == "### 3. Purchase prices of articles as an export from Exact (for the price list)"
-    assert shown["intro"] == ("Choose a sample of the export of articles from Exact and point out the columns. If the export has no column with "
-                              "the supplier, you choose the supplier when you give the export on the tab Price list.")
+    assert shown["intro"] == ("Choose a sample of the Exact article export and map the columns; without a supplier column, you choose the "
+                              "supplier on the tab Price list.")
     assert (shown["sample"]["label"], shown["row"]["label"]) == ("Sample: an export of articles from Exact", en["exact_export_header_row"])
     assert shown["head"]["value"] == {"headers": ["Row", "A", "B", "C"], "data": table_head(sample)}
     assert [shown[name]["label"] for name in ARTICLE_CHOSEN] == ["Item code (required)", "Purchase price (required)", "Supplier"]
@@ -4787,8 +4790,8 @@ def test_part_3_is_wired_as_the_page_shows_it_and_switches_its_language(tmp_path
     assert (shown["note"], shown["reading"], shown["rows"]["value"]) == ("", "", {"headers": articles_headers(None, "en"), "data": []})
     assert (nl["exact_part_articles"], nl["exact_articles_intro"]) == (
         "3. Inkoopprijzen van artikelen als export uit Exact (voor de prijslijst)",
-        "Kies een voorbeeld van de export van artikelen uit Exact en wijs de kolommen aan. Heeft de export geen kolom met de leverancier, dan "
-        "kiest u de leverancier wanneer u de export op het tabblad Prijslijst geeft.")
+        "Kies een voorbeeld van de artikelexport uit Exact en wijs de kolommen aan; ontbreekt een leverancierskolom, dan kiest u die op het "
+        "tabblad Prijslijst.")
     assert [article_label(field, "nl") for field in ARTICLE_FORM] == ["Artikelcode (verplicht)", "Inkoopprijs (verplicht)", "Leverancier"]
     # another row with the column titles offers its titles, and a sample of another type is named by its sentence
     first = named(ARTICLES_HEADER_SHOWN, handler(page, "articles_header_shown")(str(sample), 1, NO_COLUMN, NO_COLUMN, NO_COLUMN, "nl"))
@@ -5223,3 +5226,35 @@ def test_the_manual_and_the_readme_say_what_the_folder_for_orders_does():
         text = Path(path).read_text(encoding="utf-8")
         assert not [phrase for phrase in sixes if phrase in text], path
         assert "\u2014" not in text, path
+
+
+def test_page_help_texts_stay_concise_and_details_live_in_manual():
+    """WP19 item 4: every non-warning help and intro text on the page stays within 200 characters in Dutch and English (one
+    sentence, with an example where helpful), warnings/errors/statuses remain intact, and moved detail lives in aid/MANUAL.md."""
+    help_keys = (
+        "files_intro", "files_intro_export", "pricelist_intro", "settings_ai_needs",
+        "settings_help:price_pct", "settings_help:lead_time_tolerance_days",
+        "settings_help:buyer_name", "settings_help:own_addresses",
+        "settings_suppliers_help", "exact_help:senders", "exact_articles_intro", "tryout_intro",
+    )
+    for lang in ("nl", "en"):
+        strings = STRINGS[lang]
+        for key in help_keys:
+            text = strings[key]
+            assert len(text) <= 200, (lang, key, len(text), text)
+            assert "\u2014" not in text and "\u2013" not in text, (lang, key)
+            # one sentence: no ". " followed by a capitalized word (allowing "J. Jansen")
+            stripped = text.replace("J. Jansen", "Jansen")
+            assert not re.search(r"\.\s+[A-Z]", stripped), (lang, key, text)
+    # Warnings and safety notices are preserved intact
+    for warning in ("tryout_switch_help", "pricelist_older", "settings_file_write_route", "waiting_hint:po", "failed_notice", "not_sent:test_mode"):
+        assert len(STRINGS["nl"][warning]) >= 180 and len(STRINGS["en"][warning]) >= 180, warning
+    # Moved details live in aid/MANUAL.md
+    manual = manual_sections()
+    assert all(scope in manual["3.15"] for scope in COPILOT_SCOPES)
+    assert "does not belong here" in manual["2.8"]
+    assert "hoort hier niet" in manual["7"]
+    assert "zonder e-mailadres" in manual["7"].lower()
+    assert "of \"Purchasing\"" in manual["7"]
+    assert "part after the at sign" in manual["3.17"]
+

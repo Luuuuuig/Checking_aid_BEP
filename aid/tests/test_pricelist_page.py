@@ -2137,10 +2137,10 @@ def test_a_workbook_with_data_on_a_hidden_sheet_only_is_told_so_on_the_tab(tmp_p
 TEXTS = {
     "exact_part_articles": ("3. Inkoopprijzen van artikelen als export uit Exact (voor de prijslijst)",
                             "3. Purchase prices of articles as an export from Exact (for the price list)"),
-    "exact_articles_intro": ("Kies een voorbeeld van de export van artikelen uit Exact en wijs de kolommen aan. Heeft de export geen kolom met de "
-                             "leverancier, dan kiest u de leverancier wanneer u de export op het tabblad Prijslijst geeft.",
-                             "Choose a sample of the export of articles from Exact and point out the columns. If the export has no column with "
-                             "the supplier, you choose the supplier when you give the export on the tab Price list."),
+    "exact_articles_intro": ("Kies een voorbeeld van de artikelexport uit Exact en wijs de kolommen aan; ontbreekt een leverancierskolom, dan "
+                             "kiest u die op het tabblad Prijslijst.",
+                             "Choose a sample of the Exact article export and map the columns; without a supplier column, you choose the "
+                             "supplier on the tab Price list."),
     "exact_articles_field:item_code": ("Artikelcode (verplicht)", "Item code (required)"),
     "exact_articles_field:price": ("Inkoopprijs (verplicht)", "Purchase price (required)"),
     "exact_articles_field:supplier": ("Leverancier", "Supplier"),
@@ -2154,12 +2154,10 @@ TEXTS = {
                         "Koppeling met Exact, deel 3.",
                         "The columns of the export of the articles are not set yet. That is done at the installation: Settings, Connection to "
                         "Exact, part 3."),
-    "pricelist_intro": ("Een prijslijst van een leverancier vergelijkt u hier met de inkoopprijzen in Exact. De assistent heeft daarvoor de "
-                        "export van de artikelen van die leverancier uit Exact nodig. Wat verandert, zet u met een druk op de knop op de lijst "
-                        "In Exact invoeren; in Exact verandert de assistent niets.",
-                        "Here you compare a supplier's price list with the purchase prices in Exact. For that the assistant needs the export of "
-                        "that supplier's articles from Exact. What changes, you put on the list Enter in Exact with one press; the assistant "
-                        "changes nothing in Exact."),
+    "pricelist_intro": ("Vergelijk hier een prijslijst met uw inkoopprijzen uit Exact en zet de wijzigingen op de lijst In Exact invoeren; in "
+                        "Exact verandert de assistent zelf niets.",
+                        "Compare a supplier's price list with your Exact purchase prices and put the changes on the list Enter in Exact; the "
+                        "assistant changes nothing in Exact itself."),
     "pricelist_supplier": ("Leverancier", "Supplier"),
     "pricelist_supplier_help": ("Kies de leverancier, of typ de naam bij een nieuwe leverancier.",
                                 "Choose the supplier, or type the name for a new supplier."),
