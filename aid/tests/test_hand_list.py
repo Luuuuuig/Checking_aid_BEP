@@ -1362,3 +1362,17 @@ def test_the_sentence_of_another_old_value_keeps_to_the_line_of_the_put_back(tmp
     filed_on(d.store, "250108", "v1", datetime(2026, 11, 1, 9, 0))
     mark(prepared, one(prepared, "po_line_price").ids, "entered", datetime(2026, 11, 12, 10, 0))
     assert press(d, one(prepared, "po_line_price"), 11, 0) == listed_note(PUT_BACK_ROW.format(old="12,70", new="12,50"))
+
+
+def test_intro_omits_nothing_to_enter_when_unreadable_rows_exist():
+    """WP18 step 4: when no row could be listed because rows were unreadable, intro does not claim that nothing is to enter."""
+    from aid.review.hand_list import intro
+
+    for lang in ("nl", "en"):
+        strings = STRINGS[lang]
+        partial_one = intro([], passed=1, language=lang)
+        assert strings["hand_nothing"] not in partial_one and strings["hand_unreadable_one"] in partial_one
+        partial_many = intro([], passed=3, language=lang)
+        assert strings["hand_nothing"] not in partial_many and strings["hand_unreadable_many"].format(n=3) in partial_many
+        complete_empty = intro([], passed=0, language=lang)
+        assert strings["hand_nothing"] in complete_empty

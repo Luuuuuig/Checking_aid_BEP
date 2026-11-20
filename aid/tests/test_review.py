@@ -913,7 +913,8 @@ def test_a_replaced_case_is_not_offered_and_a_decision_on_it_is_never_carried_ou
     assert c.read_step("close") == {"records": [record]} and audit(c)["close"] == [record] and audit(c)["case_id"] == c.case_id
     assert offered_cases(root) == [] and list_open_cases(root) == [] and selection_from_query(root, {"case": c.case_id}) == (None, None)
     assert waiting_for_po(c) is None
-    decide(c, "RI1", "keep")                                                          # the stale tab records a decision
+    with pytest.raises(ValueError, match="already closed"):
+        decide(c, "RI1", "keep")                                                      # the stale tab cannot decide on a closed case
     with pytest.raises(ValueError, match="not in review"):
         close_case(c, d)
     assert close_text(c, d, "nl") == (STRINGS["nl"]["not_closed"], False)
@@ -5525,3 +5526,55 @@ def test_the_notes_under_the_buttons_of_every_tab_are_read_out_as_they_change(tm
     assert "document.querySelectorAll('.block.answer, .block.row-note')" in look.PAGE_JS and "line.setAttribute('aria-live', 'polite')" in look.PAGE_JS
     assert ".block.answer .prose { font-size: 16px; line-height: 24px; }" in look.PAGE_CSS
     assert [rule for rule in look.PAGE_CSS.splitlines() if ".answer" in rule and "{" in rule] == [".block.answer .prose { font-size: 16px; line-height: 24px; }"]
+
+
+def test_a_decision_on_a_closed_case_is_refused_and_a_reopened_case_still_takes_one(tmp_path, madeup_out):
+    """WP18 step 1: deciding on a case that is already closed is refused with CaseClosed (a ValueError of its own) and a
+    dedicated sentence in both languages, leaving decisions.jsonl and the close record unchanged; a case that came back
+    for review still accepts decisions."""
+    from aid.review.app import CaseClosed
+    from aid.review.page import decision_text
+
+    path, d, page, _ = sending_page(tmp_path, madeup_out, send_via="file")
+    c, _ = run(d, madeup_out, "MU07", "250107")
+    decide(c, "RI1", "keep")
+    text_close, selected = pressed_close(page, c, "nl")
+    assert selected is None and "afgesloten" in text_close.lower()
+    decisions_before = (c.root / "decisions.jsonl").read_bytes()
+    close_before = (c.root / "steps" / "09_close.json").read_bytes()
+    with pytest.raises(CaseClosed):
+        decide(c, "RI1", "confirm")
+    for lang in ("nl", "en"):
+        note, saved = decision_text(c, "RI1", "confirm", False, lang)
+        assert saved is False and note == STRINGS[lang]["case_closed"]
+    assert (c.root / "decisions.jsonl").read_bytes() == decisions_before
+    assert (c.root / "steps" / "09_close.json").read_bytes() == close_before
+    reopened, _ = run(d, madeup_out, "MU07", "250107", now=NOW + timedelta(minutes=1))
+    decide(reopened, "RI1", "ask")
+    assert close_case(reopened, d).status == "waiting"
+    escalate_pending(d.settings.cases_root, NOW + timedelta(days=20), d.settings)
+    assert CaseResult.model_validate(reopened.read_step("result")).status == "review"
+    note, saved = decision_text(reopened, "RI1", "keep", False, "nl")
+    assert saved is True and note == STRINGS["nl"]["saved"].format(item="RI1")
+
+
+def test_show_close_and_do_undo_answer_cleanly_when_case_folder_cannot_be_read(tmp_path, madeup_out):
+    """WP18 step 3: show, close and do_undo catch OSError and ValueError from load_case and answer with the page's own
+    sentence in both languages instead of raising an error box to the browser."""
+    path, d, page, _ = sending_page(tmp_path, madeup_out, send_via="file")
+    c, _ = run(d, madeup_out, "MU07", "250107")
+    show_fn = handler_of(page, "show").fn
+    close_fn = handler_of(page, "close").fn
+    undo_fn = handler_of(page, "do_undo").fn
+    (c.root / "case.json").write_text("{", encoding="utf-8")
+    for lang in ("nl", "en"):
+        expected = STRINGS[lang]["case_unreadable"]
+        assert show_fn(c.case_id, lang, None)[-1] == expected
+        assert close_fn(c.case_id, lang)[0] == expected
+        assert undo_fn(c.case_id, "E1", lang)[0] == expected
+    c.root.rename(c.root.with_name(c.root.name + "_moved"))
+    for lang in ("nl", "en"):
+        expected = STRINGS[lang]["case_unreadable"]
+        assert show_fn(c.case_id, lang, None)[-1] == expected
+        assert close_fn(c.case_id, lang)[0] == expected
+        assert undo_fn(c.case_id, "E1", lang)[0] == expected

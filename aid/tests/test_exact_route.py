@@ -89,9 +89,9 @@ TEXTS = {
     "hand_exact_handed_over_row": ("Aan Exact doorgegeven en nog niet verwerkt: kijk later in Exact en vink de regel af als het er staat.",
                                    "Handed over to Exact but not applied yet: check Exact later and tick the row off once it is there."),
     "hand_done_written": ("(door de assistent in Exact gezet op {date})", "(put into Exact by the assistant on {date})"),
-    "hand_reopen_written": ("Deze wijziging heeft de assistent zelf in Exact gezet. Kies Terugdraaien in Exact als de oude waarde terug "
-                            "moet.",
-                            "The assistant put this change into Exact itself. Choose Put back in Exact if the old value must return."),
+    "hand_reopen_written": ("Deze wijziging heeft de assistent zelf in Exact gezet. Kies Oude waarde op de lijst zetten als de oude waarde "
+                            "terug moet.",
+                            "The assistant put this change into Exact itself. Choose Put old value on the list if the old value must return."),
     # the review round of 17 November: the safety items
     "hand_exact_stop:error": ("Er ging iets onverwachts mis: de assistent zet nu niets meer in Exact. Geef dit door aan de onderzoeker.",
                               "Something unexpected went wrong: the assistant has stopped putting changes into Exact. Pass this on to the "

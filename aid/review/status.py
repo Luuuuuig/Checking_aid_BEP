@@ -214,6 +214,7 @@ class _Read(NamedTuple):
     reason: str | None
 
 
+_FAILED = object()                               # a read of a case folder failed for a moment: never kept in _CACHE
 _CACHE: dict[Path, dict[str, tuple[tuple, _Read | None]]] = {}     # by cases root, by folder: the files' sizes and times, and what was read
 _CACHE_LOCK = threading.Lock()                   # the review page reads in threads of its own
 
@@ -240,8 +241,9 @@ def case_lines(cases_root: Path, now: datetime, days: int = DAYS) -> list[CaseLi
             continue
         hit = known.get(path.name)
         read = hit[1] if hit is not None and hit[0] == stats else _read(root, path)
-        seen[path.name] = (stats, read)
-        if read is None:
+        if read is not _FAILED:
+            seen[path.name] = (stats, read)
+        if read is None or read is _FAILED:
             continue
         state = read.state or ("copilot_wait" if waits(path.name) else "reading")
         if state in DONE and read.opened_at < since:
@@ -272,7 +274,7 @@ def case_states(cases_root: Path, case_ids: Iterable[str]) -> dict[str, str]:
             continue
         hit = known.get(case_id)
         read = hit[1] if hit is not None and hit[0] == stats else _read(root, path)
-        if read is not None:
+        if read is not None and read is not _FAILED:
             found[case_id] = read.state or ("copilot_wait" if waits(case_id) else "reading")
     return found
 
@@ -314,9 +316,9 @@ def _stat(path: Path) -> tuple[int, int] | None:
     return found.st_size, found.st_mtime_ns
 
 
-def _read(root: Path, folder: Path) -> _Read | None:
-    """What the state of the case folder is told by (see the module docstring); None for a folder whose case.json or result cannot be
-    read, and for a case replaced by another."""
+def _read(root: Path, folder: Path) -> _Read | object | None:
+    """What the state of the case folder is told by (see the module docstring); None for a case replaced by another, and _FAILED for a
+    folder whose case.json or result cannot be read (so that a momentary failure is not cached)."""
     try:
         case = load_case(root, folder.name)
         opened = _local(datetime.fromisoformat(json.loads((folder / "case.json").read_bytes())["opened_at"]))
@@ -339,7 +341,7 @@ def _read(root: Path, folder: Path) -> _Read | None:
         else:
             state = "waiting"
     except (OSError, ValueError, KeyError, TypeError):
-        return None
+        return _FAILED
     return _Read(case.po_number, result.supplier, opened, state, reason)
 
 

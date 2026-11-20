@@ -709,7 +709,7 @@ def test_the_tab_is_wired_as_the_page_shows_it(tmp_path, madeup_out):
     assert [(child.label, child.id) for child in tab.parent.children] == [
         ("Beoordelen", "beoordelen"), ("In Exact invoeren", "invoeren"), ("Prijslijst", "prijslijst"), ("Bestanden", "bestanden"),
         ("Instellingen", "instellingen")]
-    given, kept = [block for block in inside(tab) if isinstance(block, gr.State)]
+    given, kept, asked_remove = [block for block in inside(tab) if isinstance(block, gr.State)]
     by_id = {block.elem_id: block for block in inside(tab) if getattr(block, "elem_id", None)}
 
     def name(component) -> str:
@@ -721,6 +721,8 @@ def test_the_tab_is_wired_as_the_page_shows_it(tmp_path, madeup_out):
             return "given"
         if component is kept:
             return "viewed"
+        if component is asked_remove:
+            return "asked_remove"
         return component.elem_id
 
     def bound(fn_name: str) -> tuple:
@@ -743,7 +745,7 @@ def test_the_tab_is_wired_as_the_page_shows_it(tmp_path, madeup_out):
     assert bound("prices_filed") == ([("pricelist-file-prices", "click")], ["pricelist-export", "pricelist-supplier", "language", "given"],
                                      ["pricelist-export-note", "pricelist-export", "pricelist-supplier", "pricelist-state", "pricelist-list-part",
                                       "given", "pricelist-notice"])
-    assert bound("prices_removed") == ([("pricelist-remove-yes", "click")], ["pricelist-supplier", "language"],
+    assert bound("prices_removed") == ([("pricelist-remove-yes", "click")], ["pricelist-supplier", "language", "asked_remove"],
                                        ["pricelist-export-note", "pricelist-supplier", "pricelist-state", "pricelist-list-part", *after_view,
                                         "pricelist-notice"])
     beside = by_id["pricelist-remove"].parent                                         # one row holds the supplier's field and the press
@@ -1709,10 +1711,11 @@ def test_a_shared_row_names_the_other_supplier(tmp_path, madeup_out):
     assert carried(page, listed, "S01", view["viewed"])["note"] == CHANGED
 
 
-def removed(page, supplier: str | None, language: str = "nl") -> dict:
+def removed(page, supplier: str | None, language: str = "nl", asked_for: str | None = "AUTO") -> dict:
     """What "Ja, weghalen" gives for the supplier chosen or typed (prices_removed, after the question of "Inkoopprijzen van deze
-    leverancier weghalen")."""
-    return called(page, "prices_removed", PRICES_REMOVED, supplier, language)
+    leverancier weghalen"). When asked_for is "AUTO", the supplier's trimmed name stands as the asked name."""
+    target = (supplier or "").strip() or None if asked_for == "AUTO" else asked_for
+    return called(page, "prices_removed", PRICES_REMOVED, supplier, language, target)
 
 
 def test_a_supplier_filed_under_another_spelling_can_be_taken_away(tmp_path, madeup_out, monkeypatch):
@@ -1757,8 +1760,8 @@ def test_a_supplier_filed_under_another_spelling_can_be_taken_away(tmp_path, mad
     # a name the aid does not hold, no name, and a name that is none: the tab's own sentences, and nothing is written
     assert removed(page, "S09")["export_note"] == ("Van S09 zijn nog geen inkoopprijzen opgenomen. Geef eerst de export van de artikelen van "
                                                    "deze leverancier uit Exact.")
-    assert removed(page, " ")["export_note"] == "Kies eerst een leverancier." and removed(page, None)["export_note"] == "Kies eerst een leverancier."
-    assert removed(page, "L" * 101)["export_note"] == "De naam van de leverancier is te lang of bevat tekens die niet in een naam horen."
+    assert removed(page, " ")["export_note"] == NL["pricelist_remove_changed"] and removed(page, None)["export_note"] == NL["pricelist_remove_changed"]
+    assert removed(page, "L" * 101)["export_note"] == NL["pricelist_remove_changed"]
     assert files_of(root / "exact") == before
     # the removal, by the stored name whatever the capitals and spaces typed
     out = removed(page, " s01 b.v. ")
@@ -2313,6 +2316,10 @@ REDESIGN = {
                                  "The stored purchase price of {supplier} will be taken away. The list Enter in Exact stays as it is."),
     "pricelist_remove_yes": ("Ja, weghalen", "Yes, take them away"),
     "pricelist_remove_no": ("Niet weghalen", "Keep them"),
+    "pricelist_remove_changed": (
+        "Er is niets weggehaald: de gekozen leverancier komt niet overeen met de vraag. Druk opnieuw op weghalen.",
+        "Nothing was removed: the supplier in the field does not match the question. Press remove again.",
+    ),
 }
 
 # The line of the articles that Exact does not know (Johan, 17 November, reported by Yijie: a price list sometimes holds new articles),
@@ -2588,41 +2595,43 @@ def test_taking_the_prices_away_asks_first_and_answers_under_the_row(tmp_path, m
     before = files_of(root)
     [asked] = [f for f in page.fns.values() if (remove._id, "click") in f.targets]
     assert getattr(asked.fn, "__name__", "") == "remove_asked" and asked.targets == [(remove._id, "click")]
-    assert asked.inputs == [supplier, language] and asked.outputs == [confirm, ask, answer] and asked.show_progress == "hidden"
+    asked_state = asked.outputs[3]
+    assert isinstance(asked_state, gr.State)
+    assert asked.inputs == [supplier, language] and asked.outputs == [confirm, ask, answer, asked_state] and asked.show_progress == "hidden"
     opened, closed = {"__type__": "update", "visible": True}, {"__type__": "update", "visible": False}
     assert asked.fn(" s08 ", "nl") == (opened, "De 3 opgeslagen inkoopprijzen van S08 worden weggehaald. De lijst In Exact invoeren blijft zoals hij "
-                                               "is.", "")
-    assert asked.fn("S08", "en") == (opened, "The 3 stored purchase prices of S08 will be taken away. The list Enter in Exact stays as it is.", "")
+                                               "is.", "", "S08")
+    assert asked.fn("S08", "en") == (opened, "The 3 stored purchase prices of S08 will be taken away. The list Enter in Exact stays as it is.", "", "S08")
     marked = _literal("S07 <b>x</b>")
     assert asked.fn("S07 <b>x</b>", "nl") == (opened, f"De opgeslagen inkoopprijs van {marked} wordt weggehaald. De lijst In Exact invoeren "
-                                                      "blijft zoals hij is.", "")
+                                                      "blijft zoals hij is.", "", "S07 <b>x</b>")
     # with nothing to take away the question stays closed, and the tab's own sentence answers under the row
     for typed, sentence in ((None, NL["pricelist_choose_supplier"]), (" ", NL["pricelist_choose_supplier"]),
                             ("S09", NL["pricelist_state_none"].format(supplier="S09")), ("L" * 101, NL["pricelist_refused:name"])):
-        assert asked.fn(typed, "nl") == (closed, "", sentence), typed
+        assert asked.fn(typed, "nl") == (closed, "", sentence, None), typed
     assert files_of(root) == before
     # "Niet weghalen", and another supplier chosen, close the question; nothing is taken away
     [kept] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == "remove_kept"]
-    assert sorted(kept.targets) == sorted([(no._id, "click"), (supplier._id, "change")]) and kept.inputs == [] and kept.outputs == [confirm]
-    assert kept.fn() == closed and kept.show_progress == "hidden"
+    assert sorted(kept.targets) == sorted([(no._id, "click"), (supplier._id, "change")]) and kept.inputs == [] and kept.outputs == [confirm, asked_state]
+    assert kept.fn() == (closed, None) and kept.show_progress == "hidden"
     assert files_of(root) == before and list(stored_prices(root)) == ["S08", "S07 <b>x</b>"]
-    # "Ja, weghalen": prices_removed as it was, then its sentence moved under the supplier's row and the export's note emptied
+    # "Ja, weghalen": prices_removed checks the asked supplier in State, then its sentence moves under the supplier's row and clears state
     [(index, taken)] = [(index, f) for index, f in page.fns.items() if getattr(f.fn, "__name__", "") == "prices_removed"]
-    assert taken.targets == [(yes._id, "click")] and taken.inputs == [supplier, language] and taken.outputs[0] is export_note
+    assert taken.targets == [(yes._id, "click")] and taken.inputs == [supplier, language, asked_state] and taken.outputs[0] is export_note
     assert len(taken.outputs) == len(PRICES_REMOVED)
     [after] = [f for f in page.fns.values() if f.trigger_after == index]
-    assert getattr(after.fn, "__name__", "") == "removal_shown" and after.inputs == [export_note] and after.outputs == [confirm, answer, export_note]
+    assert getattr(after.fn, "__name__", "") == "removal_shown" and after.inputs == [export_note] and after.outputs == [confirm, answer, export_note, asked_state]
     out = removed(page, "S08")
     assert out["export_note"] == "De opgenomen inkoopprijzen van S08 zijn weggehaald. Wat al op de lijst In Exact invoeren staat, blijft staan."
-    assert after.fn(out["export_note"]) == (closed, out["export_note"], "") and list(stored_prices(root)) == ["S07 <b>x</b>"]
-    assert after.fn(removed(page, "S08")["export_note"]) == (closed, NL["pricelist_state_none"].format(supplier="S08"), "")    # gone already
+    assert after.fn(out["export_note"]) == (closed, out["export_note"], "", None) and list(stored_prices(root)) == ["S07 <b>x</b>"]
+    assert after.fn(removed(page, "S08")["export_note"]) == (closed, NL["pricelist_state_none"].format(supplier="S08"), "", None)    # gone already
     assert after.show_progress == "hidden"
     # the language switch closes the question and empties the answer, with the two presses in the language
     [relabelled] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == "removal_relabelled"]
     assert relabelled.targets == [(language._id, "change")] and relabelled.inputs == [language]
-    assert relabelled.outputs == [confirm, ask, yes, no, answer]
+    assert relabelled.outputs == [confirm, ask, yes, no, answer, asked_state]
     assert relabelled.fn("en") == (closed, "", {"__type__": "update", "value": "Yes, take them away"}, {"__type__": "update", "value": "Keep them"},
-                                   "")
+                                   "", None)
     # none of it on a public share link nor without a settings file
     for share, file, key in ((True, True, "settings_share"), (False, False, "settings_no_file")):
         other = tab_page(tmp_path / key, madeup_out, cases=(), share=share, file=file, article_columns=ARTICLE_COLUMNS)[0]
@@ -2674,3 +2683,23 @@ def test_the_small_press_keeps_its_words_on_one_line_and_its_question_reads_as_a
                  f"#pricelist-remove-confirm {{ align-items: center; background: {look.TINT}; border-left: 4px solid {look.CONTROL}; "
                  "border-radius: 6px; padding: 12px 16px; }"):
         assert rule in css, rule
+
+
+def test_ja_weghalen_refuses_when_supplier_field_changed_after_question(tmp_path, madeup_out):
+    """WP18 step 2: ask to remove supplier A, change the supplier field to supplier B, and press Ja, weghalen:
+    the press is refused and both suppliers stay stored."""
+    page, d, clock = pricelist_page(tmp_path, madeup_out)
+    root = d.settings.cases_root
+    filed(page, tmp_path, "Supplier A", "a.csv", [["KM-1001", "Slang", "12,50"]])
+    clock.later(5)
+    filed(page, tmp_path, "Supplier B", "b.csv", [["KM-1002", "Klem", "8,00"]])
+    [asked] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == "remove_asked"]
+    [taken] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == "prices_removed"]
+    asked_out = asked.fn("Supplier A", "nl")
+    assert len(asked_out) == 4 and asked_out[3] == "Supplier A"
+    for lang in ("nl", "en"):
+        mismatch = taken.fn("Supplier B", lang, asked_out[3])
+        assert mismatch[0] == STRINGS[lang]["pricelist_remove_changed"]
+        no_question = taken.fn("Supplier B", lang, None)
+        assert no_question[0] == STRINGS[lang]["pricelist_remove_changed"]
+    assert sorted(stored_prices(root)) == ["Supplier A", "Supplier B"]

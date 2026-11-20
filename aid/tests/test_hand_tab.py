@@ -191,7 +191,7 @@ def test_nothing_ticked_writes_nothing(tmp_path, madeup_out):
         for name in ("changes_entered", "changes_dropped"):
             result = shown(page, name, nothing, language)
             assert result["note"] == strings["hand_tick_first"] and result["tab"]["label"] == strings["hand_tab_count"].format(n=3)
-        assert shown(page, "block_entered", None if language == "nl" else "", {}, language)["note"] == strings["hand_tick_first"]
+        assert shown(page, "block_entered", None if language == "nl" else "", {}, language)["note"] == strings["hand_choose_first"]
     assert (NL["hand_tick_first"], EN["hand_tick_first"]) == ("Vink eerst aan wat u bedoelt.", "Tick what you mean first.")
     assert not (prepared / MARKS_FILE).exists() and len(open_changes(prepared)) == 3
 
@@ -837,7 +837,7 @@ def test_a_tick_and_a_drop_are_taken_back_and_a_seen_change_is_not(tmp_path, mad
     for language in ("nl", "en"):
         refused = done_of(page, "change_reopened", price, language)
         assert refused["done_note"] == STRINGS[language]["hand_reopen_seen"] and refused["tab"]["label"] == STRINGS[language]["hand_tab_count"].format(n=2)
-    assert NL["hand_reopen_seen"] == ("Deze wijziging heeft de assistent zelf in Exact gezien. Kies Terugdraaien in Exact als de oude waarde "
+    assert NL["hand_reopen_seen"] == ("Deze wijziging heeft de assistent zelf in Exact gezien. Kies Oude waarde op de lijst zetten als de oude waarde "
                                       "terug moet.")
     assert (prepared / MARKS_FILE).read_bytes() == before
     assert done_of(page, "change_reopened", None, "nl")["done_note"] == "Kies eerst een wijziging bij Afgehandelde wijziging."   # nothing chosen
@@ -883,7 +883,7 @@ def test_the_sections_under_the_list_are_wired(tmp_path, madeup_out):
     language = [block for block in page.blocks.values() if isinstance(block, gr.Radio) and block.label == NL["language"]][0]
     order = [block for block in inside(tab) if isinstance(block, (gr.Markdown, gr.Button, gr.CheckboxGroup, gr.Dropdown))]
     names = [getattr(block, "elem_id", None) or getattr(block, "label", None) or block.value for block in order]
-    assert names[-6:] == ["hand-confirmations", "hand-done", "Afgehandelde wijziging", "Weer op de lijst zetten", "Terugdraaien in Exact",
+    assert names[-6:] == ["hand-confirmations", "hand-done", "Afgehandelde wijziging", "Weer op de lijst zetten", "Oude waarde op de lijst zetten",
                           "hand-done-note"]
     confirmations_md, done_md, choice, reopen, put_back, note = order[-6:]
     fills = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == "done_opened"]
@@ -901,7 +901,7 @@ def test_the_sections_under_the_list_are_wired(tmp_path, madeup_out):
         assert f.targets == [(button._id, "click")] and f.inputs == [choice, language] and f.outputs == [*list_fill.outputs, *outputs]
     english = done_of(page, "done_opened", "en", None)
     assert (english["done_choice"]["label"], english["reopen"]["value"], english["put_back"]["value"]) == (
-        "Handled change", "Put on the list again", "Put back in Exact")
+        "Handled change", "Put on the list again", "Put old value on the list")
     assert english["confirmations"].startswith("## Confirmations to attach\n\n2 confirmations of the last 7 days: attach them in Exact and set "
                                                "the status to Bevestigd.\n\n- 12-11-2026: purchase order 250108 (S08), file MU08\\_conf.pdf")
 
@@ -927,11 +927,11 @@ def test_the_texts_of_the_sections_in_both_languages():
              "hand_done_seen": ("(gezien in versie {n} van de inkooporder)", "(seen in version {n} of the purchase order)"),
              "hand_done_dropped": ("(niet ingevoerd, op {date})", "(not entered, on {date})"),
              "hand_reopen": ("Weer op de lijst zetten", "Put on the list again"),
-             "hand_put_back": ("Terugdraaien in Exact", "Put back in Exact"),
+             "hand_put_back": ("Oude waarde op de lijst zetten", "Put old value on the list"),
              "hand_done_choice": ("Afgehandelde wijziging", "Handled change"),
              "hand_reopened": ("De regel staat weer op de lijst.", "The row is on the list again."),
-             "hand_reopen_seen": ("Deze wijziging heeft de assistent zelf in Exact gezien. Kies Terugdraaien in Exact als de oude waarde terug moet.",
-                                  "The assistant saw this change in Exact itself. Choose Put back in Exact if the old value must return."),
+             "hand_reopen_seen": ("Deze wijziging heeft de assistent zelf in Exact gezien. Kies Oude waarde op de lijst zetten als de oude waarde terug moet.",
+                                  "The assistant saw this change in Exact itself. Choose Put old value on the list if the old value must return."),
              "hand_put_back_listed": ("Nog niet teruggedraaid in Exact. Op de lijst staat nu: {row}. Voer de oude waarde in Exact in en vink de regel af.",
                                       "Not put back in Exact yet. The list now holds: {row}. Enter the old value in Exact and tick the row."),
              "hand_put_back_on_list": ("Het terugzetten staat al op de lijst.", "The put-back is on the list already."),
@@ -2159,7 +2159,7 @@ def test_one_press_marks_the_article_prices_of_one_list(tmp_path, madeup_out):
     english = dict(zip(lists, opened("en", s02), strict=True))
     assert (english["choice"]["label"], english["choice"]["value"], english["button"]["value"]) == (
         "Price list", s02, "All article prices of this price list have been entered")
-    assert shown(page, "pricelist_entered", None, offered["kept"], "nl")["note"] == "Vink eerst aan wat u bedoelt."
+    assert shown(page, "pricelist_entered", None, offered["kept"], "nl")["note"] == NL["hand_choose_first"]
     assert not (prepared / MARKS_FILE).exists()
     done = shown(page, "pricelist_entered", s01, offered["kept"], "nl")
     assert done["note"] == "2 wijzigingen genoteerd als ingevoerd in Exact." and done["tab"]["label"] == "In Exact invoeren (4)"
@@ -2192,3 +2192,32 @@ def test_one_press_marks_the_article_prices_of_one_list(tmp_path, madeup_out):
     assert sorted(target for f in fills for target in f.targets if target[0] is not None) == sorted([*fill.targets, (language._id, "change")])
     assert (NL["hand_pricelist_entered"], EN["hand_pricelist_entered"]) == ("Alle artikelprijzen van deze prijslijst zijn ingevoerd",
                                                                             "All article prices of this price list have been entered")
+
+
+def test_step6_put_back_label_dropdown_empty_and_readme_command(tmp_path, madeup_out):
+    """WP18 step 6: the put-back button says it prepares a row on the list rather than changing Exact, the two dropdown
+    buttons have their own empty-selection message, and aid/README.md gives the Part 3 test command."""
+    assert NL["hand_put_back"] == "Oude waarde op de lijst zetten"
+    assert EN["hand_put_back"] == "Put old value on the list"
+    assert "Terugdraaien in Exact" not in NL["hand_reopen_seen"] and NL["hand_put_back"] in NL["hand_reopen_seen"]
+    assert "Put back in Exact" not in EN["hand_reopen_seen"] and EN["hand_put_back"] in EN["hand_reopen_seen"]
+    assert "Terugdraaien in Exact" not in NL["hand_reopen_written"] and NL["hand_put_back"] in NL["hand_reopen_written"]
+    assert "Put back in Exact" not in EN["hand_reopen_written"] and EN["hand_put_back"] in EN["hand_reopen_written"]
+    page, prepared, d = tab_page(tmp_path, madeup_out)
+    for language in ("nl", "en"):
+        strings = STRINGS[language]
+        assert strings["hand_choose_first"] != strings["hand_tick_first"]
+        assert shown(page, "block_entered", None, {}, language)["note"] == strings["hand_choose_first"]
+        assert shown(page, "pricelist_entered", None, {}, language)["note"] == strings["hand_choose_first"]
+        assert shown(page, "changes_entered", [], language)["note"] == strings["hand_tick_first"]
+        assert shown(page, "changes_dropped", [], language)["note"] == strings["hand_tick_first"]
+    manual = manual_sections()
+    put_back_q = chr(34) + NL["hand_put_back"] + chr(34)
+    choose_q = chr(34) + NL["hand_choose_first"] + chr(34)
+    assert put_back_q in manual["2.2"] and "Terugdraaien in Exact" not in manual["2.2"]
+    assert put_back_q in manual["2.6"] and "Terugdraaien in Exact" not in manual["2.6"]
+    assert choose_q in manual["2.6"]
+    readme = Path("aid/README.md").read_text(encoding="utf-8")
+    part3_cmd = "python -B -W error -m pytest aid/tests -q -p no:cacheprovider --basetemp " + chr(60) + "a temporary folder" + chr(62) + " -k " + chr(34) + "not real_launcher" + chr(34)
+    assert part3_cmd in readme
+    assert (chr(10) + "python3 -m pytest aid/tests -q" + chr(10)) not in readme

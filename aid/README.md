@@ -10,7 +10,7 @@ Python 3.11 or newer (developed on 3.13). The job `Tests` of the aid's own repos
 
 ```bash
 python3 -m pip install -r aid/requirements.txt -r aid/requirements-dev.txt
-python3 -m pytest aid/tests -q
+python -B -W error -m pytest aid/tests -q -p no:cacheprovider --basetemp <a temporary folder> -k "not real_launcher"
 ```
 
 The test suite runs offline: no test makes a network call or calls an AI service. A test that needs an AI answer replays a recorded one, made on made-up documents only.

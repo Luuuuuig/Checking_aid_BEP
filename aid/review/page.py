@@ -667,7 +667,7 @@ from aid.readers.llm_client import ReaderError
 from aid.readers.po_export import ExportRefused
 from aid.review import hand_list, intake, pricelist_page
 from aid.review import status as aid_status      # the module: the page has a status line of its own
-from aid.review.app import (CAPTURE_FILE, DECISIONS_FILE, CaseSummary, Decision, EnteredValue, FlagRow, LineMark, NothingAsked, _context,
+from aid.review.app import (CAPTURE_FILE, DECISIONS_FILE, CaseClosed, CaseSummary, Decision, EnteredValue, FlagRow, LineMark, NothingAsked, _context,
                             _pages, _saved_result, _summary, decide, load_case_view, marked_replaced)
 from aid.review.buyer_settings import (BUYER_FIELDS, SUPPLIER_FIELDS, changed_fields, parse, shown, supplier_changes, supplier_names,
                                        supplier_rows, supplier_shown, supplier_update, without_supplier)
@@ -1379,6 +1379,8 @@ def decision_text(case: Case, item_id: str, decision: str, article_update: bool,
         decide(case, item_id, decision, article_update)
     except NothingAsked:
         return strings["tryout_nothing_sent"], False
+    except CaseClosed:
+        return strings["case_closed"], False
     except ValueError:
         return strings["refused"], False
     return strings["saved"].format(item=item_id), True
@@ -1751,10 +1753,15 @@ def _page(gr, deps: Deps, tab: _Tab):
             item = aid_status.look_item(cases_root, case_id)
             pages = _item_pages(item, now.settings.watched_folder, cases_root) if item is not None else []
             return (nothing[0], [Image.open(io.BytesIO(page)) for page in pages], *nothing[2:], "")
-        case = load_case(cases_root, case_id)
+        try:
+            case = load_case(cases_root, case_id)
+        except (OSError, ValueError):
+            return (*nothing, STRINGS[language]["case_unreadable"])
         try:
             view = load_case_view(case, now.store)              # the store as it is now: a moved folder keeps its PO pages
             standing = standing_decisions(case, now.settings.ask_wait_working_days)
+        except OSError:
+            return (*nothing, STRINGS[language]["case_unreadable"])
         except ValueError:                          # a damaged decisions.jsonl (_decisions)
             return (*nothing, STRINGS[language]["decisions_damaged"].format(file=DECISIONS_FILE))
         lists = {"flags": view.flags, "matches": view.matches, "uncompared": view.uncompared}
@@ -1857,13 +1864,20 @@ def _page(gr, deps: Deps, tab: _Tab):
     def close(case_id: str | None, language: str) -> tuple:
         if not case_id or aid_status.is_item(case_id):           # a document left to the buyer: as no case
             return STRINGS[language]["no_case"], gr.update()
-        text, still_open = close_text(load_case(cases_root, case_id), live.sending(), language)
+        try:
+            case = load_case(cases_root, case_id)
+        except (OSError, ValueError):
+            return STRINGS[language]["case_unreadable"], gr.update(choices=choices(language), value=None)
+        text, still_open = close_text(case, live.sending(), language)
         return text, gr.update(choices=choices(language), value=case_id if still_open else None)
 
     def do_undo(case_id: str | None, entry_id: str | None, language: str) -> tuple:
         if not case_id or not entry_id or aid_status.is_item(case_id):     # a document left to the buyer: as no case
             return STRINGS[language]["choose_write"], gr.update()
-        case = load_case(cases_root, case_id)
+        try:
+            case = load_case(cases_root, case_id)
+        except (OSError, ValueError):
+            return STRINGS[language]["case_unreadable"], gr.update(choices=[], value=None)
         return undo_text(case, entry_id, live.now(), language), gr.update(choices=_undo_choices(case, STRINGS[language]), value=None)
 
     # The strip, the fold, the count, the case list and a failed case (see the module docstring): handlers of their own, each bound
@@ -2370,7 +2384,7 @@ def _hand_tab(gr, app, language, hand_tab, live: _Live, tab: _Tab, cases_root: P
         block chosen nothing is written."""
         try:
             if not chosen:
-                return shown(language_now, STRINGS[language_now]["hand_tick_first"])
+                return shown(language_now, STRINGS[language_now]["hand_choose_first"])
             return marked((seen or {}).get(chosen, []), "entered", language_now)
         except Exception as error:
             return unread(error, language_now)
@@ -2396,7 +2410,7 @@ def _hand_tab(gr, app, language, hand_tab, live: _Live, tab: _Tab, cases_root: P
         is written."""
         try:
             if not chosen:
-                return shown(language_now, STRINGS[language_now]["hand_tick_first"])
+                return shown(language_now, STRINGS[language_now]["hand_choose_first"])
             return marked((lists or {}).get(chosen, []), "entered", language_now)
         except Exception as error:
             return unread(error, language_now)
@@ -2952,23 +2966,26 @@ def _pricelist_tab(gr, app, language, pricelist_tab, live: _Live, tab: _Tab, cas
         return (note, gr.update(value=None), gr.update(choices=list(stored), value=name or None), state_of(name, stored, language_now),
                 gr.update(visible=name in stored), key, notice_of(readable, strings) if columns else gr.update())
 
-    def prices_removed(supplier_now: str | None, language_now: str) -> tuple:
+    def prices_removed(supplier_now: str | None, language_now: str, asked_for: str | None) -> tuple:
         """"Ja, weghalen", under the question that "Inkoopprijzen van deze leverancier weghalen" asks (remove_asked): the stored
-        article prices of the supplier chosen or typed and the columns kept for its price list taken away (remove_stored), whole or
-        not at all, and nothing else: no row of the list "In Exact invoeren" changes. It gives (the note, the supplier, the state of
-        its stored prices, the part of the price list, the table emptied, the list's note, the press inactive, no view kept, the
-        notice): after a removal no supplier is chosen, and the note names the supplier removed as it was stored. For no name, a name
-        that is none and a name the aid holds no prices of, the note is the tab's own sentence for that and nothing else changes; an
-        error says so in the note. The note is that of the export, as before the question was asked; removal_shown, chained after
+        article prices of the supplier the question named (asked_for) and the columns kept for its price list taken away
+        (remove_stored), whole or not at all, and nothing else: no row of the list "In Exact invoeren" changes. A press without an
+        open question or whose supplier field names another supplier than asked_for is refused without removing anything. It gives
+        (the note, the supplier, the state of its stored prices, the part of the price list, the table emptied, the list's note, the
+        press inactive, no view kept, the notice): after a removal no supplier is chosen, and the note names the supplier removed as
+        it was stored. For a name the aid holds no prices of, the note is the tab's own sentence for that and nothing else changes;
+        an error says so in the note. The note is that of the export, as before the question was asked; removal_shown, chained after
         this press, moves it right under the supplier's row."""
         strings = STRINGS[language_now]
         typed = (supplier_now or "").strip()
+        if not asked_for or not typed or not is_supplier_name(typed) or supplier_named(typed, [asked_for]) != asked_for:
+            return (strings["pricelist_remove_changed"], *[gr.update()] * 8)
         try:
-            name = remove_stored(cases_root, typed) if typed and is_supplier_name(typed) else None
+            name = remove_stored(cases_root, asked_for)
         except Exception as error:
             return (strings["settings_failed"].format(code=type(error).__name__), *[gr.update()] * 8)
         if name is None:
-            return (state_of(typed, {}, language_now), *[gr.update()] * 8)
+            return (state_of(asked_for, {}, language_now), *[gr.update()] * 8)
         stored, readable = stored_now()
         return (strings["pricelist_removed"].format(supplier=_literal(name)), gr.update(choices=list(stored), value=None),
                 state_of("", stored, language_now), gr.update(visible=False), *unviewed(language_now), notice_of(readable, strings))
@@ -2976,40 +2993,42 @@ def _pricelist_tab(gr, app, language, pricelist_tab, live: _Live, tab: _Tab, cas
     def remove_asked(supplier_now: str | None, language_now: str) -> tuple:
         """"Inkoopprijzen van deze leverancier weghalen": nothing is taken away yet, the tab only asks: (the row of the question right
         under the supplier's field, shown; the question, which says how many stored prices of which supplier go, by its stored name;
-        the answer under that row, emptied). For no name, a name that is none and a name the aid holds no prices of, the row stays
-        closed and the answer is the tab's own sentence for that, as prices_removed gives it; stored prices that cannot be read are
-        named as such. Nothing is written."""
+        the answer under that row, emptied; the stored supplier name kept in State for prices_removed). For no name, a name that is
+        none and a name the aid holds no prices of, the row stays closed, the kept name is None, and the answer is the tab's own
+        sentence for that; stored prices that cannot be read are named as such. Nothing is written."""
         strings = STRINGS[language_now]
         typed = (supplier_now or "").strip()
         try:
             stored = stored_prices(cases_root) if typed and is_supplier_name(typed) else {}
         except (OSError, ValueError):
-            return gr.update(visible=False), "", strings["pricelist_stored_unreadable"]
+            return gr.update(visible=False), "", strings["pricelist_stored_unreadable"], None
         name = supplier_named(typed, stored)
         if name not in stored:
-            return gr.update(visible=False), "", state_of(typed, {}, language_now)
+            return gr.update(visible=False), "", state_of(typed, {}, language_now), None
         count = len(stored[name].prices)
         question = (strings["pricelist_remove_ask_one"].format(supplier=_literal(name)) if count == 1
                     else strings["pricelist_remove_ask"].format(n=count, supplier=_literal(name)))
-        return gr.update(visible=True), question, ""
+        return gr.update(visible=True), question, "", name
 
-    def remove_kept() -> dict:
-        """"Niet weghalen", or another supplier chosen or typed: the row of the question closed, so that "Ja, weghalen" never takes away
-        the prices of another supplier than the question named. Nothing is taken away, and the answer under the row stays."""
-        return gr.update(visible=False)
+    def remove_kept() -> tuple:
+        """"Niet weghalen", or another supplier chosen or typed: the row of the question closed and the asked supplier cleared, so
+        that "Ja, weghalen" never takes away the prices of another supplier than the question named. Nothing is taken away, and the
+        answer under the row stays."""
+        return gr.update(visible=False), None
 
     def removal_shown(note: str | None) -> tuple:
         """After "Ja, weghalen" (prices_removed, which gives its sentence as the note of the export, as it always did): (the row of the
         question closed; that sentence right under the supplier's row, where the buyer pressed; the note of the export, far lower on
-        the tab, emptied)."""
-        return gr.update(visible=False), note or "", ""
+        the tab, emptied; the asked supplier cleared)."""
+        return gr.update(visible=False), note or "", "", None
 
     def removal_relabelled(language_now: str) -> tuple:
         """The page's language switched: the row of the question closed, the question and the answer under the row emptied, as
-        pricelist_relabel empties the tab's notes, and "Ja, weghalen" and "Niet weghalen" in that language."""
+        pricelist_relabel empties the tab's notes, "Ja, weghalen" and "Niet weghalen" in that language, and the asked supplier
+        cleared."""
         strings = STRINGS[language_now]
         return (gr.update(visible=False), "", gr.update(value=strings["pricelist_remove_yes"]), gr.update(value=strings["pricelist_remove_no"]),
-                "")
+                "", None)
 
     def pricelist_file_chosen(list_now: str | None, supplier_now: str | None, language_now: str) -> tuple:
         """A price list chosen, or taken away: (the five column fields filled for it, the table emptied, the note, the press inactive,
@@ -3167,6 +3186,7 @@ def _pricelist_tab(gr, app, language, pricelist_tab, live: _Live, tab: _Tab, cas
             carry = gr.Button(first["pricelist_carry_out"], variant="primary", interactive=False, elem_id="pricelist-carry-out")
     given = gr.State(None)                           # the upload of the export stored last: one press stores one export
     viewed = gr.State(None)                          # what the last view showed; None: there is no view to carry out
+    asked_remove = gr.State(None)                    # the stored supplier named in the open removal question, or None
 
     gr.on(triggers=[app.load, pricelist_tab.select], fn=pricelist_opened, inputs=[supplier, language],
           outputs=[notice, body, supplier, state, list_part])
@@ -3176,11 +3196,11 @@ def _pricelist_tab(gr, app, language, pricelist_tab, live: _Live, tab: _Tab, cas
     file_button.click(prices_filed, inputs=[export, supplier, language, given],
                       outputs=[export_note, export, supplier, state, list_part, given, notice])
     # the press beside the supplier's field asks only; "Ja, weghalen" takes the prices away, and its sentence stands under the row
-    remove.click(remove_asked, inputs=[supplier, language], outputs=[confirm, ask, remove_note], show_progress="hidden")
-    yes_button.click(prices_removed, inputs=[supplier, language],
+    remove.click(remove_asked, inputs=[supplier, language], outputs=[confirm, ask, remove_note, asked_remove], show_progress="hidden")
+    yes_button.click(prices_removed, inputs=[supplier, language, asked_remove],
                      outputs=[export_note, supplier, state, list_part, table, note, carry, viewed, notice]).then(
-        removal_shown, inputs=export_note, outputs=[confirm, remove_note, export_note], show_progress="hidden")
-    gr.on(triggers=[no_button.click, supplier.change], fn=remove_kept, outputs=confirm, show_progress="hidden")
+        removal_shown, inputs=export_note, outputs=[confirm, remove_note, export_note, asked_remove], show_progress="hidden")
+    gr.on(triggers=[no_button.click, supplier.change], fn=remove_kept, outputs=[confirm, asked_remove], show_progress="hidden")
     list_file.change(pricelist_file_chosen, inputs=[list_file, supplier, language], outputs=[*chosen, table, note, carry, viewed])
     gr.on(triggers=[field.input for field in chosen], fn=pricelist_column_chosen, outputs=[carry, viewed])
     view.click(pricelist_shown, inputs=[list_file, supplier, *chosen, language], outputs=[table, note, carry, viewed]).then(
@@ -3191,8 +3211,8 @@ def _pricelist_tab(gr, app, language, pricelist_tab, live: _Live, tab: _Tab, cas
     language.change(pricelist_relabel, inputs=[language, supplier, list_file],
                     outputs=[pricelist_tab, notice, intro, supplier, remove, state, export, file_button, export_note, list_file, *chosen, hint, view,
                              table, note, carry, viewed], queue=False)
-    language.change(removal_relabelled, inputs=language, outputs=[confirm, ask, yes_button, no_button, remove_note], show_progress="hidden",
-                    queue=False)
+    language.change(removal_relabelled, inputs=language, outputs=[confirm, ask, yes_button, no_button, remove_note, asked_remove],
+                    show_progress="hidden", queue=False)
 
 
 # --- the tab "Bestanden" ---

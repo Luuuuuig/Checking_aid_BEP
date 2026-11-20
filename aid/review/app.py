@@ -378,6 +378,10 @@ class NothingAsked(ValueError):
     """"ask" on a case made from a try-out document (aid/tryout_mark.py): the aid sends nothing about it to a supplier."""
 
 
+class CaseClosed(ValueError):
+    """A decision on a case that is already closed: closed cases take no new decisions."""
+
+
 def decide(case: Case, item_id: str, decision: Decision, article_update: bool = False) -> None:
     """Record the buyer's decision on a review item: append {"item_id", "decision", "article_update", "at"} to <case
     root>/decisions.jsonl, "at" being the time now to the second. The last decision of an item counts; close_case carries it out.
@@ -402,6 +406,10 @@ def decide(case: Case, item_id: str, decision: Decision, article_update: bool = 
     if marked_replaced(case.root):
         raise ValueError(f"case {case.case_id} was replaced by another case, so no decision is taken on it")
     result = _saved_result(case)
+    if result.status == "closed":
+        if marked_replaced(case.root):
+            raise ValueError(f"case {case.case_id} was replaced by another case, so no decision is taken on it")
+        raise CaseClosed(f"case {case.case_id} is already closed, so no decision is taken on it")
     item = next((item for item in result.review_items if item.item_id == item_id), None)
     if item is None:
         raise ValueError(f"case {case.case_id} has no review item {item_id!r}")
@@ -419,6 +427,9 @@ def decide(case: Case, item_id: str, decision: Decision, article_update: bool = 
     if marked_replaced(case.root):               # marked between the first look and the append: the line is not left in the case
         _take_back(path, line)
         raise ValueError(f"case {case.case_id} was replaced by another case, so no decision is taken on it")
+    if _saved_result(case).status == "closed":   # closed in another tab between the first look and the append
+        _take_back(path, line)
+        raise CaseClosed(f"case {case.case_id} is already closed, so no decision is taken on it")
 
 
 def _take_back(path: Path, line: str) -> None:

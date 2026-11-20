@@ -303,7 +303,7 @@ def intro(listed: list[tuple[str, str, list[tuple[str, str]]]], passed: int, lan
         title, _, hint = heading.partition("\n")
         if hint:
             lines.append(f"**{_markdown(title)}** {_markdown(hint)}")
-    if not listed:
+    if not listed and not passed:
         lines.append(strings["hand_nothing"])
     if passed:
         lines.append(strings["hand_unreadable_one"] if passed == 1 else strings["hand_unreadable_many"].format(n=passed))

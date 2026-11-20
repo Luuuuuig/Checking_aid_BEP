@@ -191,6 +191,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "doc_source": "Bron leverancier",
         "saved": "Besluit over {item} opgeslagen.",
         "refused": "Dit besluit kan hier niet worden genomen.",
+        "case_closed": "Deze zaak is al afgesloten: er is geen besluit opgeslagen.",
+        "case_unreadable": "Deze zaak kan nu niet worden gelezen: vernieuw de lijst en probeer het zo opnieuw.",
         "new_status": "De zaak is nu: {status}.",
         "write_stopped": "Een schrijfactie is niet gelukt ({write}): {error}. De zaak blijft ter beoordeling.",
         "not_closed": "Deze zaak kan niet worden afgesloten: zij is niet meer ter beoordeling.",
@@ -269,6 +271,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "hand_pricelist": "Prijslijst",
         "hand_pricelist_entered": "Alle artikelprijzen van deze prijslijst zijn ingevoerd",
         "hand_tick_first": "Vink eerst aan wat u bedoelt.",
+        "hand_choose_first": "Kies eerst wat u bedoelt.",
         "hand_entered_one": "1 wijziging genoteerd als ingevoerd in Exact.",
         "hand_entered_many": "{n} wijzigingen genoteerd als ingevoerd in Exact.",
         "hand_dropped_one": "1 wijziging vervalt: de assistent vraagt er niet meer om.",
@@ -296,10 +299,10 @@ STRINGS: dict[str, dict[str, str]] = {
         "hand_done_dropped": "(niet ingevoerd, op {date})",
         "hand_done_choice": "Afgehandelde wijziging",
         "hand_reopen": "Weer op de lijst zetten",
-        "hand_put_back": "Terugdraaien in Exact",
+        "hand_put_back": "Oude waarde op de lijst zetten",
         "hand_reopened": "De regel staat weer op de lijst.",
-        "hand_reopen_seen": ("Deze wijziging heeft de assistent zelf in Exact gezien. Kies Terugdraaien in Exact als de oude waarde terug "
-                             "moet."),
+        "hand_reopen_seen": ("Deze wijziging heeft de assistent zelf in Exact gezien. Kies Oude waarde op de lijst zetten als de oude waarde "
+                             "terug moet."),
         "hand_reopen_not": ("De wijziging komt niet terug op de lijst: er is intussen een andere wijziging voor dezelfde regel of hetzelfde "
                             "artikel."),
         "hand_put_back_listed": ("Nog niet teruggedraaid in Exact. Op de lijst staat nu: {row}. Voer de oude waarde in Exact in en vink de "
@@ -366,8 +369,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "hand_exact_handed_over_row": ("Aan Exact doorgegeven en nog niet verwerkt: kijk later in Exact en vink de regel af als het er "
                                        "staat."),
         "hand_done_written": "(door de assistent in Exact gezet op {date})",
-        "hand_reopen_written": ("Deze wijziging heeft de assistent zelf in Exact gezet. Kies Terugdraaien in Exact als de oude waarde "
-                                "terug moet."),
+        "hand_reopen_written": ("Deze wijziging heeft de assistent zelf in Exact gezet. Kies Oude waarde op de lijst zetten als de oude "
+                                "waarde terug moet."),
         "hand_exact_stop:error": ("Er ging iets onverwachts mis: de assistent zet nu niets meer in Exact. Geef dit door aan de "
                                   "onderzoeker."),
         "hand_exact_replaced_one": ("1 wijziging is in Exact gezet, maar intussen staat er een nieuwere wijziging voor dezelfde regel of "
@@ -672,6 +675,7 @@ STRINGS: dict[str, dict[str, str]] = {
                                      "is."),
         "pricelist_remove_yes": "Ja, weghalen",
         "pricelist_remove_no": "Niet weghalen",
+        "pricelist_remove_changed": "Er is niets weggehaald: de gekozen leverancier komt niet overeen met de vraag. Druk opnieuw op weghalen.",
         "files_empty": "Nog geen bestanden verwerkt. Wat de assistent met een bestand doet, komt hier vanzelf.",
         "mail_step:ids": "1. Gegevens van de app-registratie",
         "mail_step:sign_in": "2. Aanmelden bij Microsoft",
@@ -1338,6 +1342,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "doc_source": "Supplier source",
         "saved": "Decision on {item} saved.",
         "refused": "This decision cannot be taken here.",
+        "case_closed": "This case is already closed: no decision was saved.",
+        "case_unreadable": "This case cannot be read now: refresh the list and try again in a moment.",
         "new_status": "The case is now: {status}.",
         "write_stopped": "A write did not go through ({write}): {error}. The case stays for review.",
         "not_closed": "This case cannot be closed: it is no longer for review.",
@@ -1412,6 +1418,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "hand_pricelist": "Price list",
         "hand_pricelist_entered": "All article prices of this price list have been entered",
         "hand_tick_first": "Tick what you mean first.",
+        "hand_choose_first": "Choose what you mean first.",
         "hand_entered_one": "1 change noted as entered in Exact.",
         "hand_entered_many": "{n} changes noted as entered in Exact.",
         "hand_dropped_one": "1 change is dropped: the assistant no longer asks for it.",
@@ -1439,9 +1446,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "hand_done_dropped": "(not entered, on {date})",
         "hand_done_choice": "Handled change",
         "hand_reopen": "Put on the list again",
-        "hand_put_back": "Put back in Exact",
+        "hand_put_back": "Put old value on the list",
         "hand_reopened": "The row is on the list again.",
-        "hand_reopen_seen": "The assistant saw this change in Exact itself. Choose Put back in Exact if the old value must return.",
+        "hand_reopen_seen": "The assistant saw this change in Exact itself. Choose Put old value on the list if the old value must return.",
         "hand_reopen_not": "The change does not return to the list: there is another change for the same line or article by now.",
         "hand_put_back_listed": "Not put back in Exact yet. The list now holds: {row}. Enter the old value in Exact and tick the row.",
         "hand_put_back_other": ("Note: {old} is the value of the purchase order as the assistant read it; {source} showed {value}. "
@@ -1505,7 +1512,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "hand_exact_handed_over_row": ("Handed over to Exact but not applied yet: check Exact later and tick the row off once it is "
                                        "there."),
         "hand_done_written": "(put into Exact by the assistant on {date})",
-        "hand_reopen_written": "The assistant put this change into Exact itself. Choose Put back in Exact if the old value must return.",
+        "hand_reopen_written": "The assistant put this change into Exact itself. Choose Put old value on the list if the old value must return.",
         "hand_exact_stop:error": ("Something unexpected went wrong: the assistant has stopped putting changes into Exact. Pass this on to "
                                   "the researcher."),
         "hand_exact_replaced_one": ("1 change was put into Exact, but by now a newer change for the same line or article is on the list, "
@@ -1802,6 +1809,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "pricelist_remove_ask_one": "The stored purchase price of {supplier} will be taken away. The list Enter in Exact stays as it is.",
         "pricelist_remove_yes": "Yes, take them away",
         "pricelist_remove_no": "Keep them",
+        "pricelist_remove_changed": "Nothing was removed: the supplier in the field does not match the question. Press remove again.",
         "files_empty": "No files handled yet. What the assistant does with a file appears here by itself.",
         "mail_step:ids": "1. The app registration",
         "mail_step:sign_in": "2. Sign in with Microsoft",

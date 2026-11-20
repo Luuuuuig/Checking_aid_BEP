@@ -449,3 +449,22 @@ def test_the_status_module_imports_neither_the_runner_nor_the_digest():
                                        runner.COPILOT_CASES, runner.COULD_NOT_READ)
     assert (status.STOP_FILE, status.START_STATE, status.HEARTBEAT_FRESH) == (start.STOP_FILE, start.STATE_FILE, start.HEARTBEAT_FRESH)
     assert status.UNREAD_SCAN == notify._UNREAD_SCAN
+
+
+def test_a_transient_read_failure_is_not_cached_as_empty(tmp_path, monkeypatch):
+    """WP18 step 5: a failed read of a case folder is not cached as an empty result while the files' sizes and times did not change."""
+    root = tmp_path / "cases"
+    case_folder = folder(root, "250107", NOW - HOUR, "review")
+    real_read_bytes = Path.read_bytes
+
+    def flaky(self):
+        if self.name == RESULT_FILE and self.parents[1] == case_folder:
+            raise PermissionError("made-up: file temporarily held")
+        return real_read_bytes(self)
+
+    with monkeypatch.context() as patched:
+        patched.setattr(Path, "read_bytes", flaky)
+        assert status.case_lines(root, NOW) == []
+    lines = status.case_lines(root, NOW)
+    assert [(line.case_id, line.state) for line in lines] == [(case_folder.name, "review")]
+    assert status.case_states(root, [case_folder.name]) == {case_folder.name: "review"}
