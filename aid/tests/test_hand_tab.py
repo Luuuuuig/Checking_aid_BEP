@@ -113,8 +113,9 @@ def test_the_label_counts_the_open_changes(tmp_path, madeup_out):
         mark(prepared, change.ids, "entered", datetime(2026, 11, 12, 10, 0))
     listed = shown(page, "list_opened", "nl")
     assert listed["tab"]["label"] == "In Exact invoeren" and listed["rows"]["choices"] == [] and listed["block"]["choices"] == []
-    assert listed["intro"] == f"{NL['hand_intro']}\n\n{NL['hand_nothing']}" and NL["hand_nothing"] == "Er is niets in te voeren."
-    assert shown(page, "list_opened", "en")["intro"].endswith("\n\nThere is nothing to enter.")
+    assert listed["intro"] == f"{NL['hand_intro']}\n\n{NL['hand_nothing']}"
+    assert NL["hand_nothing"] == "Er is niets in te voeren. Nieuwe wijzigingen komen hier vanzelf na een controle of een besluit op Beoordelen."
+    assert shown(page, "list_opened", "en")["intro"].endswith(f"\n\n{EN['hand_nothing']}")
 
 
 def test_an_article_price_from_a_case_does_not_take_its_old_value_from_the_export(tmp_path, madeup_out):
@@ -541,7 +542,10 @@ def test_the_texts_of_the_tab_in_both_languages():
     brief = {"hand_tab": ("In Exact invoeren", "Enter in Exact"), "hand_tab_count": ("In Exact invoeren ({n})", "Enter in Exact ({n})"),
              "hand_intro": ("De assistent verandert zelf niets in Exact. Voer deze wijzigingen in Exact in en vink aan wat u hebt ingevoerd.",
                             "The assistant changes nothing in Exact itself. Enter these changes in Exact and tick what you have entered."),
-             "hand_nothing": ("Er is niets in te voeren.", "There is nothing to enter."),
+             "hand_nothing": ("Er is niets in te voeren. Nieuwe wijzigingen komen hier vanzelf na een controle of een besluit op Beoordelen.",
+                              "There is nothing to enter. New changes appear here automatically after a check or a decision on Review."),
+             "hand_done_empty": ("Nog geen afgehandelde wijzigingen in de laatste 14 dagen. Wijzigingen die u afvinkt of laat vallen, verschijnen hier.",
+                                 "No handled changes in the last 14 days yet. Changes you tick off or drop appear here."),
              "hand_block_po": ("Inkooporder {number} ({supplier})", "Purchase order {number} ({supplier})"),
              "hand_block_articles": ("Artikelprijzen", "Article prices"),
              "hand_row:po_line_price": ("regel {line} ({item}): prijs {old} → {new}", "line {line} ({item}): price {old} → {new}"),
@@ -834,7 +838,7 @@ def test_a_tick_and_a_drop_are_taken_back_and_a_seen_change_is_not(tmp_path, mad
     assert [text for text, _ in again["rows"]["choices"]] == [ROWS[0], ROWS[2]] and [v for _, v in again["done_choice"]["choices"]] == [date]
     back = done_of(page, "change_reopened", date, "en")
     assert back["done_note"] == "The row is on the list again." and back["tab"]["label"] == "Enter in Exact (3)"
-    assert back["done"] == "**Handled in the last 14 days**" and back["done_choice"]["choices"] == []
+    assert back["done"] == f"**Handled in the last 14 days**\n\n{EN['hand_done_empty']}" and back["done_choice"]["choices"] == []
     marks = [json.loads(line) for line in (prepared / MARKS_FILE).read_text(encoding="utf-8").splitlines()]
     assert [(line["entry_id"], line["mark"]) for line in marks[-2:]] == [(ids_of(price)[0], "reopened"), (ids_of(date)[0], "reopened")]
     # a change the aid saw itself is not taken back: nothing is written, and the note says what to do instead
@@ -921,7 +925,7 @@ def test_the_confirmations_section_lists_what_to_attach_in_exact(tmp_path, madeu
                                          "2 bevestigingen van de laatste 7 dagen: voeg ze in Exact bij en zet de status op Bevestigd.\n\n"
                                          "- 12-11-2026: inkooporder 250108 (S08), bestand MU08\\_conf.pdf\n"
                                          "- 12-11-2026: inkooporder 250114 (S14), bestand MU14\\_conf.pdf")
-    assert sections["done"] == "**Afgehandeld in de laatste 14 dagen**" and sections["done_note"] == ""
+    assert sections["done"] == f"**Afgehandeld in de laatste 14 dagen**\n\n{NL['hand_done_empty']}" and sections["done_note"] == ""
     late = d.model_copy(update={"clock": lambda: datetime(2026, 11, 20, 9, 0)})
     later_page = build_app(late, settings_file=tmp_path / "settings.json")
     assert done_of(later_page, "done_opened", "nl", None)["confirmations"] == ""                     # more than 7 days later: none
@@ -1909,7 +1913,7 @@ LIST_CHOSEN = (*COLUMN_FIELDS, "table", "note", "carry", "viewed")
 PRICELIST_SHOWN = ("table", "note", "carry", "viewed")
 CARRIED_OUT = ("table", "note", "carry", "viewed")
 PRICELIST_RELABEL = ("tab", "notice", "intro", "supplier", "remove", "state", "export", "file_button", "export_note", "list", *COLUMN_FIELDS, "hint",
-                     "view", "table", "note", "carry", "viewed")
+                     "view", "table_empty", "table", "note", "carry", "viewed")
 PRICELIST_HANDLERS = {"pricelist_opened", "pricelist_supplier_chosen", "pricelist_export_chosen", "prices_filed", "prices_removed", "pricelist_file_chosen",
                       "pricelist_column_chosen", "pricelist_shown", "pricelist_carried_out", "pricelist_relabel"}
 ARTICLE_COLUMNS = {"item_code": "Artikel", "price": "Inkoopprijs"}                              # as part 3 of the block saves them

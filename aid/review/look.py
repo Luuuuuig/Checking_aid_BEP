@@ -325,7 +325,7 @@ button.secondary:hover:not(:disabled) {{ box-shadow: 0 1px 3px rgba(17, 24, 39, 
 
 /* primary and action button sizing */
 #review-close > button, #review-close > .row > button, #review-oldest, #review-next, #hand-actions .row > button, .form:has(> #hand-rows) + .row > button {{ flex: 0 0 auto; width: auto; min-width: 200px; }}
-#files-give, #pricelist-file-prices, #pricelist-view, #pricelist-carry-out, #settings-sections button.primary {{ flex: 0 0 auto; width: auto; min-width: 200px; align-self: flex-start; }}
+#files-give, #pricelist-file-prices, #pricelist-view, #pricelist-carry-out, #settings-sections button.primary, #settings-sections button.stop {{ flex: 0 0 auto; width: auto; min-width: 200px; align-self: flex-start; }}
 /* "Lijst vernieuwen" beside the text of In Exact invoeren and of Bestanden: its column starts from the button's natural width, and
    the button keeps its words on one line at the right end of its column, also at a width of 683 px */
 .column:has(> #hand-intro) + .column, .column:has(> #files-done) + .column {{ flex-basis: auto; }}

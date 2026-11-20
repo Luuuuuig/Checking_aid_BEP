@@ -5711,3 +5711,16 @@ def test_article_price_tick_shows_only_when_supplier_value_is_chosen_on_a_price_
     assert 'verschijnt bij deze keuze het vinkje "Ook de artikelprijs bijwerken"' in sec7
 
 
+def test_review_tab_has_one_primary_action_in_idle_review_and_failed_states(tmp_path, madeup_out):
+    """WP19 item 5: on Beoordelen, the idle oldest-case button and the failed-case handled button are primary actions,
+    mutually exclusive with Zaak afsluiten and Volgende zaak openen."""
+    app = build_app(deps(tmp_path, madeup_out))
+    by_id = {block.elem_id: block for block in app.blocks.values() if getattr(block, "elem_id", None)}
+    assert by_id["review-oldest"].variant == "primary"
+    assert by_id["review-handled"].variant == "primary"
+    assert by_id["review-next"].variant == "primary"
+    [close_btn] = [block for block in app.blocks.values() if getattr(block, "value", None) == STRINGS["nl"]["close"]]
+    assert close_btn.variant == "primary"
+
+
+

@@ -468,9 +468,11 @@ def done_rows(all_: list[Change], now: datetime, language: str, days: int = DONE
 
 
 def done_text(rows: list[tuple[str, str]], language: str) -> str:
-    """The section of the handled changes as Markdown: its heading in bold, then a line per change of done_rows."""
+    """The section of the handled changes as Markdown: its heading in bold, then a line per change of done_rows, or an empty-state
+    sentence telling the buyer what appears here when none was handled in the last 14 days."""
     heading = f"**{STRINGS[language]['hand_done']}**"
-    return f"{heading}\n\n" + "\n".join(f"- {_markdown(text)}" for text, _ in rows) if rows else heading
+    body = "\n".join(f"- {_markdown(text)}" for text, _ in rows) if rows else STRINGS[language]["hand_done_empty"]
+    return f"{heading}\n\n{body}"
 
 
 def label_of(change: Change, store: PoStore | None, cases_root: Path | None, language: str) -> str:

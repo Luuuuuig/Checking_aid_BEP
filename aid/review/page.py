@@ -2162,7 +2162,8 @@ def _page(gr, deps: Deps, tab: _Tab):
                 gone = gr.Markdown("", visible=False, elem_id="review-gone")
                 with gr.Row(elem_id="review-pick-row") as pick_row:
                     pick = gr.Markdown(pick_text(first_lines, first_items, first), elem_id="review-pick", elem_classes=["notice"])
-                    oldest = gr.Button(first["review_open_oldest"], visible=waits(first_lines, first_items), scale=0, min_width=200, elem_id="review-oldest")
+                    oldest = gr.Button(first["review_open_oldest"], variant="primary", visible=waits(first_lines, first_items), scale=0,
+                                       min_width=200, elem_id="review-oldest")
                 # A case in three parts, in the order of the work (see the module docstring): what the buyer decides, the close with
                 # its answer, and what the decisions rest on. The first and the last show while a case is chosen (case_framed); the
                 # close's part always stands, so that the answer of a close stays on the screen once the case's parts have closed.
@@ -2211,7 +2212,7 @@ def _page(gr, deps: Deps, tab: _Tab):
                 with gr.Column(elem_id="review-close"):
                     with gr.Row():                   # a failed case has the second in place of the first
                         close_button = gr.Button(first["close"], variant="primary", visible=False)
-                        handled = gr.Button(first["handled_go"], visible=False, elem_id="review-handled")
+                        handled = gr.Button(first["handled_go"], variant="primary", visible=False, elem_id="review-handled")
                     with gr.Row(elem_id="review-answer-row"):
                         with gr.Column(elem_id="review-answer-text"):
                             status = gr.Markdown("", elem_classes=["answer"])
@@ -2875,6 +2876,19 @@ def _hand_tab(gr, app, language, hand_tab, live: _Live, tab: _Tab, cases_root: P
 
 # --- the tab "Prijslijst" ---
 
+def _table_has_rows(data) -> bool:
+    """Whether a Gradio Dataframe value (dict from handlers/tests or DataFrame from the browser) holds at least one non-empty row."""
+    if data is None:
+        return False
+    if isinstance(data, dict):
+        rows = data.get("data") or []
+    elif hasattr(data, "values"):
+        rows = data.values.tolist()
+    else:
+        rows = data
+    return any(any(cell is not None and cell == cell and str(cell).strip() for cell in row) for row in rows)
+
+
 def _pricelist_tab(gr, app, language, pricelist_tab, live: _Live, tab: _Tab, cases_root: Path, hand_tab=None,
                    hand_label_read: Callable[[str], dict] | None = None) -> None:
     """The content of the tab "Prijslijst" and its events, inside the tab (see the module docstring; aid/review/pricelist_page.py has
@@ -3195,6 +3209,12 @@ def _pricelist_tab(gr, app, language, pricelist_tab, live: _Live, tab: _Tab, cas
         return (table_of(pricelist_page.shown(done, found.current, language_now, found.shared), language_now), " ".join(notes),
                 gr.update(interactive=False), None)
 
+    def pricelist_table_shown(data, language_now: str) -> tuple:
+        """The comparison table changed or opened: show the table while it holds rows, or the empty-state line in its place."""
+        has_rows = _table_has_rows(data)
+        return (gr.update(visible=has_rows),
+                gr.update(value=STRINGS[language_now]["pricelist_table_empty"], visible=not has_rows))
+
     def pricelist_relabel(language_now: str, supplier_now: str | None, list_now: str | None) -> tuple:
         """The page's language switched: the tab in that language, with the supplier and the files kept; the notes and the table are
         emptied and no view is kept, for "Bekijken" to compare the list again in that language."""
@@ -3214,7 +3234,9 @@ def _pricelist_tab(gr, app, language, pricelist_tab, live: _Live, tab: _Tab, cas
                 gr.update(value=strings["pricelist_remove"]), state_of(name, stored, language_now),
                 gr.update(label=strings["pricelist_export"]), gr.update(value=strings["pricelist_file_prices"]), "",
                 gr.update(label=strings["pricelist_list"]), *labelled, strings["pricelist_columns_hint"],
-                gr.update(value=strings["pricelist_view"]), table_of([], language_now), "",
+                gr.update(value=strings["pricelist_view"]),
+                gr.update(value=strings["pricelist_table_empty"], visible=True),
+                table_of([], language_now), "",
                 gr.update(value=strings["pricelist_carry_out"], interactive=False), None)
 
     notice = gr.Markdown("", visible=False, elem_id="pricelist-notice")
@@ -3242,7 +3264,8 @@ def _pricelist_tab(gr, app, language, pricelist_tab, live: _Live, tab: _Tab, cas
                                       elem_id=f"pricelist-column-{column}") for column in columns_of]
             hint = gr.Markdown(first["pricelist_columns_hint"], elem_id="pricelist-columns-hint")
             view = gr.Button(first["pricelist_view"], elem_id="pricelist-view")
-            table = gr.Dataframe(value=table_of([], "nl"), interactive=False, wrap=True, elem_id="pricelist-table", max_height=320)
+            table_empty = gr.Markdown(first["pricelist_table_empty"], visible=True, elem_id="pricelist-table-empty", elem_classes=["empty-line"])
+            table = gr.Dataframe(value=table_of([], "nl"), visible=False, interactive=False, wrap=True, elem_id="pricelist-table", max_height=320)
             note = gr.Markdown("", elem_id="pricelist-note", elem_classes=["answer"], latex_delimiters=[])
             carry = gr.Button(first["pricelist_carry_out"], variant="primary", interactive=False, elem_id="pricelist-carry-out")
     given = gr.State(None)                           # the upload of the export stored last: one press stores one export
@@ -3269,9 +3292,11 @@ def _pricelist_tab(gr, app, language, pricelist_tab, live: _Live, tab: _Tab, cas
     carried = carry.click(pricelist_carried_out, inputs=[list_file, supplier, *chosen, viewed, language], outputs=[table, note, carry, viewed])
     if hand_label_read is not None:                  # the label of "In Exact invoeren" follows the press at once, not at the timer
         carried.then(hand_label_read, inputs=language, outputs=hand_tab, show_progress="hidden", queue=False)
+    gr.on(triggers=[table.change, pricelist_tab.select], fn=pricelist_table_shown, inputs=[table, language],
+          outputs=[table, table_empty], show_progress="hidden", queue=False)
     language.change(pricelist_relabel, inputs=[language, supplier, list_file],
                     outputs=[pricelist_tab, notice, intro, supplier, remove, state, export, file_button, export_note, list_file, *chosen, hint, view,
-                             table, note, carry, viewed], queue=False)
+                             table_empty, table, note, carry, viewed], queue=False)
     language.change(removal_relabelled, inputs=language, outputs=[confirm, ask, yes_button, no_button, remove_note, asked_remove],
                     show_progress="hidden", queue=False)
 
@@ -3573,7 +3598,7 @@ def _settings_tab(gr, app, language, settings_tab, live: _Live, tab: _Tab, accou
             log = gr.update(label=strings["assistant_log"], value=log)
         return (*[f"## {strings[f'mail_step:{step}']}" for step in MAIL_STEPS], store_line(strings) or "", "", "",
                 *[gr.update(label=strings[f"settings_section:{key}"]) for key in ("rules", "suppliers", "assistant")],
-                lines, gr.update(value=strings["assistant_refresh"]), log, strings["assistant_log_help"])
+                lines, gr.update(value=strings["assistant_refresh"]), "", log, strings["assistant_log_help"])
 
     def local_now() -> datetime:
         """The time of the page's clock in the local time of this PC, without a zone, as aid/review/status.py reads the times of the
@@ -4057,13 +4082,21 @@ def _buyer_section(gr, app, language, settings_tab, file_line, read: Callable[[d
             fields.append(gr.update(**update))
         relabelled = gr.update(label=strings["settings_supplier_choice"], choices=choices(settings, strings),
                                value=dropdown(settings, strings, choice_now)[1])
+        has_suppliers = bool(table(settings, strings)["data"])
         return (top(line), *[f"## {strings[f'settings_group:{group}']}" for group, _ in BUYER_GROUPS], *fields, strings["settings_limit"],
                 gr.update(value=strings["settings_buyer_save"]), "", f"### {strings['settings_suppliers']}",
-                strings["settings_suppliers_help"], table(settings, strings), relabelled,
+                strings["settings_suppliers_help"], table(settings, strings),
+                gr.update(value=strings["settings_suppliers_empty"], visible=not has_suppliers), relabelled,
                 gr.update(label=strings["settings_supplier_name"]), gr.update(label=strings["settings_supplier_email"]),
                 gr.update(label=strings["settings_supplier_lead_time"]), gr.update(label=strings["settings_supplier_review"]),
                 gr.update(label=strings["settings_supplier_messages_off"]), gr.update(value=strings["settings_supplier_save"]),
                 gr.update(value=strings["settings_supplier_remove"]))
+
+    def suppliers_table_shown(data, language_now: str) -> tuple:
+        """The suppliers table changed or opened: show the table while it holds suppliers, or the empty-state line in its place."""
+        has_rows = _table_has_rows(data)
+        return (gr.update(visible=has_rows),
+                gr.update(value=STRINGS[language_now]["settings_suppliers_empty"], visible=not has_rows))
 
     with gr.Tab(first["settings_section:rules"], id="regels") as rules_section:
         headings, fields = [], {}
@@ -4087,7 +4120,9 @@ def _buyer_section(gr, app, language, settings_tab, file_line, read: Callable[[d
     with gr.Tab(first["settings_section:suppliers"], id="leveranciers") as suppliers_section:
         suppliers_title = gr.Markdown(f"### {first['settings_suppliers']}", visible=False)       # the section's label names it
         suppliers_help = gr.Markdown(first["settings_suppliers_help"])
-        suppliers = gr.Dataframe(value={"headers": headers(first), "data": []}, interactive=False, wrap=True)
+        suppliers = gr.Dataframe(value={"headers": headers(first), "data": []}, visible=False, interactive=False, wrap=True)
+        suppliers_empty = gr.Markdown(first["settings_suppliers_empty"], visible=True, elem_id="settings-suppliers-empty",
+                                      elem_classes=["empty-line"])
         supplier = gr.Dropdown(choices=[(first["settings_supplier_new"], NEW_SUPPLIER)], value=NEW_SUPPLIER,
                                label=first["settings_supplier_choice"])
         with gr.Row():
@@ -4098,8 +4133,8 @@ def _buyer_section(gr, app, language, settings_tab, file_line, read: Callable[[d
             review = gr.Checkbox(value=False, label=first["settings_supplier_review"])
             off = gr.Checkbox(value=False, label=first["settings_supplier_messages_off"])
         with gr.Row():
-            supplier_save = gr.Button(first["settings_supplier_save"])
-            supplier_remove = gr.Button(first["settings_supplier_remove"])
+            supplier_save = gr.Button(first["settings_supplier_save"], variant="primary")
+            supplier_remove = gr.Button(first["settings_supplier_remove"], variant="stop")
         supplier_note = gr.Markdown("", elem_id="settings-supplier-note", elem_classes=["answer"])
         supplier_filled = gr.State(None)             # the supplier form as it was filled, with the supplier it was filled for
 
@@ -4108,6 +4143,8 @@ def _buyer_section(gr, app, language, settings_tab, file_line, read: Callable[[d
     supplier_shown_again = [supplier_note, file_line, suppliers, supplier, *supplier_form_fields, supplier_filled]
     gr.on(triggers=[app.load, settings_tab.select], fn=buyer_opened, inputs=language,
           outputs=[file_line, *form, filled, suppliers, supplier, *supplier_form_fields, supplier_filled, own_part])
+    gr.on(triggers=[app.load, settings_tab.select, suppliers_section.select, suppliers.change], fn=suppliers_table_shown,
+          inputs=[suppliers, language], outputs=[suppliers, suppliers_empty], show_progress="hidden", queue=False)
     rules_section.select(own_part_shown, inputs=language, outputs=own_part)        # the switch of the test mode stands in another section
     save_button.click(save_buyer, inputs=[*form, filled, language], outputs=[note, file_line, *form, filled])
     # The dropdown's change (the buyer's choice, or the value a save or a removal gave it) fills the form and leaves the note of a
@@ -4117,8 +4154,8 @@ def _buyer_section(gr, app, language, settings_tab, file_line, read: Callable[[d
     supplier_save.click(save_supplier, inputs=[supplier, *supplier_form_fields, supplier_filled, language], outputs=supplier_shown_again)
     supplier_remove.click(remove_supplier, inputs=[supplier, language], outputs=supplier_shown_again)
     language.change(buyer_relabel, inputs=[language, fields["digest"], fields["language"], supplier],
-                    outputs=[file_line, *headings, *form, limit, save_button, note, suppliers_title, suppliers_help, suppliers, supplier,
-                             *supplier_form_fields, supplier_save, supplier_remove], queue=False)
+                    outputs=[file_line, *headings, *form, limit, save_button, note, suppliers_title, suppliers_help, suppliers, suppliers_empty,
+                             supplier, *supplier_form_fields, supplier_save, supplier_remove], queue=False)
     return rules_section, suppliers_section
 
 
@@ -5337,21 +5374,28 @@ def _assistant_section(gr, language, tab: _Tab, read: Callable[[dict[str, str]],
             return gr.update(), gr.update(), gr.update()
         return lines, log, STRINGS[language_now]["assistant_log_help"]
 
+    def assistant_refreshed(language_now: str) -> str:
+        """The refresh button pressed: a visible answer naming the time of the refresh."""
+        return STRINGS[language_now]["assistant_refreshed"].format(time=clock().strftime("%H:%M"))
+
     with gr.Tab(first["settings_section:assistant"], id="assistent") as section:
         lines = gr.Markdown("", elem_id="assistant-lines")
-        refresh = gr.Button(first["assistant_refresh"], elem_id="assistant-refresh")
+        refresh = gr.Button(first["assistant_refresh"], variant="primary", elem_id="assistant-refresh")
+        refresh_note = gr.Markdown("", elem_id="assistant-note", elem_classes=["answer"])
         # a box, not a Markdown: the runner's lines are shown as they stand, an underscore of a case id included
         log = gr.Textbox(label=first["assistant_log"], elem_id="assistant-log", interactive=False, lines=12, max_lines=20)
         help_line = gr.Markdown(first["assistant_log_help"], elem_id="assistant-log-help")
     gr.on(triggers=[section.select, refresh.click], fn=assistant_shown, inputs=language, outputs=[lines, log, help_line],
           show_progress="hidden")
+    refresh.click(assistant_refreshed, inputs=language, outputs=refresh_note, show_progress="hidden", queue=False)
+    section.select(lambda: "", outputs=refresh_note, show_progress="hidden", queue=False)
 
     def read_after(event) -> None:
         """assistant_shown chained after `event`, an event of another tab that opens the section (the strip's button), so that the
         section shows the state at that moment, also when it was open already and its select does not fire again."""
         event.then(assistant_shown, inputs=language, outputs=[lines, log, help_line], show_progress="hidden")
 
-    return section, [lines, refresh, log, help_line], texts, read_after
+    return section, [lines, refresh, refresh_note, log, help_line], texts, read_after
 
 
 def _account(tenant: str, client: str) -> MicrosoftAccount:

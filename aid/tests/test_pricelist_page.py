@@ -734,8 +734,8 @@ def test_the_tab_is_wired_as_the_page_shows_it(tmp_path, madeup_out):
     order = [name(block) for block in inside(tab) if isinstance(block, (gr.Markdown, gr.Button, gr.File, gr.Dataframe, gr.Dropdown))]
     assert order == ["pricelist-notice", "pricelist-intro", "pricelist-supplier", "pricelist-remove", "pricelist-remove-ask", "pricelist-remove-yes",
                      "pricelist-remove-no", "pricelist-remove-note", "pricelist-state", "pricelist-export", "pricelist-file-prices",
-                     "pricelist-export-note", "pricelist-list", *columns, "pricelist-columns-hint", "pricelist-view", "pricelist-table",
-                     "pricelist-note", "pricelist-carry-out"]
+                     "pricelist-export-note", "pricelist-list", *columns, "pricelist-columns-hint", "pricelist-view", "pricelist-table-empty",
+                     "pricelist-table", "pricelist-note", "pricelist-carry-out"]
     assert bound("pricelist_opened") == ([("page", "load"), ("tab", "select")], ["pricelist-supplier", "language"],
                                          ["pricelist-notice", "pricelist-body", "pricelist-supplier", "pricelist-state", "pricelist-list-part"])
     after_view = ["pricelist-table", "pricelist-note", "pricelist-carry-out", "viewed"]
@@ -759,7 +759,7 @@ def test_the_tab_is_wired_as_the_page_shows_it(tmp_path, madeup_out):
     assert bound("pricelist_relabel") == ([("language", "change")], ["language", "pricelist-supplier", "pricelist-list"],
                                           ["tab", "pricelist-notice", "pricelist-intro", "pricelist-supplier", "pricelist-remove", "pricelist-state", "pricelist-export",
                                            "pricelist-file-prices", "pricelist-export-note", "pricelist-list", *columns, "pricelist-columns-hint",
-                                           "pricelist-view", "pricelist-table", "pricelist-note", "pricelist-carry-out", "viewed"])
+                                           "pricelist-view", "pricelist-table-empty", "pricelist-table", "pricelist-note", "pricelist-carry-out", "viewed"])
     # as the page is built: nothing shown but the notice's place, the two presses inactive, and a name typed is taken
     assert (by_id["pricelist-body"].visible, by_id["pricelist-list-part"].visible, by_id["pricelist-notice"].visible) == (False, False, False)
     assert by_id["pricelist-file-prices"].interactive is False and by_id["pricelist-carry-out"].interactive is False
@@ -2318,6 +2318,10 @@ REDESIGN = {
         "Er is niets weggehaald: de gekozen leverancier komt niet overeen met de vraag. Druk opnieuw op weghalen.",
         "Nothing was removed: the supplier in the field does not match the question. Press remove again.",
     ),
+    "pricelist_table_empty": (
+        "Nog geen prijslijst bekeken. Kies een prijslijst, wijs de kolommen aan en druk op Bekijken.",
+        "No price list viewed yet. Choose a price list, map the columns and press View.",
+    ),
 }
 
 # The line of the articles that Exact does not know (Johan, 17 November, reported by Yijie: a price list sometimes holds new articles),
@@ -2701,3 +2705,23 @@ def test_ja_weghalen_refuses_when_supplier_field_changed_after_question(tmp_path
         no_question = taken.fn("Supplier B", lang, None)
         assert no_question[0] == STRINGS[lang]["pricelist_remove_changed"]
     assert sorted(stored_prices(root)) == ["Supplier A", "Supplier B"]
+
+
+def test_pricelist_table_shows_empty_state_until_viewed(tmp_path, madeup_out):
+    """WP19 item 5: before Bekijken produces comparison rows, Prijslijst hides the empty table and shows an empty-state line
+    telling the buyer what to do; once rows are present the table shows and the empty-state line hides."""
+    page, d, clock = pricelist_page(tmp_path, madeup_out)
+    by_id = {block.elem_id: block for block in inside(pricelist_tab(page)) if getattr(block, "elem_id", None)}
+    assert by_id["pricelist-table"].visible is False
+    assert by_id["pricelist-table-empty"].visible is True
+    assert by_id["pricelist-table-empty"].value == NL["pricelist_table_empty"]
+    toggle = handler(page, "pricelist_table_shown")
+    assert toggle({"headers": ["A"], "data": []}, "nl") == (
+        {"__type__": "update", "visible": False},
+        {"__type__": "update", "value": NL["pricelist_table_empty"], "visible": True},
+    )
+    assert toggle({"headers": ["A"], "data": [["KM-1001", "12,50", "13,00", "prijs verandert"]]}, "en") == (
+        {"__type__": "update", "visible": True},
+        {"__type__": "update", "value": EN["pricelist_table_empty"], "visible": False},
+    )
+

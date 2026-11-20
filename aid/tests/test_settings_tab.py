@@ -1193,10 +1193,11 @@ def test_the_assistants_state_shows_its_lines_and_the_last_lines_of_the_log(tmp_
 
     def inside(block) -> list:
         return [block, *[found for child in getattr(block, "children", []) for found in inside(child)]]
-    lines, refresh, log, help_line = [block for block in inside(assistant) if isinstance(block, (gr.Markdown, gr.Button, gr.Textbox))]
-    assert [block.elem_id for block in (lines, refresh, log, help_line)] == ["assistant-lines", "assistant-refresh", "assistant-log",
-                                                                             "assistant-log-help"]
-    assert (lines.value, refresh.value, refresh.variant) == ("", nl["assistant_refresh"], "secondary")
+    lines, refresh, refresh_note, log, help_line = [block for block in inside(assistant) if isinstance(block, (gr.Markdown, gr.Button, gr.Textbox))]
+    assert [block.elem_id for block in (lines, refresh, refresh_note, log, help_line)] == [
+        "assistant-lines", "assistant-refresh", "assistant-note", "assistant-log", "assistant-log-help"]
+    assert (lines.value, refresh.value, refresh.variant) == ("", nl["assistant_refresh"], "primary")
+    assert refresh_note.value == "" and refresh_note.elem_classes == ["answer"]
     assert (type(log).__name__, log.label, log.interactive, log.lines, log.max_lines) == ("Textbox", nl["assistant_log"], False, 12, 20)
     assert help_line.value == nl["assistant_log_help"] == "Deze regels zijn voor de onderzoeker. Ze staan alleen op deze pc."
     assert (nl["assistant_refresh"], nl["assistant_log"]) == ("Stand van de assistent vernieuwen",
@@ -2411,7 +2412,8 @@ def test_the_buyers_part_is_wired_as_the_page_shows_it(tmp_path, madeup_out):
     labels = [name(block) if not isinstance(block, gr.Markdown) or block.elem_id else block.value for block in order]
     assert labels == [line, headings[0], *fields[:4], headings[1], *fields[4:6], headings[2], *fields[6:9], fields[11], fields[9], headings[3],
                       fields[10], nl["settings_limit"],
-                      f"button {nl['settings_buyer_save']}", note, headings[4], nl["settings_suppliers_help"], "table", choice, *supplier_form,
+                      f"button {nl['settings_buyer_save']}", note, headings[4], nl["settings_suppliers_help"], "table",
+                      "settings-suppliers-empty", choice, *supplier_form,
                       f"button {nl['settings_supplier_save']}", f"button {nl['settings_supplier_remove']}", supplier_note]
     [table] = [block for block in buyers if isinstance(block, gr.Dataframe)]
     assert table.interactive is False and settings.children[-1] is sections and settings.children[0].elem_id == line
@@ -5257,4 +5259,47 @@ def test_page_help_texts_stay_concise_and_details_live_in_manual():
     assert "zonder e-mailadres" in manual["7"].lower()
     assert "of \"Purchasing\"" in manual["7"]
     assert "part after the at sign" in manual["3.17"]
+
+
+def test_item5_suppliers_and_assistant_primary_empty_state_and_answer(tmp_path, madeup_out):
+    """WP19 item 5: Leveranciers has one primary save button, a stop remove button, and an empty state in place of an empty
+    table; Stand van de assistent has a primary refresh button that gives a visible answer with the refresh time."""
+    gr = import_gradio()
+    path, page, made = tab(tmp_path, madeup_out, **BUYER)
+    nl, en = STRINGS["nl"], STRINGS["en"]
+
+    def inside(block) -> list:
+        return [block, *[found for child in getattr(block, "children", []) for found in inside(child)]]
+
+    sup_tab = section(page, "leveranciers")
+    sup_blocks = inside(sup_tab)
+    [save_btn] = [b for b in sup_blocks if isinstance(b, gr.Button) and b.value == nl["settings_supplier_save"]]
+    [rem_btn] = [b for b in sup_blocks if isinstance(b, gr.Button) and b.value == nl["settings_supplier_remove"]]
+    assert save_btn.variant == "primary" and rem_btn.variant == "stop"
+    [sup_table] = [b for b in sup_blocks if isinstance(b, gr.Dataframe)]
+    [sup_empty] = [b for b in sup_blocks if getattr(b, "elem_id", None) == "settings-suppliers-empty"]
+    assert sup_table.visible is False and sup_empty.visible is True and sup_empty.value == nl["settings_suppliers_empty"]
+
+    toggle = handler(page, "suppliers_table_shown")
+    assert toggle({"headers": ["A"], "data": []}, "nl") == (
+        {"__type__": "update", "visible": False},
+        {"__type__": "update", "value": nl["settings_suppliers_empty"], "visible": True},
+    )
+    assert toggle({"headers": ["A"], "data": [["S01", "a@example.com", "10", "", ""]]}, "en") == (
+        {"__type__": "update", "visible": True},
+        {"__type__": "update", "value": en["settings_suppliers_empty"], "visible": False},
+    )
+
+    asst_tab = section(page, "assistent")
+    asst_blocks = inside(asst_tab)
+    [asst_refresh] = [b for b in asst_blocks if getattr(b, "elem_id", None) == "assistant-refresh"]
+    [asst_note] = [b for b in asst_blocks if getattr(b, "elem_id", None) == "assistant-note"]
+    assert asst_refresh.variant == "primary"
+    refreshed = handler(page, "assistant_refreshed")
+    assert refreshed("nl") == nl["assistant_refreshed"].format(time="09:00")
+    assert refreshed("en") == en["assistant_refreshed"].format(time="09:00")
+    [relabelled] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == "sections_relabelled"]
+    assert asst_note in relabelled.outputs
+    assert dict(zip([id(b) for b in relabelled.outputs], relabelled.fn("en")))[id(asst_note)] == ""
+
 
