@@ -406,10 +406,6 @@ def decide(case: Case, item_id: str, decision: Decision, article_update: bool = 
     if marked_replaced(case.root):
         raise ValueError(f"case {case.case_id} was replaced by another case, so no decision is taken on it")
     result = _saved_result(case)
-    if result.status == "closed":
-        if marked_replaced(case.root):
-            raise ValueError(f"case {case.case_id} was replaced by another case, so no decision is taken on it")
-        raise CaseClosed(f"case {case.case_id} is already closed, so no decision is taken on it")
     item = next((item for item in result.review_items if item.item_id == item_id), None)
     if item is None:
         raise ValueError(f"case {case.case_id} has no review item {item_id!r}")
@@ -427,7 +423,7 @@ def decide(case: Case, item_id: str, decision: Decision, article_update: bool = 
     if marked_replaced(case.root):               # marked between the first look and the append: the line is not left in the case
         _take_back(path, line)
         raise ValueError(f"case {case.case_id} was replaced by another case, so no decision is taken on it")
-    if _saved_result(case).status == "closed":   # closed in another tab between the first look and the append
+    if _saved_result(case).status == "closed":   # already closed, or closed in another tab before the append
         _take_back(path, line)
         raise CaseClosed(f"case {case.case_id} is already closed, so no decision is taken on it")
 
