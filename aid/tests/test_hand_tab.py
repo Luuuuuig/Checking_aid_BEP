@@ -480,6 +480,7 @@ def test_the_pages_script_draws_the_copy_buttons_and_the_style_gives_them_their_
     assert ".replace('{text}'" not in script                                     # nor as a pattern: a code may hold a dollar sign
     assert Path("aid/tests/check_copy_buttons.js").is_file()
     for rule in (".block.hand-rows input, .hand-copy button { scroll-margin-top: 148px; }",
+                 ".block.hand-rows .wrap label { font-size: 14px; line-height: 20px; }",
                  ".block.hand-rows .wrap.hand-copies { display: grid; grid-template-columns: minmax(0, max-content) minmax(0, max-content); "
                  "justify-content: start; align-items: center; gap: 8px 12px; padding-right: 4px; }",
                  ".hand-copy { display: flex; flex-wrap: wrap; gap: 8px; }",
@@ -492,8 +493,9 @@ def test_the_pages_script_draws_the_copy_buttons_and_the_style_gives_them_their_
                  f".hand-copy button.refused {{ color: {look.TONES['problem'].text}; background: {look.TONES['problem'].tint}; "
                  f"border-color: {look.TONES['problem'].mark}; }}",
                  "#hand-copy, #hand-copy .html-container { margin: 0; padding: 0; }",
-                 f"#hand-copy-said {{ min-height: 20px; margin: 0; font-size: 14px; line-height: 20px; font-weight: 600; "
+                 f"#hand-copy-said {{ margin: 0; font-size: 14px; line-height: 20px; font-weight: 600; "
                  f"color: {look.TONES['done'].text}; }}",
+                 "#hand-copy-said:not(:empty) { margin-top: 8px; }",
                  f"#hand-copy-said.refused {{ color: {look.TONES['problem'].text}; }}"):
         assert rule in css, rule
 
@@ -1338,7 +1340,8 @@ def test_the_style_keeps_the_pair_in_view_and_gives_each_standing_line_its_look(
     by_id = {block.elem_id: block for block in page.blocks.values() if getattr(block, "elem_id", None)}
     css = look.PAGE_CSS
     for rule in (".gradio-container { overflow: clip; }",
-                 f"#hand-actions {{ position: sticky; top: 0; z-index: 41; background: {look.GROUND}; padding: 8px 0; }}",
+                 f"#hand-actions {{ position: sticky; top: 0; z-index: 41; background: {look.GROUND}; gap: 0; padding: 8px 0; margin-bottom: -8px; }}",
+                 "#hand-note:has(.prose p) { margin-top: 8px; }",
                  ".block.hand-rows input, .hand-copy button { scroll-margin-top: 148px; }",
                  f".block.notice, #pricelist-notice {{ background: {look.TINT}; border: 0; border-left: 4px solid {look.CONTROL}; border-radius: 6px; "
                  "padding: 12px 16px; }",
@@ -2276,4 +2279,26 @@ def test_tick_buttons_stay_inactive_until_a_row_is_ticked_and_show_the_count(tmp
     manual = manual_sections()
     assert "inactive until" in manual["2.6"].lower() and "how many" in manual["2.6"].lower()
     assert "pas actief" in manual["7"].lower() and "hoeveel" in manual["7"].lower()
+
+
+def test_hand_tab_rows_and_empty_action_bar_layout_repairs():
+    """Follow-up of work package 19: on In Exact invoeren, row labels sit at 14/20 so long rows fit on one line beside their
+    copy buttons at 1366 px wide, and #hand-actions collapses its empty answer and copy-feedback slots instead of leaving a wide
+    blank band above the list."""
+    from aid.review import look
+    css = look.PAGE_CSS
+    rules = [line.strip() for line in css.splitlines() if "{" in line]
+    assert ".block.hand-rows .wrap label { font-size: 14px; line-height: 20px; }" in css
+    assert f"#hand-actions {{ position: sticky; top: 0; z-index: 41; background: {look.GROUND}; gap: 0; padding: 8px 0; margin-bottom: -8px; }}" in css
+    assert "#hand-note:has(.prose p) { margin-top: 8px; }" in css
+    assert f"#hand-copy-said {{ margin: 0; font-size: 14px; line-height: 20px; font-weight: 600; color: {look.TONES['done'].text}; }}" in css
+    assert "#hand-copy-said:not(:empty) { margin-top: 8px; }" in css
+    assert [rule for rule in rules if rule.startswith("#hand-actions {")] == [
+        f"#hand-actions {{ position: sticky; top: 0; z-index: 41; background: {look.GROUND}; gap: 0; padding: 8px 0; margin-bottom: -8px; }}"]
+    assert [rule for rule in rules if rule.startswith("#hand-copy-said {")] == [
+        f"#hand-copy-said {{ margin: 0; font-size: 14px; line-height: 20px; font-weight: 600; color: {look.TONES['done'].text}; }}"]
+    assert "anywhere" not in css
+    assert not [rule for rule in rules if any(part in rule for part in ("#hand-actions", "#hand-note", "#hand-copy-said", ".hand-rows"))
+                and "!important" in rule]
+
 
