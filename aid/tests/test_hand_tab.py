@@ -22,13 +22,13 @@ from aid.po_store import PoStore
 from aid.pricelist import store_current
 from aid.review.hand_list import ids_of
 from aid.review.i18n import STRINGS
-from aid.review.page import _undo_choices, build_app, import_gradio
+from aid.review.page import _literal, _undo_choices, build_app, import_gradio
 from aid.review.intake import INTAKE_FILE
 from aid.runner import SET_ASIDE_REASON, _Loop, _pass, build_deps
 from aid.settings import load_settings, update_settings_file
 from aid.sources.mailbox import NO_ORDER_LINES
 from aid.sources.upload import open_upload_case
-from aid.tests.conftest import SETTINGS, deps
+from aid.tests.conftest import SETTINGS, deps, preprocess_file
 from aid.tests.helpers import EXPORT_COLUMNS, shown_headings, skipped_headings
 
 PO = {"MU08": "250108", "MU14": "250114"}             # MU08 prepares a price on PO line 1 and the article's price, MU14 a delivery date
@@ -1474,7 +1474,6 @@ def test_the_upload_field_takes_any_file_and_the_tab_answers_in_its_language(tmp
     and an empty file pass its preprocessing, and the tab answers with the brief's sentences in the page's language, the name of the
     file as it was given and shown as it is. A refused file writes nothing. A press without a file says so. With the export's columns
     set, a spreadsheet is taken and the sentence of the types names the export (amendment 1)."""
-    from gradio.data_classes import FileData
     gr = import_gradio()
     page, prepared, d = tab_page(tmp_path, madeup_out, cases=())
     [field] = [block for block in inside(files_tab(page)) if isinstance(block, gr.File)]
@@ -1486,10 +1485,10 @@ def test_the_upload_field_takes_any_file_and_the_tab_answers_in_its_language(tmp
             ("Orderregels.csv", b"a;b", "Orderregels\\.csv is niet aangenomen: de assistent leest een export uit Exact pas als de kolommen "
              "zijn ingesteld onder Instellingen, Koppeling met Exact.", "Orderregels\\.csv was not accepted: the assistant reads an export "
              "from Exact only once its columns are set under Settings, Connection to Exact."),
-            ("notes_v*1.docx", b"made-up", "notes\\_v\\*1\\.docx is niet aangenomen: de assistent leest pdf, png en e-mail (.eml).",
-             "notes\\_v\\*1\\.docx was not accepted: the assistant reads PDF, PNG and e-mail (.eml).")):
+            ("notes_v[1].docx", b"made-up", "notes\\_v\\[1\\]\\.docx is niet aangenomen: de assistent leest pdf, png en e-mail (.eml).",
+             "notes\\_v\\[1\\]\\.docx was not accepted: the assistant reads PDF, PNG and e-mail (.eml).")):
         upload = uploaded(tmp_path, name, data)
-        assert field.preprocess(FileData(path=upload)) == upload, name                      # the page library lets it through
+        assert preprocess_file(field, upload) == upload, name                               # the page library lets it through
         assert (file_given(page, upload, "nl")["note"], file_given(page, upload, "en")["note"]) == (dutch, english), name
     assert not d.settings.watched_folder.exists()
     assert (file_given(page, None, "nl")["note"], file_given(page, None, "en")["note"]) == ("Kies eerst een bestand.", "Choose a file first.")
@@ -1710,7 +1709,7 @@ def test_one_press_gives_one_file_and_its_note_stays(tmp_path, madeup_out):
 
 
 NAMES = ["# kop.docx", "1. lijst.docx", "- streep.docx", "+ plus.docx", "www.example.com.pdf", "sales@s01.example.com.docx",
-         "a&amp;b &lt;i&gt; &copy;.docx", "> quote [link](x) `code` *em* $$x$$ <b>|.docx", "x  y   z.docx", "~~doorgehaald~~.docx"]
+         "a&amp;b &lt;i&gt; &copy;.docx", "[link](x) `code` _em_ $$x$$ {b}.docx", "x  y   z.docx", "~~doorgehaald~~.docx"]
 
 
 def test_the_note_shows_the_name_as_it_is(tmp_path, madeup_out):
@@ -1735,6 +1734,13 @@ def test_the_note_shows_the_name_as_it_is(tmp_path, madeup_out):
         key = "files_accepted" if name.endswith(".pdf") else "files_refused:type"            # the PDF lies in the watched folder as given
         assert shown.replace("\u00a0", " ") == STRINGS["nl"][key].format(name=name), name
         assert "www." not in note and re.search(r"(?<!\\)@", note) is None, name                # no autolink of a web or e-mail address
+    for name in ("> quote *em* <b>|.docx",):               # characters Windows forbids in a file name still render as text via _literal
+        note = STRINGS["nl"]["files_refused:type"].format(name=_literal(name))
+        html = renderer.render(note)
+        assert html.startswith("<p>") and html.count("<p>") == 1 and not re.search(r"<(?!/?p>)", html), name
+        text = re.sub(r"&(amp|lt|gt|quot);", lambda m: {"amp": "&", "lt": "<", "gt": ">", "quot": '"'}[m[1]], html[3:-5])
+        shown = re.sub(r"[ \t\n]+", " ", text)
+        assert shown.replace("\u00a0", " ") == STRINGS["nl"]["files_refused:type"].format(name=name), name
 
 
 FILES_LABELS = ("files_outcome:", "files_skipped:", "files_error")          # the keys of the labels of the tab's table

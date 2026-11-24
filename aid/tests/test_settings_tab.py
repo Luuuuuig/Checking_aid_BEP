@@ -32,7 +32,7 @@ from aid.review.i18n import STRINGS
 from aid.review.page import NEW_SUPPLIER, build_app, import_gradio
 from aid.settings import Settings, SettingsInvalid, is_address, load_settings, read_settings, update_settings_file
 from aid.sources.mailbox import NOT_AN_EXPORT, scan_folder
-from aid.tests.conftest import SETTINGS, ReachedMicrosoft, deps
+from aid.tests.conftest import SETTINGS, ReachedMicrosoft, deps, preprocess_file
 from aid.tests.fakes import (ACCESS_TOKEN, CLIENT_ID, COPILOT, GRAPH, TENANT_ID, USERNAME, FakeApp, FakeResponse, FakeSession,
                              case_result, copilot_answer, copilot_session, sent_text, sign_in_event)
 from aid.tests.helpers import (ANDERS_FORM, ANDERS_LAYOUT, ANDERS_MEANINGS, ANDERS_PO, COMMAS_TITLES, ERP_FORM, ERP_MEANINGS, EXPORT_COLUMNS,
@@ -3863,7 +3863,6 @@ def test_every_file_reaches_the_sentences_of_the_block(tmp_path, madeup_out):
     English before a handler runs, and the block answers in the page's language: part 2 with the brief's sentence for a file that is
     neither .xlsx nor .csv, part 1 with its own sentence for a file whose name does not end in .pdf, which says so (ruling M17: it is
     true for a PDF saved without its suffix too, which the runner passes by as well)."""
-    from gradio.data_classes import FileData
     gr = import_gradio()
     path, page, made = tab(tmp_path, madeup_out, **BUYER)
     nl, en = STRINGS["nl"], STRINGS["en"]
@@ -3874,7 +3873,7 @@ def test_every_file_reaches_the_sentences_of_the_block(tmp_path, madeup_out):
         other = tmp_path / name
         other.write_bytes(b"made-up")
         for field in (part1, part2):                                      # the page library lets the file through to the handler
-            assert field.file_types is None and field.preprocess(FileData(path=str(other))) == str(other), name
+            assert field.file_types is None and preprocess_file(field, str(other)) == str(other), name
         shown = named(EXPORT_SAMPLE_SHOWN, handler(page, "export_sample_shown")(str(other), *NONE_CHOSEN, "nl"))
         assert shown["sample_note"] == nl["exact_export_refused:file_type"], name
         assert named(EXPORT_TESTED, handler(page, "export_tested")(*export_args(other)))["reading"] == nl["exact_export_refused:file_type"]

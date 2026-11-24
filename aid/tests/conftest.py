@@ -3,6 +3,7 @@ dependencies of a pipeline run on it."""
 import csv
 import os
 import shutil
+import warnings
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
@@ -12,6 +13,8 @@ import pytest
 from aid.settings import Settings, load_settings
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+# The three files of aid/madeup/out drawn through system fonts (two scans and one cart screenshot), whose bytes vary by OS.
+DRAWN_MADEUP = ("MU05_conf.pdf", "MU16_conf.pdf", "CART02.png")
 
 # SETTINGS is built while pytest imports this file, before any fixture has run, so its path comes from
 # REPO_ROOT and not from the working directory. All values below are made up for the tests. In particular
@@ -69,14 +72,28 @@ def no_keyring(monkeypatch, request):
 
 @pytest.fixture(scope="session")
 def madeup_out(tmp_path_factory):
-    """The made-up document set (aid/madeup), generated once per test session; returns the folder with the files. deps() files the
-    set's PO PDFs in a folder of the session the first time it is called."""
+    """The made-up document set (aid/madeup), generated once per test session; returns the folder with the files. The three files
+    drawn through system fonts (DRAWN_MADEUP) are overwritten with their committed copies from aid/madeup/out so their sha256 matches
+    the recorded LLM answers on Windows too. deps() files the set's PO PDFs in a folder of the session the first time it is called."""
     from aid.madeup.generate import generate
 
     out = tmp_path_factory.mktemp("madeup")
     generate(REPO_ROOT / "aid" / "madeup" / "spec", out)
+    committed = REPO_ROOT / "aid" / "madeup" / "out"
+    for name in DRAWN_MADEUP:
+        shutil.copyfile(committed / name, out / name)
     _PO_STORES[out] = tmp_path_factory.mktemp("po_store") / "store"
     return out
+
+
+def preprocess_file(field, path: str):
+    """Run gradio.File.preprocess while ignoring the ResourceWarning from the temporary file that gradio.components.file leaves
+    unclosed on Python 3.11 on Windows."""
+    from gradio.data_classes import FileData
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=r"^unclosed file ", category=ResourceWarning, module=r"^gradio\.components\.file$")
+        return field.preprocess(FileData(path=path))
 
 
 def read_csv(path) -> list[dict]:
