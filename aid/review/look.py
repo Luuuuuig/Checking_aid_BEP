@@ -340,11 +340,14 @@ button.secondary:disabled {{ background: {SURFACE_2}; border-color: {LINE_STRONG
 /* a button beside a field stands level with the field and not with its label and help line */
 .row > .form ~ button {{ align-self: flex-end; }}
 
-/* In Exact invoeren: sticky bar above the list so actions stay anchored without visual weight */
-#hand-actions {{ position: sticky; top: 0; z-index: 41; background: {GROUND}; padding: 8px 0; }}
+/* In Exact invoeren: sticky bar above the list so actions stay anchored without visual weight;
+   collapse empty answer and copy-feedback slots so no blank band stands above the list */
+#hand-actions {{ position: sticky; top: 0; z-index: 41; background: {GROUND}; gap: 0; padding: 8px 0; margin-bottom: -8px; }}
+#hand-note:has(.prose p) {{ margin-top: 8px; }}
 .block.hand-rows input, .hand-copy button {{ scroll-margin-top: 148px; }}
 
 /* In Exact invoeren: behind each row its copy buttons, drawn by PAGE_JS */
+.block.hand-rows .wrap label {{ font-size: 14px; line-height: 20px; }}
 .block.hand-rows .wrap.hand-copies {{ display: grid; grid-template-columns: minmax(0, max-content) minmax(0, max-content); justify-content: start; align-items: center; gap: 8px 12px; padding-right: 4px; }}
 .hand-copy {{ display: flex; flex-wrap: wrap; gap: 8px; }}
 .hand-copy button {{ min-height: 32px; max-width: 100%; padding: 4px 12px; font-size: 14px; line-height: 20px; font-weight: 600; color: {INK}; background: {SURFACE}; border: 1px solid {CONTROL}; border-radius: 4px; cursor: pointer; text-align: left; overflow-wrap: break-word; }}
@@ -352,7 +355,8 @@ button.secondary:disabled {{ background: {SURFACE_2}; border-color: {LINE_STRONG
 .hand-copy button.copied {{ color: {_DONE.text}; background: {_DONE.tint}; border-color: {_DONE.mark}; }}
 .hand-copy button.refused {{ color: {_PROBLEM.text}; background: {_PROBLEM.tint}; border-color: {_PROBLEM.mark}; }}
 #hand-copy, #hand-copy .html-container {{ margin: 0; padding: 0; }}
-#hand-copy-said {{ min-height: 20px; margin: 0; font-size: 14px; line-height: 20px; font-weight: 600; color: {_DONE.text}; }}
+#hand-copy-said {{ margin: 0; font-size: 14px; line-height: 20px; font-weight: 600; color: {_DONE.text}; }}
+#hand-copy-said:not(:empty) {{ margin-top: 8px; }}
 #hand-copy-said.refused {{ color: {_PROBLEM.text}; }}
 
 /* Prijslijst: removal press and standing confirmation bar */
