@@ -9,6 +9,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import threading
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta
@@ -422,11 +423,34 @@ def test_the_page_shows_labels_and_no_code(tmp_path, madeup_out):
 def test_the_page_lists_the_open_cases_and_makes_no_network_call(tmp_path, madeup_out, monkeypatch):
     """The page, built with an open case, offers that case by its PO, supplier, time of opening and number of items; building it
     connects to nothing (gradio's analytics are off) and leaves no event loop open."""
-    def refuse(*args, **kwargs):
+    real_connect = socket.socket.connect
+    real_socketpair = socket.socketpair
+    in_socketpair = threading.local()
+
+    def refuse(self, *args, **kwargs):
+        address = args[0] if args else None
+        if getattr(in_socketpair, "active", False) and isinstance(address, tuple) and address[:1] in (("127.0.0.1",), ("::1",)):
+            return real_connect(self, *args, **kwargs)
         raise OSError("no network in the tests")
 
+    def refuse_create(*args, **kwargs):
+        raise OSError("no network in the tests")
+
+    def local_socketpair(*args, **kwargs):
+        previous = getattr(in_socketpair, "active", False)
+        in_socketpair.active = True
+        try:
+            return real_socketpair(*args, **kwargs)
+        finally:
+            in_socketpair.active = previous
+
     monkeypatch.setattr(socket.socket, "connect", refuse)
-    monkeypatch.setattr(socket, "create_connection", refuse)
+    monkeypatch.setattr(socket, "create_connection", refuse_create)
+    monkeypatch.setattr(socket, "socketpair", local_socketpair)
+    with socket.socket() as probe, pytest.raises(OSError, match="no network in the tests"):
+        probe.connect(("127.0.0.1", 8080))                         # even a local proxy on loopback stays refused
+    with pytest.raises(OSError, match="no network in the tests"):
+        socket.create_connection(("127.0.0.1", 8080))
     d = deps(tmp_path, madeup_out); c, r = run(d, madeup_out, "MU07", "250107")
     gr = import_gradio()
     app = build_app(d)
@@ -1145,9 +1169,11 @@ def test_the_page_keeps_its_temporary_files_under_the_cases_root(tmp_path, madeu
     # The page library makes a folder vibe_edit_history in its temporary folder whenever it makes its application, at the build and
     # again at the launch, and writes there only in its "vibe" mode: the command does not pass that mode on to the page, and
     # removes the folder, empty as it then is, once the page is launched (ruling S28 of the review round of Task 44).
+    no_proxy = (["intranet.example.com,127.0.0.1,localhost"] * 2 if os.name == "nt"
+                else ["intranet.example.com,127.0.0.1,localhost", "127.0.0.1,localhost"])
     assert seen == {"folder": str(tmp_path / "cases" / "tmp"), "gradio": False, "launched": True, "code": 0, "vibe_mode": None,
                     "thread_free": True, "vibe_folder_while_the_page_runs": False,
-                    "no_proxy": ["intranet.example.com,127.0.0.1,localhost", "127.0.0.1,localhost"]}     # no proxy for the page itself
+                    "no_proxy": no_proxy}     # no proxy for the page itself
     assert sorted(path.name for path in (tmp_path / "cases" / "tmp").iterdir()) == ["work"] and working.is_file()     # the work stays
     assert review_command(MADE_UP_VIBE_FILE="1")["vibe_folder_while_the_page_runs"] is True      # not empty: left as it is (rmdir only)
     assert (tmp_path / "cases" / "tmp" / "vibe_edit_history" / "kept.txt").is_file()

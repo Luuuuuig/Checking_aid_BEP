@@ -309,11 +309,10 @@ def test_the_articles_that_exact_does_not_know_have_a_line_of_their_own(tmp_path
 import os  # noqa: E402
 import shutil  # noqa: E402
 
-from gradio.data_classes import FileData  # noqa: E402
-
 from aid.review.page import import_gradio  # noqa: E402
 from aid.settings import load_settings  # noqa: E402
 from aid.tests import test_hand_tab as hand  # noqa: E402
+from aid.tests.conftest import preprocess_file  # noqa: E402
 from aid.tests.test_hand_tab import (ARTICLE_COLUMNS as SAVED_COLUMNS, CARRIED_OUT, COLUMN_FIELDS, LIST_CHOSEN, OWN, PRICELIST_HANDLERS,  # noqa: E402
                                      PRICELIST_OPENED, PRICELIST_RELABEL, PRICELIST_SHOWN, PRICES_FILED, PRICES_REMOVED, SAME, SUPPLIER_CHOSEN,
                                      articles_export, called, handler, inside, price_list, pricelist_page, pricelist_tab, tab_page, uploaded)
@@ -403,15 +402,15 @@ def test_each_refusal_of_the_export_is_a_sentence_and_stores_nothing(tmp_path, m
     for name, data, dutch, english in (
             ("artikelen.xls", good, "artikelen\\.xls is niet aangenomen: de assistent leest hier Excel (.xlsx) en csv.",
              "artikelen\\.xls was not accepted: the assistant reads Excel (.xlsx) and CSV here."),
-            ("# kop *x* <b>.pdf", b"%PDF-1.4", "\\# kop \\*x\\* \\<b\\>\\.pdf is niet aangenomen: de assistent leest hier Excel (.xlsx) en csv.",
-             "\\# kop \\*x\\* \\<b\\>\\.pdf was not accepted: the assistant reads Excel (.xlsx) and CSV here."),
+            ("# kop _x_ [b](y).pdf", b"%PDF-1.4", "\\# kop \\_x\\_ \\[b\\]\\(y\\)\\.pdf is niet aangenomen: de assistent leest hier Excel (.xlsx) en csv.",
+             "\\# kop \\_x\\_ \\[b\\]\\(y\\)\\.pdf was not accepted: the assistant reads Excel (.xlsx) and CSV here."),
             ("leeg.xlsx", b"", "leeg\\.xlsx is niet aangenomen: het bestand is leeg.", "leeg\\.xlsx was not accepted: the file is empty."),
             ("prijzen.csv", b"Code;Prijs\nKM-1001;12,50\n",
              "De kolommen van dit bestand zijn anders dan ingesteld: controleer Instellingen, Koppeling met Exact, deel 3.",
              "The columns of this file differ from those set: check Settings, Connection to Exact, part 3."),
             ("kapot.xlsx", b"no workbook", NL["exact_export_refused:unreadable"], EN["exact_export_refused:unreadable"])):
         upload = uploaded(tmp_path, name, data)
-        assert field.preprocess(FileData(path=upload)) == upload, name                      # the page library lets it through
+        assert preprocess_file(field, upload) == upload, name                               # the page library lets it through
         for language, sentence in (("nl", dutch), ("en", english)):
             refused = called(page, "prices_filed", PRICES_FILED, upload, "S01", language, None)
             assert refused["export_note"] == sentence and refused["export"] == {"__type__": "update", "value": None}, name
@@ -576,7 +575,7 @@ def test_a_price_list_the_tab_cannot_view_is_named_by_a_sentence(tmp_path, madeu
             ("leeg.csv", b"", "leeg\\.csv is niet aangenomen: het bestand is leeg.", "leeg\\.csv was not accepted: the file is empty."),
             ("kapot.xlsx", b"no workbook", NL["exact_export_refused:unreadable"], EN["exact_export_refused:unreadable"])):
         upload = uploaded(tmp_path, name, data)
-        assert field.preprocess(FileData(path=upload)) == upload, name
+        assert preprocess_file(field, upload) == upload, name
         for language, sentence in (("nl", dutch), ("en", english)):
             chosen = called(page, "pricelist_file_chosen", LIST_CHOSEN, upload, "S01", language)
             assert chosen["note"] == sentence and chosen["carry"] == INACTIVE and chosen["viewed"] is None, name
@@ -1222,8 +1221,8 @@ def test_a_case_id_that_is_no_folder_name_is_never_looked_up(tmp_path, madeup_ou
 
     assert [names_a_folder(case_id) for case_id in ("250108_20261112T090000", "pricelist_S01_20261120T093000", "a b.c")] == [True] * 3
     assert [names_a_folder(case_id) for case_id in ("", ".", "..", "a/b", "/etc/naam", "../x", "x\x00y", "X" * 256, "é" * 128)] == [False] * 9
-    assert names_a_folder("X" * 255) and names_a_folder("a:b?", windows=False) and not names_a_folder("a:b", windows=True)
-    assert not names_a_folder("a*b", windows=True) and names_a_folder("Voorbeeld B.V.", windows=True)
+    assert names_a_folder("X" * 255) and names_a_folder(":b?", windows=False) and not names_a_folder(":b?", windows=True)
+    assert not names_a_folder("a:b", windows=True) and not names_a_folder("a*b", windows=True) and names_a_folder("Voorbeeld B.V.", windows=True)
     monkeypatch.setattr(tryout_mark, "sleep", lambda seconds: (_ for _ in ()).throw(AssertionError("waited")))
     looked = []
     monkeypatch.setattr(tryout_mark, "load_case", lambda root, case_id: looked.append(case_id) or (_ for _ in ()).throw(FileNotFoundError()))

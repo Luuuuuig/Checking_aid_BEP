@@ -1810,10 +1810,12 @@ def test_a_demonstration_start_while_a_file_of_the_previous_one_is_open_says_to_
     locked = demo / "voorbeelden"
     remove = portable._remove
 
+    raised = PermissionError(13, "The process cannot access the file because it is being used by another process",
+                             str(locked / "Verzonnen prijslijst S04.xlsx"))
+
     def in_use(path):
         if path == locked:
-            raise PermissionError(13, "The process cannot access the file because it is being used by another process",
-                                  str(locked / "Verzonnen prijslijst S04.xlsx"))
+            raise raised
         remove(path)
     monkeypatch.setattr(portable, "_remove", in_use)
     boxes, folders = Boxes(), Folders({("data", "--status"): 1, ("demo", "--status"): 1})
@@ -1821,10 +1823,8 @@ def test_a_demonstration_start_while_a_file_of_the_previous_one_is_open_says_to_
     assert boxes.events == [("information", DEMO_STARTING_BOX), ("closed", DEMO_STARTING_BOX), ("warning", DEMO_IN_USE)]
     assert ("fill",) not in folders.asked() and ("demo", *DEMO_LAUNCH) not in folders.asked()
     assert (demo / "DEMONSTRATIE.txt").is_file() and locked.is_dir()
-    assert log(demo)[-1] == ("demonstration start: the previous demonstration could not be removed (PermissionError: [Errno 13] The "
-                             "process cannot access the file because it is being used by another process: '"
-                             + str(locked / "Verzonnen prijslijst S04.xlsx") + "'): a file in the folder demo is still open, "
-                             "for example in Excel; nothing started")
+    assert log(demo)[-1] == (f"demonstration start: the previous demonstration could not be removed (PermissionError: {raised}): "
+                             "a file in the folder demo is still open, for example in Excel; nothing started")
     monkeypatch.setattr(portable, "_remove", remove)
     folders = Folders({("data", "--status"): 1, ("demo", "--status"): [1, 0], ("demo", *DEMO_LAUNCH): 0})
     assert portable.demo_start(demo, run=folders, answers=Page(False, False, True), open_page=Browser(), wait_seconds=30,

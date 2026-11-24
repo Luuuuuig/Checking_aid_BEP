@@ -680,8 +680,9 @@ def test_a_damaged_file_names_its_case_and_the_sweep_goes_on(tmp_path):
     (folder.root / "messages" / "sent.jsonl").mkdir()
     valid = sent_case(tmp_path, "250104", (SENT, "missing_info"))
     now = datetime(2026, 12, 1, 9, 0)
+    folder_error = "PermissionError" if os.name == "nt" else "IsADirectoryError"
     assert ended_waits(tmp_path / "cases", now, 3) == ([EndedWait(valid.case_id, "m1", False)], [
-        (torn.case_id, "ValidationError"), (damaged.case_id, "ValidationError"), (folder.case_id, "IsADirectoryError")])
+        (torn.case_id, "ValidationError"), (damaged.case_id, "ValidationError"), (folder.case_id, folder_error)])
     assert pending_asks(tmp_path / "cases", now, 3) == [valid.case_id]
 
 

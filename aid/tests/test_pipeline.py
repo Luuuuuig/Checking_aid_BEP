@@ -366,7 +366,8 @@ def test_a_change_the_write_log_cannot_hold_is_in_the_result_and_the_audit(tmp_p
     c = open_upload_case(d.settings.cases_root, [madeup_out / "MU08_conf.pdf"], "250108", "confirmation", NOW)
     (c.root / "write_log.jsonl").mkdir()
     r = run_case(c, d)
-    assert r.status == "failed" and r.error.startswith("IsADirectoryError: ") and r.error.endswith("(write: rule R04, po_line_price, line 1)")
+    folder_error = "PermissionError" if os.name == "nt" else "IsADirectoryError"
+    assert r.status == "failed" and r.error.startswith(f"{folder_error}: ") and r.error.endswith("(write: rule R04, po_line_price, line 1)")
     assert [e.op.kind for e in r.write_entries] == ["po_line_price"]
     assert [w["entry_id"] for w in audit(c)["writes"]] == [r.write_entries[0].entry_id] and "Traceback" in audit(c)["errors"][0]["message"]
 

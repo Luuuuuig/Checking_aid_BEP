@@ -8,9 +8,9 @@ from decimal import Decimal
 import pytest
 
 from aid.batch import SUMMARY_COLUMNS, main
-from aid.madeup.generate import TRYOUT_EXPORT_COLUMNS, MadeUpSpec, export_csv
+from aid.madeup.generate import TRYOUT_EXPORT_COLUMNS, MadeUpSpec, export_csv, generate
 from aid.po_store import EXPORT_FIELDS, PoStore
-from aid.tests.conftest import REPO_ROOT, SETTINGS, read_csv
+from aid.tests.conftest import DRAWN_MADEUP, REPO_ROOT, SETTINGS, read_csv
 from aid.tests.helpers import ANDERS_LAYOUT, ANDERS_PO, MADEUP_LAYOUT
 
 
@@ -308,3 +308,22 @@ def test_a_layout_is_tried_on_one_sample_po_with_a_cases_file_of_its_header_row(
     assert (reading["po_number"], reading["document"]["reader"], len(reading["document"]["lines"])) == ("IB-2600417", "po_pdf:layout", 12)
     assert [(first[field]["text"], first[field]["value"]) for field in ("item_code", "quantity", "unit_price")] == [
         ("KM-2301", "KM-2301"), ("10", "10"), ("12,50", "12.50")]
+
+
+def test_generated_madeup_matches_committed_outside_drawn_files(tmp_path, madeup_out):
+    """The 43 files of the made-up set that are not drawn through system fonts match the committed copies in aid/madeup/out byte for
+    byte on every system; madeup_out overwrites only the three drawn files (DRAWN_MADEUP) with their committed copies so all 46
+    files in the fixture match aid/madeup/out byte for byte."""
+    committed = REPO_ROOT / "aid" / "madeup" / "out"
+    fresh = tmp_path / "fresh"
+    generate(REPO_ROOT / "aid" / "madeup" / "spec", fresh)
+    committed_names = sorted(path.name for path in committed.iterdir() if path.is_file())
+    fresh_names = sorted(path.name for path in fresh.iterdir() if path.is_file())
+    fixture_names = sorted(path.name for path in madeup_out.iterdir() if path.is_file())
+    assert committed_names == fresh_names == fixture_names and len(committed_names) == 46
+    assert set(DRAWN_MADEUP) <= set(committed_names) and len(DRAWN_MADEUP) == 3
+    others = [name for name in committed_names if name not in DRAWN_MADEUP]
+    assert len(others) == 43
+    assert [name for name in others if (fresh / name).read_bytes() != (committed / name).read_bytes()] == []
+    assert [name for name in committed_names if (madeup_out / name).read_bytes() != (committed / name).read_bytes()] == []
+

@@ -669,7 +669,10 @@ def test_an_attach_to_an_address_where_nothing_listens_is_prepared(tmp_path):
     document.write_bytes(b"x")
     route = RetryingWriter(ExactApiWriter(url, ENDPOINTS, token=lambda: "t", timeout=2.0), PreparedWriter(tmp_path / "prepared"))
     entry = route.apply(file_op("attach_document", document), "c1", "R01", {}, NOW)
-    assert (entry.status, entry.error) == ("prepared", "attach POST /po/250101/attach: ConnectionError") and not outcome_not_known(entry)
+    assert entry.status == "prepared" and entry.error in (
+        "attach POST /po/250101/attach: ConnectionError",
+        "attach POST /po/250101/attach: no answer within 2 s",
+    ) and not outcome_not_known(entry)
     assert len((tmp_path / "prepared" / "prepared_changes.csv").read_text().splitlines()) == 2
 
 
