@@ -57,11 +57,12 @@ LEESMIJ.txt anew and leaves data and demo as they are; while the aid runs from t
 build says so and changes nothing. An out folder that holds anything but an earlier build is refused, and so is one inside the
 package. app/aid holds the program only (_program_files): in a git repository the files git tracks under aid/, else an allow-list
 (the package's .py files, the files the code reads: the readers' templates and prompts, the messaging templates, madeup/out,
-madeup/spec (which the demonstration reads), madeup/tryout, extension, README.md, MANUAL.md, requirements.txt and
-settings.example.json), and never the tests, a cache folder or a hidden file. Every other file found under aid/ (evaluation results,
-a run's files, a second settings file) is left out and named in one line of the build's output. Exit codes of the build: 0 built; 1
-the embeddable package could not be had or used (the download, the file, its sha256, its content), the package could not be copied,
-or python and app could not be replaced; 2 refused (the system, the out folder); pip's own exit code when pip fails.
+madeup/spec (which the demonstration reads), madeup/tryout, extension, README.md, MANUAL.md, requirements.txt,
+settings.example.json and the stand-in's manifest readers/made_up_extra.sha256), and never the tests, a cache folder or a hidden
+file. Every other file found under aid/ (evaluation results, a run's files, a second settings file) is left out and named in one
+line of the build's output. Exit codes of the build: 0 built; 1 the embeddable package could not be had or used (the download, the
+file, its sha256, its content), the package could not be copied, or python and app could not be replaced; 2 refused (the system,
+the out folder); pip's own exit code when pip fails.
 
 The start (start) runs with the folder's own pythonw.exe, which has no console (_console), so it tells the buyer what it does in
 message boxes of Windows with the title TITLE (box: user32's MessageBoxW, BOX, unless start is given others). It first makes sure
@@ -230,7 +231,7 @@ SELF_CHECK = ("aid.start", "aid.runner", "aid.capture_server", "aid.review.page"
 # The allow-list of the program, without git: besides the .py files, the files the code reads, by folder and by name.
 PROGRAM_FOLDERS = ("readers/templates/", "readers/prompts/", "messaging/templates/", "madeup/out/", "madeup/spec/", "madeup/tryout/",
                    "extension/")
-PROGRAM_FILES = ("README.md", "MANUAL.md", "requirements.txt", "settings.example.json")
+PROGRAM_FILES = ("README.md", "MANUAL.md", "requirements.txt", "settings.example.json", "readers/made_up_extra.sha256")
 # The sha256 of the embeddable package (64-bit) of each version, as python.org's release page of the version gives it under
 # "Windows embeddable package (64-bit)", read from the page beside each value on 10 November 2026. python.org gives a SHA-256
 # there from 3.13.12 and 3.14.3 on; the release pages of 3.11, of 3.12 and of the earlier 3.13 and 3.14 versions give an MD5 only,

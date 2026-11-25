@@ -12,6 +12,7 @@ from aid.demo import RECORDED_DIR
 from aid.readers.llm_client import LlmRequest, LlmResponse, ReaderError, RecordedClient
 from aid.runner import NO_LLM, build_deps
 from aid.settings import Settings
+from aid.tests.conftest import REPO_ROOT
 from aid.tests.test_runner import settings_file
 
 MADE_UP_PDF = stand_in.MADE_UP_FOLDERS[0] / "MU05_conf.pdf"
@@ -244,3 +245,58 @@ def test_the_made_up_decider_classes_a_file_of_the_set_by_its_name_and_answers_n
     answer = decider.decide(Decision(kind="document_type", options=options, context={"file_name": name}))
     assert answer.choice == expected and answer.confidence == (1.0 if expected else 0.0) and answer.source == decider.name
     assert decider.decide(Decision(kind="version", options=["1", "2"], context={"file_name": name})).choice is None
+
+
+# The unseen made-up cases of evaluation/unseen_cases: their documents stand in the manifest made_up_extra.sha256 of the package.
+UNSEEN_DOCUMENTS = REPO_ROOT / "evaluation" / "unseen_cases" / "cases" / "documents"
+
+
+def test_a_document_of_the_extra_manifest_goes_out_and_the_same_with_one_byte_changed_is_refused(tmp_path):
+    """A document whose sha256 stands in the manifest is sent beside the files of the made-up folders, which still go out; the same
+    document with one byte changed is refused before anything is sent."""
+    document = b"%PDF-1.4 a made-up document of the extra manifest\n"
+    manifest = tmp_path / "made_up_extra.sha256"
+    manifest.write_text(hashlib.sha256(document).hexdigest() + "\n", encoding="ascii")
+    client = Recording("made-up-model")
+    guard = stand_in.StandIn(client, allowed=stand_in.made_up_digests(manifest=manifest))
+    guard.complete(request(pdf=document))
+    guard.complete(request(pdf=MADE_UP_PDF.read_bytes()))
+    changed = document[:-2] + b"X\n"
+    with pytest.raises(ReaderError, match="made-up documents only"):
+        guard.complete(request(pdf=changed))
+    assert len(client.requests) == 2
+
+
+def test_an_empty_or_missing_extra_manifest_adds_nothing(tmp_path):
+    folders_only = stand_in.made_up_digests(manifest=tmp_path / "missing.sha256")
+    empty = tmp_path / "empty.sha256"
+    empty.write_text("", encoding="ascii")
+    assert stand_in.extra_digests(tmp_path / "missing.sha256") == frozenset() == stand_in.extra_digests(empty)
+    assert stand_in.made_up_digests(manifest=empty) == folders_only
+    assert hashlib.sha256(MADE_UP_PDF.read_bytes()).hexdigest() in folders_only
+
+
+def test_the_sha256_of_an_empty_file_is_never_accepted_even_from_a_manifest(tmp_path):
+    """An empty document is refused before anything is sent, even when a manifest holds the sha256 of an empty file."""
+    manifest = tmp_path / "made_up_extra.sha256"
+    manifest.write_text(hashlib.sha256(b"").hexdigest() + "\n", encoding="ascii")
+    assert stand_in.extra_digests(manifest) == frozenset()
+    assert hashlib.sha256(b"").hexdigest() not in stand_in.made_up_digests(manifest=manifest)
+    client = Recording("made-up-model")
+    for allowed in (stand_in.made_up_digests(manifest=manifest), frozenset({hashlib.sha256(b"").hexdigest()})):
+        with pytest.raises(ReaderError, match="made-up documents only"):
+            stand_in.StandIn(client, allowed=allowed).complete(request(pdf=b""))
+    assert client.requests == []
+
+
+def test_the_stand_in_reads_the_manifest_of_the_package():
+    """By default the stand-in takes the manifest that the package holds, beside the made-up folders."""
+    assert stand_in.EXTRA_MANIFEST.parent == stand_in.PACKAGE / "readers" and stand_in.EXTRA_MANIFEST.is_file()
+    assert stand_in.extra_digests() <= stand_in.StandIn(Recording("made-up-model")).allowed
+
+
+@pytest.mark.skipif(not UNSEEN_DOCUMENTS.is_dir(), reason="evaluation/unseen_cases is not in this repository")
+def test_the_extra_manifest_holds_the_sha256_of_every_committed_unseen_document_and_nothing_else():
+    lines = stand_in.EXTRA_MANIFEST.read_text(encoding="ascii").splitlines()
+    expected = sorted(hashlib.sha256(path.read_bytes()).hexdigest() for path in UNSEEN_DOCUMENTS.iterdir() if path.is_file())
+    assert lines == sorted(set(expected)) and len(lines) == len(expected)

@@ -11,7 +11,9 @@ names the model that read it, never Copilot.
 It sends nothing but the made-up documents (StandIn.complete). A request that carries a document, a PDF or a PNG image, goes out only
 when each of its documents is, byte for byte, a file of the made-up set in the package (MADE_UP_FOLDERS, compared by sha256); any
 other document is refused with a ReaderError before anything leaves the PC, so that a company document that reaches the inbox or
-the mailbox is never sent. The refusal's text begins as the runner's COULD_NOT_READ does, so that the review page shows such a case,
+the mailbox is never sent. A document whose sha256 stands in the manifest made_up_extra.sha256 beside this module (the documents of
+evaluation/unseen_cases, one sha256 per line) goes out as well; an empty or missing manifest adds none, and the sha256 of an
+empty file is never accepted, even where a manifest holds it. The refusal's text begins as the runner's COULD_NOT_READ does, so that the review page shows such a case,
 which fails at the pass that reads it, as one whose document Copilot could not read. A request without a document goes out only as
 the one test message of the settings tab (StandIn.ask). A try-out confirmation that the settings tab makes is no file of the set
 either, since it is made from a purchase order the aid knows: it is refused too. A failure of the service itself (no connection, an
@@ -50,6 +52,9 @@ KEY = "ANTHROPIC_API_KEY"                        # the variable the Anthropic SD
 PACKAGE = Path(__file__).resolve().parent.parent
 MADE_UP_FOLDERS = (PACKAGE / "madeup" / "out", PACKAGE / "madeup" / "tryout")    # the made-up set the package holds
 MADE_UP_SUFFIXES = (".pdf", ".png")
+EXTRA_MANIFEST = Path(__file__).resolve().parent / "made_up_extra.sha256"    # more made-up documents, by their sha256 only
+_SHA256 = re.compile(r"[0-9a-f]{64}")
+EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()    # an empty document: never sent, whatever a manifest holds
 NOT_MADE_UP = ("Copilot could not read this document: the stand-in for Copilot reads the made-up documents only, and this document is "
                "none of them, so it was not sent")                      # begins as COULD_NOT_READ of aid/runner.py
 NO_QUESTION = "the stand-in for Copilot sends no question but the test message of the settings tab"
@@ -72,10 +77,21 @@ def active(environ: Mapping[str, str] | None = None) -> bool:
     return environ.get(VARIABLE, "").strip().lower() == ON
 
 
-def made_up_digests(folders: tuple[Path, ...] = MADE_UP_FOLDERS) -> frozenset[str]:
-    """The sha256, in hex, of every PDF and PNG file of the made-up set: the documents the stand-in may send."""
-    return frozenset(hashlib.sha256(path.read_bytes()).hexdigest() for folder in folders if folder.is_dir()
-                     for path in sorted(folder.iterdir()) if path.is_file() and path.suffix.lower() in MADE_UP_SUFFIXES)
+def extra_digests(manifest: Path = EXTRA_MANIFEST) -> frozenset[str]:
+    """The sha256 of each line of the manifest that is one in lower-case hex; none for an empty, missing or unreadable manifest."""
+    try:
+        text = Path(manifest).read_text(encoding="ascii")
+    except (OSError, UnicodeDecodeError):
+        return frozenset()
+    return frozenset(line.strip() for line in text.splitlines() if _SHA256.fullmatch(line.strip())) - {EMPTY_SHA256}
+
+
+def made_up_digests(folders: tuple[Path, ...] = MADE_UP_FOLDERS, manifest: Path = EXTRA_MANIFEST) -> frozenset[str]:
+    """The sha256, in hex, of every PDF and PNG file of the made-up set and of the manifest's documents: the documents the
+    stand-in may send."""
+    return (frozenset(hashlib.sha256(path.read_bytes()).hexdigest() for folder in folders if folder.is_dir()
+                     for path in sorted(folder.iterdir()) if path.is_file() and path.suffix.lower() in MADE_UP_SUFFIXES) \
+        | extra_digests(manifest)) - {EMPTY_SHA256}
 
 
 class StandIn:
@@ -91,7 +107,7 @@ class StandIn:
         """The client's answer to a request whose every document is a file of the made-up set; a ReaderError before anything is
         sent for any other request, one without a document included."""
         documents = ([] if req.pdf is None else [req.pdf]) + list(req.images)
-        if not documents or any(hashlib.sha256(data).hexdigest() not in self.allowed for data in documents):
+        if not documents or any(not data or hashlib.sha256(data).hexdigest() not in self.allowed for data in documents):
             raise ReaderError(NOT_MADE_UP)
         try:
             return self.client.complete(req)
