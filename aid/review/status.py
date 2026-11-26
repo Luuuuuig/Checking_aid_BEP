@@ -67,7 +67,12 @@ The assistant. assistant gives what the review page says of the assistant (Assis
   aid/connections/secrets.py, which makes nothing).
 problems gives what is wrong (Problem), the most urgent first: a STOP file, else a runner the launcher gave up, else no pass yet or
 none for PASS_LATE; a refused store; a lapsed sign-in of the mailbox; Copilot failing as a whole, with the cases that wait for it now,
-or else refusing documents.
+or else refusing documents; or, while an exploration service reads (SERVICE_READERS: Azure OpenAI or Foundry, for the made-up
+documents), the cases that wait for it ("service_wait"). A failure of such a service is a CopilotError that is not of the chat, which
+the runner notes as it notes Copilot's: the case is among the cases the AI service failed, and its state is "copilot_wait". Copilot's
+own problems are told only while Copilot reads, and the runner notes no failure as a whole while a service reads (it keeps
+COPILOT_DOWN with Copilot's decider only, aid/runner.py). waits_for gives the service's label, by which the review page names it in
+the texts of a case that waits.
 
 The log. log_tail gives the last lines of <cases_root>/runner.log, the newest first, as they stand.
 """
@@ -122,7 +127,9 @@ DONE = ("handled", "closed_itself", "closed_by_you")    # the states of a case t
 REASONS = ("unread", "copilot", "parser", "other")      # why a case failed
 LOOK_REASONS = {"no text layer; class unknown": "scan", "more than one PO number": "many"}     # the scan's reasons of a review item
 CAUSES = ("sign_in", "unreachable", "code", "other")    # the causes of Copilot's failure as a whole
-PROBLEMS = ("stopped", "given_up", "no_pass_ever", "no_pass", "store", "lapsed", "copilot_down", "copilot_refused")
+PROBLEMS = ("stopped", "given_up", "no_pass_ever", "no_pass", "store", "lapsed", "copilot_down", "copilot_refused", "service_wait")
+SERVICE_READERS = ("azure_openai", "foundry")   # the readers of the settings that are an exploration service (SERVICES of
+                                                # aid/readers/exploration.py)
 
 _COPILOT_REFUSED = f"ReaderError: {COULD_NOT_READ.partition(':')[0]}"
 _NOT_ACCEPTED = NOT_ACCEPTED.partition(":")[0]   # Copilot refused the sign-in (a 401)
@@ -192,7 +199,7 @@ class Assistant(NamedTuple):
     launcher: Launcher
     stopped: bool                                # a STOP file stands next to the settings file
     mailbox: Mailbox
-    reader: str                                  # the reader of the settings: "parser" or "llm"
+    reader: str                                  # the reader of the settings: "llm", "parser", "azure_openai" or "foundry"
     copilot: Copilot | None                      # Copilot failing as a whole, while the settings read with it
     refused: int                                 # the cases whose document Copilot refused and that the runner still tries
     store_refused: bool                          # the store of the sign-in lies inside a git work tree
@@ -202,7 +209,8 @@ class Problem(NamedTuple):
     """A problem of the assistant (see problems)."""
     kind: str                                    # one of PROBLEMS
     since: datetime | None = None                # the last pass (no_pass), the lapse (lapsed) or Copilot's first failure (copilot_down)
-    n: int = 0                                   # the cases waiting for Copilot (copilot_down) or whose document it refused (copilot_refused)
+    n: int = 0                                   # the cases waiting for Copilot (copilot_down) or whose document it refused (copilot_refused),
+                                                 # or the documents waiting for the exploration service that reads (service_wait)
 
 
 class _Read(NamedTuple):
@@ -292,6 +300,13 @@ def _copilot_waits(root: Path) -> Callable[[str], bool]:
 def state_text(state: str, language: str) -> str:
     """The state of a case (STATES), or of a document left to the buyer ("look", "looked"), in words in the language."""
     return STRINGS[language][f"state:{state}"]
+
+
+def waits_for(reader: str, strings: dict[str, str]) -> str | None:
+    """What a case that waits for the AI service ("copilot_wait") waits for while the reader of the settings is an exploration service
+    (SERVICE_READERS): the service by its label on the settings tab in the language of `strings` ("settings_reader:<reader>"), which
+    the texts of such a case then name in place of Copilot (see the module docstring); None while Copilot or the parser reads."""
+    return strings[f"settings_reader:{reader}"] if reader in SERVICE_READERS else None
 
 
 def fail_text(reason: str, language: str) -> str:
@@ -479,6 +494,8 @@ def problems(assistant: Assistant, lines: Sequence[CaseLine]) -> list[Problem]:
         found.append(Problem("copilot_down", assistant.copilot.since, sum(1 for line in lines if line.state == "copilot_wait")))
     elif assistant.refused:
         found.append(Problem("copilot_refused", n=assistant.refused))
+    elif assistant.reader in SERVICE_READERS and (waiting := sum(1 for line in lines if line.state == "copilot_wait")):
+        found.append(Problem("service_wait", n=waiting))
     return found
 
 

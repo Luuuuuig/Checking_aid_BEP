@@ -7,13 +7,18 @@ freeze_record gathers:
   within a minute or the folder is no repository, and git_problem says which (None when the commit is known); working_tree_clean,
   whether git status --porcelain shows nothing (None when it is not known);
 - settings_sha256, the sha256 of the settings file, and settings, the settings themselves with the authorization limit shown as
-  "set" or "unset" exactly as the audit shows it (aid/audit.py); nothing else is hidden;
+  "set" or "unset" exactly as the audit shows it (aid/audit.py), and the addresses of the two exploration services of the settings
+  tab, the endpoint of Azure OpenAI and the resource and the full address of Foundry (ADDRESSES), shown so as well; nothing else
+  is hidden;
 - prompts, each prompt file of aid/readers/prompts: its path, the version marker of its first line and its sha256;
 - model, the model id of the settings;
-- stand_in, the reader that the environment chooses for a run that reads through AID_STAND_IN (aid/readers/stand_in.py): value, the
-  value of AID_STAND_IN as the aid takes it, without the spaces around it and in lower case, and deployment, for azure_openai and
-  foundry the name of the deployment in AZURE_OPENAI_DEPLOYMENT or AID_FOUNDRY_DEPLOYMENT; each None when unset or blank, and the
-  deployment None for anthropic, whose model is the one of the settings. Never a key or the address of a resource;
+- stand_in, the exploration reader or the stand-in that a run reads with, as build_deps of aid/runner.py chooses it: while the
+  settings name a reader chosen on the settings tab ("azure_openai" or "foundry"), that reader, which build_deps takes whatever
+  AID_STAND_IN holds, with the deployment of the settings (azure_openai_deployment or foundry_deployment); else the reader that the
+  environment chooses for a run that reads through AID_STAND_IN (aid/readers/stand_in.py): value, the value of AID_STAND_IN as the
+  aid takes it, without the spaces around it and in lower case, and deployment, for azure_openai and foundry the name of the
+  deployment in AZURE_OPENAI_DEPLOYMENT or AID_FOUNDRY_DEPLOYMENT; each None when unset or blank, and the deployment None for
+  anthropic, whose model is the one of the settings. Never a key, an endpoint or a resource;
 - rules, the routing rules R01 to R11, each with the settings it reads (RULE_SETTINGS of aid/routing.py) and their values, the
   authorization limit again as "set" or "unset";
 - aid_version (the default of Deps.aid_version), python, the Python version, and packages: the lines of `pip freeze`, or, when pip
@@ -48,6 +53,10 @@ PIP_FREEZE = [sys.executable, "-m", "pip", "freeze"]
 TIMEOUT = 60                                     # seconds a git or pip command may take
 
 
+# The settings of the two exploration services that name their resource: shown as "set" or "unset", never as they are.
+ADDRESSES = ("azure_openai_endpoint", "foundry_resource", "foundry_base_url")
+
+
 def now() -> datetime:
     """The time of the freeze, from the clock; a function of its own so that a test can fix it."""
     return datetime.now().astimezone()
@@ -56,10 +65,11 @@ def now() -> datetime:
 def freeze_record(settings_path: Path, settings: Settings, repo_root: Path, clock: Callable[[], datetime],
                   environ: Mapping[str, str] = os.environ) -> dict:
     """The freeze record (see the module docstring) of the settings read from `settings_path`, for the repository at `repo_root`,
-    with the reader that the environment `environ` chooses."""
+    with the reader that the settings or the environment `environ` choose."""
     commit, git_problem = _git(repo_root, "rev-parse", "HEAD")
     status, _ = _git(repo_root, "status", "--porcelain") if commit is not None else (None, None)
     dumped = _settings_dump(settings)
+    dumped |= {name: "set" if dumped.get(name) else "unset" for name in ADDRESSES}      # an address names the resource
     packages_source, packages, packages_problem = _packages()
     return {
         "git_commit": commit or "unknown",
@@ -69,7 +79,7 @@ def freeze_record(settings_path: Path, settings: Settings, repo_root: Path, cloc
         "settings": dumped,
         "prompts": [_prompt(path, repo_root) for path in sorted((repo_root / PROMPTS).glob("*.md"))],
         "model": settings.model,
-        "stand_in": _stand_in(environ),
+        "stand_in": _stand_in(settings, environ),
         "rules": {rule: {"settings": {name: dumped[name] for name in names}}
                   for rule, names in sorted(RULE_SETTINGS.items()) if rule != FALLBACK_RULE},
         "aid_version": Deps.model_fields["aid_version"].default,
@@ -114,9 +124,13 @@ def _git(repo_root: Path, *args: str) -> tuple[str | None, str | None]:
     return done.stdout.strip(), None
 
 
-def _stand_in(environ: Mapping[str, str]) -> dict:
-    """The value of AID_STAND_IN, as the aid takes it (stand_in.value), and for an exploration reader the name of its deployment;
-    None for each that is unset or blank. Never a key or an address."""
+def _stand_in(settings: Settings, environ: Mapping[str, str]) -> dict:
+    """The reader a run reads with, as build_deps chooses it (see the module docstring): the reader chosen on the settings tab with
+    the deployment of the settings; else the value of AID_STAND_IN, as the aid takes it (stand_in.value), and for an exploration
+    reader the name of its deployment in the environment. None for each that is unset or blank. Never a key or an address."""
+    if settings.reader in exploration.SERVICES:           # build_deps takes it whatever AID_STAND_IN holds
+        deployment = getattr(settings, exploration.SETTING_OF[exploration.VARIABLES[settings.reader][-1]]) or ""
+        return {"value": settings.reader, "deployment": deployment.strip() or None}
     chosen = stand_in.value(environ) or None
     names = exploration.VARIABLES.get(chosen or "")
     deployment = environ.get(names[-1], "").strip() if names else ""

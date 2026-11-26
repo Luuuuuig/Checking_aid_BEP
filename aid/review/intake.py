@@ -52,7 +52,8 @@ nothing else tells it apart; an attachment of an e-mail under such a name ("<e-m
 label of a line that opened a case (OPENED: case, guess and recheck), and behind its mark of a try-out, stands what the case is now,
 "Zaak geopend voor inkooporder 250105. Nu: mislukt." ("files_now"), its state read from the case's folder when the table is read
 (case_states of aid/review/status.py), so that the intake file itself never changes: failed, failed and noted as handled by the
-buyer, waiting for the supplier, closed by itself or by the buyer, waiting for Copilot, or being read. A case in review, also one that
+buyer, waiting for the supplier, closed by itself or by the buyer, waiting for Copilot (for the exploration service that reads,
+named by its label, while the settings read with Azure OpenAI or Foundry), or being read. A case in review, also one that
 waits for its purchase order, keeps its label alone, and so does a case whose folder is gone or cannot be read; no other outcome
 changes, also one that names a case.
 """
@@ -201,20 +202,25 @@ def when(event: dict) -> str:
     return (moment.astimezone() if moment.utcoffset() is not None else moment).strftime("%d-%m-%Y %H:%M")
 
 
-def rows(cases_root: Path, language: str, limit: int = TABLE_LINES) -> list[list[str]]:
+def rows(cases_root: Path, language: str, limit: int = TABLE_LINES, reader: str = "llm") -> list[list[str]]:
     """The table of the tab as it shows the last lines (recent): the time, the file and the label in the language, with the mark of a
     try-out behind the label of a case made from a try-out document, the mark of the folder for orders behind the label of a line of
     a purchase order that folder gave (a bare file named as is_order_file of aid/sources/mailbox.py names one), and behind the label of
-    a line that opened a case (OPENED) what the case is now (see the module docstring)."""
+    a line that opened a case (OPENED) what the case is now (see the module docstring). `reader` is the reader of the settings: while
+    it is an exploration service, a case that waits for the AI service waits for that service by its label (waits_for of
+    aid/review/status.py), and else for Copilot."""
     strings = STRINGS[language]
+    service = aid_status.waits_for(reader, strings)
     events = recent(cases_root, limit)
     states = aid_status.case_states(Path(cases_root), [event["detail"] for event in events if event["outcome"] in OPENED])
     table = []
     for event in events:
         label = shown(event, language) + (f" {strings['hand_tryout']}" if _tryout(cases_root, event) else "") \
             + (f" {strings['files_from_orders']}" if is_order_file(event["file"]) else "")
-        key = f"files_now:{states.get(event['detail'])}" if event["outcome"] in OPENED else None      # none for a case in review
-        table.append([when(event), event["file"], strings["files_now"].format(label=label, state=strings[key]) if key in strings else label])
+        state = states.get(event["detail"]) if event["outcome"] in OPENED else None
+        key = "files_now:service_wait" if state == "copilot_wait" and service is not None else f"files_now:{state}"
+        now = strings[key].format(service=service) if key in strings else None          # none for a case in review, or gone
+        table.append([when(event), event["file"], strings["files_now"].format(label=label, state=now) if now is not None else label])
     return table
 
 

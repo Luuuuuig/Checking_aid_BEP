@@ -22,7 +22,12 @@ that ends in "_one" for a count of one beside the one that ends in "_many") and 
 that handles it ("assistant" for the runner and its launcher, "connections" for the sign-in, the mailbox and Copilot); the keys that
 begin with "strip_" are its last line. "review_all" labels the fold of every case of the last 7 days under it, "all_column:<column>"
 the columns of its table and "todo:<state>" what the buyer does for a case of that state ("todo:closed_changes" for a closed case
-whose changes stand on the list In Exact invoeren, "todo:nothing" for one with nothing left to do). "review_pick" and
+whose changes stand on the list In Exact invoeren, "todo:nothing" for one with nothing left to do). While an exploration service
+reads (Azure OpenAI or Foundry), a case that waits for the AI service ("copilot_wait") is told by the keys that end in
+"service_wait" in place of those that end in "copilot_wait" ("chip:", "state:", "todo:", "files_now:", and
+"assistant_waiting_service" for "assistant_waiting_copilot"), which name the service by its label "settings_reader:<reader>", and
+the strip and the section "Stand van de assistent" name the problem "problem:service_wait", by the number of the documents that
+wait; while Copilot or the parser reads, the keys of Copilot stay. "review_pick" and
 "review_pick_none" are the line under the field "Zaak" while no case is chosen, "review_open_oldest" its button, "review_open_next"
 the button beside the answer of a close that opens the oldest waiting case with "review_next_preview" naming that case, and "review_gone"
 the line of a case on screen that left the list ("review_gone_handled" for a failed case noted as handled meanwhile). A failed case
@@ -53,7 +58,17 @@ refusals of a save, the lines of "Verbinding testen" and the sentences of its st
 with "files_from_orders";
 "reader_state:<state>" says what reads the documents now, "copilot_cause:<cause>" why Copilot fails (a status code, a sign-in, a
 Copilot not reached or no usable answer, never its own words), "copilot_hint:<code>" what the buyer can do about a choice of Copilot
-that "Copilot testen" refused, by its status code, and "settings_ai_switched" and "settings_ai_switch_refused" answer that choice.
+that "Copilot testen" refused, by its status code, and "settings_ai_switched" and "settings_ai_switch_refused" answer that choice,
+the latter with the reader that reads on: "settings_ai_kept:parser" for the parser, else "settings_ai_kept" with its label.
+The two exploration services of that step, Azure OpenAI and Foundry for the made-up documents, are labelled by "settings_reader:<value>"
+in the choice and above their blocks, with "settings_ai_service_help" under it, "settings_ai_field:<setting>" labelling a field of a
+block ("settings_ai_field:key" its key box), "settings_ai_save:<value>" its named save and "settings_ai_key:<state>" the line that says
+whether the key is stored; "settings_ai_service_switched" answers a choice of a service, "settings_service_refused" a refusal with the
+sentence "service_why:<kind>" that names the field of the tab, and "settings_service_failed" a service that did not answer the test,
+with "service_hint:<kind>"; "settings_key_refused", "settings_key_refused_git" and "settings_key_refused_kind" say why the store of the
+keys is refused, as the three of the sign-in do; "settings_ai_key_removed" and "settings_ai_key_removed_reader" answer "Sleutel
+verwijderen", and "settings_ai_key_kept" a removal that removed nothing, as the parser could not be written in the place of the
+service that reads.
 "settings_section:<section>"
 labels a section of that tab ("Uw regels", "Leveranciers", "Stand van de assistent"; "Postvak en AI" is "settings_connections" and
 "Koppeling met Exact" "exact_title"), and the keys that begin with "assistant" are the strings of its section "Stand van de assistent":
@@ -67,7 +82,10 @@ file in which exact_base_url is set, which no command uses. The help of the supp
 questions does and does not do: the aid's own questions come to the buyer, and a question the buyer chooses on the review tab is
 still sent; a review item that comes from that tick has the tick's own words as its reason ("De assistent stuurt deze leverancier
 uit zichzelf geen vragen"). A save on the settings tab that the runner takes over at its next pass says so in one note,
-"settings_buyer_saved", whichever part of the tab saved, but for the layout of the block "Koppeling met Exact", whose own note
+"settings_buyer_saved", whichever part of the tab saved, but for the blocks of Azure OpenAI and Foundry, whose own notes say whether
+the service was tested ("settings_ai_saved_tested", while it reads, and "settings_ai_saved_tested_later" when a new key can only
+be taken at the next start) or is tested once it is chosen ("settings_ai_saved_untested"),
+and for the layout of the block "Koppeling met Exact", whose own note
 "exact_saved" says the same and what becomes of the purchase orders that wait in the watched folder; the number recognition of that
 block says "settings_buyer_saved", "settings_buyer_unchanged" and "settings_buyer_refused" as the buyer's part does, and its own
 "exact_number_changed" when the pattern was changed elsewhere. "settings_extension_code", with its help, labels the code the browser
@@ -422,6 +440,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "chip:review": "Ter beoordeling: {n}",
         "chip:failed": "Mislukt: {n}",
         "chip:copilot_wait": "Wacht op Copilot: {n}",
+        "chip:service_wait": "Wacht op {service}: {n}",
         "chip:waiting": "Wacht op leverancier: {n}",
         "chip:closed_itself": "Vanzelf afgesloten: {n}",
         "strip_pass": "Laatste ronde: {time}",
@@ -431,6 +450,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "strip_mailbox:off": "Geen postvak: de assistent leest de bewaakte map",
         "strip_reader:parser": "Documenten lezen zonder AI",
         "strip_reader:llm": "Documenten lezen met Copilot",
+        "strip_reader:azure_openai": "Documenten lezen met Azure OpenAI (verzonnen documenten)",
+        "strip_reader:foundry": "Documenten lezen met Foundry (verzonnen documenten)",
         "strip_updated": "Bijgewerkt om {time}",
         "problem:no_pass": "Geen ronde van de assistent sinds {time}",
         "problem:no_pass_ever": "De assistent heeft nog geen ronde gemaakt",
@@ -440,6 +461,10 @@ STRINGS: dict[str, dict[str, str]] = {
         "problem:lapsed": "Postvak niet verbonden: de aanmelding is verlopen",
         "problem:copilot_down_one": "Copilot werkt niet sinds {since}: 1 zaak wacht",
         "problem:copilot_down_many": "Copilot werkt niet sinds {since}: {n} zaken wachten",
+        "problem:service_wait_one": ("1 document wacht op {service}: het lezen lukt nu niet. Controleer de sleutel en de velden bij "
+                                     "{service}, of kies de dienst opnieuw; runner.log zegt waarom."),
+        "problem:service_wait_many": ("{n} documenten wachten op {service}: het lezen lukt nu niet. Controleer de sleutel en de velden "
+                                      "bij {service}, of kies de dienst opnieuw; runner.log zegt waarom."),
         "problem:copilot_refused_one": "Copilot weigerde het document van 1 zaak",
         "problem:copilot_refused_many": "Copilot weigerde de documenten van {n} zaken",
         "act:assistant": "Stand van de assistent openen",
@@ -454,6 +479,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "todo:waiting_po": "Niets te doen: de assistent kijkt opnieuw zodra de inkooporder uit Exact binnen is.",
         "todo:failed": "Kies de zaak bij Zaak en handel de bevestiging zelf af in Exact.",
         "todo:copilot_wait": "Niets te doen: de assistent probeert het bij de volgende ronde opnieuw.",
+        "todo:service_wait": ("Controleer de sleutel en de velden bij {service} onder Postvak en AI; de assistent probeert het bij de "
+                              "volgende ronde opnieuw."),
         "todo:reading": "Niets te doen: de assistent leest het document nu.",
         "todo:waiting": "Niets te doen: de zaak komt terug als de leverancier antwoordt of als de wachttijd om is.",
         "todo:closed_changes": "Voer de wijzigingen in Exact in: tabblad In Exact invoeren.",
@@ -489,6 +516,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "files_now:closed_itself": "vanzelf afgesloten",
         "files_now:closed_by_you": "door u afgesloten",
         "files_now:copilot_wait": "wacht op Copilot",
+        "files_now:service_wait": "wacht op {service}",
         "files_now:reading": "wordt gelezen",
         "documents": "Documenten",
         "record": "Vergelijking",
@@ -699,6 +727,8 @@ STRINGS: dict[str, dict[str, str]] = {
                            "Postvak en AI, staat waarom en wat u kunt doen; sluit de zaak daarna opnieuw af."),
         "reader_state:parser": "De assistent leest documenten nu zonder AI.",
         "reader_state:llm": "De assistent leest documenten nu met Copilot.",
+        "reader_state:azure_openai": "De assistent leest documenten nu met Azure OpenAI (verzonnen documenten).",
+        "reader_state:foundry": "De assistent leest documenten nu met Foundry (verzonnen documenten).",
         "reader_state:down": ("De assistent leest documenten nu met Copilot, maar Copilot werkt niet sinds {since} ({cause}); wachtende "
                               "zaken: {n}."),
         "reader_state:refused": ("De assistent leest documenten nu met Copilot, maar Copilot weigert documenten. Mislukt in de laatste 7 "
@@ -710,8 +740,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "copilot_cause:other": "geen bruikbaar antwoord",
         "settings_ai_switched": ("Opgeslagen. Copilot antwoordde op de test; de assistent leest documenten vanaf de volgende ronde met "
                                  "Copilot, binnen een minuut."),
-        "settings_ai_switch_refused": ("Niet opgeslagen: Copilot gaf geen antwoord op de test ({cause}). De assistent blijft lezen zonder "
-                                       "AI. {hint}"),
+        "settings_ai_switch_refused": "Niet opgeslagen: Copilot gaf geen antwoord op de test ({cause}). {kept} {hint}",
+        "settings_ai_kept:parser": "De assistent blijft lezen zonder AI.",
+        "settings_ai_kept": "De assistent blijft lezen met {reader}.",
         "copilot_hint:400": ("Een 400 komt meestal doordat het account geen licentie voor Microsoft 365 Copilot heeft, of doordat het een "
                              "persoonlijk Microsoft-account is. Copilot werkt alleen met een werkaccount met die licentie."),
         "copilot_hint:401": "Druk eerst op Aanmelden voor Copilot en kies daarna opnieuw Copilot.",
@@ -733,6 +764,7 @@ STRINGS: dict[str, dict[str, str]] = {
                                "of geef dit door aan de onderzoeker."),
         "assistant_lapsed": "De aanmelding van het postvak is verlopen sinds {since}: meld u opnieuw aan onder Postvak en AI.",
         "assistant_waiting_copilot": "Wachten op Copilot: inkooporder {orders}.",
+        "assistant_waiting_service": "Wachten op {service}: inkooporder {orders}.",
         "assistant_store": "Aanmelden kan niet: de beveiligde opslag is geweigerd. Onder Postvak en AI staat waarom.",
         "assistant_refresh": "Stand van de assistent vernieuwen",
         "assistant_refreshed": "Stand bijgewerkt om {time}.",
@@ -800,12 +832,72 @@ STRINGS: dict[str, dict[str, str]] = {
         "settings_ai_test:test_mode": "Schakel de proefstand in voordat u de demonstratiedienst test.",
         "settings_ai_test:missing_key": "Stel de sleutel voor de demonstratiedienst in voordat u deze test.",
         "settings_ai_test:missing_library": "Installeer de bibliotheek voor de demonstratiedienst voordat u deze test.",
-        "settings_ai_test:mailbox": "De verkenning met Azure OpenAI of Foundry werkt zonder postvak: gebruik een eigen map met verzonnen documenten, zonder Microsoft-koppeling, postvak of mappen.",
         "settings_ai_test:key_refused": "Controleer de sleutel voor de demonstratiedienst en test de verbinding opnieuw.",
         "settings_ai_reader": "Documenten lezen met",
         "settings_reader:llm": "Copilot",
         "settings_reader:parser": "zonder AI (parser)",
+        "settings_reader:azure_openai": "Azure OpenAI (verzonnen documenten)",
+        "settings_reader:foundry": "Foundry (verzonnen documenten)",
         "settings_ai_ids_needed": "Sla eerst de map-id en de toepassings-id op; daarna kan Copilot de documenten lezen.",
+        "settings_ai_field:azure_openai_endpoint": "Endpoint van de resource",
+        "settings_ai_field:azure_openai_deployment": "Deployment",
+        "settings_ai_field:foundry_resource": "Naam van de resource",
+        "settings_ai_field:foundry_base_url": "Volledig adres, in plaats van de naam",
+        "settings_ai_field:foundry_deployment": "Deployment",
+        "settings_ai_field:key": "Sleutel",
+        "settings_ai_save:azure_openai": "Azure OpenAI opslaan",
+        "settings_ai_save:foundry": "Foundry opslaan",
+        "settings_ai_service_help": ("Alleen voor de verzonnen documenten van het pakket en in de proefstand; de sleutel blijft in de "
+                                     "beveiligde opslag van deze pc en staat nooit op deze pagina."),
+        "settings_ai_key:stored": "Er is een sleutel opgeslagen in de beveiligde opslag van deze pc.",
+        "settings_ai_key:none": "Er is geen sleutel opgeslagen.",
+        "settings_ai_key_remove": "Sleutel verwijderen",
+        "settings_ai_key_removed": "Sleutel verwijderd.",
+        "settings_ai_key_retype": "De getypte sleutel is niet opgeslagen; typ hem opnieuw.",
+        "settings_ai_key_not_undone": ("De opslag van de sleutel kon niet worden teruggedraaid: de beveiligde opslag van deze pc houdt "
+                                       "nu de getypte sleutel."),
+        "settings_ai_saved_tested": "Opgeslagen en getest. De assistent gebruikt dit vanaf de volgende ronde, binnen een minuut.",
+        "settings_ai_saved_tested_later": ("Opgeslagen en getest. De assistent gebruikt de nieuwe sleutel pas na de volgende start van "
+                                           "de assistent, of nadat u onder {choice} eerst \"{parser}\" en daarna deze dienst weer hebt "
+                                           "gekozen."),
+        "settings_ai_saved_untested": "Opgeslagen. De dienst wordt getest zodra u hem kiest onder {choice}.",
+        "service_why:key_form": ("de sleutel in het veld \"{field}\" bij {service} mag geen spatie, regeleinde of ander teken bevatten "
+                                 "dan letters, cijfers en leestekens zonder accent: typ hem opnieuw en druk op {save}."),
+        "settings_ai_key_removed_reader": "Sleutel verwijderd. De assistent las met deze dienst en leest vanaf de volgende ronde zonder AI.",
+        "settings_ai_key_kept": ("Er is niets verwijderd: {service} leest nog met deze sleutel, en de instellingen konden niet worden "
+                                 "gewijzigd. {why}"),
+        "settings_ai_service_switched": ("Opgeslagen. {service} antwoordde op de test; de assistent leest documenten vanaf de volgende "
+                                         "ronde met {service}, binnen een minuut."),
+        "settings_service_refused": "Niet opgeslagen: {why}",
+        "service_why:test_mode": ("{service} werkt alleen in de proefstand: zet onder Koppeling met Exact \"{switch}\" aan en kies "
+                                  "daarna opnieuw."),
+        "service_why:missing": "vul bij {service} het veld \"{field}\" in en druk op {save}.",
+        "service_why:missing_place": "vul bij {service} het veld \"{field}\" of het veld \"{other}\" in en druk op {save}.",
+        "service_why:key": "typ bij {service} de sleutel in het veld \"{field}\" en druk op {save}.",
+        "service_why:endpoint_form": ("het veld \"{field}\" bij {service} moet alleen het adres van de resource zijn, met https en "
+                                      "zonder pad of vraag, zoals `{example}`: verbeter het en druk op {save}."),
+        "service_why:form": ("het veld \"{field}\" bij {service} moet een https-adres zijn, zoals `{example}`: verbeter het en druk op "
+                             "{save}."),
+        "service_why:both": "vul bij {service} het veld \"{field}\" of het veld \"{other}\" in, niet allebei, en druk op {save}.",
+        "service_why:resource_form": ("het veld \"{field}\" bij {service} neemt alleen de naam van de resource, zonder \"://\" of \"/\": zet "
+                                      "een volledig adres in het veld \"{other}\" en druk op {save}."),
+        "service_why:environment": ("het venster waaruit de assistent is gestart, heeft de variabele `{variable}`, die de "
+                                    "Anthropic-bibliotheek naast het veld \"{field}\" leest: haal die variabele weg en start de assistent "
+                                    "opnieuw, of vul bij {service} het veld \"{other}\" in, in plaats van \"{field}\"."),
+        "service_why:library": ("deze Python heeft niet de client voor Foundry van de Anthropic-bibliotheek: installeer de versie uit "
+                                "aid/requirements.txt."),
+        "settings_service_failed": "Niet opgeslagen: {service} gaf geen antwoord op de test ({cause}). {hint}",
+        "service_hint:key": "Controleer de sleutel, typ hem opnieuw in het veld \"{field}\" bij {service} en druk op {save}.",
+        "service_hint:not_found": "Controleer de velden \"{field}\" en \"{deployment}\" bij {service}.",
+        "service_hint:address": "Controleer het veld \"{field}\" bij {service} en de internetverbinding.",
+        "service_hint:deployment": "Controleer het veld \"{deployment}\" bij {service}: de deployment moet een model zijn dat documenten leest.",
+        "settings_key_refused": "De beveiligde opslag van de sleutels op deze pc is geweigerd.",
+        "settings_key_refused_git": ("De beveiligde opslag van de sleutels ({store}) ligt binnen een map met versiebeheer, want in "
+                                     "{work_tree} staat een map .git. Staat die map .git daar per ongeluk, verplaats hem dan naar een andere "
+                                     "plek en probeer het opnieuw. Hebt u die map .git nodig, geef dit dan door aan de onderzoeker."),
+        "settings_key_refused_kind": ("De beveiligde opslag van de sleutels ({store}) is gemaakt door een andere Windows-gebruiker of in een "
+                                      "ander soort sessie. Start de pagina en de assistent als dezelfde gebruiker, of geef dit door aan "
+                                      "de onderzoeker."),
         "settings_connections": "Postvak en AI",
         "settings_extension_code": "Code voor de uitbreiding in de browser",
         "settings_extension_code_help": "Plak deze code in de opties van de uitbreiding Inkoopassistent in Edge of Chrome.",
@@ -1163,6 +1255,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "tryout_switch_help": ("In de proefstand verstuurt de assistent alleen berichten aan uw eigen adressen (Instellingen, Uw regels). "
                                "Zet u de proefstand uit, dan vervalt dat: elk bericht gaat dan naar het adres dat de instellingen geven."),
         "tryout_saved": "Opgeslagen.",
+        "tryout_saved_reader": "Opgeslagen. {service} werkt alleen in de proefstand; de assistent leest vanaf de volgende ronde zonder AI.",
         "tryout_saved_open": ("Opgeslagen. Op de lijst In Exact invoeren staan nog {n} wijzigingen uit proefdocumenten. Voer die niet in het "
                               "echte Exact in; laat ze vallen."),
         "tryout_saved_open_one": ("Opgeslagen. Op de lijst In Exact invoeren staat nog 1 wijziging uit een proefdocument. Voer die niet in het "
@@ -1214,6 +1307,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "state:failed": "Mislukt",
         "state:handled": "Mislukt, door u afgehandeld",
         "state:copilot_wait": "Wacht op Copilot",
+        "state:service_wait": "Wacht op {service}",
         "state:reading": "Wordt gelezen",
         "state:waiting": "Wacht op de leverancier",
         "state:closed_itself": "Vanzelf afgesloten",
@@ -1555,6 +1649,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "chip:review": "For review: {n}",
         "chip:failed": "Failed: {n}",
         "chip:copilot_wait": "Waiting for Copilot: {n}",
+        "chip:service_wait": "Waiting for {service}: {n}",
         "chip:waiting": "Waiting for supplier: {n}",
         "chip:closed_itself": "Closed by itself: {n}",
         "strip_pass": "Last pass: {time}",
@@ -1564,6 +1659,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "strip_mailbox:off": "No mailbox: the assistant reads the watched folder",
         "strip_reader:parser": "Documents read without AI",
         "strip_reader:llm": "Documents read with Copilot",
+        "strip_reader:azure_openai": "Documents read with Azure OpenAI (made-up documents)",
+        "strip_reader:foundry": "Documents read with Foundry (made-up documents)",
         "strip_updated": "Updated at {time}",
         "problem:no_pass": "No pass of the assistant since {time}",
         "problem:no_pass_ever": "The assistant has not made a pass yet",
@@ -1573,6 +1670,10 @@ STRINGS: dict[str, dict[str, str]] = {
         "problem:lapsed": "Mailbox not connected: the sign-in has lapsed",
         "problem:copilot_down_one": "Copilot is not working since {since}: 1 case waits",
         "problem:copilot_down_many": "Copilot is not working since {since}: {n} cases wait",
+        "problem:service_wait_one": ("1 document waits for {service}: reading does not work now. Check the key and the fields of "
+                                     "{service}, or choose the service again; runner.log says why."),
+        "problem:service_wait_many": ("{n} documents wait for {service}: reading does not work now. Check the key and the fields of "
+                                      "{service}, or choose the service again; runner.log says why."),
         "problem:copilot_refused_one": "Copilot refused the document of 1 case",
         "problem:copilot_refused_many": "Copilot refused the documents of {n} cases",
         "act:assistant": "Open the assistant's state",
@@ -1587,6 +1688,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "todo:waiting_po": "Nothing to do: the assistant looks again once the purchase order from Exact is in.",
         "todo:failed": "Choose the case under Case and handle the confirmation yourself in Exact.",
         "todo:copilot_wait": "Nothing to do: the assistant tries again at its next pass.",
+        "todo:service_wait": "Check the key and the fields of {service} under Mailbox and AI; the assistant tries again at its next pass.",
         "todo:reading": "Nothing to do: the assistant is reading the document now.",
         "todo:waiting": "Nothing to do: the case comes back when the supplier answers or when the wait is over.",
         "todo:closed_changes": "Enter the changes in Exact: tab Enter in Exact.",
@@ -1621,6 +1723,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "files_now:closed_itself": "closed by itself",
         "files_now:closed_by_you": "closed by you",
         "files_now:copilot_wait": "waits for Copilot",
+        "files_now:service_wait": "waits for {service}",
         "files_now:reading": "being read",
         "documents": "Documents",
         "record": "Comparison",
@@ -1824,6 +1927,8 @@ STRINGS: dict[str, dict[str, str]] = {
                            "why and what you can do; then close the case again."),
         "reader_state:parser": "The assistant now reads documents without AI.",
         "reader_state:llm": "The assistant now reads documents with Copilot.",
+        "reader_state:azure_openai": "The assistant now reads documents with Azure OpenAI (made-up documents).",
+        "reader_state:foundry": "The assistant now reads documents with Foundry (made-up documents).",
         "reader_state:down": ("The assistant now reads documents with Copilot, but Copilot is not working since {since} ({cause}); cases "
                               "waiting: {n}."),
         "reader_state:refused": ("The assistant now reads documents with Copilot, but Copilot refuses documents. Failed in the last 7 "
@@ -1835,8 +1940,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "copilot_cause:other": "no usable answer",
         "settings_ai_switched": ("Saved. Copilot answered the test; from its next pass, within a minute, the assistant reads documents "
                                  "with Copilot."),
-        "settings_ai_switch_refused": ("Not saved: Copilot gave no answer to the test ({cause}). The assistant keeps reading without AI. "
-                                       "{hint}"),
+        "settings_ai_switch_refused": "Not saved: Copilot gave no answer to the test ({cause}). {kept} {hint}",
+        "settings_ai_kept:parser": "The assistant keeps reading without AI.",
+        "settings_ai_kept": "The assistant keeps reading with {reader}.",
         "copilot_hint:400": ("A 400 usually means that the account has no Microsoft 365 Copilot licence, or that it is a personal "
                              "Microsoft account. Copilot works only with a work account that has that licence."),
         "copilot_hint:401": "Press Sign in for Copilot first, then choose Copilot again.",
@@ -1858,6 +1964,7 @@ STRINGS: dict[str, dict[str, str]] = {
                                "or pass this on to the researcher."),
         "assistant_lapsed": "The mailbox sign-in has lapsed since {since}: sign in again under Mailbox and AI.",
         "assistant_waiting_copilot": "Waiting for Copilot: purchase order {orders}.",
+        "assistant_waiting_service": "Waiting for {service}: purchase order {orders}.",
         "assistant_store": "Signing in is not possible: the protected store is refused. Mailbox and AI says why.",
         "assistant_refresh": "Refresh the assistant's state",
         "assistant_refreshed": "Status refreshed at {time}.",
@@ -1925,12 +2032,65 @@ STRINGS: dict[str, dict[str, str]] = {
         "settings_ai_test:test_mode": "Turn on test mode before testing the demonstration service.",
         "settings_ai_test:missing_key": "Set the key for the demonstration service before testing it.",
         "settings_ai_test:missing_library": "Install the library for the demonstration service before testing it.",
-        "settings_ai_test:mailbox": "The exploration with Azure OpenAI or Foundry works without a mailbox: use a folder of made-up documents of its own, without the Microsoft connection, the mailbox or the folders.",
         "settings_ai_test:key_refused": "Check the key for the demonstration service and test the connection again.",
         "settings_ai_reader": "Read documents with",
         "settings_reader:llm": "Copilot",
         "settings_reader:parser": "without AI (parser)",
+        "settings_reader:azure_openai": "Azure OpenAI (made-up documents)",
+        "settings_reader:foundry": "Foundry (made-up documents)",
         "settings_ai_ids_needed": "Save the tenant ID and the client ID first; then Copilot can read the documents.",
+        "settings_ai_field:azure_openai_endpoint": "Endpoint of the resource",
+        "settings_ai_field:azure_openai_deployment": "Deployment",
+        "settings_ai_field:foundry_resource": "Name of the resource",
+        "settings_ai_field:foundry_base_url": "Full address, instead of the name",
+        "settings_ai_field:foundry_deployment": "Deployment",
+        "settings_ai_field:key": "Key",
+        "settings_ai_save:azure_openai": "Save Azure OpenAI",
+        "settings_ai_save:foundry": "Save Foundry",
+        "settings_ai_service_help": ("For the made-up documents of the package only, in the test mode; the key stays in the protected "
+                                     "store of this PC and never stands on this page."),
+        "settings_ai_key:stored": "A key is stored in the protected store of this PC.",
+        "settings_ai_key:none": "No key is stored.",
+        "settings_ai_key_remove": "Remove the key",
+        "settings_ai_key_removed": "Key removed.",
+        "settings_ai_key_retype": "The key you typed was not saved; type it again.",
+        "settings_ai_key_not_undone": "Keeping the key could not be undone: the protected store of this PC now holds the key typed.",
+        "settings_ai_saved_tested": "Saved and tested. The assistant uses this from its next pass, within a minute.",
+        "settings_ai_saved_tested_later": ("Saved and tested. The assistant uses the new key only after its next start, or after you "
+                                           "have chosen \"{parser}\" and then this service again under {choice}."),
+        "settings_ai_saved_untested": "Saved. The service is tested when you choose it under {choice}.",
+        "service_why:key_form": ("the key in the field \"{field}\" under {service} may hold no space, line end or character other than "
+                                 "letters, digits and punctuation without accents: type it again and press {save}."),
+        "settings_ai_key_removed_reader": "Key removed. The assistant read with this service; from its next pass it reads without AI.",
+        "settings_ai_key_kept": "Nothing was removed: {service} still reads with this key, and the settings could not be changed. {why}",
+        "settings_ai_service_switched": ("Saved. {service} answered the test; from its next pass, within a minute, the assistant reads "
+                                         "documents with {service}."),
+        "settings_service_refused": "Not saved: {why}",
+        "service_why:test_mode": "{service} works in the test mode only: tick \"{switch}\" under Connection to Exact, then choose again.",
+        "service_why:missing": "fill in the field \"{field}\" under {service} and press {save}.",
+        "service_why:missing_place": "fill in the field \"{field}\" or the field \"{other}\" under {service} and press {save}.",
+        "service_why:key": "type the key into the field \"{field}\" under {service} and press {save}.",
+        "service_why:endpoint_form": ("the field \"{field}\" under {service} needs only the address of the resource, with https and "
+                                      "without a path or a query, such as `{example}`: correct it and press {save}."),
+        "service_why:form": "the field \"{field}\" under {service} needs an https address, such as `{example}`: correct it and press {save}.",
+        "service_why:both": "fill in the field \"{field}\" or the field \"{other}\" under {service}, not both, and press {save}.",
+        "service_why:resource_form": ("the field \"{field}\" under {service} takes the name of the resource only, without \"://\" or \"/\": "
+                                      "put a full address into the field \"{other}\" and press {save}."),
+        "service_why:environment": ("the window the assistant was started from has the variable `{variable}`, which the Anthropic library "
+                                    "reads beside the field \"{field}\": remove that variable and start the assistant again, or fill in "
+                                    "the field \"{other}\" under {service} instead of \"{field}\"."),
+        "service_why:library": "this Python lacks the Anthropic library's client for Foundry: install the version of aid/requirements.txt.",
+        "settings_service_failed": "Not saved: {service} gave no answer to the test ({cause}). {hint}",
+        "service_hint:key": "Check the key, type it again into the field \"{field}\" under {service} and press {save}.",
+        "service_hint:not_found": "Check the fields \"{field}\" and \"{deployment}\" under {service}.",
+        "service_hint:address": "Check the field \"{field}\" under {service} and the internet connection.",
+        "service_hint:deployment": "Check the field \"{deployment}\" under {service}: the deployment must be a model that reads documents.",
+        "settings_key_refused": "The protected store of the keys on this PC was refused.",
+        "settings_key_refused_git": ("The protected store of the keys ({store}) lies inside a folder under version control, as {work_tree} "
+                                     "holds a .git folder. If that .git folder is there by mistake, move it somewhere else and try again. "
+                                     "If you need that .git folder, pass this on to the researcher."),
+        "settings_key_refused_kind": ("The protected store of the keys ({store}) was made by another Windows user or in another kind of "
+                                      "session. Start the page and the assistant as the same user, or pass this on to the researcher."),
         "settings_connections": "Mailbox and AI",
         "settings_extension_code": "Code for the browser extension",
         "settings_extension_code_help": "Paste this code into the options of the Inkoopassistent extension in Edge or Chrome.",
@@ -2278,6 +2438,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "tryout_switch_help": ("In the test mode the assistant sends messages to your own addresses only (Settings, Your rules). Switching "
                                "the test mode off ends that: every message then goes to the address the settings give."),
         "tryout_saved": "Saved.",
+        "tryout_saved_reader": "Saved. {service} works in the test mode only; from its next pass the assistant reads without AI.",
         "tryout_saved_open": ("Saved. The list Enter in Exact still holds {n} changes from try-out documents. Do not enter them in the real "
                               "Exact; drop them."),
         "tryout_saved_open_one": "Saved. The list Enter in Exact still holds 1 change from a try-out document. Do not enter it in the real Exact; drop it.",
@@ -2327,6 +2488,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "state:failed": "Failed",
         "state:handled": "Failed, handled by you",
         "state:copilot_wait": "Waits for Copilot",
+        "state:service_wait": "Waits for {service}",
         "state:reading": "Being read",
         "state:waiting": "Waits for the supplier",
         "state:closed_itself": "Closed by itself",

@@ -101,8 +101,8 @@ def test_the_stand_in_is_refused_outside_the_test_mode_and_without_the_key(tmp_p
 
 
 def test_the_stand_in_says_when_the_python_has_no_anthropic_library(tmp_path, monkeypatch):
-    """The folder for Windows does without the development client's library: the stand-in then says to start the aid with a Python
-    that has it, and sends nothing."""
+    """A Python without the development client's library (the folder for Windows carries it since 26 November): the stand-in then
+    says to start the aid with a Python that has it, and sends nothing."""
     monkeypatch.setattr(llm_client, "anthropic", None)
     settings, _ = settings_file(tmp_path, reader="llm", test_mode=True)
     with pytest.raises(ValueError, match="Anthropic library"):

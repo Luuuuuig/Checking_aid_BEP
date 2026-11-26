@@ -151,7 +151,8 @@ When run_loop is given the settings file the Deps were built from, it looks at t
 pass. When the time has changed, the file is read again with load_settings and the pass runs with the Deps that `rebuild` makes of
 its settings (the command rebuilds them with build_deps), or with the Deps given and the new settings. A file that cannot be read
 or validated, or whose Deps cannot be built, leaves the settings in use as they are, with one line in the log that names the fields
-at fault, if any, and never a value. So a save on the settings tab of the review page is taken over at the next pass.
+at fault, if any, and never a value: for a reader of the settings tab that is refused (exploration.SettingsRefused), the kind of
+the refusal and the setting it names, for any other error its class. So a save on the settings tab of the review page is taken over at the next pass.
 
 What the next digest is to report is kept in <cases_root>/digest_state.json, so that it survives the end of a session: {"last_sent":
 the time of the last digest or null, "reported": the ids of the cases handled since then, "skipped": the [file, reason] pairs of the
@@ -171,7 +172,8 @@ The command builds the Deps for company documents with build_deps and runs the l
 file. A settings file that cannot be read or validated stops it with exit code 2 and the fields at fault, never their values. With
 reader "parser" in the settings the reader is the parser and the decider NoDecider; with reader "llm" both ask Microsoft 365 Copilot
 (the paragraph below), and without the tenant and the client in the settings the command refuses reader "llm" with exit code 2
-(NO_LLM). The writer is always the PreparedWriter into <cases_root>/prepared: no command builds a write route into Exact, and a
+(NO_LLM); with reader "azure_openai" or "foundry" the reader is an exploration service for the made-up documents only, those of
+the unseen cases included, for the evaluation run (the same paragraph). The writer is always the PreparedWriter into <cases_root>/prepared: no command builds a write route into Exact, and a
 settings file in which exact_base_url is set is refused as a file that cannot be used, with the one sentence of aid/settings.py
 (WRITE_ROUTE_SET). The mailer follows send_via, and is made by mailer_of of aid/messaging/microsoft_mailer.py, the one builder that
 the review page makes the mailer of a close with too: "microsoft" is the MicrosoftMailer, which sends from
@@ -196,6 +198,17 @@ the buyer. For a demonstration on the owner's own PC while Copilot has no licenc
 takes Copilot's place while the process has AID_STAND_IN=anthropic and the key in its environment and the settings have the test mode
 on: it reads with the Anthropic client, sends a document only when it is byte for byte a file of the made-up set, refuses every other
 document before anything is sent, and no model is asked for a decision (MadeUpDecider classes a made-up scan by its name).
+The two exploration services, Azure OpenAI and Anthropic's models in Microsoft Foundry (aid/readers/exploration.py), read the
+made-up documents of the package and, for the evaluation run (the owner's decision of 26 November 2026), the documents of the
+manifest of the unseen cases, behind the same guard on both ways below, never a company document, and only in the
+test mode, which is their one switch: a mailbox of one's own, to which only made-up mails are sent, may be read with them, and its
+attachments pass the same guard, while the work mailbox is never connected on a PC outside the company. Each is reached in one of
+two ways: with reader "azure_openai" or "foundry", which the settings tab writes once the service answered its test message, from
+the address and the deployment of the settings and the key that the tab keeps in the secrets store of this PC (settings_client;
+the key is read when the Deps are built, at the start and after a change of the settings file); or, for a copy started from a
+window, with reader "llm" while the process has AID_STAND_IN=azure_openai or foundry and the service's environment variables
+(stand_in_for). A refusal of either stops the command with exit code 2, as one of the stand-in does, and no model is asked for a
+decision.
 """
 import argparse
 import json
@@ -222,7 +235,7 @@ from aid.pipeline import _cut_off_after_writes      # whether a run cut off wrot
 from aid.po_store import PoStore
 from aid.readers.cart import is_cart_page, read_cart_html
 from aid.readers.copilot_client import CopilotClient, CopilotError
-from aid.readers import stand_in
+from aid.readers import exploration, stand_in
 from aid.readers.llm_client import LlmClient, LlmRequest, LlmResponse, ReaderError
 from aid.readers.supplier_llm import read_supplier_document
 from aid.readers.supplier_parser import load_templates
@@ -363,6 +376,10 @@ class _Loop:
             return
         try:
             deps = self.rebuild(settings) if self.rebuild is not None else self.deps.model_copy(update={"settings": settings})
+        except exploration.SettingsRefused as exc:   # the reader of the settings tab: its kind and the setting it names, no value
+            named = exc.kind if exc.settings == (exc.kind,) else f"{exc.kind}: {', '.join(exc.settings)}"
+            _log(root, now, SETTINGS, f"SettingsRefused ({named}): the changed settings cannot be used; the settings in use are kept")
+            return
         except Exception as exc:                 # its text may quote a value of the settings
             _log(root, now, SETTINGS, f"{type(exc).__name__}: the changed settings cannot be used; the settings in use are kept")
             return
@@ -1359,11 +1376,22 @@ def build_deps(settings: Settings, environ: Mapping[str, str], account: Microsof
     While `environ` has AID_STAND_IN=azure_openai or AID_STAND_IN=foundry, reader "llm" reads through the exploration reader of
     Azure OpenAI or of Anthropic's models in Microsoft Foundry instead (aid/readers/exploration.py), behind the same guard with the
     made-up folders of the package and the documents of the unseen cases (the evaluation run, by the owner's decision of 26 November
-    2026), and the decider is MadeUpDecider as well. It is
-    refused with ValueError outside the test mode, while the settings name any part of the work mailbox (the tenant, the client, the
-    mailbox, the mail folder or the order folder), and without its environment variables, which a refusal names without a value."""
+    2026), and the decider is MadeUpDecider as well. It is refused with ValueError outside the test mode, which is its one switch (a
+    mailbox in the settings is no refusal), and without its environment variables, which a refusal names without a value.
+
+    With reader "azure_openai" or "foundry", which the settings tab writes only once the service answered its test message, the
+    reader is that exploration reader whatever `environ` holds: settings_client of aid/readers/exploration.py, behind the same
+    guard, the documents of the unseen cases included as on the path of AID_STAND_IN (unseen_cases, for the evaluation run), with
+    the address and the deployment of the settings and the key that the secrets store in default_secrets_dir() holds,
+    read now and kept in memory until the Deps are built again; the decider is MadeUpDecider. It raises ValueError, as the
+    exploration reader of AID_STAND_IN does, outside the test mode, without a setting or the key, and for Foundry while the process
+    environment holds the other address variable than the one the settings give (exploration.SettingsRefused, which names the
+    setting or the key and never a value), and for a store this process may not use (StoreRefused)."""
     reader, decider = read_with_parser, NoDecider()
-    if settings.reader == "llm" and stand_in.active(environ):
+    if settings.reader in exploration.SERVICES:      # chosen on the settings tab; the key is read from the store of this PC now
+        client = exploration.settings_client(settings.reader, settings, LazySecretStore(default_secrets_dir()), unseen_cases=True)
+        reader, decider = llm_reader(client), stand_in.MadeUpDecider()
+    elif settings.reader == "llm" and stand_in.active(environ):
         reader, decider = llm_reader(stand_in.stand_in_for(settings, environ)), stand_in.MadeUpDecider()
     elif settings.reader == "llm":
         if not (settings.ms_tenant_id and settings.ms_client_id):

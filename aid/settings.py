@@ -53,6 +53,14 @@ version writes it true, and the hand-over switches it off on the settings tab as
 only to the owner's own addresses (own_addresses, and the account of the work mailbox; OwnOnly of aid/messaging); switching it off
 lifts that.
 
+reader is "llm" (Microsoft 365 Copilot), "parser" (the template parser, without AI), or one of the two exploration services for the
+made-up documents of the package only: "azure_openai" (Azure OpenAI) or "foundry" (Anthropic's models in Microsoft Foundry), which
+the settings tab writes only once the service answered its test message (settings_client of aid/readers/exploration.py). Their
+addresses and deployments are the five settings azure_openai_endpoint, azure_openai_deployment, foundry_resource, foundry_base_url
+and foundry_deployment, which are no secrets; an empty text counts as null. Their keys are no settings and never stand in this file:
+the settings tab keeps them in the secrets store of this PC (aid/connections/secrets.py), and a file that holds a key is refused
+by its name, as any key the settings do not know.
+
 own_addresses are the owner's own e-mail addresses for the test mode, one address to each entry, with no name around it, no second
 address, no comma and no colon (a mail program reads "x:y@example.org" as a group that holds y@example.org, and the SMTP mailer would
 send to that address); an entry that is no such address is refused by its place (own_addresses.1), never by what it holds, as the
@@ -137,9 +145,17 @@ class Settings(BaseModel):
     po_store_root: Path
     watched_folder: Path
     supplier_lead_times: dict[str, int] = {}     # supplier -> days, from the ERP export (question G7 of the solution requirements); unknown supplier -> None
-    reader: Literal["llm", "parser"] = "llm"     # chosen by the AI-necessity check
+    # chosen by the AI-necessity check; "azure_openai" and "foundry" read the made-up documents of the package only (see the docstring)
+    reader: Literal["llm", "parser", "azure_openai", "foundry"] = "llm"
     model: str = "claude-opus-5-5"
     effort: Literal["low", "medium", "high"] = "medium"
+    # The two exploration services that the settings tab offers as readers (aid/readers/exploration.py): addresses and deployments,
+    # which are no secrets. Their keys are no settings: the settings tab keeps them in the secrets store of this PC.
+    azure_openai_endpoint: str | None = None     # the endpoint of the Azure OpenAI resource, https://<resource>.openai.azure.com
+    azure_openai_deployment: str | None = None   # the name of its deployment
+    foundry_resource: str | None = None          # the name of the Foundry resource; or, never with it, its full address below
+    foundry_base_url: str | None = None          # https://<resource>.services.ai.azure.com/anthropic
+    foundry_deployment: str | None = None        # the name of the deployment of Anthropic's model in Foundry
     exact_base_url: str | None = None
     exact_endpoints: dict[str, str] = {}
     exact_fields: dict[str, str] = {}            # operation kind -> Exact field name, for the kinds whose field differs from the writer's default
@@ -192,6 +208,7 @@ class Settings(BaseModel):
     test_mode: bool = False
 
     @field_validator("ms_tenant_id", "ms_client_id", "mailbox", "mail_folder", "mail_folder_name", "order_folder", "order_folder_name",
+                     "azure_openai_endpoint", "azure_openai_deployment", "foundry_resource", "foundry_base_url", "foundry_deployment",
                      mode="before")
     @classmethod
     def _empty_is_null(cls, value):

@@ -428,7 +428,8 @@ def test_a_line_that_opened_a_case_says_what_the_case_is_now(tmp_path, madeup_ou
     assert {key: STRINGS["nl"][key] for key in STRINGS["nl"] if key.startswith("files_now")} == {
         "files_now": "{label}. Nu: {state}.", "files_now:failed": "mislukt", "files_now:handled": "mislukt, door u afgehandeld",
         "files_now:waiting": "wacht op de leverancier", "files_now:closed_itself": "vanzelf afgesloten",
-        "files_now:closed_by_you": "door u afgesloten", "files_now:copilot_wait": "wacht op Copilot", "files_now:reading": "wordt gelezen"}
+        "files_now:closed_by_you": "door u afgesloten", "files_now:copilot_wait": "wacht op Copilot", "files_now:reading": "wordt gelezen",
+        "files_now:service_wait": "wacht op {service}"}
     assert STRINGS["en"]["files_now"] == "{label}. Now: {state}." and (root / INTAKE_FILE).read_bytes() == written
 
 

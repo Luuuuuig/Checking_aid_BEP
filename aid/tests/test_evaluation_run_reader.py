@@ -102,3 +102,36 @@ def test_anthropic_sends_a_document_of_the_manifest_as_before(tmp_path, manifest
     with pytest.raises(ValueError) as refused:
         stand_in.stand_in_for(settings_off, ON)
     assert str(refused.value) == stand_in.NO_TEST_MODE
+
+
+@pytest.mark.parametrize("value", EXPLORATION)
+def test_in_the_aid_the_reader_chosen_on_the_settings_tab_sends_a_document_of_the_manifest(tmp_path, manifest, services, monkeypatch,
+                                                                                           value):
+    """e. The reader that the runner builds of the service chosen on the settings tab (build_deps with reader azure_openai or foundry,
+    through settings_client) is guarded as the reader of AID_STAND_IN is, so that the evaluation run works the way the owner now
+    works: a document of the manifest goes out, as a made-up file does, and a document in neither set is refused before the client
+    is called. The page's test of the choice (settings_client as the page calls it) and the one-document check keep the manifest
+    out."""
+    from aid import runner
+    from aid.tests.test_exploration import chosen, keyed
+    for name in exploration.PLACES:                              # the Anthropic library reads Foundry's addresses as well
+        monkeypatch.delenv(name, raising=False)
+    built = []
+    monkeypatch.setattr(runner, "LazySecretStore", lambda directory: keyed(value))       # the store of the tab, with the key
+    monkeypatch.setattr(runner, "llm_reader", lambda client: built.append(client) or (lambda path, kind: None))
+    settings = chosen(tmp_path, value)
+    deps = runner.build_deps(settings, {})
+    [guard] = built
+    assert isinstance(deps.decider, stand_in.MadeUpDecider) and guard.name == f"{value}:dep"
+    guard.complete(request(pdf=OWN))
+    guard.complete(request(pdf=MADE_UP_PDF.read_bytes()))
+    assert [req.pdf for req in services[0].requests] == [OWN, MADE_UP_PDF.read_bytes()]
+    with pytest.raises(ReaderError) as error:
+        guard.complete(request(pdf=FOREIGN))
+    assert str(error.value) == exploration.NOT_MADE_UP.format(service=exploration.SERVICES[value])
+    assert guard.allowed == stand_in.made_up_digests() and hashlib.sha256(OWN).hexdigest() in guard.allowed
+    page_choice = exploration.settings_client(value, settings, keyed(value), environ={})      # as the page calls it
+    for other in (page_choice, explore.default_factory(value, switched_on(value), None)):
+        with pytest.raises(ReaderError):
+            other.complete(request(pdf=OWN))
+        assert other.client.requests == [] and hashlib.sha256(OWN).hexdigest() not in other.allowed

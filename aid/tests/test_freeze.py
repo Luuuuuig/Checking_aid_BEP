@@ -151,6 +151,41 @@ def test_the_record_names_the_reader_chosen_by_the_environment_and_no_key_or_add
     assert {key: plain[key] for key in KEYS} == {key: record[key] for key in KEYS}
 
 
+TAB = {"azure_openai_endpoint": "https://made-up-tab.openai.azure.com", "azure_openai_deployment": "dep-tab-azure",
+       "foundry_resource": "made-up-tab-resource", "foundry_base_url": "https://made-up-tab.services.ai.azure.com/anthropic",
+       "foundry_deployment": "dep-tab-foundry"}                    # the fields of the two services on the settings tab
+ADDRESSES = ("azure_openai_endpoint", "foundry_resource", "foundry_base_url")
+
+
+@pytest.mark.parametrize(("reader", "environ", "expected"), [
+    ("azure_openai", {}, {"value": "azure_openai", "deployment": "dep-tab-azure"}),
+    ("foundry", {}, {"value": "foundry", "deployment": "dep-tab-foundry"}),
+    ("foundry", {"AID_STAND_IN": "azure_openai", "AZURE_OPENAI_DEPLOYMENT": "dep-azure"}, {"value": "foundry", "deployment": "dep-tab-foundry"}),
+    ("azure_openai", {"AID_STAND_IN": "anthropic"}, {"value": "azure_openai", "deployment": "dep-tab-azure"}),
+    ("llm", {"AID_STAND_IN": "azure_openai", "AZURE_OPENAI_DEPLOYMENT": "dep-azure"}, {"value": "azure_openai", "deployment": "dep-azure"}),
+    ("llm", {}, {"value": None, "deployment": None})])
+def test_the_record_names_the_reader_chosen_on_the_settings_tab_and_no_key_endpoint_or_resource(tmp_path, monkeypatch, reader, environ,
+                                                                                               expected):
+    """The reader chosen on the settings tab (reader azure_openai or foundry) with the deployment of the settings, which build_deps
+    takes whatever AID_STAND_IN holds, so that the record names the reader the run reads with; with reader "llm" the one AID_STAND_IN
+    chooses, as before. The record never names a key, an endpoint or a resource: the settings it holds show the endpoint of Azure
+    OpenAI and the resource and the full address of Foundry as "set" or "unset", as the authorization limit."""
+    monkeypatch.setattr(freeze, "PIP_FREEZE", NO_PIP)
+    path = tmp_path / "settings.json"
+    path.write_text(SETTINGS.model_copy(update={"reader": reader, "test_mode": True} | TAB).model_dump_json(indent=2), encoding="utf-8")
+    settings = freeze.load_settings(path)
+    record = freeze.freeze_record(path, settings, tmp_path, lambda: CLOCK, environ=SECRETS | environ)
+    assert record["stand_in"] == expected and sorted(record) == sorted(KEYS + ["stand_in"])
+    text = json.dumps(record)
+    assert not [value for value in [*SECRETS.values(), *(TAB[name] for name in ADDRESSES)] if value in text]
+    assert {name: record["settings"][name] for name in ADDRESSES} == dict.fromkeys(ADDRESSES, "set")
+    assert record["settings"]["foundry_deployment"] == "dep-tab-foundry" and record["settings"]["reader"] == reader
+    unset = SETTINGS.model_copy(update=dict.fromkeys(ADDRESSES)).model_dump_json(indent=2)
+    path.write_text(unset, encoding="utf-8")
+    plain = freeze.freeze_record(path, freeze.load_settings(path), tmp_path, lambda: CLOCK, environ={})
+    assert {name: plain["settings"][name] for name in ADDRESSES} == dict.fromkeys(ADDRESSES, "unset")
+
+
 # --- the command ---
 
 def test_the_command_writes_the_record_without_the_amount(settings_file, repo, tmp_path, monkeypatch, capsys):

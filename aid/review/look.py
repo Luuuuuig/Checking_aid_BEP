@@ -389,6 +389,10 @@ button.secondary:disabled {{ background: {SURFACE_2}; border-color: {LINE_STRONG
 # (.block.answer, and the note of a decision row, .block.row-note) once as a polite live region (role status), so that a screen
 # reader reads an answer as it comes, without moving the focus. It watches the page for lines that appear later. It holds no
 # address. The status line of "Beoordelen" and every note that answers a press on a tab have the class answer (aid/review/page.py).
+# It sets autocomplete "new-password" on the input of each key box of the settings tab (settings-azure_openai-key and
+# settings-foundry-key, _service_block of aid/review/page.py), so that the browser does not offer to remember a key: the page library
+# renders a password box with an empty autocomplete and does not apply the one of html_attributes (the review's code-1). It does so
+# at the load and again whenever the page renders anew.
 #
 # It also draws the copy buttons of the tab "In Exact invoeren" (copies). The tab gives them in a hidden element (hand-copy-data:
 # _copy_data of aid/review/page.py), by the value of each row's tick box, which the page library writes as the box's name. After
@@ -411,6 +415,9 @@ PAGE_JS = """
       line.setAttribute('role', 'status');
       line.setAttribute('aria-live', 'polite');
     }
+  });
+  const keys = () => document.querySelectorAll('#settings-azure_openai-key input, #settings-foundry-key input').forEach((box) => {
+    if (box.getAttribute('autocomplete') !== 'new-password') box.setAttribute('autocomplete', 'new-password');
   });
   const copies = () => {
     const data = document.getElementById('hand-copy-data');
@@ -481,7 +488,8 @@ PAGE_JS = """
   language();
   answers();
   copies();
-  new MutationObserver(() => { language(); answers(); copies(); })
+  keys();
+  new MutationObserver(() => { language(); answers(); copies(); keys(); })
     .observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['name', 'data-rows'] });
   document.addEventListener('change', language, true);
   document.addEventListener('click', (event) => {

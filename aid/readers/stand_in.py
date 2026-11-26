@@ -30,19 +30,19 @@ reader, by its bytes.
 The test mode is read when the runner builds its reader: a runner that runs keeps the stand-in when the test mode is switched off
 on the settings tab (the changed settings are then not taken, and runner.log says so) until it is started again.
 
-The library of the development client is not in the folder for Windows (aid/portable.py), so the stand-in needs a Python that has
-it; without it stand_in_for says so and nothing is sent.
+The stand-in needs the library of the development client, which the folder for Windows carries since 26 November (aid/portable.py);
+in a Python without it stand_in_for says so and nothing is sent.
 
 AID_STAND_IN also takes the values "azure_openai" and "foundry" (VALUES; active is true for each of the three, and value says which):
 stand_in_for then gives the exploration reader of Azure OpenAI or of Anthropic's models in Microsoft Foundry instead
 (aid/readers/exploration.py), behind the same guard, with texts that name the service. Its allowed set is the one of "anthropic",
 the made-up folders and the manifest, since by the owner's decision of 26 November 2026 the timed evaluation run reads the cases of
 evaluation/unseen_cases through Azure OpenAI; the one-document check and the bake-off build their guard without the manifest
-(exploration.guarded). It is refused, in this
-order, outside the test mode, while the settings name any part of the work mailbox, and without its environment variables (foundry
-also without the Anthropic library's client for Foundry). A count of the tokens of a request (StandIn.count_tokens) sends the
-request as well, so it passes the same check first, and a failure of the service in a count is a CopilotError as in an answer. The
-value "anthropic" works as before: its texts, its allowed set with the manifest, and no refusal for a mailbox.
+(exploration.guarded). It is refused, in this order, outside the test mode, which is its one switch (a mailbox in the settings is no
+refusal), and without its environment variables (foundry also without the Anthropic library's client for Foundry). A count of the
+tokens of a request (StandIn.count_tokens) sends the request as well, so it passes the same check first, and a failure of the
+service in a count is a CopilotError as in an answer. The value "anthropic" works as before: its texts and its allowed set with the
+manifest.
 """
 import hashlib
 import json
@@ -72,8 +72,8 @@ NOT_MADE_UP = ("Copilot could not read this document: the stand-in for Copilot r
 NO_QUESTION = "the stand-in for Copilot sends no question but the test message of the settings tab"
 NO_TEST_MODE = "the stand-in for Copilot (AID_STAND_IN=anthropic) works only in the test mode: switch the test mode on, or start without it"
 NO_KEY = f"the stand-in for Copilot (AID_STAND_IN=anthropic) needs the key in the environment variable {KEY}, never in a file"
-NO_LIBRARY = ("the stand-in for Copilot (AID_STAND_IN=anthropic) needs the Anthropic library, which the folder for Windows does without: "
-              "start the aid with a Python that has it")
+NO_LIBRARY = ("the stand-in for Copilot (AID_STAND_IN=anthropic) needs the Anthropic library, which this Python does not have: start "
+              "the aid with a Python that has it, such as the folder for Windows")
 TEST_SCHEMA = {"type": "object", "properties": {"answer": {"type": "string"}}, "required": ["answer"], "additionalProperties": False}
 TEST_SYSTEM = "Answer the message in the field answer."
 SERVICE_FAILED = "the stand-in for Copilot could not reach its service: {kind}"    # the class of the client's error, never its text
@@ -197,16 +197,15 @@ def _template(text: str) -> re.Pattern[str]:
 
 def setup_kind(text: str) -> str | None:
     """What a setup refusal of the stand-in or of an exploration reader (the text of the ValueError that stand_in_for raises) asks of
-    the owner: "test_mode", "missing_key" (a missing key or setting, whatever name it holds), "missing_library", or "mailbox" (the
-    settings name a part of the work mailbox); None for any other text. The texts of the exploration readers are matched by their
-    templates (aid/readers/exploration.py), so that no finished text is listed."""
+    the owner: "test_mode", "missing_key" (a missing key or setting, whatever name it holds) or "missing_library"; None for any
+    other text. The texts of the exploration readers are matched by their templates (aid/readers/exploration.py), so that no
+    finished text is listed."""
     from aid.readers import exploration, foundry_client      # here, as in stand_in_for
     fixed = {NO_TEST_MODE: "test_mode", NO_KEY: "missing_key", NO_LIBRARY: "missing_library",
              foundry_client.NO_FOUNDRY_LIBRARY: "missing_library"}
     if (kind := fixed.get(text)) is not None:
         return kind
-    for template, kind in ((exploration.NO_TEST_MODE, "test_mode"), (exploration.NO_SETTING, "missing_key"),
-                           (exploration.NO_MAILBOX, "mailbox")):
+    for template, kind in ((exploration.NO_TEST_MODE, "test_mode"), (exploration.NO_SETTING, "missing_key")):
         if _template(template).fullmatch(text):
             return kind
     return None
@@ -216,16 +215,15 @@ def stand_in_for(settings: Settings, environ: Mapping[str, str] | None = None, t
     """The stand-in for the settings, with the model of the settings, or the package default while they hold the example's
     placeholder. Raises ValueError outside the test mode, without the key in the environment, or without the Anthropic library.
     While AID_STAND_IN is "azure_openai" or "foundry", the exploration reader of that service behind the guard instead, which also
-    sends the documents of the manifest of the unseen cases (guarded with unseen_cases=True), refused with
-    ValueError outside the test mode, while the settings name any part of the work mailbox, or without its environment variables
-    (foundry also without the Anthropic library's client for Foundry)."""
+    sends the documents of the manifest of the unseen cases (guarded with unseen_cases=True), refused with ValueError outside the
+    test mode, which is its one switch, or without its environment variables (foundry also without the Anthropic library's client
+    for Foundry)."""
     environ = os.environ if environ is None else environ
     chosen = value(environ)
     if chosen in VALUES and chosen != ON:
         from aid.readers import exploration      # here, so that the two modules do not import each other when they load
         if not settings.test_mode:
             raise ValueError(exploration.NO_TEST_MODE.format(service=exploration.SERVICES[chosen], value=chosen))
-        exploration.check_no_mailbox(chosen, settings)
         return exploration.guarded(chosen, exploration.exploration_client(chosen, environ, effort=settings.effort), test_text,
                                    unseen_cases=True)
     if not settings.test_mode:

@@ -36,7 +36,8 @@ DEMO_FILES = {"Demonstratie starten.cmd": "--demo", "Demonstratie stoppen.cmd": 
 FOLDER = sorted([*CMD_FILES, *DEMO_FILES, "LEESMIJ.txt", "python", "app"])
 ORIGINAL_PTH = b"python311.zip\r\n.\r\n\r\n# Uncomment to run site.main() automatically\r\n#import site\r\n"
 LEESMIJ = ("Deze map is de inkoopassistent. Buiten deze map zet de assistent alleen een snelkoppeling in de map Opstarten en, als u "
-           "zich aanmeldt bij Microsoft, de aanmelding in uw eigen profiel. Komt de assistent als zip-bestand van internet, ook een "
+           "zich aanmeldt bij Microsoft of een sleutel van Azure OpenAI of Foundry opslaat, de aanmelding of de sleutel in de "
+           "beveiligde opslag in uw eigen profiel. Komt de assistent als zip-bestand van internet, ook een "
            "nieuwe versie, hef dan de blokkering op voordat u het uitpakt: klik met de rechtermuisknop op het zip-bestand, kies "
            "Eigenschappen, vink Blokkering opheffen aan en klik op OK. Anders kan Windows de assistent tegenhouden. Hebt u het al "
            "uitgepakt, stop dan de assistent als die draait en verwijder wat u uitpakte, maar nooit een map data; hef daarna de "
@@ -63,8 +64,8 @@ LEESMIJ = ("Deze map is de inkoopassistent. Buiten deze map zet de assistent all
            "alles wat in de map van de nieuwe versie staat in deze map, ook de bestanden waarop u dubbelklikt, en start opnieuw; de "
            "map data blijft staan. Het zip-bestand van een nieuwe versie bevat een map Inkoopassistent: pak het eerst uit op een "
            "andere plek, bijvoorbeeld in Downloads, en zet wat in die map Inkoopassistent staat in deze map, niet die map zelf. "
-           "Weggooien: meld u op de pagina af bij Microsoft, dubbelklik op Inkoopassistent niet meer vanzelf starten, stop de "
-           "assistent en verwijder deze map.")
+           "Weggooien: meld u op de pagina af bij Microsoft, verwijder een opgeslagen sleutel van Azure OpenAI of Foundry met "
+           "Sleutel verwijderen, dubbelklik op Inkoopassistent niet meer vanzelf starten, stop de assistent en verwijder deze map.")
 # The start file: pythonw.exe, which has no console, started through "start", so that the file's own window ends at once.
 START_LINE = '@start "" "%~dp0python\\pythonw.exe" -I -X utf8 -m aid.portable --start "%~dp0data"\r\n'
 DEMO_START_LINE = '@start "" "%~dp0python\\pythonw.exe" -I -X utf8 -m aid.portable --demo "%~dp0demo"\r\n'
@@ -425,15 +426,15 @@ def test_the_folders_python_with_its_pth_reads_the_users_own_packages_unless_it_
     assert seen[("-I",)] == ["not found", "utf-8"]
 
 
-def test_the_requirements_leave_the_development_clients_library_out():
+def test_the_folder_takes_every_package_of_the_requirements_the_anthropic_library_included():
+    """The owner's decision of 26 November: the folder carries the Anthropic library, which Foundry and the stand-in need, so that
+    Foundry works from the folder too, as Azure OpenAI does without it. The build gives pip aid/requirements.txt as it is (see
+    test_build_makes_the_folder_and_a_second_build_keeps_data); no line is left out any more."""
     text = (REPO_ROOT / "aid" / "requirements.txt").read_text(encoding="utf-8")
-    kept = portable.requirements(text)
-    assert [line for line in text.splitlines() if not line.startswith("anthropic")] == kept.splitlines()
-    assert "anthropic" not in kept and "gradio==" in kept and "msal-extensions==" in kept and "pillow==" in kept
+    assert "anthropic==" in text and "gradio==" in text and "msal-extensions==" in text and "pillow==" in text
     assert text.splitlines()[0].endswith("Python 3.11 or newer.")       # the owner's PC runs 3.11, and the README says so
-    for line in ("Anthropic == 2.3.0", "anthropic>=2", "anthropic[vertex]==2.3.0 ; python_version >= '3.11'", "  anthropic  "):
-        assert portable.requirements(f"# a comment\npydantic==2.13.5\n{line}\n") == "# a comment\npydantic==2.13.5\n", line
-    assert portable.requirements("anthropic-tools==1.0\n") == "anthropic-tools==1.0\n"           # another package
+    assert not hasattr(portable, "DEVELOPMENT_CLIENT") and not hasattr(portable, "requirements")
+    assert "without the line of the development AI client's library" not in portable.__doc__
 
 
 def test_the_sha256_values_are_python_orgs_with_the_page_they_come_from():
@@ -461,11 +462,11 @@ def test_build_makes_the_folder_and_a_second_build_keeps_data(tmp_path, capsys):
     assert (python / "python311._pth").read_bytes() == portable.pth_text((3, 11)).encode("ascii")
     site = python / "Lib" / "site-packages"
     assert (site / "made_up_package" / "__init__.py").is_file() and not (site / "bin").exists()   # pip's scripts hold the builder's path
-    # pip once, with this Python, into the folder's site-packages, with the requirements without the development client's library
+    # pip once, with this Python, into the folder's site-packages, with the requirements as they are, the Anthropic library included
     [(cmd, kwargs, requirements)] = pip.calls
     assert cmd[:4] == [sys.executable, "-m", "pip", "install"]
     assert Path(cmd[cmd.index("--target") + 1]).parts[-3:] == ("python", "Lib", "site-packages") and "--no-compile" in cmd
-    assert requirements == portable.requirements((REPO_ROOT / "aid" / "requirements.txt").read_text(encoding="utf-8"))
+    assert requirements == (REPO_ROOT / "aid" / "requirements.txt").read_text(encoding="utf-8") and "\nanthropic==" in requirements
     # the package without its tests and its cache folders
     app = out / "app" / "aid"
     assert (app / "portable.py").is_file() and (app / "start.py").is_file() and (app / "settings.example.json").is_file()

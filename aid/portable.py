@@ -41,8 +41,9 @@ and prints the sha256 and the md5 of the package with the release page, for the 
 release page gives a SHA-256 from 3.13.12 and 3.14.3 on, an MD5 before). python.org gives no Windows files for the releases after
 3.11.9 and after 3.12.10 (and after 3.13.17): on a 404 the build says so and names a version that has one, of the same minor
 version, for a Python of python.org or for --python-zip. pip is called once, with the running interpreter, into
-python/Lib/site-packages, with aid/requirements.txt without the line of the development AI client's library (requirements); since
-this Python and this Windows resolve the packages, every package that Windows and this Python version need is installed. A failing
+python/Lib/site-packages, with aid/requirements.txt as it is, the Anthropic library included (since 26 November, so that Foundry
+and the stand-in for Copilot work from the folder too; Azure OpenAI needs no Anthropic library); since this Python and this
+Windows resolve the packages, every package that Windows and this Python version need is installed. A failing
 pip ends the build with pip's exit code. pip compiles nothing (a compiled file holds the folder it was compiled in), and the console
 scripts it puts beside the packages, which hold the path of the builder's Python and are not used, are removed: no file of the
 folder holds an absolute path or the value of a setting.
@@ -168,7 +169,6 @@ from pathlib import Path
 from typing import NamedTuple
 
 PACKAGE = Path(__file__).resolve().parent        # the package aid, which the build copies into the folder app
-DEVELOPMENT_CLIENT = "anthropic"                 # the library of the development AI client: the folder does without it
 SETTINGS_FILE = "settings.json"
 STOP_FILE = "STOP"                               # the stop switch of the launcher and the runner, beside the settings (aid/start.py)
 STATE_FILE = "start_state.json"                  # the launcher's state file, beside the settings while it runs (aid/start.py)
@@ -329,7 +329,8 @@ DEMO_STILL_STOPPING = "De demonstratie stopt nog. Wacht een minuut voordat u haa
 # The demonstration could not stop. The reason is in the folder demo, in logs, in the file start.log.
 DEMO_NOT_STOPPED = "De demonstratie kon niet stoppen. De reden staat in de map demo, in logs, in het bestand start.log."
 # LEESMIJ.txt, a paragraph each, in ASCII (the build writes it so): this folder is the purchasing assistant, and outside it the
-# assistant puts only a shortcut in the Startup folder and, when you sign in to Microsoft, the sign-in in your own profile; a zip
+# assistant puts only a shortcut in the Startup folder and, when you sign in to Microsoft or save a key of Azure OpenAI or Foundry,
+# the sign-in or the key in the protected store in your own profile; a zip
 # file from the internet, also of a new version, is unblocked before it is unpacked (right-click it, Properties, tick Unblock, OK),
 # or Windows can hold the assistant back, and when it was unpacked already: stop the assistant if it runs, delete what was unpacked,
 # but never a folder data, unblock it and unpack it again; start (no window stays open: a message says that it starts and closes
@@ -341,9 +342,11 @@ DEMO_NOT_STOPPED = "De demonstratie kon niet stoppen. De reden staat in de map d
 # not copy or send it); where to put the folder (not in a folder that OneDrive synchronises; after a move, start again); update
 # (delete everything but data, put everything that is in the folder of the new version in, the files to double-click too, and start
 # again; data stays; the zip of a new version holds a folder Inkoopassistent: unpack it elsewhere first and put what is in that
-# folder in, not the folder itself); remove (sign out of Microsoft on the page, no longer start at logon, stop, delete the folder).
+# folder in, not the folder itself); remove (sign out of Microsoft on the page, remove a stored key of Azure OpenAI or Foundry with
+# Sleutel verwijderen, no longer start at logon, stop, delete the folder).
 LEESMIJ = ("Deze map is de inkoopassistent. Buiten deze map zet de assistent alleen een snelkoppeling in de map Opstarten en, als u "
-           "zich aanmeldt bij Microsoft, de aanmelding in uw eigen profiel.",
+           "zich aanmeldt bij Microsoft of een sleutel van Azure OpenAI of Foundry opslaat, de aanmelding of de sleutel in de "
+           "beveiligde opslag in uw eigen profiel.",
            "Komt de assistent als zip-bestand van internet, ook een nieuwe versie, hef dan de blokkering op voordat u het uitpakt: klik "
            "met de rechtermuisknop op het zip-bestand, kies Eigenschappen, vink Blokkering opheffen aan en klik op OK. Anders kan "
            "Windows de assistent tegenhouden. Hebt u het al uitgepakt, stop dan de assistent als die draait en verwijder wat u "
@@ -369,8 +372,8 @@ LEESMIJ = ("Deze map is de inkoopassistent. Buiten deze map zet de assistent all
            "staat in deze map, ook de bestanden waarop u dubbelklikt, en start opnieuw; de map data blijft staan. Het zip-bestand van "
            "een nieuwe versie bevat een map Inkoopassistent: pak het eerst uit op een andere plek, bijvoorbeeld in Downloads, en zet "
            "wat in die map Inkoopassistent staat in deze map, niet die map zelf.",
-           "Weggooien: meld u op de pagina af bij Microsoft, dubbelklik op Inkoopassistent niet meer vanzelf starten, stop de assistent "
-           "en verwijder deze map.")
+           "Weggooien: meld u op de pagina af bij Microsoft, verwijder een opgeslagen sleutel van Azure OpenAI of Foundry met Sleutel "
+           "verwijderen, dubbelklik op Inkoopassistent niet meer vanzelf starten, stop de assistent en verwijder deze map.")
 
 
 def _say(line: str) -> None:
@@ -559,17 +562,6 @@ def start_files() -> dict[str, str]:
             DEMO_STOP_CMD: f'@{line("python.exe", "--demo-stop", DEMO)} & pause\r\n', README: "\r\n\r\n".join(LEESMIJ) + "\r\n"}
 
 
-def requirements(text: str) -> str:
-    """aid/requirements.txt without the line of the development AI client's library; every other line as it is."""
-    return "".join(line for line in text.splitlines(keepends=True) if _requirement(line) != DEVELOPMENT_CLIENT)
-
-
-def _requirement(line: str) -> str | None:
-    """The package a requirement line names, in the normal form of its name; None for a comment or an empty line."""
-    found = re.match(r"\s*([A-Za-z0-9][A-Za-z0-9._-]*)", line)
-    return re.sub(r"[-_.]+", "-", found.group(1)).lower() if found is not None else None
-
-
 # --- the build ---
 
 def _download(url: str) -> bytes:
@@ -733,12 +725,10 @@ def _made(staging: Path, package: bytes, name: str, version: tuple, run) -> int:
     (python / f"{tag}._pth").write_bytes(pth_text(version[:2]).encode("ascii"))
     site = python / "Lib" / "site-packages"
     site.mkdir(parents=True, exist_ok=True)
-    wanted = staging / "requirements.txt"
-    wanted.write_text(requirements((PACKAGE / "requirements.txt").read_text(encoding="utf-8")), encoding="utf-8")
     _say("Installing the packages with pip into python/Lib/site-packages; this takes a few minutes")
     try:
         done = run([sys.executable, "-m", "pip", "install", "--target", str(site), "--no-compile", "--disable-pip-version-check",
-                    "-r", str(wanted)])
+                    "-r", str(PACKAGE / "requirements.txt")])
     except (OSError, subprocess.SubprocessError) as exc:
         _say(f"pip could not be run ({type(exc).__name__}: {exc}): nothing was built")
         return 1

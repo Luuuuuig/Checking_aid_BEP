@@ -3662,6 +3662,102 @@ def test_the_strip_counts_the_cases_by_state_and_names_the_problems(tmp_path, ma
     assert table_rows(chips["review-all-table"]) == table_rows(shown["review-all-table"])
 
 
+def waiting_page(tmp_path, madeup_out, reader: str, **values):
+    """A page whose settings read with `reader`, the runner's last pass a minute ago, and two cases without a result in the intake's
+    file, MU03's (250103, 09:00) and MU05's (250105, 09:01). Returns (the page, the Deps, a function that makes the cases named wait
+    for the AI service as the runner notes it, among the cases it failed, and the texts of the page then by `language`)."""
+    from aid.review import intake
+    path, d, page, _ = sending_page(tmp_path, madeup_out, reader=reader, **values)
+    root = d.settings.cases_root
+    cases = [open_case(root, "confirmation", [madeup_out / f"{case}_conf.pdf"], number, NOW + timedelta(minutes=minute))
+             for minute, (case, number) in enumerate((("MU03", "250103"), ("MU05", "250105")))]
+    intake.append(root, [(f"MU0{3 + 2 * n}_conf.pdf", "case", case.case_id) for n, case in enumerate(cases)], LATER)
+    [given] = [f for f in page.fns.values() if getattr(f.fn, "__name__", "") == "file_given"]
+
+    def texts(waiting: int, language: str) -> dict:
+        digest_state(d, 1, copilot_cases={case.case_id: {"refused": 0, "failed": 0, "read_after": False} for case in cases[:waiting]})
+        strip = called(page, "strip_ticked", language)
+        _, table, _, _ = handler_of(page, "files_opened").fn(language, dict(given.inputs[-1].value))
+        lines, _, _ = next(f for f in page.fns.values() if getattr(f.fn, "__name__", "") == "assistant_shown").fn(language)
+        return {"strip": strip["review-strip"], "action": strip["review-strip-action"], "fold": table_rows(strip["review-all-table"])[1:],
+                "files": {row[1]: row[2] for row in table["data"]}, "lines": lines.split("\n\n"),
+                "section": handler_of(page, "strip_acted").fn(language)[1], "reader": next(f for f in page.fns.values() if getattr(f.fn, "__name__", "") == "reader_shown").fn(language)}
+    return page, d, texts
+
+
+@pytest.mark.parametrize("value", ["azure_openai", "foundry"])
+def test_cases_that_wait_while_a_service_reads_name_the_service_and_one_line_says_what_to_check(tmp_path, madeup_out, value):
+    """Page-3 of the review of the settings tab. A failure of Azure OpenAI or Foundry while it reads is a failure of the AI service as
+    a whole (a CopilotError that is not of the chat), which the runner notes as it notes Copilot's: the case waits, and the classes of
+    the failures stay as they are. While the settings read with that service, every text of a case that waits names the service by
+    its label on the settings tab in place of Copilot: its chip on the strip, its state and what the buyer does in the fold, its line
+    on the tab "Bestanden" and the line of the orders in "Stand van de assistent". The strip and that section say in one problem line,
+    by the number of the documents that wait, that reading does not work now and what to check, in both languages; the line of what
+    reads says it too, and the strip's button opens "Postvak en AI", where the service is chosen."""
+    from aid.readers import exploration
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    page, d, texts = waiting_page(tmp_path, madeup_out, value, test_mode=True)
+    opened = {"nl": "Zaak geopend voor inkooporder {po}. Nu: {now}.", "en": "Case opened for purchase order {po}. Now: {now}."}
+    for language in ("nl", "en"):
+        words = STRINGS[language]
+        service = words[f"settings_reader:{value}"]
+        calm = texts(0, language)
+        assert calm["action"] == {"__type__": "update", "visible": False} and not [line for line in calm["lines"] if line.startswith("**")]
+        assert words[f"reader_state:{value}"] in calm["lines"] and service not in "".join(calm["fold"][0] + calm["fold"][1])
+        assert calm["reader"] == words[f"reader_state:{value}"]
+        for n in (1, 2):
+            shown = texts(n, language)
+            problem = words[f"problem:service_wait_{'one' if n == 1 else 'many'}"].format(n=n, service=service)
+            assert words["chip:service_wait"].format(n=n, service=service) in shown["strip"] and problem in shown["strip"]
+            assert "Copilot" not in shown["strip"] and words[f"strip_reader:{value}"] in shown["strip"]
+            assert shown["action"] == {"__type__": "update", "value": words["act:connections"], "visible": True}
+            assert shown["section"] == {"__type__": "update", "selected": "koppelingen"}
+            waits = [words["state:service_wait"].format(service=service), words["todo:service_wait"].format(service=service)]
+            reading = waits if n == 2 else [words["state:reading"], words["todo:reading"]]
+            assert [row[1:] for row in shown["fold"]] == [[f"{words['po_document']} 250105", *reading], [f"{words['po_document']} 250103", *waits]]
+            now = words["files_now:service_wait"].format(service=service)
+            assert shown["files"]["MU03_conf.pdf"] == opened[language].format(po="250103", now=now)
+            assert shown["files"]["MU05_conf.pdf"] == opened[language].format(po="250105", now=now if n == 2 else words["files_now:reading"])
+            orders = "250103, 250105" if n == 2 else "250103"
+            assert words["assistant_waiting_service"].format(service=service, orders=orders) in shown["lines"]
+            assert [line for line in shown["lines"] if line.startswith("**")] == [f"**{problem}**"]         # one problem line
+            assert shown["reader"] == problem                       # the line of what reads now, under "Postvak en AI", says it too
+            assert not any("Copilot" in line for line in shown["lines"])
+    assert nl["problem:service_wait_many"] == ("{n} documenten wachten op {service}: het lezen lukt nu niet. Controleer de sleutel en de "
+                                               "velden bij {service}, of kies de dienst opnieuw; runner.log zegt waarom.")
+    assert en["problem:service_wait_many"] == ("{n} documents wait for {service}: reading does not work now. Check the key and the fields "
+                                               "of {service}, or choose the service again; runner.log says why.")
+    assert (nl["chip:service_wait"], nl["state:service_wait"], nl["files_now:service_wait"]) == (
+        "Wacht op {service}: {n}", "Wacht op {service}", "wacht op {service}")
+    lines = aid_status.case_lines(d.settings.cases_root, NOW)
+    state = aid_status.assistant(None, d.settings.cases_root, d.settings, NOW)
+    assert aid_status.problems(state, lines) == [aid_status.Problem("service_wait", n=2)]
+    assert aid_status.SERVICE_READERS == tuple(exploration.SERVICES) and "service_wait" in aid_status.PROBLEMS
+
+
+@pytest.mark.parametrize("reader", ["llm", "parser"])
+def test_cases_that_wait_while_copilot_or_the_parser_reads_keep_copilots_texts(tmp_path, madeup_out, reader):
+    """Page-3, the other side: while Copilot reads ("llm", which the stand-in for Copilot of AID_STAND_IN reads under too) or the
+    parser, the texts of a case that waits for the AI service are Copilot's as they were, byte for byte, and no problem line of a
+    service is shown."""
+    nl, en = STRINGS["nl"], STRINGS["en"]
+    page, d, texts = waiting_page(tmp_path, madeup_out, reader)
+    shown = texts(1, "nl")
+    assert nl["chip:copilot_wait"].format(n=1) == "Wacht op Copilot: 1" and "Wacht op Copilot: 1" in shown["strip"]
+    assert shown["action"] == {"__type__": "update", "visible": False} and "wachten op" not in shown["strip"]
+    assert "verzonnen documenten" not in shown["strip"] + "".join(shown["lines"])
+    assert shown["fold"][1][2:] == ["Wacht op Copilot", "Niets te doen: de assistent probeert het bij de volgende ronde opnieuw."]
+    assert shown["files"]["MU03_conf.pdf"] == "Zaak geopend voor inkooporder 250103. Nu: wacht op Copilot."
+    assert "Wachten op Copilot: inkooporder 250103." in shown["lines"] and not [line for line in shown["lines"] if line.startswith("**")]
+    shown = texts(2, "en")
+    assert "Waiting for Copilot: 2" in shown["strip"] and shown["fold"][0][2:] == ["Waits for Copilot", en["todo:copilot_wait"]]
+    assert en["todo:copilot_wait"] == "Nothing to do: the assistant tries again at its next pass."
+    assert shown["files"]["MU05_conf.pdf"] == "Case opened for purchase order 250105. Now: waits for Copilot."
+    assert "Waiting for Copilot: purchase order 250103, 250105." in shown["lines"]
+    lines = aid_status.case_lines(d.settings.cases_root, NOW)
+    assert aid_status.problems(aid_status.assistant(None, d.settings.cases_root, d.settings, NOW), lines) == []
+
+
 def test_the_timer_refreshes_beoordelen_without_touching_the_chosen_case(tmp_path, madeup_out):
     """Finding 5. One timer at the top level of the page reads the strip and the case list again every 30 seconds, as the page's load,
     "Lijst vernieuwen" and the language switch do, through two handlers of its own, which reach no part of the view of the case and

@@ -177,12 +177,12 @@ def test_the_client_counts_the_tokens_of_the_request_it_would_send(monkeypatch):
     assert [block["type"] for block in sent["count"]["messages"][0]["content"]] == ["document", "text"] and len(made) == 1     # one SDK client
 
 
-# --- the aid from a folder, whose Python has no development client's library (Task 30) ---
+# --- a Python without the development client's library (Task 30; the folder carries it since 26 November) ---
 
 def test_the_package_imports_without_the_development_clients_library(monkeypatch):
-    """The folder's Python is given the aid's packages without the development AI client's library (aid/portable.py). The parts
-    and the launcher import all the same, and only a use of the development client fails, with ReaderError. In a fresh
-    interpreter, where an import of the library fails as it does when the library is not installed."""
+    """A Python may hold the aid's packages without the development AI client's library (the folder of aid/portable.py carries it
+    since 26 November). The parts and the launcher import all the same, and only a use of the development client fails, with
+    ReaderError. In a fresh interpreter, where an import of the library fails as it does when the library is not installed."""
     script = ("import sys\n"
               "sys.modules['anthropic'] = None\n"
               "import aid.runner, aid.review, aid.review.__main__, aid.capture_server, aid.start, aid.demo\n"

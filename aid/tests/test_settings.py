@@ -320,3 +320,34 @@ def test_the_example_holds_the_folder_for_orders_empty_after_the_folder():
     assert (values["order_folder"], values["order_folder_name"]) == (None, None) and names[-1] == "test_mode"
     example = load_settings(Path("aid/settings.example.json"))
     assert (example.order_folder, example.order_folder_name) == (None, None)
+
+
+# --- the readers of the two exploration services, chosen on the settings tab ---
+
+SERVICE_SETTINGS = ("azure_openai_endpoint", "azure_openai_deployment", "foundry_resource", "foundry_base_url", "foundry_deployment")
+
+
+def test_the_reader_takes_the_two_services_and_their_five_settings(tmp_path):
+    """reader takes "azure_openai" and "foundry" beside "llm" and "parser", and the five settings of the two services (their addresses
+    and deployments, no key) are texts, null by default and in the example, where they stand right after effort; an empty text, or
+    spaces only, is null. A key is no setting: a settings file that holds one is refused by its name, never by its value."""
+    example = json.loads(Path("aid/settings.example.json").read_text(encoding="utf-8"))
+    names = list(example)
+    assert names[names.index("effort"):][:6] == ["effort", *SERVICE_SETTINGS] and names[-1] == "test_mode"
+    assert all(example[name] is None for name in SERVICE_SETTINGS)
+    assert all(Settings.model_fields[name].default is None for name in SERVICE_SETTINGS)
+    path = tmp_path / "settings.json"
+    given = {"azure_openai_endpoint": "https://made-up.openai.azure.com", "azure_openai_deployment": "made-up-deployment",
+             "foundry_resource": "made-up-resource", "foundry_base_url": " ", "foundry_deployment": ""}
+    for reader in ("llm", "parser", "azure_openai", "foundry"):
+        path.write_text(json.dumps(example | given | {"reader": reader}), encoding="utf-8")
+        settings = load_settings(path)
+        assert settings.reader == reader
+    assert [getattr(settings, name) for name in SERVICE_SETTINGS] == [
+        "https://made-up.openai.azure.com", "made-up-deployment", "made-up-resource", None, None]
+    for refused, field in (({"reader": "azure"}, "reader"), ({"azure_openai_api_key": "made-up-key-0001"}, "azure_openai_api_key"),
+                           ({"foundry_api_key": "made-up-key-0001"}, "foundry_api_key")):
+        path.write_text(json.dumps(example | refused), encoding="utf-8")
+        with pytest.raises(SettingsInvalid) as raised:
+            read_settings(path)
+        assert raised.value.fields == [field] and "made-up-key-0001" not in str(raised.value)

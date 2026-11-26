@@ -513,7 +513,8 @@ nothing and says so, as in part 2.
 The block ends with the part "Proefdraaien met een inkooporder uit Exact" (_tryout_section; aid/tryout.py makes the try-out): the
 switch "Proefstand: de assistent werkt met het test-Exact", which says under its label that switching the test mode off lifts the
 guard of the test mode on the mail ("tryout_switch_help"; OwnOnly of aid/messaging), and writes the setting test_mode and nothing
-else as soon as the buyer ticks or clears it ("Opgeslagen.", and when it turns the test mode off while the list "In Exact
+else as soon as the buyer ticks or clears it, but for the reader: cleared while Azure OpenAI or Foundry reads, it writes "parser" as
+the reader too, as those two read in the test mode only ("Opgeslagen.", and when it turns the test mode off while the list "In Exact
 invoeren" holds changes that only try-out documents asked, how many, to be dropped and not entered in the real Exact) and, as the
 block's form, writes nothing when the file no longer holds the value it was filled with (another browser tab, or the file itself,
 changed it), filling itself again from the file and saying so in a sentence of its own; and, only while test_mode is true and no
@@ -590,20 +591,46 @@ On a page opened on a public share link the tab says only "Niet beschikbaar op e
 included, and on a page built without its settings file (the Colab notebook) it offers nothing either.
 
 The AI section of the settings tab, step 5 of "Postvak en AI", is first the line of what reads the documents now (reader_shown): the
-parser or Copilot, and Copilot failing as a whole since when, with its cause by a status code and the cases that wait for it, or
-refusing documents, from the runner's digest state and the case folders (aid/review/status.py), read when the page loads, when the
-section is selected, at the language switch and after each choice. Then "Documenten lezen met", Copilot or "zonder AI (parser)", writes
-the setting reader ("llm" or "parser") into the settings file as soon as it is chosen, as "Postvak opslaan" writes the settings of the mailbox,
-and answers on settings-reader-note right under it. Copilot is written only once the tenant and the client are saved, and only once
-Copilot answered the test message of "Copilot testen", sent with them (finding 6 of the owner's test): a refusal writes nothing,
-keeps the reader of the file and says why by the status code with a hint (400: most often no licence or a personal account; 401: sign
-in for Copilot first; 403: a permission or a consent missing), never by Copilot's own words. It is the one choice of the page that
-sends something to Microsoft, at the buyer's own press, and never when the page loads or its language changes. Then Microsoft 365
-Copilot (aid/readers/copilot_client.py), under a short text of what Copilot needs: "Aanmelden voor Copilot" signs in in the browser as
-"Aanmelden bij Microsoft" does, saying first that it waits, with the permissions of the mailbox in the field (mail_scopes) and of
-Copilot together, and "Copilot testen" sends Copilot one message, "Answer with the word OK only.", and shows "Copilot antwoordt" with
-the first 20 characters of the answer, or the error of the client by its text, which names a status and Graph's error code ("Copilot
-refused: 403 Forbidden") and never a token or a message of Microsoft; the two answer on the line under them.
+parser, Copilot, or one of the two exploration services for the made-up documents, and Copilot failing as a whole since when, with
+its cause by a status code and the cases that wait for it, or refusing documents, from the runner's digest state and the case folders
+(aid/review/status.py), read when the page loads, when the section is selected, at the language switch and after each choice. Then
+"Documenten lezen met", in this order Copilot, "Azure OpenAI (verzonnen documenten)", "Foundry (verzonnen documenten)" or "zonder AI
+(parser)", writes the setting reader ("llm", "azure_openai", "foundry" or "parser") into the settings file as soon as it is chosen, as
+"Postvak opslaan" writes the settings of the mailbox, and answers on settings-reader-note right under it. Copilot is written only once
+the tenant and the client are saved, and only once Copilot answered the test message of "Copilot testen", sent with them (finding 6 of
+the owner's test): a refusal writes nothing, keeps the reader of the file and says why by the status code with a hint (400: most often
+no licence or a personal account; 401: sign in for Copilot first; 403: a permission or a consent missing), never by Copilot's own
+words. It is the one choice of the page that sends something to Microsoft, at the buyer's own press, and never when the page loads or
+its language changes. Azure OpenAI and Foundry (the owner's decision of 26 November) are written likewise only once the service answered
+the same test message, sent through the reader the runner builds of the saved settings and of the key in the secrets store of this PC
+(settings_client of aid/readers/exploration.py, behind its guard, which sends no document but the made-up files of the package, and
+the test no document at all): a
+refusal writes nothing and says why by the field of the tab, in the page's language (the test mode by its switch, a field or the key
+missing, an address in another form, both Foundry addresses, and Foundry's address beside the other one in the environment of the
+window the aid was started from, by that variable; a mailbox in the settings is no refusal), a store of the keys that the PC refuses with
+its folders as the sign-in says it, and a service that did not answer by its status code with a hint by the field, never by the
+service's own words or a value. Then Microsoft 365 Copilot (aid/readers/copilot_client.py), under a short text of what Copilot needs:
+"Aanmelden voor Copilot" signs in in the browser as "Aanmelden bij Microsoft" does, saying first that it waits, with the permissions of
+the mailbox in the field (mail_scopes) and of Copilot together, and "Copilot testen" sends Copilot one message, "Answer with the word OK
+only.", and shows "Copilot antwoordt" with the first 20 characters of the answer, or the error of the client by its text, which names
+a status and Graph's error code ("Copilot refused: 403 Forbidden") and never a token or a message of Microsoft; the two answer on the
+line under them. Then one block for each exploration service (_service_block), under its name and one sentence of what it is for: its
+fields (for Azure OpenAI the endpoint of the resource and the deployment; for Foundry the name of the resource, or its full address in
+a second field, never both, and the deployment), filled from the settings file when the page loads; a box for its key, which shows no
+key, is never filled and asks the browser not to remember it (autocomplete "new-password", which the page's load script sets,
+PAGE_JS of aid/review/look.py, as the page library does not); the line that says only whether the secrets store of this PC (the store of the Microsoft sign-in in
+default_secrets_dir(), aid/connections/secrets.py) holds the key, read without making the store, which a save of a key alone
+makes (_Look); and two buttons that answer on the line under them. Its named save,
+"Azure OpenAI opslaan" or "Foundry opslaan" (no save of the tab reads "Opslaan" alone, finding 7 of the owner's test), refuses an
+address in another form, both Foundry addresses, or a key with a space or a character that is no printable ASCII, by the field;
+while the settings file names that service as the reader, it first sends the test message through the reader of the new fields
+and the key typed, and keeps and writes nothing unless the service answered (the review's keys-1); then it puts a key typed into
+the store, never into the settings file, writes the fields through the tab's own save, puts the key back as it was when that write
+fails, gives the settings file a new modification time when only the key of the service that reads changed, so that the runner
+builds its reader again with it, and empties the box, whatever it gives; with the box empty the key that is stored stays.
+"Sleutel verwijderen" removes the key from the store and, while the settings file names that service as the reader, writes the parser
+in its place, since the runner keeps the key it read until it builds its reader again and a runner started without it is refused. A
+key is never in the settings file, in what the page gives back, in its configuration or in its log.
 
 The part ends with "Code voor de uitbreiding in de browser": the code the browser extension sends to the capture server
 (capture_token of the settings file), one line that cannot be edited, with a button to copy it, filled from the settings file each
@@ -634,6 +661,7 @@ import os
 import re
 import tempfile
 import threading
+import time
 import warnings
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
@@ -646,7 +674,7 @@ from msal.oauth2cli.oauth2 import BrowserInteractionTimeoutError
 
 from aid.case import TEMPORARY, WORK, Case, load_case, names_a_folder, sha256_file, work_copy_folder
 from aid.connections.microsoft import COPILOT_SCOPES, MicrosoftAccount, SignInFailed, SignInNeeded, mail_scopes
-from aid.connections.secrets import LazySecretStore, SecretStore, StoreRefused, default_secrets_dir, work_tree_refusal
+from aid.connections.secrets import SECRETS, LazySecretStore, SecretStore, StoreRefused, default_secrets_dir, work_tree_refusal
 from aid.execution import exact_route
 from aid.execution.by_hand import (ARTICLE_KIND, FIELDS, FOLDER, KINDS, Change, ListUnread, changes, mark, open_changes, place_of,
                                    reopen)
@@ -662,7 +690,7 @@ from aid.po_store import PoStore
 from aid.pricelist import (NameRefused, NoArticle, also_held, current_prices, is_supplier_name, keep_columns, kept_columns, list_of,
                            others_asking, remove_stored, store_current, stored_prices, supplier_named, with_others)
 from aid.readers.copilot_client import UNREACHABLE, CopilotClient, CopilotError
-from aid.readers import stand_in
+from aid.readers import exploration, stand_in
 from aid.readers.llm_client import ReaderError
 from aid.readers.po_export import ExportRefused
 from aid.review import hand_list, intake, pricelist_page
@@ -705,13 +733,21 @@ _WHOLE_TITLES = "#export-head th, #export-head th *, #export-lines th, #export-l
 # middle of the window, with "Op de lijst In Exact invoeren zetten" right under it. It runs in the page alone and names no address.
 _COUNT_INTO_VIEW = '() => { requestAnimationFrame(() => document.getElementById("pricelist-note")?.scrollIntoView({block: "center"})); }'
 SEND_VIA = get_args(Settings.model_fields["send_via"].annotation)     # the values of send_via, in the order the tab offers them
-READERS = get_args(Settings.model_fields["reader"].annotation)        # the values of reader: "llm" (Copilot) and "parser"
+# the values of reader: "llm" (Copilot), "parser" and the two exploration services, "azure_openai" and "foundry"
+READERS = get_args(Settings.model_fields["reader"].annotation)
 COPILOT_TEST = "Answer with the word OK only."                         # the message of "Copilot testen"
+# The fields of the block of each exploration service in step 5 of "Postvak en AI", in their order: its settings; its key is no setting.
+SERVICE_FIELDS = {"azure_openai": ("azure_openai_endpoint", "azure_openai_deployment"),
+                  "foundry": ("foundry_resource", "foundry_base_url", "foundry_deployment")}
+# The rows of those fields in each block, in their order: Foundry's full address, whose label and example are long, on a row of its
+# own, so that at 1366 by 768 neither breaks inside a word (the review's page-9).
+FIELD_ROWS = {"azure_openai": (("azure_openai_endpoint", "azure_openai_deployment"),),
+              "foundry": (("foundry_resource",), ("foundry_base_url",), ("foundry_deployment",))}
 MAIL_STEPS = ("ids", "sign_in", "mailbox", "send", "read")             # the five numbered steps of "Postvak en AI" ("mail_step:<step>")
 _STATUS_CODE = re.compile(r"^[A-Za-z]+ refused: ([1-5][0-9]{2})\b")
 _LOG = logging.getLogger(__name__)
 # The label on the tab of each setting the tab writes, by which a refused field is named, never by its value: the eight of the mailbox,
-# the reader, the twelve of the buyer's form, the four supplier settings by the heading of the suppliers, the three fields of the
+# the reader and the five of its two exploration services, the twelve of the buyer's form, the four supplier settings by the heading of the suppliers, the three fields of the
 # supplier form (the keys of with_supplier's problems), the layout of the purchase order and its senders of the block "Koppeling met
 # Exact", the three settings of the export of its part 2, the two of the export of articles of its part 3, and the test mode by its
 # switch at the end of that block.
@@ -724,7 +760,9 @@ FIELD_LABELS = {"ms_tenant_id": "settings_tenant", "ms_client_id": "settings_cli
                 "supplier_lead_time": "settings_supplier_lead_time"} | {"po_layout": "exact_layout", "po_senders": "exact_field:senders"} | {
                 "export_columns": "exact_export_columns", "export_decimal_comma": "exact_export_field:numbers",
                 "export_fill_down": "exact_export_field:fill_down", "test_mode": "tryout_switch"} | {
-                "article_columns": "exact_articles_columns", "article_decimal_comma": "exact_export_field:numbers"}
+                "article_columns": "exact_articles_columns", "article_decimal_comma": "exact_export_field:numbers"} | {
+                field: f"settings_ai_field:{field}" for field in ("azure_openai_endpoint", "azure_openai_deployment", "foundry_resource",
+                                                               "foundry_base_url", "foundry_deployment")}
 NEW_SUPPLIER = "(new supplier)"                  # the value of "Leverancier toevoegen" in the dropdown of suppliers
 # The supplier form as "Leverancier toevoegen" fills it: what a new supplier's values are compared with.
 NEW_FORM = {"name": NEW_SUPPLIER, "email": "", "lead_time": "", "review": False, "off": False}
@@ -754,7 +792,7 @@ _CHIPS = (("review", "attention"), ("failed", "problem"), ("look", "attention"),
 _TONE = {"review": "attention", "waiting_po": "waiting", "failed": "problem", "handled": "done", "copilot_wait": "waiting",
          "reading": "waiting", "waiting": "waiting", "closed_itself": "done", "closed_by_you": "done", "look": "attention", "looked": "done"}
 _PLACES = {"stopped": "assistant", "given_up": "assistant", "no_pass_ever": "assistant", "no_pass": "assistant", "store": "connections",
-           "lapsed": "connections", "copilot_down": "connections", "copilot_refused": "connections"}
+           "lapsed": "connections", "copilot_down": "connections", "copilot_refused": "connections", "service_wait": "connections"}
 _SECTIONS = {"assistant": "assistent", "connections": "koppelingen"}
 _CLOSED = ("closed_itself", "closed_by_you")
 TICK_SECONDS = 30                                # how often the page reads the strip, the count and the case list again
@@ -952,18 +990,20 @@ def review_label(lines: list[aid_status.CaseLine], language: str, items: Sequenc
 
 
 def _strip_html(lines: list[aid_status.CaseLine], aid: aid_status.Assistant | None, problems: list[aid_status.Problem], now: datetime,
-                language: str, items: Sequence[aid_status.LookItem] = ()) -> str:
+                language: str, items: Sequence[aid_status.LookItem] = (), service: str | None = None) -> str:
     """The strip of the tab "Beoordelen" (see the module docstring) as HTML: a chip for each state it counts, "Ter beoordeling" always
     and any other only while its count is above 0, the documents the intake left to the buyer (`items`) that wait for him among them
-    ("Zelf bekijken"); and when `aid` is given (the assistant as aid/review/status.py reads it, on the PC's own page with its settings
-    file), a chip for each problem, the most urgent first, and a last line with the runner's last pass, the mailbox, the reader and
-    the time of `now`. Every word goes through html.escape."""
+    ("Zelf bekijken"), the cases that wait for the AI service named by `service` while an exploration service reads (its label,
+    waits_for of aid/review/status.py) and else by Copilot; and when `aid` is given (the assistant as aid/review/status.py reads it, on
+    the PC's own page with its settings file), a chip for each problem, the most urgent first, and a last line with the runner's last
+    pass, the mailbox, the reader and the time of `now`. Every word goes through html.escape."""
     strings = STRINGS[language]
     counted = Counter(line.state for line in lines) + Counter(item.state for item in items)
-    parts = [_chips((strings[f"chip:{state}"].format(n=counted[state]), tone) for state, tone in _CHIPS if counted[state] or state == "review")]
+    parts = [_chips((_waits_text("chip", state, service, strings, n=counted[state]), tone) for state, tone in _CHIPS
+                    if counted[state] or state == "review")]
     if aid is not None:
         if problems:
-            parts.append(_chips((_problem_text(problem, strings), "problem") for problem in problems))
+            parts.append(_chips((_problem_text(problem, strings, service), "problem") for problem in problems))
         parts.append(f'<div class="meta">{escape(" · ".join(_strip_meta(aid, now, strings)))}</div>')
     return f'<div class="strip">{"".join(parts)}</div>'
 
@@ -973,15 +1013,25 @@ def _chips(chips) -> str:
     return '<div class="chips">' + "".join(f'<span class="chip {tone}">{escape(words)}</span>' for words, tone in chips) + "</div>"
 
 
-def _problem_text(problem: aid_status.Problem, strings: dict[str, str]) -> str:
+def _problem_text(problem: aid_status.Problem, strings: dict[str, str], service: str | None = None) -> str:
     """A problem of the assistant in words: since when and for how many cases, as aid/review/status.py tells it, never an error's
-    text."""
+    text; the documents that wait for the exploration service that reads by `service`, its label (waits_for)."""
     if problem.kind == "no_pass":
         return strings["problem:no_pass"].format(time=_moment(problem.since))
-    if problem.kind in ("copilot_down", "copilot_refused"):
+    if problem.kind in ("copilot_down", "copilot_refused", "service_wait"):
         since = _moment(problem.since) if problem.since is not None else ""
-        return strings[f"problem:{problem.kind}_{'one' if problem.n == 1 else 'many'}"].format(since=since, n=problem.n)
+        return strings[f"problem:{problem.kind}_{'one' if problem.n == 1 else 'many'}"].format(since=since, n=problem.n, service=service)
     return strings[f"problem:{problem.kind}"]
+
+
+def _waits_text(key: str, state: str, service: str | None, strings: dict[str, str], **values) -> str:
+    """The words of a state under `key` ("chip", "state" or "todo"), with `values`: for a case that waits for the AI service
+    ("copilot_wait") while an exploration service reads, those that name the service by `service`, its label (waits_for of
+    aid/review/status.py), in place of Copilot ("<key>:service_wait"); else those of the state, as they were."""
+    if state == "copilot_wait" and service is not None:
+        return strings[f"{key}:service_wait"].format(service=service, **values)
+    text = strings[f"{key}:{state}"]
+    return text.format(**values) if values else text
 
 
 def _strip_meta(aid: aid_status.Assistant, now: datetime, strings: dict[str, str]) -> list[str]:
@@ -998,18 +1048,20 @@ def _strip_meta(aid: aid_status.Assistant, now: datetime, strings: dict[str, str
     return [*parts, strings[f"strip_reader:{aid.reader}"], strings["strip_updated"].format(time=_clock(now, now))]
 
 
-def _all_html(lines: list[aid_status.CaseLine], asking: set[str], language: str, items: Sequence[aid_status.LookItem] = ()) -> str:
+def _all_html(lines: list[aid_status.CaseLine], asking: set[str], language: str, items: Sequence[aid_status.LookItem] = (),
+              service: str | None = None) -> str:
     """The table of the fold under the strip (see the module docstring): for each case of `lines` and each document the intake left to
     the buyer (`items`), the time it came in, its order or "Document <its file>", its state as a chip and what the buyer does, which
-    for a closed case is to enter its changes while they stand on the list In Exact invoeren (`asking` holds those cases). Those that
-    wait for the buyer come first, then the others, each newest first, the cases in the order of `lines` where two times are the same;
-    one sentence when there is none. Every name goes through html.escape."""
+    for a closed case is to enter its changes while they stand on the list In Exact invoeren (`asking` holds those cases); a case that
+    waits for the AI service while an exploration service reads names the service, `service` (_waits_text). Those that wait for the
+    buyer come first, then the others, each newest first, the cases in the order of `lines` where two times are the same; one sentence
+    when there is none. Every name goes through html.escape."""
     strings = STRINGS[language]
     if not lines and not items:
         return f'<p class="empty">{escape(strings["review_all_none"])}</p>'
     head = "".join(f"<th>{escape(strings[f'all_column:{column}'])}</th>" for column in ("time", "case", "state", "todo"))
-    rows = [(line.state in aid_status.NEEDS, line.opened_at, _all_row(line.opened_at, _order(line, strings), line.state, _todo(line, asking), language))
-            for line in lines]
+    rows = [(line.state in aid_status.NEEDS, line.opened_at,
+             _all_row(line.opened_at, _order(line, strings), line.state, _todo(line, asking), language, service)) for line in lines]
     rows += [(item.state == "look", item.time, _all_row(item.time, strings["item_name"].format(file=item.file), item.state,
                                                         "look" if item.state == "look" else "nothing", language)) for item in items]
     rows.sort(key=lambda row: row[1], reverse=True)          # stable: the order of `lines` stays where two times are the same
@@ -1017,11 +1069,14 @@ def _all_html(lines: list[aid_status.CaseLine], asking: set[str], language: str,
     return f"<table><thead><tr>{head}</tr></thead><tbody>{''.join(row for _, _, row in rows)}</tbody></table>"
 
 
-def _all_row(moment: datetime, name: str, state: str, todo: str, language: str) -> str:
-    """A row of the fold's table: the time, the name of the case or document, its state as a chip and what the buyer does ("todo:")."""
+def _all_row(moment: datetime, name: str, state: str, todo: str, language: str, service: str | None = None) -> str:
+    """A row of the fold's table: the time, the name of the case or document, its state as a chip and what the buyer does ("todo:"),
+    both naming the exploration service that reads, `service`, for a case that waits for it (_waits_text)."""
+    strings = STRINGS[language]
+    shown = _waits_text("state", state, service, strings) if state == "copilot_wait" else aid_status.state_text(state, language)
     return (f"<tr><td>{_moment(moment)}</td><td>{escape(name)}</td>"
-            f'<td><span class="chip {_TONE[state]}">{escape(aid_status.state_text(state, language))}</span></td>'
-            f"<td>{escape(STRINGS[language][f'todo:{todo}'])}</td></tr>")
+            f'<td><span class="chip {_TONE[state]}">{escape(shown)}</span></td>'
+            f"<td>{escape(_waits_text('todo', todo, service, strings))}</td></tr>")
 
 
 def _order(line: aid_status.CaseLine, strings: dict[str, str]) -> str:
@@ -1699,8 +1754,10 @@ def _page(gr, deps: Deps, tab: _Tab):
         lines, items = aid_status.case_lines(cases_root, now), aid_status.review_items(cases_root, now)
         aid = aid_status.assistant(tab.file, cases_root, now_deps.settings, now) if acting else None
         problems = aid_status.problems(aid, lines) if aid is not None else []
-        return _Strip(_strip_html(lines, aid, problems, now, language, items), strings[f"act:{_PLACES[problems[0].kind]}"] if problems else None,
-                      strings["review_all"].format(n=len(lines) + len(items)), _all_html(lines, asking(lines), language, items))
+        service = aid_status.waits_for(now_deps.settings.reader, strings)          # the exploration service that reads, or None
+        return _Strip(_strip_html(lines, aid, problems, now, language, items, service),
+                      strings[f"act:{_PLACES[problems[0].kind]}"] if problems else None,
+                      strings["review_all"].format(n=len(lines) + len(items)), _all_html(lines, asking(lines), language, items, service))
 
     def tables(lists: dict, language: str) -> list[dict]:
         headers = [STRINGS[language][column] for column in _COLUMNS]
@@ -3338,7 +3395,7 @@ def _files_tab(gr, app, language, files_tab, live: _Live, tab: _Tab, cases_root:
 
     def table(language_now: str) -> dict:
         """The table as the intake file is now: the last lines, the newest first (intake.rows)."""
-        return {"headers": headers(language_now), "data": intake.rows(cases_root, language_now)}
+        return {"headers": headers(language_now), "data": intake.rows(cases_root, language_now, reader=live.settings().reader)}
 
     def intro(language_now: str) -> str:
         """The intro, which names the export from Exact only while its columns are set in the settings as they are now."""
@@ -3866,10 +3923,11 @@ def _settings_tab(gr, app, language, settings_tab, live: _Live, tab: _Tab, accou
                             outputs=[intro, tenant, client, sign_in_button, code_button, sign_out_button, browser_note, account_shown, mailbox,
                                      folder, folders_button, test_button, send_via, save_button, trigger_title, trigger_shown, order_folder,
                                      note])
-            reader_note = _ai_section(gr, app, language, tab, tenant, client, mailbox, account_shown, begin, read, write, connections.select,
-                                      local_now)
+            ai = _ai_section(gr, app, language, tab, tenant, client, mailbox, account_shown, begin, read, write, connections.select,
+                             local_now)
+            reader_note = ai.note
             _extension_code(gr, app, language, current)
-        _exact_section(gr, app, language, settings_tab, read, write, lambda: live.now().clock())
+        _exact_section(gr, app, language, settings_tab, read, write, lambda: live.now().clock(), ai)
         assistant_section, assistant_parts, assistant_texts, read_after = _assistant_section(gr, language, tab, read, local_now)
     language.change(sections_relabelled, inputs=language,
                     outputs=[*steps, sign_note, folder_note, reader_note, rules_section, suppliers_section, assistant_section, *assistant_parts],
@@ -4178,7 +4236,7 @@ _EXACT_FIELDS = ("po_label", "date_label", "supplier_label", "supplier_line", "v
 
 
 def _exact_section(gr, app, language, settings_tab, read: Callable[[dict[str, str]], tuple[Settings, str | None]], write: Callable,
-                   clock: Callable[[], datetime]) -> None:
+                   clock: Callable[[], datetime], reader: "_Reader | None" = None) -> None:
     """The block "Koppeling met Exact" of the settings tab and its events, the tab's section of that name, after "Postvak en AI" (see
     the module docstring; aid/review/exact_settings.py has what it shows and writes). read gives the settings in the file (or those in
     use, with the line of a file that cannot be read) and write saves into it (both of _settings_tab); clock is the time of the page's
@@ -4499,7 +4557,7 @@ def _exact_section(gr, app, language, settings_tab, read: Callable[[dict[str, st
         number_filled = gr.State(None)               # the PO number pattern of the file that the two fields were filled with
         _export_part(gr, app, language, settings_tab, read, write, state, state_text)
         _articles_part(gr, app, language, settings_tab, read, write)                       # part 3, the export of articles
-        _tryout_section(gr, app, language, settings_tab, refresh, read, write, clock)      # the part "Proefdraaien", last in the block
+        _tryout_section(gr, app, language, settings_tab, refresh, read, write, clock, reader)      # the part "Proefdraaien", last
 
     numbers = [po_words, po_least, po_most, number_filled]
     gr.on(triggers=[app.load, settings_tab.select], fn=exact_numbers_opened, inputs=language, outputs=numbers)
@@ -4968,14 +5026,15 @@ def _articles_part(gr, app, language, settings_tab, read: Callable[[dict[str, st
 
 
 def _tryout_section(gr, app, language, settings_tab, refresh, read: Callable[[dict[str, str]], tuple[Settings, str | None]], write: Callable,
-                    clock: Callable[[], datetime]) -> None:
+                    clock: Callable[[], datetime], reader: "_Reader | None" = None) -> None:
     """The part "Proefdraaien met een inkooporder uit Exact" at the end of the block "Koppeling met Exact", with the switch of the test
     mode, and their events (see the module docstring; aid/tryout.py makes the try-out and reads it back, aid/sources/dropin.py puts
     it into the watched folder). refresh is the block's button "Stand vernieuwen", which fills the part again; read and write are
     those of _settings_tab; clock is the time of the page's own actions, the moment a try-out is made, which gives it its date, its
     title and the time in its file's name. Every control is made once. A state of the page keeps what the switch was filled with,
     test_mode as the file held it, by which a toggle of a switch that another browser tab overtook is refused, as the block's form is
-    (ruling L6)."""
+    (ruling L6). `reader` is the AI section's choice of the reader with its line, which follow a save of the switch that put the
+    parser in the place of Azure OpenAI or Foundry."""
     first = STRINGS["nl"]
 
     def change_choices(strings: dict[str, str]) -> list[tuple[str, str]]:
@@ -5125,7 +5184,8 @@ def _tryout_section(gr, app, language, settings_tab, refresh, read: Callable[[di
 
     def test_mode_saved(on: bool, filled_with: bool | None, language_now: str) -> tuple:
         """The switch toggled by the buyer: test_mode written into the settings file and nothing else (write of _settings_tab, inside
-        whose lock the file is read), and the part as the saved settings give it: (the switch, what it is filled with, the line why,
+        whose lock the file is read), but for the reader "parser", written in the same save when the test mode is turned off while
+        Azure OpenAI or Foundry reads, which read in the test mode only; and the part as the saved settings give it: (the switch, what it is filled with, the line why,
         the controls, the cart's part, the dropdown, the note). Turned off while the list "In Exact invoeren" holds changes that only
         try-out documents asked, the note says how many, to be dropped and not entered in the real Exact. Nothing is written for a file that cannot be
         read, which keeps the switch as it was filled and says so by its line, for a file whose test mode is no longer the one the
@@ -5139,9 +5199,14 @@ def _tryout_section(gr, app, language, settings_tab, refresh, read: Callable[[di
         if not isinstance(filled_with, bool):
             return settings.test_mode, settings.test_mode, *part(settings, strings)[:4], strings["tryout_switch_refilled"]
 
+        services: list[str] = []                    # the service that read when the switch went off, which the parser replaces
+
         def build(held: Settings) -> dict:
             if held.test_mode != filled_with:
                 raise _Refused(strings["tryout_switch_refilled"])
+            if not on and held.reader in exploration.SERVICES:     # Azure OpenAI and Foundry read in the test mode only
+                services.append(held.reader)
+                return {"test_mode": False, "reader": "parser"}
             return {"test_mode": bool(on)}
 
         saved, note, _ = write(build, strings)
@@ -5153,6 +5218,9 @@ def _tryout_section(gr, app, language, settings_tab, refresh, read: Callable[[di
         made_up = 0 if saved.test_mode else _open_from_tryouts(saved.cases_root)
         note = (strings["tryout_saved"] if not made_up else strings["tryout_saved_open_one"] if made_up == 1
                 else strings["tryout_saved_open"].format(n=made_up))
+        if services and saved.reader == "parser":     # the sentence of the service first, then that of the try-out changes left
+            note = strings["tryout_saved_reader"].format(service=strings[f"settings_reader:{services[0]}"]) + note.removeprefix(
+                strings["tryout_saved"])
         return saved.test_mode, saved.test_mode, *part(saved, strings)[:4], note
 
     def tryout_relabel(language_now: str, change_now: str | None) -> tuple:
@@ -5193,7 +5261,9 @@ def _tryout_section(gr, app, language, settings_tab, refresh, read: Callable[[di
     make.click(tryout_made, inputs=[po_choice, change, language], outputs=[po_choice, download, note])
     give.click(tryout_given, inputs=[po_choice, change, language], outputs=[po_choice, download, note])
     gr.on(triggers=[po_choice.input, change.input], fn=tryout_chosen, inputs=None, outputs=download)      # the buyer's choice, not a fill
-    switch.input(test_mode_saved, inputs=[switch, filled, language], outputs=[*shown, note])      # the buyer's toggle, not a fill
+    toggled = switch.input(test_mode_saved, inputs=[switch, filled, language], outputs=[*shown, note])      # the buyer's toggle, not a fill
+    if reader is not None:                       # the choice of the reader and its line follow a save that put the parser back
+        toggled.then(reader.refreshed, inputs=language, outputs=[reader.choice, reader.line, reader.note], show_progress="hidden")
     language.change(tryout_relabel, inputs=[language, change], outputs=[title, intro, switch, why, po_choice, change, make, give, note],
                     queue=False)
     cart_make.click(tryout_cart_made, inputs=[po_choice, cart_change, language], outputs=[po_choice, note])
@@ -5219,8 +5289,8 @@ def _ai_section(gr, app, language, tab: _Tab, tenant, client, mailbox, account_s
     the account for an action or the note that says why there is none, and read and write are those of _settings_tab: the settings in
     the file (or those in use, with the line of a file that cannot be read), and a save into it. opened is the select of the part's
     section, and clock gives the time of the page's Deps in the local time of this PC. Its buttons and its choice take the account as
-    a step other than the sign-in (begin's `elsewhere`). Returns the answer line of the choice, which the language switch of
-    _settings_tab empties."""
+    a step other than the sign-in (begin's `elsewhere`). Returns a _Reader: the answer line of the choice, which the language switch
+    of _settings_tab empties, and the choice with its line and reader_refreshed, which the switch of the test mode refreshes."""
     first = STRINGS["nl"]
 
     def ai_opened(language_now: str) -> str:
@@ -5273,9 +5343,9 @@ def _ai_section(gr, app, language, tab: _Tab, tenant, client, mailbox, account_s
     def copilot_refusal(settings: Settings, strings: dict[str, str]) -> str | None:
         """None once Copilot answered the one test message of "Copilot testen" (COPILOT_TEST, nothing of a document), sent with the
         tenant and the client of the settings; else why it did not: the cause by a status code and its hint (_copilot_cause), never
-        Copilot's own words, or why no account could be made. While the stand-in for Copilot is on, the stand-in is asked instead,
-        and its refusal (outside the test mode, without the key or the library, or, for an exploration reader, while the settings name
-        the work mailbox or without its variables) is said in its own words, which name no document."""
+        Copilot's own words, with the reader of the settings, which reads on, or why no account could be made. While the stand-in for Copilot is on, the stand-in is asked instead,
+        and its refusal (outside the test mode, without the key or the library, or, for an exploration reader, without its variables)
+        is said in its own words, which name no document."""
         if stand_in.active():
             try:
                 stand_in.stand_in_for(settings, test_text=COPILOT_TEST).ask(COPILOT_TEST)
@@ -5291,7 +5361,9 @@ def _ai_section(gr, app, language, tab: _Tab, tenant, client, mailbox, account_s
             CopilotClient(account, session=tab.session).ask(COPILOT_TEST)
         except Exception as error:
             cause, code = _copilot_cause(error)
-            return strings["settings_ai_switch_refused"].format(cause=_cause_text(cause, code, strings),
+            kept = (strings["settings_ai_kept:parser"] if settings.reader == "parser"     # the reader that reads on (the review's page-6)
+                    else strings["settings_ai_kept"].format(reader=strings[f"settings_reader:{settings.reader}"]))
+            return strings["settings_ai_switch_refused"].format(cause=_cause_text(cause, code, strings), kept=kept,
                                                                 hint=_copilot_hint(cause, code, strings))
         return None
 
@@ -5300,7 +5372,11 @@ def _ai_section(gr, app, language, tab: _Tab, tenant, client, mailbox, account_s
         the client are saved, and only once it answered the test message, sent with the saved tenant and client (copilot_refusal),
         so that a Copilot this account cannot use is never chosen (finding 6 of the owner's test): a refusal writes nothing and
         keeps the reader the file holds. This is the one choice of the page that sends something to Microsoft, at the buyer's own
-        press. Nothing is written into a file that cannot be read: the note is then the line that says so."""
+        press. Azure OpenAI or Foundry, for the made-up documents only, likewise only once the service answered the same test
+        message through the reader the runner builds of the saved settings and the key in the secrets store (service_refusal), and
+        only while the file, read again inside the lock of the write, still has the test mode on (the review's guard-miss-1): the
+        test mode switched off while the test was out refuses the choice with the tab's own sentence and writes nothing. Nothing is
+        written into a file that cannot be read: the note is then the line that says so."""
         strings = STRINGS[language_now]
         before, line = read(strings)
         if line is not None:
@@ -5310,17 +5386,39 @@ def _ai_section(gr, app, language, tab: _Tab, tenant, client, mailbox, account_s
                 return before.reader, strings["settings_ai_ids_needed"]
             if (refused := copilot_refusal(before, strings)) is not None:
                 return before.reader, refused
-        saved, refused, _ = write(lambda held: {"reader": reader_now}, strings)
+        elif reader_now in exploration.SERVICES and (refused := service_refusal(reader_now, before, strings)) is not None:
+            return before.reader, refused
+
+        def chosen(held: Settings) -> Mapping[str, object]:
+            """The reader, checked again inside the lock: the test mode may have been switched off while the test was out."""
+            if reader_now in exploration.SERVICES and not held.test_mode:
+                raise _Refused(_why(reader_now, "test_mode", strings, switch=strings["tryout_switch"]))
+            return {"reader": reader_now}
+        saved, refused, _ = write(chosen, strings)
         if saved is None:
             return before.reader, refused
+        if saved.reader in exploration.SERVICES:
+            return saved.reader, strings["settings_ai_service_switched"].format(service=strings[f"settings_reader:{saved.reader}"])
         return saved.reader, strings["settings_ai_switched" if saved.reader == "llm" else "settings_buyer_saved"]
+
+    def service_refusal(value: str, settings: Settings, strings: dict[str, str]) -> str | None:
+        """None once the service of `value` ("azure_openai" or "foundry") answered the one test message of "Copilot testen"
+        (COPILOT_TEST, nothing of a document), sent through the reader that the runner builds of the settings and of the key in the
+        secrets store of this PC (settings_client of aid/readers/exploration.py, behind its guard); else why it did not, by the field
+        of the tab, never by a value or the key (_service_text)."""
+        try:
+            exploration.settings_client(value, settings, _keys(made_only=True), test_text=COPILOT_TEST).ask(COPILOT_TEST)
+        except Exception as error:
+            return _service_text(value, settings, error, strings)
+        return None
 
     def reader_shown(language_now: str):
         """The line of what reads the documents now, by the settings file (_reader_text), read from the files of this PC by
-        aid/review/status.py; it asks Microsoft nothing. A file that cannot be read leaves the line as it is."""
+        aid/review/status.py, also the problem of the cases that wait for the exploration service that reads; it asks Microsoft
+        nothing. A file that cannot be read leaves the line as it is."""
         strings = STRINGS[language_now]
         settings = read(strings)[0]
-        if settings.reader != "llm":
+        if settings.reader == "parser":
             return strings["reader_state:parser"]
         now = clock()
         try:
@@ -5330,11 +5428,145 @@ def _ai_section(gr, app, language, tab: _Tab, tenant, client, mailbox, account_s
             return gr.update()
         return _reader_text(state, lines, now, strings)
 
+    def reader_refreshed(language_now: str) -> tuple:
+        """(the reader of the settings file, the line of what reads now, the answer of the choice emptied), for the choice and its
+        lines after a save elsewhere on the tab changed the reader: the switch of the test mode, which puts the parser in the place
+        of a service (_tryout_section), so that no answer of an earlier choice stays under it (the review's code-3)."""
+        return read(STRINGS[language_now])[0].reader, reader_shown(language_now), ""
+
     def ai_relabel(language_now: str, reader_now: str | None) -> tuple:
+        """The language switch: the section's labels and lines in the language, the answer lines emptied, and of each service's
+        block its heading, its help, its fields, its key box and its two buttons, with the line of its key read again."""
         strings = STRINGS[language_now]
+        services = [shown for value in exploration.SERVICES for shown in (
+            f"### {strings[f'settings_reader:{value}']}", strings["settings_ai_service_help"],
+            *[gr.update(label=strings[FIELD_LABELS[field]]) for field in SERVICE_FIELDS[value]],
+            gr.update(label=strings["settings_ai_field:key"]), _key_line(value, strings),
+            gr.update(value=strings[f"settings_ai_save:{value}"]), gr.update(value=strings["settings_ai_key_remove"]), "")]
         return (f"### {strings['settings_ai']}", strings["settings_ai_needs"], gr.update(value=strings["settings_ai_sign_in"]),
                 gr.update(value=strings["settings_ai_test"]),
-                gr.update(label=strings["settings_ai_reader"], choices=_reader_choices(strings), value=reader_now), "")
+                gr.update(label=strings["settings_ai_reader"], choices=_reader_choices(strings), value=reader_now), "", *services)
+
+    def services_opened(language_now: str) -> tuple:
+        """The page loaded: the fields of the blocks of the two services from the settings file, and the line of each key, which
+        says only whether the secrets store of this PC holds it (_key_line). A key box is never filled."""
+        strings = STRINGS[language_now]
+        settings = read(strings)[0]
+        return (*[getattr(settings, field) or "" for value in exploration.SERVICES for field in SERVICE_FIELDS[value]],
+                *[_key_line(value, strings) for value in exploration.SERVICES])
+
+    def service_save(value: str) -> Callable:
+        """The named save of the block of the service of `value` (save_azure_openai, save_foundry)."""
+        def saved(*given) -> tuple:
+            """Save the block: (the key box emptied, the line of the key, a note), in this order, so that a runner never reads with
+            fields or a key that did not answer (the review's keys-1):
+            a. the form, with no network: an address in another form than the reader takes, both Foundry addresses, or a key with a
+               space, a line end or a character that is no printable ASCII is refused by its field (_service_form);
+            b. while the settings file names this service as the reader, the one test message of "Copilot testen" goes out through the
+               reader that the runner would build of the new fields and of the key typed, or else the key stored (settings_client); the
+               key typed is given to it beside the store and kept nowhere, and a refusal or a failure is said in the sentences of the
+               choice (_service_text);
+            c. the key typed goes into the secrets store of this PC, never into the settings file: a store the PC refuses is said with
+               its folders;
+            d. the fields are written through the tab's own save, an empty field only where the file holds one; when that write fails,
+               the key is put back as it was (exploration.store_key gives what undoes it), and when that fails too, the note says
+               that the store holds the key typed, in place of asking for it again;
+            e. while the service reads and only the key changed, the settings file gets a new modification time, so that the runner
+               builds its reader again, with the new key, at its next pass (_touched); when that time cannot be moved, the note says
+               that the new key is used after the next start, or after choosing the parser and the service again.
+            Each refusal keeps nothing and writes nothing, and says, when a key was typed, that it must be typed again, since the box
+            is emptied whatever the save gives. While another reader reads, the save sends nothing, and the note says that the service
+            is tested when it is chosen under "Documenten lezen met"; with the box empty the key that is stored stays."""
+            *texts, key, language_now = given
+            strings = STRINGS[language_now]
+            values = {field: (text or "").strip() or None for field, text in zip(SERVICE_FIELDS[value], texts)}
+            key = (key or "").strip()
+            again = f" {strings['settings_ai_key_retype']}" if key else ""
+            if (refused := _service_form(value, values, key, strings)) is not None:
+                return "", gr.update(), refused
+            settings, line = read(strings)
+            if line is not None:
+                return "", gr.update(), line + again
+            reading = settings.reader == value
+            if reading:
+                candidate = settings.model_copy(update=values)
+                store = {exploration.KEYS[value]: key} if key else _keys(made_only=True)      # the key typed, or the one stored
+                try:
+                    exploration.settings_client(value, candidate, store, test_text=COPILOT_TEST).ask(COPILOT_TEST)
+                except Exception as error:
+                    return "", gr.update(), _service_text(value, candidate, error, strings) + again
+            undo = None
+            if key:
+                try:
+                    undo = exploration.store_key(value, _keys(), key)
+                except StoreRefused as error:
+                    return "", gr.update(), _why_text(_refusal_text(error, strings, "settings_key_refused"), strings) + again
+                except Exception as error:               # the store's file cannot be read or written
+                    return "", gr.update(), strings["settings_failed"].format(code=type(error).__name__) + again
+            changed: list[bool] = []
+
+            def build(held: Settings) -> dict:
+                given_values = {field: text for field, text in values.items() if text is not None or getattr(held, field) is not None}
+                changed.append(any(getattr(held, field) != text for field, text in given_values.items()))
+                return given_values
+            written, refused, _ = write(build, strings)
+            if written is None:
+                if undo is not None:
+                    try:
+                        undo()
+                    except Exception:                    # the store holds the key typed: no "type it again" (the review's code-4)
+                        return "", _key_line(value, strings), f"{refused} {strings['settings_ai_key_not_undone']}"
+                return "", _key_line(value, strings), refused + again
+            if reading and key and not any(changed) and not _touched(tab.file):
+                # the key alone changed, and the runner, which notices a settings file that changed, could not be told so
+                return "", _key_line(value, strings), strings["settings_ai_saved_tested_later"].format(
+                    parser=strings["settings_reader:parser"], choice=strings["settings_ai_reader"])
+            note = strings["settings_ai_saved_tested"] if reading else strings["settings_ai_saved_untested"].format(
+                choice=strings["settings_ai_reader"])
+            return "", _key_line(value, strings), note
+        saved.__name__ = saved.__qualname__ = f"save_{value}"
+        return saved
+
+    def key_remove(value: str) -> Callable:
+        """The removal of the key of the service of `value` (remove_azure_openai_key, remove_foundry_key)."""
+        def removed(language_now: str) -> tuple:
+            """Remove the key from the secrets store of this PC: (the line of the key, a note, the reader, the line of what reads
+            now, the answer of the choice). The runner keeps the key it read until it builds its reader again, and a runner started
+            without it is refused: so while the settings file names this service as the reader, the parser is written in its place
+            first, which the runner takes at its next pass, and the key is removed only once that write succeeded, so that the
+            file never names a service whose key is gone (the review's keys-miss-1); the note says so, and the answer of the choice
+            under the reader, which may still say that the service was chosen, is emptied (the review's page-8). A write that is
+            refused removes nothing, and the note says that plainly, with why. A store the PC refuses is said with its folders."""
+            strings = STRINGS[language_now]
+            try:
+                if not exploration.key_stored(value, _keys(made_only=True)):
+                    return strings["settings_ai_key:none"], strings["settings_ai_key:none"], gr.update(), gr.update(), gr.update()
+            except StoreRefused as error:
+                return gr.update(), _refusal_text(error, strings, "settings_key_refused"), gr.update(), gr.update(), gr.update()
+            except Exception as error:                   # the store's file cannot be read
+                return gr.update(), strings["settings_failed"].format(code=type(error).__name__), gr.update(), gr.update(), gr.update()
+            switched: list[bool] = []                    # whether the write put the parser in this service's place
+
+            def parser(held: Settings) -> Mapping[str, object]:
+                if held.reader != value:                 # another reader meanwhile: nothing to write
+                    return {}
+                switched.append(True)
+                return {"reader": "parser"}
+            if read(strings)[0].reader == value:
+                written, why, _ = write(parser, strings)
+                if written is None:                      # nothing written: nothing removed either
+                    return (gr.update(), strings["settings_ai_key_kept"].format(service=strings[f"settings_reader:{value}"], why=why),
+                            gr.update(), gr.update(), gr.update())
+            shown = ("parser", reader_shown(language_now), "") if switched else (gr.update(), gr.update(), gr.update())
+            try:
+                _keys().delete(exploration.KEYS[value])
+            except StoreRefused as error:
+                return (gr.update(), _refusal_text(error, strings, "settings_key_refused"), *shown)
+            except Exception as error:                   # the store's file cannot be written
+                return (gr.update(), strings["settings_failed"].format(code=type(error).__name__), *shown)
+            return (_key_line(value, strings), strings["settings_ai_key_removed_reader" if switched else "settings_ai_key_removed"], *shown)
+        removed.__name__ = removed.__qualname__ = f"remove_{value}_key"
+        return removed
 
     reader_state = gr.Markdown("", elem_id="settings-reader-state")         # what reads the documents now
     reader = gr.Radio(choices=_reader_choices(first), value=None, label=first["settings_ai_reader"])
@@ -5345,16 +5577,66 @@ def _ai_section(gr, app, language, tab: _Tab, tenant, client, mailbox, account_s
         copilot_button = gr.Button(first["settings_ai_sign_in"])
         copilot_test_button = gr.Button(first["settings_ai_test"])
     note = gr.Markdown("", elem_classes=["answer"])                           # the answer of the two buttons above
+    blocks = [_service_block(gr, value, first) for value in exploration.SERVICES]      # Azure OpenAI, then Foundry
 
     app.load(ai_opened, inputs=language, outputs=reader)
+    app.load(services_opened, inputs=language, outputs=[*(box for block in blocks for box in block.fields), *(block.line for block in blocks)])
+    for value, block in zip(exploration.SERVICES, blocks):
+        block.save.click(service_save(value), inputs=[*block.fields, block.key, language], outputs=[block.key, block.line, block.answer])
+        block.remove.click(key_remove(value), inputs=language, outputs=[block.line, block.answer, reader, reader_state, reader_note])
     copilot_button.click(sign_in_copilot, inputs=[tenant, client, mailbox, language], outputs=[account_shown, note])
     copilot_test_button.click(test_copilot, inputs=[tenant, client, language], outputs=note)
     gr.on(triggers=[app.load, opened, language.change], fn=reader_shown, inputs=language, outputs=reader_state, show_progress="hidden")
     # a choice of the user, not the value the tab loads; its test of Copilot takes a few seconds, the line follows the choice
     reader.input(save_reader, inputs=[reader, language], outputs=[reader, reader_note], show_progress="minimal").then(
         reader_shown, inputs=language, outputs=reader_state, show_progress="hidden")
-    language.change(ai_relabel, inputs=[language, reader], outputs=[title, needs, copilot_button, copilot_test_button, reader, note])
-    return reader_note
+    language.change(ai_relabel, inputs=[language, reader], outputs=[title, needs, copilot_button, copilot_test_button, reader, note, *(
+        shown for block in blocks for shown in (block.heading, block.help, *block.fields, block.key, block.line, block.save, block.remove,
+                                                 block.answer))])
+    return _Reader(reader_note, reader, reader_state, reader_refreshed)
+
+
+class _Reader(NamedTuple):
+    """What the AI section gives the rest of the settings tab (_ai_section)."""
+    note: object                                 # the answer line of the choice, which the language switch empties
+    choice: object                               # the radio "Documenten lezen met"
+    line: object                                 # the line of what reads now
+    refreshed: Callable[[str], tuple]            # (the reader of the file, the line) for the two, after a save elsewhere
+
+
+class _ServiceBlock(NamedTuple):
+    """The block of an exploration service in step 5 of "Postvak en AI" (_service_block)."""
+    heading: object                              # "### Azure OpenAI (verzonnen documenten)"
+    help: object                                 # one sentence: the made-up documents, the test mode, the key in the store
+    fields: list                                 # its settings, SERVICE_FIELDS, in their order, in the rows of FIELD_ROWS
+    key: object                                  # the key box, which never shows a key and is emptied by each save
+    line: object                                 # whether a key is stored, never the key
+    save: object                                 # its named save, "Azure OpenAI opslaan"
+    remove: object                               # "Sleutel verwijderen"
+    answer: object                               # the answer of the two buttons, right under them
+
+
+def _service_block(gr, value: str, strings: dict[str, str]) -> _ServiceBlock:
+    """The block of the service of `value` ("azure_openai" or "foundry"), made in place (see the module docstring)."""
+    heading = gr.Markdown(f"### {strings[f'settings_reader:{value}']}")
+    help_line = gr.Markdown(strings["settings_ai_service_help"])
+    fields = []
+    for group in FIELD_ROWS[value]:
+        with gr.Row():
+            fields += [gr.Textbox(label=strings[FIELD_LABELS[field]], placeholder=exploration.EXAMPLES.get(field), elem_id=f"settings-{field}")
+                       for field in group]
+    # a box for a key that the browser does not correct or capitalise (the review's keys-5): the page library applies spellcheck,
+    # autocorrect and autocapitalize of html_attributes, but renders a password box with an empty autocomplete and does not apply
+    # the one given here, so the page's load script sets autocomplete "new-password" on it (PAGE_JS of aid/review/look.py, code-1)
+    key = gr.Textbox(label=strings["settings_ai_field:key"], value="", type="password", elem_id=f"settings-{value}-key",
+                     html_attributes=gr.InputHTMLAttributes(autocomplete="new-password", spellcheck=False, autocorrect="off",
+                                                            autocapitalize="off"))
+    line = gr.Markdown("", elem_id=f"settings-{value}-key-line")
+    with gr.Row():
+        save = gr.Button(strings[f"settings_ai_save:{value}"])
+        remove = gr.Button(strings["settings_ai_key_remove"])
+    answer = gr.Markdown("", elem_id=f"settings-{value}-note", elem_classes=["answer"])
+    return _ServiceBlock(heading, help_line, fields, key, line, save, remove, answer)
 
 
 def _assistant_section(gr, language, tab: _Tab, read: Callable[[dict[str, str]], tuple[Settings, str | None]],
@@ -5433,17 +5715,157 @@ def _sending_account(tab: _Tab, settings: Settings, accounts: dict[tuple[str, st
     return accounts[key]
 
 
-def _refusal_text(error: Exception, strings: dict[str, str]) -> str:
+def _refusal_text(error: Exception, strings: dict[str, str], key: str = "settings_store_refused") -> str:
     """Why no account can be made, for the line under a button (finding 2 of the owner's test): a store of the sign-in that lies
     inside a git work tree by its folder and the folder that holds .git, and one made by another Windows user or in another kind of
     session by its folder, each shown as it is (_literal) and with what to do; any other failure by the fixed line, which names
-    nothing of the error. The folders are shown on the settings tab of this PC only, which a public link does not offer."""
+    nothing of the error. The folders are shown on the settings tab of this PC only, which a public link does not offer. With
+    `key` "settings_key_refused", the same of the same store as the keeper of the keys of the two exploration services."""
     if isinstance(error, StoreRefused) and error.directory is not None:
         if error.work_tree is not None:
-            return strings["settings_store_refused_git"].format(store=_literal(str(error.directory)), work_tree=_literal(str(error.work_tree)))
+            return strings[f"{key}_git"].format(store=_literal(str(error.directory)), work_tree=_literal(str(error.work_tree)))
         if error.recorded is not None:
-            return strings["settings_store_refused_kind"].format(store=_literal(str(error.directory)))
-    return strings["settings_store_refused"]
+            return strings[f"{key}_kind"].format(store=_literal(str(error.directory)))
+    return strings[key]
+
+
+def _keys(made_only: bool = False):
+    """The secrets store of this PC that keeps the keys of the two exploration services (exploration.KEYS): the store of the
+    Microsoft sign-in in default_secrets_dir(), from which the runner reads them too, made at its first use, so that a store the PC
+    refuses is said where it is used (_refusal_text) and nothing is made before. With made_only, a look at it that makes no folder
+    and no file (_Look), so that the page loading, the language switch, a removal and a choice make no store: the store is made by
+    a save of a key alone (the review's page-miss-1)."""
+    return _Look() if made_only else LazySecretStore(default_secrets_dir())
+
+
+class _Look:
+    """A look at the secrets store of this PC that makes nothing (_keys): get raises the refusal of a store inside a git work tree,
+    which work_tree_refusal tells without making anything, gives None while the store holds no file of secrets (SECRETS), and only
+    then reads the store, which may refuse a store of another kind."""
+
+    def get(self, name: str) -> str | None:
+        directory = default_secrets_dir()
+        if (refused := work_tree_refusal(directory)) is not None:
+            raise refused
+        if not (directory / SECRETS).exists():
+            return None
+        return LazySecretStore(directory).get(name)
+
+
+def _key_line(value: str, strings: dict[str, str]) -> str:
+    """Whether the secrets store of this PC holds the key of the service of `value`, in words, never the key, without making the
+    store (_Look): a store the PC refuses by its folders (_refusal_text), no key while the store holds no file of secrets, and a
+    file that cannot be read by the class of its error."""
+    try:
+        stored = exploration.key_stored(value, _keys(made_only=True))      # a bool: the page never holds a key
+    except StoreRefused as error:
+        return _refusal_text(error, strings, "settings_key_refused")
+    except Exception as error:
+        return strings["settings_failed"].format(code=type(error).__name__)
+    return strings["settings_ai_key:stored" if stored else "settings_ai_key:none"]
+
+
+def _service_form(value: str, values: Mapping[str, str | None], key: str, strings: dict[str, str]) -> str | None:
+    """Why the fields and the key typed of a service's block cannot be saved as they are, before anything is sent, kept or written:
+    an address in another form than the reader needs (aid/readers/exploration.py), both Foundry addresses, a name of Foundry's
+    resource that holds "://" or "/", an address that belongs in the field of the full address (the review's page-4), or a key with
+    a space, a line end or a character that is no printable ASCII (the review's keys-6); None when they can. A field left empty is
+    no refusal here: the choice of the service names it. A refusal of a field says that the key typed, if any, must be typed
+    again."""
+    again = f" {strings['settings_ai_key_retype']}" if key else ""
+    for field, valid in (("azure_openai_endpoint", exploration.endpoint_address), ("foundry_base_url", exploration.https_address)):
+        if values.get(field) and not valid(values[field]):
+            return _why(value, _form_kind(field), strings, field=strings[FIELD_LABELS[field]], example=exploration.EXAMPLES[field]) + again
+    if values.get("foundry_resource") and values.get("foundry_base_url"):
+        return _why(value, "both", strings, field=strings[FIELD_LABELS["foundry_resource"]],
+                    other=strings[FIELD_LABELS["foundry_base_url"]]) + again
+    if values.get("foundry_resource") and ("://" in values["foundry_resource"] or "/" in values["foundry_resource"]):
+        return _why(value, "resource_form", strings, field=strings[FIELD_LABELS["foundry_resource"]],
+                    other=strings[FIELD_LABELS["foundry_base_url"]]) + again
+    if key and not (key.isascii() and key.isprintable() and not any(sign.isspace() for sign in key)):
+        return _why(value, "key_form", strings, field=strings["settings_ai_field:key"])
+    return None
+
+
+def _form_kind(setting: str) -> str:
+    """The sentence of an address in another form than its setting needs: the endpoint of Azure OpenAI, the address of the resource
+    only, without a path or a query ("endpoint_form", the review's page-7); any other address, an https address ("form")."""
+    return "endpoint_form" if setting == "azure_openai_endpoint" else "form"
+
+
+def _touched(path: Path) -> bool:
+    """Give the settings file a new modification time, at least two seconds after the one it had, so that a runner that reads it
+    again when that time changes builds its reader again (a key changed in the store alone, the review's keys-1); its content is
+    left as it is. Whether the time moved: a file that cannot be touched is left as it is too, and the runner then takes the new
+    key only at its next start (the review's code-miss-1)."""
+    try:
+        before = path.stat().st_mtime_ns
+        after = max(time.time_ns(), before + 2_000_000_000)
+        os.utime(path, ns=(after, after))
+    except OSError:
+        return False
+    return True
+
+
+def _why(value: str, kind: str, strings: dict[str, str], **more) -> str:
+    """A refusal of the service of `value`, "Niet opgeslagen: " with the sentence of its kind ("service_why:<kind>"), which names the
+    service and the block's save and takes the field labels and the rest from `more`."""
+    return _why_text(strings[f"service_why:{kind}"].format(service=strings[f"settings_reader:{value}"],
+                                                            save=strings[f"settings_ai_save:{value}"], **more), strings)
+
+
+def _why_text(why: str, strings: dict[str, str]) -> str:
+    return strings["settings_service_refused"].format(why=why)
+
+
+def _service_label(name: str, strings: dict[str, str]) -> str:
+    """A setting that a refusal of settings_client names, by its label on the tab: a key by the label of the key's field."""
+    return strings["settings_ai_field:key"] if name in exploration.KEYS.values() else strings[FIELD_LABELS[name]]
+
+
+def _service_text(value: str, settings: Settings, error: Exception, strings: dict[str, str]) -> str:
+    """Why the service of `value` was not chosen, as the answer of the choice says it, in the page's language: a store of the keys
+    that the PC refuses with its folders (_refusal_text); a refusal of settings_client (exploration.SettingsRefused) by the field of
+    the tab and what to do there (the test mode by its switch, an address with the form it needs, and for Foundry's address beside
+    the other one in the environment the variable, which only its name can say); a Python without
+    the library's client for Foundry; and a service that did not answer the test by its status code, or as not reachable or as no
+    usable answer, with a hint by the field of the tab, never by the service's own words: the key for a 401 or a 403, the address
+    and the deployment for a 404, the address and the network for a service that cannot be reached and for a redirect (3xx, which
+    neither client follows: AzureServiceError, or the Anthropic library's APIStatusError), the deployment, which must be a model
+    that reads documents, for a 400, and to try again later for a timeout, a 429, a 5xx and anything else (the review's page-4).
+    The page's log names the class of such an error and its status code only. Never a value or the key."""
+    service, save = strings[f"settings_reader:{value}"], strings[f"settings_ai_save:{value}"]
+    if isinstance(error, StoreRefused):
+        return _why_text(_refusal_text(error, strings, "settings_key_refused"), strings)
+    if isinstance(error, exploration.SettingsRefused):
+        labels = [_service_label(name, strings) for name in error.settings]
+        if error.kind == "environment":                 # the other address, which the settings tab offers instead
+            labels.append(_service_label(next(name for name in exploration.PLACE_SETTINGS if name != error.settings[0]), strings))
+        kind = "missing_place" if error.kind == "missing" and len(labels) == 2 else error.kind
+        kind = _form_kind(error.settings[0]) if kind == "form" else kind
+        return _why(value, kind, strings, field=labels[0], switch=labels[0], other=labels[-1], variable=error.variable,
+                    example=exploration.EXAMPLES.get(error.settings[0]))
+    if isinstance(error, ValueError) and stand_in.setup_kind(str(error)) == "missing_library":
+        return _why(value, "library", strings)
+    if isinstance(error, (ValueError, OSError)):     # the store's file cannot be read, or another failure on this PC
+        return strings["settings_failed"].format(code=type(error).__name__)
+    kind, code, _ = (("other", None, "") if isinstance(error, ReaderError) else _demonstration_test_failure(error))
+    status = getattr(error, "status_code", None)
+    moved = type(status) is int and 300 <= status <= 399          # a redirect, which neither client follows
+    if moved:
+        kind, code = "refused", str(status)
+    _LOG.warning("Service test failed: %s", type(error).__name__ + (f" ({code})" if code else ""))
+    if kind == "local":
+        return strings["settings_failed"].format(code=type(error).__name__)
+    cause = "unreachable" if kind == "unreachable" else "code" if code is not None else "other"
+    unconnected = type(error).__name__ in ("APIConnectionError", "AzureNoConnection")     # not reached; a timeout is not one of them
+    hint = ("service_hint:key" if code in ("401", "403") else "service_hint:not_found" if code == "404"
+            else "service_hint:address" if unconnected or moved else "service_hint:deployment" if code == "400" else "copilot_hint:other")
+    address = "azure_openai_endpoint" if value == "azure_openai" else next(
+        (name for name in exploration.PLACE_SETTINGS if getattr(settings, name)), exploration.PLACE_SETTINGS[0])
+    shown = strings[hint].format(service=service, save=save, deployment=strings[f"settings_ai_field:{value}_deployment"],
+                                 field=strings["settings_ai_field:key"] if hint == "service_hint:key" else _service_label(address, strings))
+    return strings["settings_service_failed"].format(service=service, cause=_cause_text(cause, code, strings), hint=shown)
 
 
 def _service_test_failure(error: Exception, strings: dict[str, str], *, demonstration: bool = False) -> str:
@@ -5508,13 +5930,18 @@ def _day_time(moment: datetime) -> str:
 
 
 def _reader_text(state: aid_status.Assistant, lines: list[aid_status.CaseLine], now: datetime, strings: dict[str, str]) -> str:
-    """What reads the documents now, in words, by the reader of the settings: the parser or Copilot, and while it is Copilot, Copilot
-    failing as a whole as the runner notes it in its digest state (since when, its cause by a status code, never the error's text,
+    """What reads the documents now, in words, by the reader of the settings: the parser, the exploration service of Azure OpenAI
+    or of Foundry (for the made-up documents only), which while cases wait for it is the problem line of the strip ("problem:
+    service_wait", by the number of the documents that wait: reading does not work now, and what to check), or Copilot, and while it
+    is Copilot, Copilot failing as a whole as the runner notes it in its digest state (since when, its cause by a status code, never the error's text,
     and the cases that wait for it now), or refusing documents (the cases that failed for it in the last status.DAYS days before
     `now`, the page's clock in the local time of this PC, named only while there are any). The line of step 5 of "Postvak en AI"
     (reader_shown) and of the section "Stand van de assistent" (_assistant_lines)."""
-    if state.reader != "llm":
-        return strings["reader_state:parser"]
+    if state.reader != "llm":                         # the parser, or the exploration service that reads
+        waiting = sum(1 for case in lines if case.state == "copilot_wait")
+        if (service := aid_status.waits_for(state.reader, strings)) is not None and waiting:
+            return _problem_text(aid_status.Problem("service_wait", n=waiting), strings, service)
+        return strings[f"reader_state:{state.reader}"]
     if state.copilot is not None:
         waiting = sum(1 for case in lines if case.state == "copilot_wait")
         return strings["reader_state:down"].format(since=_day_time(state.copilot.since), n=waiting,
@@ -5531,7 +5958,8 @@ def _assistant_lines(settings: Settings, state: aid_status.Assistant, lines: lis
     """The lines of the section "Stand van de assistent", a paragraph each, in this order: the runner's last pass, or since when it
     made none, or that it made none yet; whether the launcher runs, since when and how often it started the runner; a STOP file; a
     runner the launcher gave up; the mailbox as the tab tells it (_trigger_text) and since when its sign-in has lapsed; what reads the
-    documents (_reader_text) and the purchase orders that wait for Copilot, oldest first; and a store of the sign-in that the PC
+    documents (_reader_text) and the purchase orders that wait for Copilot, or for the exploration service that reads, named by its
+    label (waits_for of aid/review/status.py), oldest first; and a store of the sign-in that the PC
     refuses, whose folders "Postvak en AI" names. A line that tells one of `problems` (status.problems: the same as the review tab's)
     is in bold. Every time is in the local time of this PC, and every day in one form, that of _day_time ("12-11-2026 15:57"), the
     mailbox's line too; no line holds an error's text."""
@@ -5556,11 +5984,14 @@ def _assistant_lines(settings: Settings, state: aid_status.Assistant, lines: lis
     shown.append((f"{strings['settings_trigger']}: {_trigger_text(settings, strings, DAY_FORM)}", None))
     if state.mailbox.lapsed is not None:
         shown.append((strings["assistant_lapsed"].format(since=_day_time(state.mailbox.lapsed)), "lapsed"))
-    shown.append((_reader_text(state, lines, now, strings), "copilot_down" if state.copilot is not None else "copilot_refused"))
+    service = aid_status.waits_for(state.reader, strings)          # the exploration service that reads, or None
+    kind = "copilot_down" if state.copilot is not None else "copilot_refused" if service is None else "service_wait"
+    shown.append((_reader_text(state, lines, now, strings), kind))
     waiting = sorted((line for line in lines if line.state == "copilot_wait"), key=lambda line: (line.opened_at, line.case_id))
     if waiting:
-        orders = dict.fromkeys(line.po_number or strings["unknown_po"] for line in waiting)
-        shown.append((strings["assistant_waiting_copilot"].format(orders=", ".join(orders)), None))
+        orders = ", ".join(dict.fromkeys(line.po_number or strings["unknown_po"] for line in waiting))
+        shown.append((strings["assistant_waiting_service"].format(service=service, orders=orders) if service is not None
+                       else strings["assistant_waiting_copilot"].format(orders=orders), None))
     if state.store_refused:
         shown.append((strings["assistant_store"], "store"))
     return "\n\n".join(f"**{text}**" if kind in told else text for text, kind in shown)
@@ -5643,7 +6074,8 @@ def _language_choices(strings: dict[str, str]) -> list[tuple[str, str]]:
 
 
 def _reader_choices(strings: dict[str, str]) -> list[tuple[str, str]]:
-    return [(strings[f"settings_reader:{value}"], value) for value in READERS]
+    """The choices of "Documenten lezen met": each value of reader (READERS) by its label, the parser last, without AI."""
+    return [(strings[f"settings_reader:{value}"], value) for value in sorted(READERS, key=lambda value: value == "parser")]
 
 
 def _when(moment: datetime | str, form: str = WHEN_FORM) -> str:

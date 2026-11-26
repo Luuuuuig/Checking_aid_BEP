@@ -420,7 +420,8 @@ def test_the_problems_come_in_their_order(tmp_path):
     calm = state._replace(last_pass=NOW - timedelta(minutes=1), late=False, store_refused=False, mailbox=state.mailbox._replace(lapsed=None),
                           copilot=None)
     assert status.problems(calm, lines) == [] and status.problems(calm._replace(refused=3), lines) == [status.Problem("copilot_refused", None, 3)]
-    assert set(status.PROBLEMS) == {"stopped", "given_up", "no_pass_ever", "no_pass", "store", "lapsed", "copilot_down", "copilot_refused"}
+    assert set(status.PROBLEMS) == {"stopped", "given_up", "no_pass_ever", "no_pass", "store", "lapsed", "copilot_down", "copilot_refused",
+                                   "service_wait"}
 
 
 # --- the log, and what the module imports ---
