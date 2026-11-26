@@ -27,7 +27,9 @@ client's own figure or, where the answer carries none (a replay of answers recor
 price given now.
 
 --estimate-only counts the input tokens of one request per model (the first document of the set, through the client's count_tokens), prints
-them and stops before any answer is asked for, so the cost can be approved first.
+them and stops before any answer is asked for, so the cost can be approved first. A count that fails (at the service, or for an
+Anthropic model id with a ReaderError such as the library missing) is a line that says so, and the command then ends with 1; "unknown"
+is for an exploration service that offers no count.
 
 --record DIR wraps each model's client in RecordedClient(DIR/<model>, with a colon of a service name made an underscore, live=client): every
 answer is kept, and a second run with the same DIR replays them without a call. Recorded answers are answers on made-up documents.
@@ -63,7 +65,7 @@ Examples (the prices come from the provider's price page on the day of the run, 
 
   python3 -m aid.evalscripts.bakeoff --models claude-opus-5-5 claude-sonnet-5-5 claude-haiku-5-5 --estimate-only
 
-  python3 -m aid.evalscripts.bakeoff --models claude-opus-5-5 azure_openai:DEPLOYMENT foundry:DEPLOYMENT --estimate-only
+  python3 -m aid.evalscripts.bakeoff --models MODEL azure_openai:DEPLOYMENT foundry:DEPLOYMENT --estimate-only
 
   python3 -m aid.evalscripts.bakeoff --models claude-opus-5-5 claude-sonnet-5-5 claude-haiku-5-5 \\
       --price claude-opus-5-5=IN,OUT --price claude-sonnet-5-5=IN,OUT --price claude-haiku-5-5=IN,OUT \\
@@ -224,9 +226,10 @@ def main(argv: list[str] | None = None, client_factory: ClientFactory | None = N
 def _estimate(models: list[str], prices: dict[str, Price], factory: ClientFactory, documents: list[tuple[Path, Kind]],
               parser: argparse.ArgumentParser) -> int:
     """Print the input tokens of the first document's request for each model, which is the size of every request of the full run.
-    A count the client cannot give (no counting route is documented for Azure OpenAI) or that the guard refuses is "unknown" with the
-    reason; a count that fails at the service is "the count failed" with the error, and the command returns 1 once every model was
-    tried. The next model follows either way."""
+    For an exploration service, a count the client cannot give (no counting route is documented for Azure OpenAI) or that the guard
+    refuses is "unknown" with the reason. A count that fails at the service, and a ReaderError of an Anthropic model id (such as the
+    anthropic library missing), is "the count failed" with the error, and the command returns 1 once every model was tried. The
+    next model follows either way."""
     path, kind = documents[0]
     request = reading_request(path, kind)
     failed = False
@@ -234,7 +237,11 @@ def _estimate(models: list[str], prices: dict[str, Price], factory: ClientFactor
         try:
             tokens = _build(factory, model, prices.get(model), parser).count_tokens(request)
         except ReaderError as error:
-            print(f"{model}: unknown ({error})")
+            if service_of(model) is None:            # an Anthropic model id: a count was possible, and it failed
+                print(f"{model}: the count failed ({error})")
+                failed = True
+            else:                                    # an exploration service that offers no count, or a document its guard refuses
+                print(f"{model}: unknown ({error})")
             continue
         except CopilotError as error:                # the service failed: a key, an address or a deployment, a limit, no connection
             print(f"{model}: the count failed ({error}); correct the variables before the full run")

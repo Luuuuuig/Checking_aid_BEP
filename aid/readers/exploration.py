@@ -12,7 +12,9 @@ empty or holds spaces only counts as unset, and a variable that is missing is na
 both" does a Foundry address that is there at all count, even empty, as the SDK takes it.
 The addresses are https addresses with a host, so that the key never leaves over plain http: AZURE_OPENAI_ENDPOINT is the endpoint
 of the resource, with no query and no path but /openai/v1, the forms azure_client.responses_url takes, and ANTHROPIC_FOUNDRY_BASE_URL
-any https address. Another form is refused, by the variable and the form it needs, and never repaired.
+any https address. Another form is refused, by the variable and the form it needs, and never repaired. Neither client follows a
+redirect (azure_client.py, foundry_client.py), so the key and the document go to that address only, and a redirect, also one to
+plain http, is a failure of the service.
 
 Both are refused while the settings name any part of the work mailbox (MAILBOX_FIELDS). The Microsoft sign-in is kept once per
 Windows user, not once per folder, so a second folder whose settings name a tenant and a mail folder would be signed in at once and

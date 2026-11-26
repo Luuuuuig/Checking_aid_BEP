@@ -3,6 +3,7 @@ while the process has AID_STAND_IN=azure_openai or foundry, for the made-up docu
 unseen cases), without a mailbox and in the test mode only. No test calls a service."""
 import hashlib
 import json
+import os
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -108,8 +109,15 @@ def test_the_exploration_readers_need_the_test_mode(tmp_path, made, value):
     assert made == []
 
 
+MAILBOX_PARTS = ("ms_tenant_id", "ms_client_id", "mailbox", "mail_folder", "order_folder")      # written out, not taken from the code
+
+
+def test_the_mailbox_fields_are_the_five_parts_of_the_work_mailbox():
+    assert exploration.MAILBOX_FIELDS == MAILBOX_PARTS
+
+
 @pytest.mark.parametrize("value", EXPLORATION)
-@pytest.mark.parametrize("field", exploration.MAILBOX_FIELDS)
+@pytest.mark.parametrize("field", MAILBOX_PARTS)
 def test_the_exploration_readers_refuse_any_part_of_the_work_mailbox(tmp_path, made, value, field):
     """Each part of the work mailbox is refused on its own, by its field, before the variables are looked at. A settings file holds
     order_folder only beside mail_folder, so each field is set alone on a copy of the settings."""
@@ -139,6 +147,29 @@ def test_a_missing_variable_is_named_without_its_value(tmp_path, made, value, mi
         assert text == exploration.NO_SETTING.format(service=exploration.SERVICES[value], value=value, variable=named)
     assert made == []
 
+
+@pytest.mark.parametrize("value", EXPLORATION)
+def test_a_key_in_a_file_is_never_taken_in_place_of_the_variable(tmp_path, made, monkeypatch, value):
+    """The key comes from the environment variable only. With the variable missing from the environment, a key written into the
+    folder's settings file (as the value of a field the file allows, under the variable's name) and into a file in the working
+    folder (.env, and a file named after the variable) is not taken: building the reader is refused with the sentence that names
+    the missing variable, and the key is in no text of it."""
+    variable = next(name for name in exploration.VARIABLES[value] if name.endswith("_API_KEY"))
+    key = "made-up-key-in-a-file"
+    for name, setting in switched_on(value).items():
+        monkeypatch.setenv(name, setting)
+    monkeypatch.delenv(variable)
+    settings, path = settings_file(tmp_path, reader="llm", test_mode=True, exact_fields={variable: key})
+    assert key in path.read_text(encoding="utf-8") and settings.exact_fields == {variable: key}
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / ".env").write_text(f"{variable}={key}\n", encoding="utf-8")
+    (work / variable).write_text(key + "\n", encoding="utf-8")
+    monkeypatch.chdir(work)
+    with pytest.raises(ValueError) as refused:
+        build_deps(settings, os.environ)
+    assert str(refused.value) == exploration.NO_SETTING.format(service=exploration.SERVICES[value], value=value, variable=variable)
+    assert key not in str(refused.value) and made == []
 
 def test_values_are_stripped():
     """A value pasted with spaces or a line end reaches the client without them. A deployment given (the bake-off gives one for each
@@ -331,7 +362,7 @@ def test_the_runner_reads_a_made_up_confirmation_through_the_exploration_reader(
             super().__init__(RECORDED_DIR)
             self.name = f"azure_openai:{deployment}"
     monkeypatch.setattr(exploration, "AzureOpenAIClient", Replayed)
-    monkeypatch.setattr(llm_client, "anthropic", SimpleNamespace(AnthropicFoundry=StubFoundry))
+    monkeypatch.setattr(llm_client, "anthropic", SimpleNamespace(AnthropicFoundry=StubFoundry, DefaultHttpxClient=dict))
     settings, _ = settings_file(tmp_path, reader="llm", test_mode=True)
     deps = build_deps(settings, switched_on(value))
     assert isinstance(deps.decider, stand_in.MadeUpDecider)

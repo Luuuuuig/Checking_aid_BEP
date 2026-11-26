@@ -6,6 +6,11 @@ differs, and the answer names the deployment, as "foundry:<deployment>", not the
 With its debug log on (ANTHROPIC_LOG=debug, or the root logger at DEBUG), anthropic 2.3.0 logs the options of every request at the
 logger SDK_LOG, and for Foundry those hold the key in the headers x-api-key and api-key. The client therefore puts a filter on that
 logger (KeyHidden), once per key, which writes KEY_HIDDEN in the key's place in each record's message.
+
+The SDK client runs over the SDK's http client with follow_redirects=False, for the answer and for the token count alike. The
+SDK's default follows redirects and would send the key headers and the request body to the place a redirect names, even over
+plain http. Here a redirect is answered as the SDK answers any status that is not a success (APIStatusError, with the status),
+so it is a failure of the service, and the key and the document go to the configured address only.
 """
 import logging
 from dataclasses import replace
@@ -83,5 +88,7 @@ class FoundryClient(AnthropicClient):
                 raise ReaderError(NO_FOUNDRY_LIBRARY)
             where = {"resource": self._resource} if self._resource is not None else {"base_url": self._base_url}
             hide_key(self._api_key)                  # before the first request, whose options the SDK may log
-            self._sdk = sdk.AnthropicFoundry(api_key=self._api_key, **where)
+            # The SDK's own http client follows redirects, with the key headers and the body: this one follows none.
+            http_client = sdk.DefaultHttpxClient(follow_redirects=False)
+            self._sdk = sdk.AnthropicFoundry(api_key=self._api_key, http_client=http_client, **where)
         return self._sdk

@@ -48,10 +48,17 @@ class FakeFoundry:
     with_options = with_middleware = copy
 
 
+class FakeHttpClient:
+    """The SDK's DefaultHttpxClient in a stub: it keeps the options it is made with."""
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+
 @pytest.fixture(autouse=True)
 def fake_sdk(monkeypatch):
     FakeFoundry.instances = []
-    monkeypatch.setattr(llm_client, "anthropic", SimpleNamespace(AnthropicFoundry=FakeFoundry))
+    monkeypatch.setattr(llm_client, "anthropic", SimpleNamespace(AnthropicFoundry=FakeFoundry, DefaultHttpxClient=FakeHttpClient))
 
 
 @pytest.fixture(autouse=True)
@@ -65,12 +72,14 @@ def sdk_log():
     log.filters[:] = before
 
 
-def test_the_sdk_client_gets_the_key_and_the_resource():
+def test_the_sdk_client_gets_the_key_the_resource_and_an_http_client_that_follows_no_redirect():
     FoundryClient("dep", "k", resource="res").complete(REQUEST)
-    assert FakeFoundry.instances[-1].kwargs == {"api_key": "k", "resource": "res"}
+    kwargs = dict(FakeFoundry.instances[-1].kwargs)
+    assert kwargs.pop("http_client").kwargs == {"follow_redirects": False} and kwargs == {"api_key": "k", "resource": "res"}
     url = "https://res.services.ai.azure.com/anthropic"
     FoundryClient("dep", "k", base_url=url).complete(REQUEST)
-    assert FakeFoundry.instances[-1].kwargs == {"api_key": "k", "base_url": url}
+    kwargs = dict(FakeFoundry.instances[-1].kwargs)
+    assert kwargs.pop("http_client").kwargs == {"follow_redirects": False} and kwargs == {"api_key": "k", "base_url": url}
 
 
 def test_resource_and_base_url_are_one_or_the_other():
@@ -195,10 +204,11 @@ def test_the_key_is_in_no_record_and_no_output_of_the_sdks_debug_log(monkeypatch
         sent.append(request)
         return httpx2.Response(200, headers={"content-type": "text/event-stream"}, content=MADE_UP_ANSWER)
 
-    def local(**kwargs):
+    def local(http_client, **kwargs):              # the client's own http client, in a local one that follows no redirect either
+        assert http_client.follow_redirects is False
         return anthropic.AnthropicFoundry(**kwargs, http_client=httpx2.Client(transport=httpx2.MockTransport(answer)))
 
-    monkeypatch.setattr(llm_client, "anthropic", SimpleNamespace(AnthropicFoundry=local))
+    monkeypatch.setattr(llm_client, "anthropic", SimpleNamespace(AnthropicFoundry=local, DefaultHttpxClient=anthropic.DefaultHttpxClient))
     caplog.set_level(logging.DEBUG)
     caplog.set_level(logging.DEBUG, logger="anthropic")
     shown = logging.StreamHandler(sys.stderr)        # the console's lines, as ANTHROPIC_LOG=debug prints them
@@ -220,3 +230,49 @@ def test_the_key_is_hidden_by_one_filter_per_key(sdk_log):
         FoundryClient("dep", key, resource="res")._client()
     keys = [getattr(log_filter, "key", None) for log_filter in sdk_log.filters]
     assert sorted(keys) == ["made-up-key-1", "made-up-key-2"]            # a second client with the same key adds none, no key none
+
+
+
+CONFIGURED = "made-up-resource.services.ai.azure.com"       # the host of the made-up resource, never reached: the transport is patched
+
+
+@pytest.mark.parametrize("call", ["complete", "count_tokens"])
+def test_a_redirect_is_not_followed_and_is_a_failure_of_the_service(monkeypatch, call):
+    """A service that answers 307 with a Location on another host over plain http gets no second request: the key headers and the
+    document go to the configured host only. The redirect is the same kind of error as another failure of the service (here 400):
+    the SDK's APIStatusError, which the exploration reader turns into a CopilotError that names the service and the class only;
+    neither text holds the key. The installed AnthropicFoundry runs over its own http client, whose transport is patched, so
+    nothing leaves the PC."""
+    import anthropic
+    import httpx2
+    from aid.readers import exploration
+    from aid.readers.copilot_client import CopilotError
+    from aid.tests.test_stand_in import MADE_UP_PDF, request
+    for name in ("ANTHROPIC_FOUNDRY_API_KEY", "ANTHROPIC_FOUNDRY_RESOURCE", "ANTHROPIC_FOUNDRY_BASE_URL", "ANTHROPIC_LOG"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(llm_client, "anthropic", anthropic)
+    hosts, status = [], {"code": 307}
+
+    def answer(transport, sent):
+        hosts.append(sent.url.host)
+        if status["code"] == 307:
+            return httpx2.Response(307, headers={"location": "http://elsewhere.invalid/made-up"}, request=sent)
+        return httpx2.Response(400, json={"type": "error", "error": {"type": "invalid_request_error", "message": "made-up"}},
+                               request=sent)
+
+    monkeypatch.setattr(httpx2.HTTPTransport, "handle_request", answer)
+    made_up = request(pdf=MADE_UP_PDF.read_bytes())
+    failures = {}
+    for code in (307, 400):
+        status["code"], hosts[:] = code, []
+        with pytest.raises(anthropic.APIStatusError) as failed:
+            getattr(FoundryClient("dep", KEY, resource="made-up-resource"), call)(REQUEST)
+        assert hosts == [CONFIGURED]                 # the configured host got the request, and no other host got any
+        assert failed.value.status_code == code and KEY not in str(failed.value)
+        reader = exploration.guarded("foundry", FoundryClient("dep", KEY, resource="made-up-resource"))
+        with pytest.raises(CopilotError) as said:
+            getattr(reader, call)(made_up)
+        assert hosts == [CONFIGURED, CONFIGURED] and KEY not in str(said.value)
+        failures[code] = str(said.value)
+    assert failures[307].startswith("the exploration reader for Anthropic's models in Microsoft Foundry failed at its service: ")
+    assert failures[400].startswith("the exploration reader for Anthropic's models in Microsoft Foundry failed at its service: ")

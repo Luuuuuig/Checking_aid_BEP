@@ -378,6 +378,7 @@ def test_the_help_names_the_options_and_the_candidate_models(capsys):
     options = ("--models", "--set", "--spec", "--out", "--price", "--estimate-only", "--record")
     assert raised.value.code == 0 and all(option in help_text for option in options)
     assert "--models claude-opus-5-5 claude-sonnet-5-5 claude-haiku-5-5 --estimate-only" in help_text      # the example commands are not re-wrapped
+    assert "--models MODEL azure_openai:DEPLOYMENT foundry:DEPLOYMENT --estimate-only" in help_text      # a placeholder, no model version
 
 
 def test_the_default_client_is_the_anthropic_client_priced_by_the_command_line(two_documents, tmp_path, monkeypatch, capsys):
@@ -545,6 +546,20 @@ def test_estimate_goes_on_after_a_copilot_error_from_the_count(two_documents, ca
             "variables before the full run") in printed
     assert "model-b: 5000 input tokens" in printed
 
+
+def test_a_reader_error_of_an_anthropic_model_s_count_is_a_failure_not_unknown(two_documents, capsys, monkeypatch):
+    """"unknown" is for a service that offers no count. The count of an Anthropic model id that raises ReaderError (here the
+    library is missing) failed: the line says so, the next model is still counted, and the command ends with 1."""
+    monkeypatch.setattr(llm_client, "anthropic", None)
+
+    def factory(model, price):
+        return client_for_model(model, price) if model == "model-x" else FakeClient(model, price)
+
+    assert main(["--models", "model-x", "model-b", "--set", str(two_documents), "--spec", str(SPEC_DIR), "--estimate-only"],
+                client_factory=factory) == 1
+    printed = capsys.readouterr().out
+    assert "model-x: the count failed (the anthropic package is not installed: this Python cannot use the development client)" in printed
+    assert "model-x: unknown" not in printed and "model-b: 5000 input tokens" in printed
 
 def test_a_service_failure_is_an_error_row_and_the_run_goes_on(two_documents, tmp_path, capsys):
     out = tmp_path / "result.csv"
