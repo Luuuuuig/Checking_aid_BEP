@@ -200,6 +200,16 @@ jobs:
           Get-CimInstance Win32_Process -Filter "Name = 'pythonw.exe'" | Where-Object { $_.CommandLine -like "*aid.portable --demo *" } |
             ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 
+      - name: Check that the folder's Python imports the Anthropic library
+        shell: pwsh
+        run: |
+          # Foundry and the stand-in for Copilot read through the Anthropic library, which the folder carries since 26 November
+          # 2026 (aid/MANUAL.md section 3.16). The starts above read with the parser, so they do not show that the library imports
+          # in the folder's own Python; this does, in isolated mode as the folder runs it. Without it no zip goes on the Releases page.
+          $folder = Join-Path $env:RUNNER_TEMP "test folder\Inkoopassistent"
+          & (Join-Path $folder "python\python.exe") -I -X utf8 -c "import anthropic; anthropic.AnthropicFoundry; anthropic.DefaultHttpxClient; print('anthropic', anthropic.__version__)"
+          if ($LASTEXITCODE -ne 0) { throw "the folder's Python cannot import the Anthropic library (exit code $LASTEXITCODE)" }
+
       - name: Put the zip on the Releases page
         if: github.ref == 'refs/heads/main'
         shell: pwsh
