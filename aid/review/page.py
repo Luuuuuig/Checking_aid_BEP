@@ -5274,7 +5274,8 @@ def _ai_section(gr, app, language, tab: _Tab, tenant, client, mailbox, account_s
         """None once Copilot answered the one test message of "Copilot testen" (COPILOT_TEST, nothing of a document), sent with the
         tenant and the client of the settings; else why it did not: the cause by a status code and its hint (_copilot_cause), never
         Copilot's own words, or why no account could be made. While the stand-in for Copilot is on, the stand-in is asked instead,
-        and its refusal (outside the test mode, without the key or the library) is said in its own words, which name no document."""
+        and its refusal (outside the test mode, without the key or the library, or, for an exploration reader, while the settings name
+        the work mailbox or without its variables) is said in its own words, which name no document."""
         if stand_in.active():
             try:
                 stand_in.stand_in_for(settings, test_text=COPILOT_TEST).ask(COPILOT_TEST)
@@ -5464,10 +5465,9 @@ def _demonstration_test_failure(error: Exception) -> tuple[str, str | None, str]
     """Classify demonstration client errors using their class or status, without logging the response body."""
     name = type(error).__name__
     if isinstance(error, ValueError):
-        setup = {stand_in.NO_TEST_MODE: "test_mode", stand_in.NO_KEY: "missing_key", stand_in.NO_LIBRARY: "missing_library"}
-        if (kind := setup.get(str(error))) is not None:
+        if (kind := stand_in.setup_kind(str(error))) is not None:
             return kind, None, str(error)
-    if name in ("APIConnectionError", "APITimeoutError"):
+    if name in ("APIConnectionError", "APITimeoutError", "AzureNoConnection", "AzureTimeout"):   # the Anthropic library's, Azure OpenAI's
         return "unreachable", None, name
     if isinstance(status := getattr(error, "status_code", None), int) and 400 <= status <= 599:
         kind = {401: "key_refused", 403: "key_refused", 429: "429"}.get(status, "refused")

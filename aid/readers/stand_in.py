@@ -32,6 +32,15 @@ on the settings tab (the changed settings are then not taken, and runner.log say
 
 The library of the development client is not in the folder for Windows (aid/portable.py), so the stand-in needs a Python that has
 it; without it stand_in_for says so and nothing is sent.
+
+AID_STAND_IN also takes the values "azure_openai" and "foundry" (VALUES; active is true for each of the three, and value says which):
+stand_in_for then gives the exploration reader of Azure OpenAI or of Anthropic's models in Microsoft Foundry instead
+(aid/readers/exploration.py), behind the same guard, with texts that name the service. Its allowed set is the made-up folders alone
+(made_up_digests with no manifest), so that no document of evaluation/unseen_cases can reach either service. It is refused, in this
+order, outside the test mode, while the settings name any part of the work mailbox, and without its environment variables (foundry
+also without the Anthropic library's client for Foundry). A count of the tokens of a request (StandIn.count_tokens) sends the
+request as well, so it passes the same check first, and a failure of the service in a count is a CopilotError as in an answer. The
+value "anthropic" works as before: its texts, its allowed set with the manifest, and no refusal for a mailbox.
 """
 import hashlib
 import json
@@ -48,6 +57,7 @@ from aid.settings import Settings
 
 VARIABLE = "AID_STAND_IN"                        # the environment variable that switches the stand-in on, never a setting
 ON = "anthropic"                                    # its one value that does
+VALUES = (ON, "azure_openai", "foundry")            # the values that switch it on: the stand-in, and the exploration readers
 KEY = "ANTHROPIC_API_KEY"                        # the variable the Anthropic SDK reads the key from; never written to a file
 PACKAGE = Path(__file__).resolve().parent.parent
 MADE_UP_FOLDERS = (PACKAGE / "madeup" / "out", PACKAGE / "madeup" / "tryout")    # the made-up set the package holds
@@ -70,11 +80,17 @@ CLASS_OF = ((re.compile(r"_conf\.pdf$"), "confirmation"), (re.compile(r"_po_v\d+
 COPY = re.compile(r"_\d+(?=\.[^.]+$)")           # the _2 that the tab Bestanden puts before the suffix of a second copy
 
 
-def active(environ: Mapping[str, str] | None = None) -> bool:
-    """Whether the environment (the process's own when none is given) switches the stand-in on: AID_STAND_IN is "anthropic", in any
-    case of letters and with spaces around it."""
+def value(environ: Mapping[str, str] | None = None) -> str:
+    """The value of AID_STAND_IN in the environment (the process's own when none is given), in lower case and without the spaces
+    around it; "" without the variable."""
     environ = os.environ if environ is None else environ
-    return environ.get(VARIABLE, "").strip().lower() == ON
+    return environ.get(VARIABLE, "").strip().lower()
+
+
+def active(environ: Mapping[str, str] | None = None) -> bool:
+    """Whether the environment (the process's own when none is given) switches the stand-in or an exploration reader on: AID_STAND_IN
+    is one of VALUES, in any case of letters and with spaces around it."""
+    return value(environ) in VALUES
 
 
 def extra_digests(manifest: Path = EXTRA_MANIFEST) -> frozenset[str]:
@@ -86,35 +102,50 @@ def extra_digests(manifest: Path = EXTRA_MANIFEST) -> frozenset[str]:
     return frozenset(line.strip() for line in text.splitlines() if _SHA256.fullmatch(line.strip())) - {EMPTY_SHA256}
 
 
-def made_up_digests(folders: tuple[Path, ...] = MADE_UP_FOLDERS, manifest: Path = EXTRA_MANIFEST) -> frozenset[str]:
+def made_up_digests(folders: tuple[Path, ...] = MADE_UP_FOLDERS, manifest: Path | None = EXTRA_MANIFEST) -> frozenset[str]:
     """The sha256, in hex, of every PDF and PNG file of the made-up set and of the manifest's documents: the documents the
-    stand-in may send."""
+    stand-in may send. A manifest of None adds none, as for the exploration readers."""
     return (frozenset(hashlib.sha256(path.read_bytes()).hexdigest() for folder in folders if folder.is_dir()
                      for path in sorted(folder.iterdir()) if path.is_file() and path.suffix.lower() in MADE_UP_SUFFIXES) \
-        | extra_digests(manifest)) - {EMPTY_SHA256}
+        | (frozenset() if manifest is None else extra_digests(manifest))) - {EMPTY_SHA256}
 
 
 class StandIn:
     """An LlmClient over the Anthropic client that sends the made-up documents only, and, given a test text, Copilot's ask of that
-    one message (see the module docstring). `name` is the client's, the model id, so that a document it read names the model."""
+    one message (see the module docstring). `name` is the client's, the model id, so that a document it read names the model. An
+    exploration reader (aid/readers/exploration.py) is its client in a StandIn with its own allowed set and texts: `not_made_up`, the
+    refusal of a document, and `service_failed`, the failure of the service, in which StandIn fills in {kind}."""
 
-    def __init__(self, client, test_text: str | None = None, allowed: frozenset[str] | None = None):
+    def __init__(self, client, test_text: str | None = None, allowed: frozenset[str] | None = None, not_made_up: str = NOT_MADE_UP,
+                 service_failed: str = SERVICE_FAILED):
         self.client, self.test_text = client, test_text
         self.allowed = made_up_digests() if allowed is None else allowed
+        self.not_made_up, self.service_failed = not_made_up, service_failed
         self.name = client.name
 
     def complete(self, req: LlmRequest) -> LlmResponse:
         """The client's answer to a request whose every document is a file of the made-up set; a ReaderError before anything is
         sent for any other request, one without a document included."""
+        return self._sent(self.client.complete, req)
+
+    def count_tokens(self, req: LlmRequest) -> int:
+        """The client's count of the input tokens of a request whose every document is a file of the made-up set. A count sends
+        the request to the service as an answer does, so it is refused and its failures are told as complete's are."""
+        return self._sent(self.client.count_tokens, req)
+
+    def _sent(self, send, req: LlmRequest):
+        """What `send`, the client's complete or count_tokens, gives for the request: a ReaderError (not_made_up) before anything
+        is sent unless the request carries a document and each of its documents is a file of the set, and a CopilotError
+        (service_failed, with the class of the error and never its text) when the service fails. The client's ReaderError stays."""
         documents = ([] if req.pdf is None else [req.pdf]) + list(req.images)
         if not documents or any(not data or hashlib.sha256(data).hexdigest() not in self.allowed for data in documents):
-            raise ReaderError(NOT_MADE_UP)
+            raise ReaderError(self.not_made_up)
         try:
-            return self.client.complete(req)
+            return send(req)
         except ReaderError:
             raise
         except Exception as error:               # the service failed, not the document: the case waits for a later pass
-            raise CopilotError(SERVICE_FAILED.format(kind=type(error).__name__)) from error
+            raise CopilotError(self.service_failed.format(kind=type(error).__name__)) from error
 
     def ask(self, text: str, context: list[dict] | None = None) -> LlmResponse:
         """The answer to the settings tab's one test message, in Copilot's form (the text of the answer); a ReaderError before
@@ -157,10 +188,42 @@ class MadeUpDecider:
                               source=self.name)
 
 
+def _template(text: str) -> re.Pattern[str]:
+    """A pattern for a str.format template: its fixed words as they are, each {placeholder} as any text."""
+    return re.compile(".+".join(re.escape(part) for part in re.split(r"\{\w+\}", text)), re.DOTALL)
+
+
+def setup_kind(text: str) -> str | None:
+    """What a setup refusal of the stand-in or of an exploration reader (the text of the ValueError that stand_in_for raises) asks of
+    the owner: "test_mode", "missing_key" (a missing key or setting, whatever name it holds), "missing_library", or "mailbox" (the
+    settings name a part of the work mailbox); None for any other text. The texts of the exploration readers are matched by their
+    templates (aid/readers/exploration.py), so that no finished text is listed."""
+    from aid.readers import exploration, foundry_client      # here, as in stand_in_for
+    fixed = {NO_TEST_MODE: "test_mode", NO_KEY: "missing_key", NO_LIBRARY: "missing_library",
+             foundry_client.NO_FOUNDRY_LIBRARY: "missing_library"}
+    if (kind := fixed.get(text)) is not None:
+        return kind
+    for template, kind in ((exploration.NO_TEST_MODE, "test_mode"), (exploration.NO_SETTING, "missing_key"),
+                           (exploration.NO_MAILBOX, "mailbox")):
+        if _template(template).fullmatch(text):
+            return kind
+    return None
+
+
 def stand_in_for(settings: Settings, environ: Mapping[str, str] | None = None, test_text: str | None = None) -> StandIn:
     """The stand-in for the settings, with the model of the settings, or the package default while they hold the example's
-    placeholder. Raises ValueError outside the test mode, without the key in the environment, or without the Anthropic library."""
+    placeholder. Raises ValueError outside the test mode, without the key in the environment, or without the Anthropic library.
+    While AID_STAND_IN is "azure_openai" or "foundry", the exploration reader of that service behind the guard instead, refused with
+    ValueError outside the test mode, while the settings name any part of the work mailbox, or without its environment variables
+    (foundry also without the Anthropic library's client for Foundry)."""
     environ = os.environ if environ is None else environ
+    chosen = value(environ)
+    if chosen in VALUES and chosen != ON:
+        from aid.readers import exploration      # here, so that the two modules do not import each other when they load
+        if not settings.test_mode:
+            raise ValueError(exploration.NO_TEST_MODE.format(service=exploration.SERVICES[chosen], value=chosen))
+        exploration.check_no_mailbox(chosen, settings)
+        return exploration.guarded(chosen, exploration.exploration_client(chosen, environ, effort=settings.effort), test_text)
     if not settings.test_mode:
         raise ValueError(NO_TEST_MODE)
     if not environ.get(KEY):

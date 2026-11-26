@@ -4,6 +4,10 @@ whose accuracy is close enough to the best is chosen.
     python3 -m aid.evalscripts.bakeoff --models M1 M2 ... [--set aid/madeup/out] [--spec aid/madeup/spec] [--out FILE] [--price M=IN,OUT ...]
                                        [--estimate-only] [--record DIR]
 
+A model is an Anthropic model id, or azure_openai:<deployment> or foundry:<deployment>, the exploration readers of aid/readers/exploration.py
+(made-up documents only, their settings in environment variables; no route of Azure OpenAI that counts tokens before an answer is documented,
+so --estimate-only says unknown for it). A name with a colon is never an Anthropic model id: one that names no service is a command error.
+
 For each model, in the order given, the command reads each *_conf.pdf of --set as a confirmation and each *.png (CART02.png) as a cart
 page with read_supplier_document, scores the reading with score_reading against the spec of the case in --spec (aid/madeup/spec/<case>.json)
 and the text lines of the PDF (a screenshot has none, so its sources are not scored), and writes one CSV row per model and document to --out
@@ -13,7 +17,8 @@ field right, not the end of the run. The columns, and how the result is read, ar
 The summary that follows has, per model, the mean field accuracy over all documents, the mean source accuracy over the documents where it
 can be measured, the mean cost per case and the total cost, and then the decision of choose: the cheapest model whose field accuracy and
 source accuracy are both within 2 percentage points of the best. Without a price for every model there is no decision, because there is no
-cost to compare.
+cost to compare, and none while a document of an exploration reader was not read (its service failed, or the guard refused it), because its
+row would count as a reading of 0.
 
 --price MODEL=IN,OUT gives a model's price in euro per million input tokens and per million output tokens. The prices are read from the
 provider's price page on the day of the run and typed here; the command holds none. A price for a model that is not in --models is a
@@ -24,15 +29,17 @@ price given now.
 --estimate-only counts the input tokens of one request per model (the first document of the set, through the client's count_tokens), prints
 them and stops before any answer is asked for, so the cost can be approved first.
 
---record DIR wraps each model's client in RecordedClient(DIR/<model>, live=client): every answer is kept, and a second run with the same DIR
-replays them without a call. Recorded answers are answers on made-up documents.
+--record DIR wraps each model's client in RecordedClient(DIR/<model>, with a colon of a service name made an underscore, live=client): every
+answer is kept, and a second run with the same DIR replays them without a call. Recorded answers are answers on made-up documents.
 
-main takes the client factory as its second argument (model, price -> client), so that the tests run it with fake clients; the default
-builds AnthropicClient(model, price_per_mtok=price), which reads its key from ANTHROPIC_API_KEY.
+main takes the client factory as its second argument (model, price -> client), so that the tests run it with fake clients; the default,
+client_for_model, builds AnthropicClient(model, price_per_mtok=price), which reads its key from ANTHROPIC_API_KEY, or for a service name its
+guarded exploration reader. A document the service cannot be sent, or a failure of the service, is a row with the error, as a ReaderError is.
 """
 import argparse
 import csv
-from collections.abc import Callable
+import os
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal, InvalidOperation
@@ -41,6 +48,8 @@ from statistics import fmean
 from typing import Protocol
 
 from aid.evalscripts.score_reading import ReadingScore, choose, expected_fields, score_reading, score_unread
+from aid.readers import exploration
+from aid.readers.copilot_client import CopilotError
 from aid.readers.llm_client import AnthropicClient, LlmClient, LlmRequest, LlmResponse, ReaderError, RecordedClient
 from aid.readers.pdf_text import TextLine, extract_lines
 from aid.readers.supplier_llm import Kind, documents_to_record, read_supplier_document, reading_request
@@ -53,6 +62,8 @@ EPILOG = """\
 Examples (the prices come from the provider's price page on the day of the run, euro per million tokens):
 
   python3 -m aid.evalscripts.bakeoff --models claude-opus-5-5 claude-sonnet-5-5 claude-haiku-5-5 --estimate-only
+
+  python3 -m aid.evalscripts.bakeoff --models claude-opus-5-5 azure_openai:DEPLOYMENT foundry:DEPLOYMENT --estimate-only
 
   python3 -m aid.evalscripts.bakeoff --models claude-opus-5-5 claude-sonnet-5-5 claude-haiku-5-5 \\
       --price claude-opus-5-5=IN,OUT --price claude-sonnet-5-5=IN,OUT --price claude-haiku-5-5=IN,OUT \\
@@ -68,9 +79,27 @@ class BakeoffClient(LlmClient, Protocol):
 ClientFactory = Callable[[str, Price | None], BakeoffClient]
 
 
-def anthropic_client(model: str, price: Price | None) -> AnthropicClient:
-    """The default client factory: the model behind the Anthropic SDK, priced at the euro prices of a million tokens given with --price."""
-    return AnthropicClient(model, price_per_mtok=price)
+def service_of(model: str) -> tuple[str, str] | None:
+    """The service and the deployment of a name like azure_openai:<deployment> or foundry:<deployment>; None for any other name,
+    an Anthropic model id."""
+    service, colon, deployment = model.partition(":")
+    return (service, deployment.strip()) if colon and service in exploration.SERVICES else None
+
+
+def client_for_model(model: str, price: Price | None, environ: Mapping[str, str] | None = None) -> BakeoffClient:
+    """The default client factory. azure_openai:<deployment> and foundry:<deployment> give the exploration reader of that service
+    for that deployment, behind the guard that sends the made-up documents of the package only; its settings come from the
+    environment variables (environ, by default os.environ), never from a file. Any other name is a model of the Anthropic SDK,
+    priced at the euro prices of a million tokens given with --price. Raises ValueError for a service name with no deployment and
+    for a setting the service lacks (its text names the variable, never a value)."""
+    named = service_of(model)
+    if named is None:
+        return AnthropicClient(model, price_per_mtok=price)
+    service, deployment = named
+    if not deployment:
+        raise ValueError(f"{model!r} needs a deployment after the colon, as in {service}:<deployment>")
+    client = exploration.exploration_client(service, os.environ if environ is None else environ, deployment=deployment, price=price)
+    return exploration.guarded(service, client)
 
 
 def today() -> date:
@@ -103,7 +132,9 @@ class Target:
 
 @dataclass
 class ResultRow:
-    """One model's reading of one document: the line of the result file."""
+    """One model's reading of one document: the line of the result file. `not_read` marks a document that an exploration reader did
+    not read at all (its service failed, or the guard refused it), which is no column of the file; no row of an Anthropic model id
+    has it."""
     model: str
     case: str
     kind: str
@@ -114,6 +145,7 @@ class ResultRow:
     seconds: float
     attempts: int
     error: str
+    not_read: bool = False
 
     def cells(self) -> list[str | int]:
         source = self.score.source_accuracy
@@ -138,16 +170,19 @@ class Summary:
     cost_per_case: Decimal | None                  # None unless every answer has a cost
     total_cost: Decimal | None
     unread: int
+    not_read: int = 0                              # the rows marked not_read
 
 
 def main(argv: list[str] | None = None, client_factory: ClientFactory | None = None) -> int:
     """Run the bake-off (see the module docstring). Returns 0 when the run is done, whatever the decision and however many documents could
-    not be read; a command line that cannot be run (no documents, no spec for one, a price that is not MODEL=IN,OUT or is for a model
-    that is not in --models) exits with 2."""
+    not be read, and 1 for an estimate whose count failed at a service; a command line that cannot be run (no documents, no spec for one, a
+    price that is not MODEL=IN,OUT or is for a model that is not in --models, a service name with a blank deployment, a name with a colon
+    that names no service, a variable the service lacks) exits with 2."""
     parser = argparse.ArgumentParser(
         prog="python3 -m aid.evalscripts.bakeoff", epilog=EPILOG, formatter_class=argparse.RawDescriptionHelpFormatter,
         description="Run the candidate models on the made-up set, score them and choose the cheapest that is close enough to the best.")
-    parser.add_argument("--models", nargs="+", required=True, help="the model ids to run, in this order")
+    parser.add_argument("--models", nargs="+", required=True,
+                        help="the model ids to run, in this order; azure_openai:<deployment> or foundry:<deployment> for an exploration reader")
     parser.add_argument("--set", type=Path, default=Path("aid/madeup/out"), help="folder of the made-up documents (default aid/madeup/out)")
     parser.add_argument("--spec", type=Path, default=Path("aid/madeup/spec"), help="folder of the case specs (default aid/madeup/spec)")
     parser.add_argument("--out", type=Path, help="the result file (default aid/evalscripts/results/bakeoff_<date of the run>.csv)")
@@ -158,18 +193,25 @@ def main(argv: list[str] | None = None, client_factory: ClientFactory | None = N
     parser.add_argument("--record", type=Path, metavar="DIR",
                         help="keep every answer in DIR/<model>, and replay what is there instead of asking again")
     args = parser.parse_args(argv)
-    factory, prices = client_factory or anthropic_client, dict(args.price)
+    factory, prices = client_factory or client_for_model, dict(args.price)
     unknown = [model for model in prices if model not in args.models]
     if unknown:                                    # a misspelt name would leave the model that does run without a price
         parser.error(f"--price names {', '.join(unknown)}, not among the --models ({' '.join(args.models)}): check the spelling")
+    services = " or ".join(f"{service}:<deployment>" for service in exploration.SERVICES)
+    for model in args.models:                      # before any client is built
+        named = service_of(model)
+        if named is not None and not named[1]:
+            parser.error(f"{model!r} needs a deployment after the colon, as in {named[0]}:<deployment>")
+        if named is None and ":" in model:         # a misspelt service name would leave the guard: an Anthropic model id holds no colon
+            parser.error(f"{model!r} names no service: use {services}; an Anthropic model id holds no colon")
     documents = documents_to_record(args.set)
     if not documents:
         parser.error(f"no documents in {args.set}: it holds no *_conf.pdf and no *.png")
     if args.estimate_only:
-        return _estimate(args.models, prices, factory, documents)
+        return _estimate(args.models, prices, factory, documents, parser)
     targets = _targets(documents, args.spec, parser)
     out = args.out or RESULTS / f"bakeoff_{today().isoformat()}.csv"
-    rows = _run(args.models, prices, factory, args.record, targets, out)
+    rows = _run(args.models, prices, factory, args.record, targets, out, parser)
     summaries = [_summarise(model, [row for row in rows if row.model == model]) for model in args.models]
     print(f"\nSummary over {len(targets)} documents per model:")
     for summary in summaries:
@@ -179,15 +221,36 @@ def main(argv: list[str] | None = None, client_factory: ClientFactory | None = N
     return 0
 
 
-def _estimate(models: list[str], prices: dict[str, Price], factory: ClientFactory, documents: list[tuple[Path, Kind]]) -> int:
-    """Print the input tokens of the first document's request for each model, which is the size of every request of the full run."""
+def _estimate(models: list[str], prices: dict[str, Price], factory: ClientFactory, documents: list[tuple[Path, Kind]],
+              parser: argparse.ArgumentParser) -> int:
+    """Print the input tokens of the first document's request for each model, which is the size of every request of the full run.
+    A count the client cannot give (no counting route is documented for Azure OpenAI) or that the guard refuses is "unknown" with the
+    reason; a count that fails at the service is "the count failed" with the error, and the command returns 1 once every model was
+    tried. The next model follows either way."""
     path, kind = documents[0]
     request = reading_request(path, kind)
+    failed = False
     for model in models:
-        tokens = factory(model, prices.get(model)).count_tokens(request)
+        try:
+            tokens = _build(factory, model, prices.get(model), parser).count_tokens(request)
+        except ReaderError as error:
+            print(f"{model}: unknown ({error})")
+            continue
+        except CopilotError as error:                # the service failed: a key, an address or a deployment, a limit, no connection
+            print(f"{model}: the count failed ({error}); correct the variables before the full run")
+            failed = True
+            continue
         print(f"{model}: {tokens} input tokens for one request ({path.name}); the full run reads {len(documents)} documents per model")
     print(f"The answers add output tokens, up to {request.max_tokens} per request.")
-    return 0
+    return 1 if failed else 0
+
+
+def _build(factory: ClientFactory, model: str, price: Price | None, parser: argparse.ArgumentParser) -> BakeoffClient:
+    """The model's client; a setting a service lacks is a command error, as the exploration readers' text names it."""
+    try:
+        return factory(model, price)
+    except ValueError as error:
+        parser.error(str(error))
 
 
 def _targets(documents: list[tuple[Path, Kind]], spec_dir: Path, parser: argparse.ArgumentParser) -> list[Target]:
@@ -203,7 +266,7 @@ def _targets(documents: list[tuple[Path, Kind]], spec_dir: Path, parser: argpars
 
 
 def _run(models: list[str], prices: dict[str, Price], factory: ClientFactory, record: Path | None, targets: list[Target],
-         out: Path) -> list[ResultRow]:
+         out: Path, parser: argparse.ArgumentParser) -> list[ResultRow]:
     """Read every document with every model and write each row to `out` as it is made, so that a run that stops half way leaves its rows."""
     rows = []
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -211,9 +274,9 @@ def _run(models: list[str], prices: dict[str, Price], factory: ClientFactory, re
         writer = csv.writer(handle, lineterminator="\n")
         writer.writerow(COLUMNS)
         for model in models:
-            client = factory(model, prices.get(model))
+            client = _build(factory, model, prices.get(model), parser)
             if record is not None:
-                client = RecordedClient(record / model, live=client)
+                client = RecordedClient(record / model.replace(":", "_"), live=client)
             for target in targets:
                 row = _read(model, client, target, prices.get(model))
                 rows.append(row)
@@ -225,17 +288,22 @@ def _run(models: list[str], prices: dict[str, Price], factory: ClientFactory, re
 
 def _read(model: str, client: LlmClient, target: Target, price: Price | None) -> ResultRow:
     """One model's reading of one document, scored. A ReaderError is the row of a document that scores no field right, with what
-    the failed requests used."""
+    the failed requests used; so is a CopilotError, the failure of a service, which used nothing we know of. For an exploration
+    reader, a CopilotError and a ReaderError without an answer (the guard's refusal) mark the row not_read."""
     try:
         doc, response = read_supplier_document(target.path, client, kind=target.kind)
-        score, error, attempts = score_reading(doc, target.expected, target.lines), "", response.attempts
+        score, error, attempts, unread = score_reading(doc, target.expected, target.lines), "", response.attempts, False
     except ReaderError as failure:
         response, score, error, attempts = failure.response, score_unread(target.expected), str(failure), failure.attempts
+        unread = failure.response is None
+    except CopilotError as failure:
+        response, score, error, attempts, unread = None, score_unread(target.expected), f"service failed: {failure}", 0, True
     used = response if response is not None else LlmResponse(text="", model=model, input_tokens=0, output_tokens=0, seconds=0.0)   # no answer: no use
     cost = used.cost_eur
     if cost is None and price is not None:           # answers replayed from a recording made without a price
         cost = (used.input_tokens * price[0] + used.output_tokens * price[1]) / 1_000_000
-    return ResultRow(model, target.case, target.kind, score, used.input_tokens, used.output_tokens, cost, used.seconds, attempts, error)
+    return ResultRow(model, target.case, target.kind, score, used.input_tokens, used.output_tokens, cost, used.seconds, attempts, error,
+                     not_read=unread and service_of(model) is not None)
 
 
 def _summarise(model: str, rows: list[ResultRow]) -> Summary:
@@ -243,7 +311,8 @@ def _summarise(model: str, rows: list[ResultRow]) -> Summary:
     costs = [row.cost for row in rows]
     priced = None not in costs
     return Summary(model, len(rows), fmean(row.score.field_accuracy for row in rows), fmean(sources) if sources else None, len(sources),
-                   sum(costs) / len(costs) if priced else None, sum(costs) if priced else None, sum(bool(row.error) for row in rows))
+                   sum(costs) / len(costs) if priced else None, sum(costs) if priced else None, sum(bool(row.error) for row in rows),
+                   sum(row.not_read for row in rows))
 
 
 def _describe(summary: Summary) -> str:
@@ -256,8 +325,13 @@ def _describe(summary: Summary) -> str:
 
 
 def _decide(summaries: list[Summary]) -> str:
-    """The decision by choose, or why there is none. A model with no source accuracy to measure counts as 0 there: nothing it read was
-    shown to be sourced."""
+    """The decision by choose, or why there is none: a document of an exploration reader that was not read (its row would count as a
+    reading of 0), a model without a price, or no model close enough to the best. A model with no source accuracy to measure counts as
+    0 there: nothing it read was shown to be sourced."""
+    if count := sum(summary.not_read for summary in summaries):
+        models, many = ", ".join(summary.model for summary in summaries if summary.not_read), count != 1
+        return (f"No decision: {count} document{'s' if many else ''} of {models} {'were' if many else 'was'} not read (the service failed, "
+                f"or the document was refused); run the same command again with the same --record to ask {'them' if many else 'it'} again.")
     unpriced = [summary.model for summary in summaries if summary.cost_per_case is None]
     if unpriced:
         return f"No decision: the cost per case is unknown for {', '.join(unpriced)}; give --price MODEL=IN,OUT for every model."

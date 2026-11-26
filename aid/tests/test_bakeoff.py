@@ -11,9 +11,10 @@ from types import SimpleNamespace
 import anthropic
 import pytest
 
-from aid.evalscripts.bakeoff import main
+from aid.evalscripts.bakeoff import client_for_model, main
 from aid.evalscripts.score_reading import HEADER_FIELDS, LINE_FIELDS
-from aid.readers import llm_client
+from aid.readers import exploration, llm_client
+from aid.readers.copilot_client import CopilotError
 from aid.readers.llm_client import LlmResponse, ReaderError
 from aid.readers.supplier_llm import reading_request
 from aid.tests.helpers import answer_from_spec
@@ -447,3 +448,249 @@ def test_a_set_with_no_text_layer_is_decided_on_field_accuracy_and_cost(two_docu
     run(two_documents, tmp_path / "result.csv", Models(), *PRICES_A_B, models=("model-a", "model-b"))
     printed = capsys.readouterr().out
     assert "source accuracy not measurable" in printed and "Decision: model-b" in printed          # the same readings, and model-b is cheaper
+
+
+# --- the services of the exploration readers: azure_openai:<deployment> and foundry:<deployment> ---
+
+class ServiceClient(FakeClient):
+    """A client a service name stands for. `fails_on` is the number of the document (1 is the first) at which it raises a
+    CopilotError that names the class only; `counts` None makes count_tokens raise ReaderError, as Azure OpenAI's does."""
+
+    def __init__(self, name, price, fails_on=None, **options):
+        super().__init__(name, price, **options)
+        self.fails_on = fails_on
+
+    def complete(self, req):
+        if self.fails_on is not None and len(self.calls) + 1 == self.fails_on:
+            self.calls.append(req)
+            raise CopilotError("the exploration reader for Azure OpenAI failed at its service: ConnectionError")
+        return super().complete(req)
+
+    def count_tokens(self, req):
+        if self.counts is None:
+            raise ReaderError("this service has no way to count tokens")
+        return super().count_tokens(req)
+
+
+class Built(list):
+    """What the replaced exploration_client was asked for, one dict per call; `options` are the ServiceClient options by service."""
+    options: dict = {}
+
+
+@pytest.fixture
+def built(monkeypatch):
+    """Replaces exploration_client by one that records its arguments and returns a ServiceClient."""
+    seen = Built()
+    seen.options = {}
+
+    def fake(value, environ, deployment=None, effort="medium", price=None, session=None):
+        seen.append({"value": value, "deployment": deployment, "price": price, "environ": environ})
+        return ServiceClient(f"{value}:{deployment}", price, **seen.options.get(value, {}))
+
+    monkeypatch.setattr(exploration, "exploration_client", fake)
+    return seen
+
+
+def test_service_names_reach_their_clients_with_the_deployment(built):
+    azure, foundry = client_for_model("azure_openai:dep1", None), client_for_model("foundry:dep2", (Decimal(3), Decimal(15)))
+    assert [(b["value"], b["deployment"], b["price"]) for b in built] == [("azure_openai", "dep1", None), ("foundry", "dep2", (3, 15))]
+    assert azure.name == "azure_openai:dep1" and foundry.name == "foundry:dep2"
+    assert type(azure).__name__ == "StandIn" and type(foundry).__name__ == "StandIn"           # both are behind the guard
+    plain = client_for_model("model-x", None)
+    assert type(plain).__name__ == "AnthropicClient" and len(built) == 2
+
+
+def test_a_name_with_a_blank_deployment_is_a_command_error_before_any_client_is_built(two_documents, tmp_path, capsys, built):
+    for name in ("azure_openai:", "foundry:", "foundry:   "):
+        with pytest.raises(SystemExit) as raised:
+            main(["--models", "model-b", name, "--set", str(two_documents), "--spec", str(SPEC_DIR), "--out", str(tmp_path / "r.csv")])
+        assert raised.value.code == 2 and "needs a deployment" in capsys.readouterr().err
+    with pytest.raises(ValueError):
+        client_for_model("azure_openai:", None)
+    assert built == []
+
+
+def test_a_missing_setting_is_a_command_error_naming_the_variable(two_documents, tmp_path, capsys, monkeypatch):
+    monkeypatch.delenv("AZURE_OPENAI_ENDPOINT", raising=False)
+    with pytest.raises(SystemExit) as raised:
+        main(["--models", "azure_openai:dep1", "--set", str(two_documents), "--spec", str(SPEC_DIR), "--out", str(tmp_path / "r.csv")])
+    assert raised.value.code == 2 and "AZURE_OPENAI_ENDPOINT" in capsys.readouterr().err
+
+
+def test_prices_take_the_service_names(two_documents, tmp_path, built):
+    out = tmp_path / "result.csv"
+    argv = ["--models", "azure_openai:dep1", "--set", str(two_documents), "--spec", str(SPEC_DIR), "--out", str(out)]
+    assert main([*argv, "--price", "azure_openai:dep1=2,8"]) == 0
+    assert built[0]["price"] == (2, 8) and [r["cost"] for r in read_rows(out)] == ["0.0036", "0.0036"]    # 1000 * 2 + 200 * 8 per million
+
+
+def test_estimate_only_says_unknown_for_azure_and_counts_foundry(two_documents, tmp_path, capsys, built):
+    built.options = {"azure_openai": {"counts": None}, "foundry": {"counts": 42}}
+    assert main(["--models", "azure_openai:dep1", "foundry:dep2", "--set", str(two_documents), "--spec", str(SPEC_DIR), "--estimate-only"]) == 0
+    printed = capsys.readouterr().out
+    assert "azure_openai:dep1: unknown (" in printed and "foundry:dep2: 42 input tokens" in printed
+
+
+def test_estimate_goes_on_after_a_copilot_error_from_the_count(two_documents, capsys):
+    class Counting(FakeClient):
+        def count_tokens(self, req):
+            if self.name == "model-a":
+                raise CopilotError("the exploration reader for Foundry failed at its service: ConnectionError")
+            return super().count_tokens(req)
+
+    assert main(["--models", "model-a", "model-b", "--set", str(two_documents), "--spec", str(SPEC_DIR), "--estimate-only"],
+                client_factory=lambda model, price: Counting(model, price)) == 1          # every model was tried, and one count failed
+    printed = capsys.readouterr().out
+    assert ("model-a: the count failed (the exploration reader for Foundry failed at its service: ConnectionError); correct the "
+            "variables before the full run") in printed
+    assert "model-b: 5000 input tokens" in printed
+
+
+def test_a_service_failure_is_an_error_row_and_the_run_goes_on(two_documents, tmp_path, capsys):
+    out = tmp_path / "result.csv"
+    factory = lambda model, price: ServiceClient(model, price, fails_on=2)
+    assert run(two_documents, out, factory, models=("azure_openai:dep1", "foundry:dep2", "model-b")) == 0
+    rows = read_rows(out)
+    assert [r["error"] for r in rows[:2]] == ["", "service failed: the exploration reader for Azure OpenAI failed at its service: ConnectionError"]
+    assert [r["model"] for r in rows] == ["azure_openai:dep1"] * 2 + ["foundry:dep2"] * 2 + ["model-b"] * 2 and rows[1]["fields_correct"] == "0"
+    assert "Summary over 2 documents per model" in capsys.readouterr().out
+
+
+def test_the_record_folder_of_a_service_name_has_no_colon(two_documents, tmp_path):
+    record = tmp_path / "recorded"
+    assert run(two_documents, tmp_path / "result.csv", Models(), "--record", str(record), models=("azure_openai:dep1",)) == 0
+    assert [p.name for p in record.iterdir()] == ["azure_openai_dep1"] and list((record / "azure_openai_dep1").glob("*.json"))
+
+
+def test_a_document_outside_the_made_up_folders_is_an_error_row_without_a_call(madeup_out, tmp_path, monkeypatch):
+    folder = tmp_path / "set"
+    folder.mkdir()
+    (folder / "MU05_conf.pdf").write_bytes((madeup_out / "MU05_conf.pdf").read_bytes() + b"\n")      # one byte more: no made-up file
+    inner = []
+
+    def fake(value, environ, deployment=None, effort="medium", price=None, session=None):
+        inner.append(ServiceClient(f"{value}:{deployment}", price))
+        return inner[-1]
+
+    monkeypatch.setattr(exploration, "exploration_client", fake)
+    out = tmp_path / "result.csv"
+    assert main(["--models", "azure_openai:dep1", "--set", str(folder), "--spec", str(SPEC_DIR), "--out", str(out)]) == 0
+    [row] = read_rows(out)
+    assert row["error"].startswith("Copilot could not read this document:") and row["fields_correct"] == "0"
+    assert inner[0].calls == []
+
+
+@pytest.mark.parametrize("status, kind", [(404, "AzureNotFound"), (401, "AzureKeyRefused")])
+def test_an_azure_openai_failure_is_a_row_with_the_class_that_names_its_cause(tmp_path, monkeypatch, status, kind):
+    """The real Azure OpenAI client behind the real guard, over a fake session that answers every request with the status."""
+    from aid.readers import stand_in
+    from aid.readers.azure_client import AzureOpenAIClient
+    from aid.tests.test_azure_client import FakeResponse, FakeSession
+    folder = tmp_path / "set"
+    folder.mkdir()
+    for name in ("MU01_conf.pdf", "CART02.png"):                     # the package's own made-up files, which the guard lets through
+        shutil.copy(stand_in.MADE_UP_FOLDERS[0] / name, folder / name)
+    sessions = []
+
+    def azure(value, environ, deployment=None, effort="medium", price=None, session=None):
+        sessions.append(FakeSession(FakeResponse(status, {"error": {"code": "made-up-code", "message": "made-up message"}})))
+        return AzureOpenAIClient("https://made-up.openai.azure.com", "made-up-key", deployment, price_per_mtok=price, session=sessions[-1])
+
+    monkeypatch.setattr(exploration, "exploration_client", azure)
+    out = tmp_path / "result.csv"
+    assert main(["--models", "azure_openai:dep1", "--set", str(folder), "--spec", str(SPEC_DIR), "--out", str(out)]) == 0
+    assert [r["error"] for r in read_rows(out)] == [f"service failed: the exploration reader for Azure OpenAI failed at its service: {kind}"] * 2
+    assert len(sessions[0].calls) == 2                               # each document was sent, and refused
+
+
+class Failing(ServiceClient):
+    """A client a service name stands for whose service fails at every document."""
+
+    def complete(self, req):
+        self.calls.append(req)
+        raise CopilotError("the exploration reader for Azure OpenAI failed at its service: AzureLimit")
+
+
+def test_no_decision_is_made_over_documents_that_a_service_did_not_read(two_documents, tmp_path, capsys):
+    """A document whose service failed scores 0 and costs nothing: a decision over it would rest on the failure, not on a reading."""
+    prices = ["--price", "azure_openai:dep1=2,8", "--price", "foundry:dep2=3,15"]
+    assert run(two_documents, tmp_path / "result.csv", lambda model, price: Failing(model, price), *prices,
+               models=("azure_openai:dep1", "foundry:dep2")) == 0
+    printed = capsys.readouterr().out
+    assert ("No decision: 4 documents of azure_openai:dep1, foundry:dep2 were not read (the service failed, or the document was "
+            "refused); run the same command again with the same --record to ask them again.") in printed
+    assert "Decision:" not in printed
+
+
+def test_no_decision_is_made_while_one_document_was_refused_by_the_guard(madeup_out, tmp_path, capsys, built):
+    """The guard's refusal is a document that was not read as well: here the cart, changed by one byte, beside the confirmation."""
+    folder = tmp_path / "set"
+    folder.mkdir()
+    shutil.copy(madeup_out / "MU01_conf.pdf", folder / "MU01_conf.pdf")
+    (folder / "CART02.png").write_bytes((madeup_out / "CART02.png").read_bytes() + b"\n")
+    assert run(folder, tmp_path / "result.csv", None, "--price", "azure_openai:dep1=2,8", models=("azure_openai:dep1",)) == 0
+    printed = capsys.readouterr().out
+    assert ("No decision: 1 document of azure_openai:dep1 was not read (the service failed, or the document was refused); run the "
+            "same command again with the same --record to ask it again.") in printed and "Decision:" not in printed
+
+
+@pytest.mark.parametrize("failure", [ReaderError("no usable answer"), CopilotError("made-up failure")])
+def test_an_unread_document_of_an_anthropic_model_id_still_counts_as_0_and_the_run_decides(two_documents, tmp_path, capsys, failure):
+    """The rule of results/README.md for the Anthropic models: an unread document counts as 0, and the decision is made."""
+    class Unread(FakeClient):
+        def complete(self, req):
+            if req.pdf is None:                           # the cart
+                raise failure
+            return super().complete(req)
+
+    factory = lambda model, price: (Unread if model == "model-a" else FakeClient)(model, price)
+    assert run(two_documents, tmp_path / "result.csv", factory, *PRICES_A_B, models=("model-a", "model-b")) == 0
+    printed = capsys.readouterr().out
+    assert "model-a: field accuracy 50.0%" in printed and "Decision: model-b" in printed and "No decision" not in printed
+
+
+@pytest.mark.parametrize("name", ["Foundry:dep", "azure-openai:dep"])
+@pytest.mark.parametrize("extra", [[], ["--estimate-only"]], ids=["a run", "an estimate"])
+def test_a_misspelt_service_name_is_a_command_error_before_any_client_is_built(two_documents, tmp_path, capsys, name, extra):
+    """A name with a colon is no Anthropic model id: one whose service is misspelt would otherwise leave the guard."""
+    models = Models()
+    with pytest.raises(SystemExit) as raised:
+        run(two_documents, tmp_path / "result.csv", models, *extra, models=("model-a", name))
+    assert raised.value.code == 2 and models.clients == {} and not (tmp_path / "result.csv").exists()
+    assert (f"{name!r} names no service: use azure_openai:<deployment> or foundry:<deployment>; an Anthropic model id holds no "
+            "colon") in capsys.readouterr().err
+
+
+def test_estimate_says_unknown_for_azure_openai_without_sending_anything(two_documents, capsys, monkeypatch):
+    """The real Azure OpenAI client behind the real guard: its count is unknown, and its session is never used."""
+    from aid.readers.azure_client import NO_COUNT, AzureOpenAIClient
+
+    class Unused:
+        def post(self, *args, **kwargs):
+            raise AssertionError("the estimate sent a request to Azure OpenAI")
+
+    def azure(value, environ, deployment=None, effort="medium", price=None, session=None):
+        return AzureOpenAIClient("https://made-up.openai.azure.com", "made-up-key", deployment, session=Unused())
+
+    monkeypatch.setattr(exploration, "exploration_client", azure)
+    assert main(["--models", "azure_openai:dep1", "--set", str(two_documents), "--spec", str(SPEC_DIR), "--estimate-only"]) == 0
+    assert f"azure_openai:dep1: unknown ({NO_COUNT})" in capsys.readouterr().out
+
+
+def test_estimate_on_a_set_outside_the_made_up_folders_counts_nothing(madeup_out, tmp_path, capsys, monkeypatch):
+    """A count sends the document as an answer does, so the guard refuses it first, for both services."""
+    folder = tmp_path / "set"
+    folder.mkdir()
+    (folder / "MU05_conf.pdf").write_bytes((madeup_out / "MU05_conf.pdf").read_bytes() + b"\n")       # one byte more: no made-up file
+    inner = []
+
+    def fake(value, environ, deployment=None, effort="medium", price=None, session=None):
+        inner.append(ServiceClient(f"{value}:{deployment}", price))
+        return inner[-1]
+
+    monkeypatch.setattr(exploration, "exploration_client", fake)
+    assert main(["--models", "azure_openai:dep1", "foundry:dep2", "--set", str(folder), "--spec", str(SPEC_DIR), "--estimate-only"]) == 0
+    printed = capsys.readouterr().out
+    for model, service in (("azure_openai:dep1", "Azure OpenAI"), ("foundry:dep2", "Anthropic's models in Microsoft Foundry")):
+        assert f"{model}: unknown (Copilot could not read this document: the exploration reader for {service} reads" in printed
+    assert len(inner) == 2 and all(client.counted == [] and client.calls == [] for client in inner)
