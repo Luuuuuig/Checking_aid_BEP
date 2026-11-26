@@ -35,8 +35,10 @@ it; without it stand_in_for says so and nothing is sent.
 
 AID_STAND_IN also takes the values "azure_openai" and "foundry" (VALUES; active is true for each of the three, and value says which):
 stand_in_for then gives the exploration reader of Azure OpenAI or of Anthropic's models in Microsoft Foundry instead
-(aid/readers/exploration.py), behind the same guard, with texts that name the service. Its allowed set is the made-up folders alone
-(made_up_digests with no manifest), so that no document of evaluation/unseen_cases can reach either service. It is refused, in this
+(aid/readers/exploration.py), behind the same guard, with texts that name the service. Its allowed set is the one of "anthropic",
+the made-up folders and the manifest, since by the owner's decision of 26 November 2026 the timed evaluation run reads the cases of
+evaluation/unseen_cases through Azure OpenAI; the one-document check and the bake-off build their guard without the manifest
+(exploration.guarded). It is refused, in this
 order, outside the test mode, while the settings name any part of the work mailbox, and without its environment variables (foundry
 also without the Anthropic library's client for Foundry). A count of the tokens of a request (StandIn.count_tokens) sends the
 request as well, so it passes the same check first, and a failure of the service in a count is a CopilotError as in an answer. The
@@ -213,7 +215,8 @@ def setup_kind(text: str) -> str | None:
 def stand_in_for(settings: Settings, environ: Mapping[str, str] | None = None, test_text: str | None = None) -> StandIn:
     """The stand-in for the settings, with the model of the settings, or the package default while they hold the example's
     placeholder. Raises ValueError outside the test mode, without the key in the environment, or without the Anthropic library.
-    While AID_STAND_IN is "azure_openai" or "foundry", the exploration reader of that service behind the guard instead, refused with
+    While AID_STAND_IN is "azure_openai" or "foundry", the exploration reader of that service behind the guard instead, which also
+    sends the documents of the manifest of the unseen cases (guarded with unseen_cases=True), refused with
     ValueError outside the test mode, while the settings name any part of the work mailbox, or without its environment variables
     (foundry also without the Anthropic library's client for Foundry)."""
     environ = os.environ if environ is None else environ
@@ -223,7 +226,8 @@ def stand_in_for(settings: Settings, environ: Mapping[str, str] | None = None, t
         if not settings.test_mode:
             raise ValueError(exploration.NO_TEST_MODE.format(service=exploration.SERVICES[chosen], value=chosen))
         exploration.check_no_mailbox(chosen, settings)
-        return exploration.guarded(chosen, exploration.exploration_client(chosen, environ, effort=settings.effort), test_text)
+        return exploration.guarded(chosen, exploration.exploration_client(chosen, environ, effort=settings.effort), test_text,
+                                   unseen_cases=True)
     if not settings.test_mode:
         raise ValueError(NO_TEST_MODE)
     if not environ.get(KEY):

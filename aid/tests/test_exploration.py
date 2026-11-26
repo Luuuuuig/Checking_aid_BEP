@@ -1,6 +1,6 @@
 """The exploration readers (aid/readers/exploration.py): Azure OpenAI and Anthropic's models in Microsoft Foundry in Copilot's place
-while the process has AID_STAND_IN=azure_openai or foundry, for the made-up documents of the package only (never a document of the
-unseen cases), without a mailbox and in the test mode only. No test calls a service."""
+while the process has AID_STAND_IN=azure_openai or foundry, for the made-up documents only (in the aid also those of the unseen cases,
+never in the one-document check or the bake-off), without a mailbox and in the test mode only. No test calls a service."""
 import hashlib
 import json
 import os
@@ -80,8 +80,8 @@ def test_the_switch_is_on_for_the_three_values(tmp_path):
     settings, _ = settings_file(tmp_path, reader="llm", test_mode=True)
     for written, value in ((" Azure_OpenAI ", "azure_openai"), ("FOUNDRY", "foundry")):
         guard = stand_in.stand_in_for(settings, switched_on(value, AID_STAND_IN=written))
-        assert guard.name == f"{value}:dep" and guard.allowed == stand_in.made_up_digests(manifest=None)
-        assert stand_in.extra_digests() and not guard.allowed & stand_in.extra_digests()      # never a document of the unseen cases
+        assert guard.name == f"{value}:dep" and guard.allowed == stand_in.made_up_digests()
+        assert stand_in.extra_digests() and stand_in.extra_digests() <= guard.allowed      # in the aid, the unseen cases too (26 November)
 
 
 def test_anthropic_is_unchanged(tmp_path, monkeypatch):
@@ -127,8 +127,8 @@ def test_the_exploration_readers_refuse_any_part_of_the_work_mailbox(tmp_path, m
     assert str(refused.value) == exploration.NO_MAILBOX.format(service=exploration.SERVICES[value], value=value, field=field)
     assert made == []
     guard = stand_in.stand_in_for(settings, switched_on(value))                           # without it, the reader is made
-    assert guard.name == f"{value}:dep" and guard.allowed == stand_in.made_up_digests(manifest=None)
-    assert stand_in.extra_digests() and not guard.allowed & stand_in.extra_digests()
+    assert guard.name == f"{value}:dep" and guard.allowed == stand_in.made_up_digests()
+    assert stand_in.extra_digests() and stand_in.extra_digests() <= guard.allowed
 
 
 @pytest.mark.parametrize("value, missing, named", [
@@ -230,8 +230,9 @@ def test_foundry_is_refused_without_the_library_s_client_for_foundry(monkeypatch
 
 @pytest.mark.parametrize("value", EXPLORATION)
 def test_the_exploration_readers_allow_the_made_up_folders_only(value):
-    """The allowed set of an exploration reader is the made-up folders of the package, without the manifest of the unseen cases that
-    the stand-in takes as well; checked here also where evaluation/unseen_cases is not in the repository."""
+    """The allowed set of an exploration reader as the one-document check and the bake-off build it is the made-up folders of the
+    package, without the manifest of the unseen cases that the aid takes as well; checked here also where evaluation/unseen_cases is
+    not in the repository."""
     guard = exploration.guarded(value, Service(f"{value}:dep"))
     assert guard.allowed and guard.allowed == stand_in.made_up_digests(manifest=None)
     assert stand_in.extra_digests() and not stand_in.extra_digests() & guard.allowed
@@ -240,6 +241,8 @@ def test_the_exploration_readers_allow_the_made_up_folders_only(value):
 
 @pytest.mark.skipif(not UNSEEN_DOCUMENTS.is_dir(), reason="evaluation/unseen_cases is not in this repository")
 def test_a_document_of_the_unseen_cases_goes_to_anthropic_but_not_to_the_exploration_readers(tmp_path, monkeypatch):
+    """The exploration readers here are guarded as the one-document check and the bake-off guard them; in the aid they take the
+    manifest as well (test_evaluation_run_reader.py)."""
     first = stand_in.EXTRA_MANIFEST.read_text(encoding="ascii").split()[0]
     paths = [path for path in sorted(UNSEEN_DOCUMENTS.iterdir()) if path.is_file() and hashlib.sha256(path.read_bytes()).hexdigest() == first]
     document = paths[0].read_bytes()

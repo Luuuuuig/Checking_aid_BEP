@@ -6,7 +6,9 @@ by field: the value of each field and the page and line it was found on. The fir
 the seconds and, with --price (euros per million input tokens and per million output tokens), the cost.
 
 The key and the other settings come from environment variables only (see aid/readers/exploration.py), and the key is never printed.
-The document always goes through guarded(): a file that is not a made-up document of the package is refused before anything is sent.
+The document always goes through guarded(): a file that is not a made-up document of the package is refused before anything is sent,
+and so is a document of the unseen cases of the evaluation (made_up_extra.sha256), which the aid alone sends, for the evaluation run:
+this check prints what it read, and nobody may see a case of the evaluation before the run.
 
 The kind is "cart" for a .png and "confirmation" otherwise, unless --kind says so. The exit code is 0 for a reading, 2 for a refusal
 (a document that is not made up, a file that cannot be read, a missing variable, an answer that cannot be used) with its

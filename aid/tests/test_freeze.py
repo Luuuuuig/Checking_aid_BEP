@@ -122,6 +122,35 @@ def test_an_unset_limit_is_recorded_as_unset(tmp_path, monkeypatch):
     assert record["settings"]["authorization_limit"] == "unset" == record["rules"]["R10"]["settings"]["authorization_limit"]
 
 
+KEYS = ["aid_version", "git_commit", "git_problem", "model", "packages", "packages_problem", "packages_source", "prompts", "python",
+        "rules", "settings", "settings_sha256", "timestamp", "working_tree_clean"]      # the entries of the record before stand_in
+SECRETS = {"AZURE_OPENAI_API_KEY": "test-key", "AZURE_OPENAI_ENDPOINT": "https://made-up.openai.azure.com",
+           "ANTHROPIC_FOUNDRY_API_KEY": "test-key", "ANTHROPIC_FOUNDRY_RESOURCE": "made-up-resource",
+           "ANTHROPIC_FOUNDRY_BASE_URL": "https://made-up.services.ai.azure.com/anthropic", "ANTHROPIC_API_KEY": "test-key"}
+
+
+@pytest.mark.parametrize(("environ", "expected"), [
+    ({"AID_STAND_IN": " azure_openai ", "AZURE_OPENAI_DEPLOYMENT": " dep-azure "}, {"value": "azure_openai", "deployment": "dep-azure"}),
+    ({"AID_STAND_IN": "foundry", "AID_FOUNDRY_DEPLOYMENT": "dep-foundry"}, {"value": "foundry", "deployment": "dep-foundry"}),
+    ({"AID_STAND_IN": "azure_openai"}, {"value": "azure_openai", "deployment": None}),
+    ({"AID_STAND_IN": "anthropic", "AZURE_OPENAI_DEPLOYMENT": "dep-azure"}, {"value": "anthropic", "deployment": None}),
+    ({"AID_STAND_IN": "  "}, {"value": None, "deployment": None}),
+    ({}, {"value": None, "deployment": None})])
+def test_the_record_names_the_reader_chosen_by_the_environment_and_no_key_or_address(settings_file, tmp_path, monkeypatch, environ,
+                                                                                    expected):
+    """The reader of a run that reads through AID_STAND_IN: the value and the deployment of its service, never a key or an address,
+    even when they are set; every other entry of the record is as it was."""
+    monkeypatch.setattr(freeze, "PIP_FREEZE", NO_PIP)
+    settings = freeze.load_settings(settings_file)
+    record = freeze.freeze_record(settings_file, settings, tmp_path, lambda: CLOCK, environ=SECRETS | environ)
+    assert record["stand_in"] == expected
+    assert sorted(record) == sorted(KEYS + ["stand_in"]) and record["model"] == settings.model
+    text = json.dumps(record)
+    assert not [value for value in SECRETS.values() if value in text]
+    plain = freeze.freeze_record(settings_file, settings, tmp_path, lambda: CLOCK, environ={})
+    assert {key: plain[key] for key in KEYS} == {key: record[key] for key in KEYS}
+
+
 # --- the command ---
 
 def test_the_command_writes_the_record_without_the_amount(settings_file, repo, tmp_path, monkeypatch, capsys):

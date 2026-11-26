@@ -23,8 +23,10 @@ documents from the services. The exploration therefore runs in a folder of made-
 python -m aid.demo --prepare-only --out <folder>.
 
 The client is wrapped in the stand-in's guard (guarded). A request goes out only when each of its documents is, byte for byte, a file
-of the made-up folders of the package; the manifest of the unseen cases (made_up_extra.sha256) is left out, so that no document of
-evaluation/unseen_cases can reach either service. A refusal begins as the runner's COULD_NOT_READ does and names the service. A
+of the made-up folders of the package. In the aid (stand_in.stand_in_for) a document whose sha256 stands in the manifest of the unseen
+cases (made_up_extra.sha256) goes out as well, as with the stand-in: by the owner's decision of 26 November 2026 the timed evaluation
+run reads evaluation/unseen_cases through Azure OpenAI. The one-document check (explore.py) and the bake-off leave the manifest out,
+since the check prints what it read and the bake-off scores it, and nobody may see a case before the run. A refusal begins as the runner's COULD_NOT_READ does and names the service. A
 failure of the service is a CopilotError that names the service and the class of the error (for Azure OpenAI a class named by
 the cause, aid/readers/azure_client.py), so that the case is read again at a later pass.
 """
@@ -117,10 +119,12 @@ def check_no_mailbox(value: str, settings: Settings) -> None:
         raise ValueError(NO_MAILBOX.format(service=SERVICES[value], value=value, field=field))
 
 
-def guarded(value: str, client, test_text: str | None = None) -> StandIn:
+def guarded(value: str, client, test_text: str | None = None, *, unseen_cases: bool = False) -> StandIn:
     """The client behind the stand-in's guard, with the texts of its service: it sends a document only when it is byte for byte a
-    file of the made-up folders of the package, never one of the manifest of the unseen cases, and no question but the one test
-    message `test_text` of the settings tab (StandIn)."""
+    file of the made-up folders of the package, and no question but the one test message `test_text` of the settings tab (StandIn).
+    A document of the manifest of the unseen cases goes out only with `unseen_cases` True, which stand_in.stand_in_for alone gives
+    (the evaluation run in the aid, by the owner's decision of 26 November 2026); the one-document check and the bake-off never do."""
     service = SERVICES[value]
-    return StandIn(client, test_text, allowed=made_up_digests(manifest=None), not_made_up=NOT_MADE_UP.format(service=service),
+    allowed = made_up_digests() if unseen_cases else made_up_digests(manifest=None)
+    return StandIn(client, test_text, allowed=allowed, not_made_up=NOT_MADE_UP.format(service=service),
                    service_failed=SERVICE_FAILED.format(service=service, kind="{kind}"))       # StandIn fills in the kind

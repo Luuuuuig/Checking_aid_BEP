@@ -5,7 +5,8 @@ whose accuracy is close enough to the best is chosen.
                                        [--estimate-only] [--record DIR]
 
 A model is an Anthropic model id, or azure_openai:<deployment> or foundry:<deployment>, the exploration readers of aid/readers/exploration.py
-(made-up documents only, their settings in environment variables; no route of Azure OpenAI that counts tokens before an answer is documented,
+(the made-up files of the package only, never a document of the unseen cases of the evaluation, which nobody may see scored before the
+run; their settings in environment variables; no route of Azure OpenAI that counts tokens before an answer is documented,
 so --estimate-only says unknown for it). A name with a colon is never an Anthropic model id: one that names no service is a command error.
 
 For each model, in the order given, the command reads each *_conf.pdf of --set as a confirmation and each *.png (CART02.png) as a cart

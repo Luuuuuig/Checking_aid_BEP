@@ -1358,7 +1358,8 @@ def build_deps(settings: Settings, environ: Mapping[str, str], account: Microsof
 
     While `environ` has AID_STAND_IN=azure_openai or AID_STAND_IN=foundry, reader "llm" reads through the exploration reader of
     Azure OpenAI or of Anthropic's models in Microsoft Foundry instead (aid/readers/exploration.py), behind the same guard with the
-    made-up folders of the package only, so never a document of the unseen cases, and the decider is MadeUpDecider as well. It is
+    made-up folders of the package and the documents of the unseen cases (the evaluation run, by the owner's decision of 26 November
+    2026), and the decider is MadeUpDecider as well. It is
     refused with ValueError outside the test mode, while the settings name any part of the work mailbox (the tenant, the client, the
     mailbox, the mail folder or the order folder), and without its environment variables, which a refusal names without a value."""
     reader, decider = read_with_parser, NoDecider()

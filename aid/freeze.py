@@ -10,6 +10,10 @@ freeze_record gathers:
   "set" or "unset" exactly as the audit shows it (aid/audit.py); nothing else is hidden;
 - prompts, each prompt file of aid/readers/prompts: its path, the version marker of its first line and its sha256;
 - model, the model id of the settings;
+- stand_in, the reader that the environment chooses for a run that reads through AID_STAND_IN (aid/readers/stand_in.py): value, the
+  value of AID_STAND_IN as the aid takes it, without the spaces around it and in lower case, and deployment, for azure_openai and
+  foundry the name of the deployment in AZURE_OPENAI_DEPLOYMENT or AID_FOUNDRY_DEPLOYMENT; each None when unset or blank, and the
+  deployment None for anthropic, whose model is the one of the settings. Never a key or the address of a resource;
 - rules, the routing rules R01 to R11, each with the settings it reads (RULE_SETTINGS of aid/routing.py) and their values, the
   authorization limit again as "set" or "unset";
 - aid_version (the default of Deps.aid_version), python, the Python version, and packages: the lines of `pip freeze`, or, when pip
@@ -27,13 +31,14 @@ import os
 import platform
 import subprocess
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime
 from importlib import metadata
 from pathlib import Path
 
 from aid.audit import _settings_dump
 from aid.pipeline import _PROMPT_VERSION, Deps
+from aid.readers import exploration, stand_in
 from aid.routing import FALLBACK_RULE, RULE_SETTINGS
 from aid.settings import Settings, load_settings
 
@@ -48,8 +53,10 @@ def now() -> datetime:
     return datetime.now().astimezone()
 
 
-def freeze_record(settings_path: Path, settings: Settings, repo_root: Path, clock: Callable[[], datetime]) -> dict:
-    """The freeze record (see the module docstring) of the settings read from `settings_path`, for the repository at `repo_root`."""
+def freeze_record(settings_path: Path, settings: Settings, repo_root: Path, clock: Callable[[], datetime],
+                  environ: Mapping[str, str] = os.environ) -> dict:
+    """The freeze record (see the module docstring) of the settings read from `settings_path`, for the repository at `repo_root`,
+    with the reader that the environment `environ` chooses."""
     commit, git_problem = _git(repo_root, "rev-parse", "HEAD")
     status, _ = _git(repo_root, "status", "--porcelain") if commit is not None else (None, None)
     dumped = _settings_dump(settings)
@@ -62,6 +69,7 @@ def freeze_record(settings_path: Path, settings: Settings, repo_root: Path, cloc
         "settings": dumped,
         "prompts": [_prompt(path, repo_root) for path in sorted((repo_root / PROMPTS).glob("*.md"))],
         "model": settings.model,
+        "stand_in": _stand_in(environ),
         "rules": {rule: {"settings": {name: dumped[name] for name in names}}
                   for rule, names in sorted(RULE_SETTINGS.items()) if rule != FALLBACK_RULE},
         "aid_version": Deps.model_fields["aid_version"].default,
@@ -104,6 +112,15 @@ def _git(repo_root: Path, *args: str) -> tuple[str | None, str | None]:
     if done.returncode != 0:
         return None, f"git {args[0]} failed: {done.stderr.strip()}"
     return done.stdout.strip(), None
+
+
+def _stand_in(environ: Mapping[str, str]) -> dict:
+    """The value of AID_STAND_IN, as the aid takes it (stand_in.value), and for an exploration reader the name of its deployment;
+    None for each that is unset or blank. Never a key or an address."""
+    chosen = stand_in.value(environ) or None
+    names = exploration.VARIABLES.get(chosen or "")
+    deployment = environ.get(names[-1], "").strip() if names else ""
+    return {"value": chosen, "deployment": deployment or None}
 
 
 def _sha256(path: Path) -> str:
