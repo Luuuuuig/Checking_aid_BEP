@@ -1354,7 +1354,13 @@ def build_deps(settings: Settings, environ: Mapping[str, str], account: Microsof
     client (NO_LLM). While `environ` switches the stand-in for Copilot on (AID_STAND_IN=anthropic, aid/readers/stand_in.py), reader
     "llm" reads through the stand-in instead, which sends the made-up documents only, needs no tenant and no client, and is refused
     with ValueError outside the test mode, without the key or without the Anthropic library; the decider is then MadeUpDecider, which
-    asks no model."""
+    asks no model.
+
+    While `environ` has AID_STAND_IN=azure_openai or AID_STAND_IN=foundry, reader "llm" reads through the exploration reader of
+    Azure OpenAI or of Anthropic's models in Microsoft Foundry instead (aid/readers/exploration.py), behind the same guard with the
+    made-up folders of the package only, so never a document of the unseen cases, and the decider is MadeUpDecider as well. It is
+    refused with ValueError outside the test mode, while the settings name any part of the work mailbox (the tenant, the client, the
+    mailbox, the mail folder or the order folder), and without its environment variables, which a refusal names without a value."""
     reader, decider = read_with_parser, NoDecider()
     if settings.reader == "llm" and stand_in.active(environ):
         reader, decider = llm_reader(stand_in.stand_in_for(settings, environ)), stand_in.MadeUpDecider()
