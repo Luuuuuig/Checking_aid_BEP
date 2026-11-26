@@ -106,7 +106,7 @@ def extra_digests(manifest: Path = EXTRA_MANIFEST) -> frozenset[str]:
 
 def made_up_digests(folders: tuple[Path, ...] = MADE_UP_FOLDERS, manifest: Path | None = EXTRA_MANIFEST) -> frozenset[str]:
     """The sha256, in hex, of every PDF and PNG file of the made-up set and of the manifest's documents: the documents the
-    stand-in may send. A manifest of None adds none, as for the exploration readers."""
+    stand-in may send. A manifest of None adds none, as for the one-document check, the bake-off and the settings tab's test."""
     return (frozenset(hashlib.sha256(path.read_bytes()).hexdigest() for folder in folders if folder.is_dir()
                      for path in sorted(folder.iterdir()) if path.is_file() and path.suffix.lower() in MADE_UP_SUFFIXES) \
         | (frozenset() if manifest is None else extra_digests(manifest))) - {EMPTY_SHA256}

@@ -14,11 +14,12 @@ freeze_record gathers:
 - model, the model id of the settings;
 - stand_in, the exploration reader or the stand-in that a run reads with, as build_deps of aid/runner.py chooses it: while the
   settings name a reader chosen on the settings tab ("azure_openai" or "foundry"), that reader, which build_deps takes whatever
-  AID_STAND_IN holds, with the deployment of the settings (azure_openai_deployment or foundry_deployment); else the reader that the
-  environment chooses for a run that reads through AID_STAND_IN (aid/readers/stand_in.py): value, the value of AID_STAND_IN as the
-  aid takes it, without the spaces around it and in lower case, and deployment, for azure_openai and foundry the name of the
-  deployment in AZURE_OPENAI_DEPLOYMENT or AID_FOUNDRY_DEPLOYMENT; each None when unset or blank, and the deployment None for
-  anthropic, whose model is the one of the settings. Never a key, an endpoint or a resource;
+  AID_STAND_IN holds, with the deployment of the settings (azure_openai_deployment or foundry_deployment); else, with reader "llm"
+  and a value of AID_STAND_IN that the aid knows (stand_in.active), the reader that the environment chooses for a run that reads
+  through AID_STAND_IN (aid/readers/stand_in.py): value, the value of AID_STAND_IN as the aid takes it, without the spaces around it
+  and in lower case, and deployment, for azure_openai and foundry the name of the deployment in AZURE_OPENAI_DEPLOYMENT or
+  AID_FOUNDRY_DEPLOYMENT, None when unset or blank, and None for anthropic, whose model is the one of the settings; else, for a run
+  that reads with the parser or with Copilot itself, None for both. Never a key, an endpoint or a resource;
 - rules, the routing rules R01 to R11, each with the settings it reads (RULE_SETTINGS of aid/routing.py) and their values, the
   authorization limit again as "set" or "unset";
 - aid_version (the default of Deps.aid_version), python, the Python version, and packages: the lines of `pip freeze`, or, when pip
@@ -125,14 +126,17 @@ def _git(repo_root: Path, *args: str) -> tuple[str | None, str | None]:
 
 
 def _stand_in(settings: Settings, environ: Mapping[str, str]) -> dict:
-    """The reader a run reads with, as build_deps chooses it (see the module docstring): the reader chosen on the settings tab with
-    the deployment of the settings; else the value of AID_STAND_IN, as the aid takes it (stand_in.value), and for an exploration
-    reader the name of its deployment in the environment. None for each that is unset or blank. Never a key or an address."""
+    """The reader a run reads with, exactly as build_deps of aid/runner.py chooses it (see the module docstring): the reader chosen
+    on the settings tab with the deployment of the settings; else, with reader "llm" and a value of AID_STAND_IN that the aid knows
+    (stand_in.active), that value as the aid takes it (stand_in.value), and for an exploration reader the name of its deployment in
+    the environment, None when unset or blank; else (the parser, Copilot itself) None for both. Never a key or an address."""
     if settings.reader in exploration.SERVICES:           # build_deps takes it whatever AID_STAND_IN holds
         deployment = getattr(settings, exploration.SETTING_OF[exploration.VARIABLES[settings.reader][-1]]) or ""
         return {"value": settings.reader, "deployment": deployment.strip() or None}
-    chosen = stand_in.value(environ) or None
-    names = exploration.VARIABLES.get(chosen or "")
+    if settings.reader != "llm" or not stand_in.active(environ):      # build_deps reads with the parser, or with Copilot itself
+        return {"value": None, "deployment": None}
+    chosen = stand_in.value(environ)
+    names = exploration.VARIABLES.get(chosen)
     deployment = environ.get(names[-1], "").strip() if names else ""
     return {"value": chosen, "deployment": deployment or None}
 

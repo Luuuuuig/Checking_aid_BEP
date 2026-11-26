@@ -117,7 +117,7 @@ def test_in_the_aid_the_reader_chosen_on_the_settings_tab_sends_a_document_of_th
     for name in exploration.PLACES:                              # the Anthropic library reads Foundry's addresses as well
         monkeypatch.delenv(name, raising=False)
     built = []
-    monkeypatch.setattr(runner, "LazySecretStore", lambda directory: keyed(value))       # the store of the tab, with the key
+    monkeypatch.setattr(runner, "KeyLook", lambda directory: keyed(value))               # the store of the tab, with the key
     monkeypatch.setattr(runner, "llm_reader", lambda client: built.append(client) or (lambda path, kind: None))
     settings = chosen(tmp_path, value)
     deps = runner.build_deps(settings, {})

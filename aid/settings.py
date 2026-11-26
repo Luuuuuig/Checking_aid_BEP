@@ -53,8 +53,9 @@ version writes it true, and the hand-over switches it off on the settings tab as
 only to the owner's own addresses (own_addresses, and the account of the work mailbox; OwnOnly of aid/messaging); switching it off
 lifts that.
 
-reader is "llm" (Microsoft 365 Copilot), "parser" (the template parser, without AI), or one of the two exploration services for the
-made-up documents of the package only: "azure_openai" (Azure OpenAI) or "foundry" (Anthropic's models in Microsoft Foundry), which
+reader is "llm" (Microsoft 365 Copilot), "parser" (the template parser, without AI), or one of the two exploration services for
+made-up documents only (the files of the package, and in the aid also those of the unseen cases, for the evaluation run: the guard
+of aid/readers/exploration.py): "azure_openai" (Azure OpenAI) or "foundry" (Anthropic's models in Microsoft Foundry), which
 the settings tab writes only once the service answered its test message (settings_client of aid/readers/exploration.py). Their
 addresses and deployments are the five settings azure_openai_endpoint, azure_openai_deployment, foundry_resource, foundry_base_url
 and foundry_deployment, which are no secrets; an empty text counts as null. Their keys are no settings and never stand in this file:
@@ -145,7 +146,7 @@ class Settings(BaseModel):
     po_store_root: Path
     watched_folder: Path
     supplier_lead_times: dict[str, int] = {}     # supplier -> days, from the ERP export (question G7 of the solution requirements); unknown supplier -> None
-    # chosen by the AI-necessity check; "azure_openai" and "foundry" read the made-up documents of the package only (see the docstring)
+    # chosen by the AI-necessity check; "azure_openai" and "foundry" read made-up documents only (see the docstring)
     reader: Literal["llm", "parser", "azure_openai", "foundry"] = "llm"
     model: str = "claude-opus-5-5"
     effort: Literal["low", "medium", "high"] = "medium"

@@ -222,7 +222,7 @@ from pathlib import Path
 
 from aid.case import TEMPORARY, WORK, Case, _write_json, load_case, sha256_file    # _write_json: the state is rewritten whole or not at all
 from aid.connections.microsoft import SIGN_IN_AGAIN, MicrosoftAccount, MicrosoftUnreachable, SignInNeeded
-from aid.connections.secrets import LazySecretStore, default_secrets_dir
+from aid.connections.secrets import KeyLook, LazySecretStore, default_secrets_dir
 from aid.decider import LlmDecider, NoDecider
 from aid.execution.by_hand import FOLDER as PREPARED, open_changes, reconcile
 from aid.execution.writer import PreparedWriter
@@ -1382,14 +1382,17 @@ def build_deps(settings: Settings, environ: Mapping[str, str], account: Microsof
     With reader "azure_openai" or "foundry", which the settings tab writes only once the service answered its test message, the
     reader is that exploration reader whatever `environ` holds: settings_client of aid/readers/exploration.py, behind the same
     guard, the documents of the unseen cases included as on the path of AID_STAND_IN (unseen_cases, for the evaluation run), with
-    the address and the deployment of the settings and the key that the secrets store in default_secrets_dir() holds,
+    the address and the deployment of the settings and the key that the secrets store in default_secrets_dir() holds, read through
+    a look that makes nothing (KeyLook), so that a key that is not there is refused without making the store,
     read now and kept in memory until the Deps are built again; the decider is MadeUpDecider. It raises ValueError, as the
     exploration reader of AID_STAND_IN does, outside the test mode, without a setting or the key, and for Foundry while the process
     environment holds the other address variable than the one the settings give (exploration.SettingsRefused, which names the
-    setting or the key and never a value), and for a store this process may not use (StoreRefused)."""
+    setting or the key and never a value), and for a store this process may not use (StoreRefused): a store inside a git work tree
+    at once, and a store of another kind than this process can use only once it holds a file of secrets, since before that the look
+    finds no key and the key counts as missing (outside Windows, where a folder may be made with a keyring)."""
     reader, decider = read_with_parser, NoDecider()
     if settings.reader in exploration.SERVICES:      # chosen on the settings tab; the key is read from the store of this PC now
-        client = exploration.settings_client(settings.reader, settings, LazySecretStore(default_secrets_dir()), unseen_cases=True)
+        client = exploration.settings_client(settings.reader, settings, KeyLook(default_secrets_dir()), unseen_cases=True)
         reader, decider = llm_reader(client), stand_in.MadeUpDecider()
     elif settings.reader == "llm" and stand_in.active(environ):
         reader, decider = llm_reader(stand_in.stand_in_for(settings, environ)), stand_in.MadeUpDecider()

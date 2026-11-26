@@ -1,5 +1,6 @@
-"""The exploration readers: Azure OpenAI and Anthropic's models in Microsoft Foundry in Copilot's place, for the made-up documents
-of the package only, to learn how well and at what cost each service reads them.
+"""The exploration readers: Azure OpenAI and Anthropic's models in Microsoft Foundry in Copilot's place, for made-up documents only
+(the files of the package, and in the aid also the documents of the manifest of the unseen cases: see the guard below), to learn how
+well and at what cost each service reads them.
 
 AID_STAND_IN=azure_openai or AID_STAND_IN=foundry switches one on, as AID_STAND_IN=anthropic switches on the stand-in for Copilot
 (aid/readers/stand_in.py, whose stand_in_for builds them through this module), and each works only while the settings have the test
@@ -19,7 +20,8 @@ plain http, is a failure of the service.
 
 The test mode is the one switch (the owner's decision of 26 November): in it the settings may name a mailbox as well, so that a
 mailbox of one's own, to which only made-up mails are sent, is read together with the service. The guard below still sends no
-document but the made-up files of the package, byte for byte, also when one arrives as a mail attachment, and nothing of an
+document but a made-up one it may send, byte for byte (a file of the package, or in the aid a document of the manifest of the
+unseen cases), also when one arrives as a mail attachment, and nothing of an
 e-mail's text goes to either service: the runner asks them to read document files only, and its decider is then MadeUpDecider,
 which asks no model to class a document. Company mail never comes to a PC outside the company: the work mailbox is never
 connected on such a PC.
@@ -66,8 +68,8 @@ PLACES = ("ANTHROPIC_FOUNDRY_RESOURCE", "ANTHROPIC_FOUNDRY_BASE_URL")     # wher
 NO_SETTING = "the exploration reader for {service} (AID_STAND_IN={value}) needs the environment variable {variable}, never in a file"
 NO_TEST_MODE = ("the exploration reader for {service} (AID_STAND_IN={value}) works only in the test mode: switch the test mode on, "
                 "or start without it")
-NOT_MADE_UP = ("Copilot could not read this document: the exploration reader for {service} reads the made-up documents of the "
-               "package only, and this document is none of them, so it was not sent")      # begins as COULD_NOT_READ of aid/runner.py
+NOT_MADE_UP = ("Copilot could not read this document: the exploration reader for {service} reads made-up documents only, and "
+               "this document is not one it may send, so it was not sent")                # begins as COULD_NOT_READ of aid/runner.py
 SERVICE_FAILED = "the exploration reader for {service} failed at its service: {kind}"    # the class of the error, never its text
 # The {variable} of NO_SETTING for an address in another form: the variable and the form it needs, never the value.
 ENDPOINT_FORM = "AZURE_OPENAI_ENDPOINT as an https address such as https://<resource>.openai.azure.com"
@@ -84,8 +86,8 @@ PLACE_SETTINGS = tuple(SETTING_OF[name] for name in PLACES)              # found
 EXAMPLES = {"azure_openai_endpoint": "https://<resource>.openai.azure.com",          # the form an address setting needs
             "foundry_base_url": "https://<resource>.services.ai.azure.com/anthropic"}
 # The refusals of such a reader (SettingsRefused): each names the reader and the setting, or the key by its name, never a value.
-READER_TEST_MODE = ('the reader "{value}" ({service}) reads the made-up documents of the package in the test mode only: switch the '
-                    'test mode on, or choose another reader')
+READER_TEST_MODE = ('the reader "{value}" ({service}) reads made-up documents in the test mode only: switch the test mode on, or '
+                    'choose another reader')
 READER_SETTING = 'the reader "{value}" ({service}) needs {setting}: fill it in on the settings tab'
 READER_KEY = ('the reader "{value}" ({service}) needs its key in the secrets store of this PC ({setting}): type it on the settings '
               'tab, never in a file')

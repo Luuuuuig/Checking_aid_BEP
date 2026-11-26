@@ -888,3 +888,39 @@ def test_the_runner_logs_a_refused_reader_of_the_settings_tab_by_its_kind_and_se
     changed(path, reader="parser")
     loop.reload()
     assert loop.deps is not deps and loop.deps.reader.__name__ == "read_with_parser"
+
+
+def test_the_refusals_say_made_up_documents_without_binding_them_to_the_package():
+    """The final review's dm-2: in the aid both paths also send the documents of the manifest of the unseen cases, while the
+    one-document check and the bake-off never do, so the refusals of a document and of the test mode say "made-up documents" without
+    "of the package", and a refused document is one the reader may not send, true in either place; the manual quotes the first."""
+    assert exploration.NOT_MADE_UP == ("Copilot could not read this document: the exploration reader for {service} reads made-up "
+                                       "documents only, and this document is not one it may send, so it was not sent")
+    assert exploration.READER_TEST_MODE == ('the reader "{value}" ({service}) reads made-up documents in the test mode only: switch the '
+                                            'test mode on, or choose another reader')
+    from aid.tests.conftest import REPO_ROOT
+    manual = (REPO_ROOT / "aid" / "MANUAL.md").read_text(encoding="utf-8")
+    assert exploration.NOT_MADE_UP.format(service="Azure OpenAI") in manual
+    for text in (exploration.NOT_MADE_UP, exploration.READER_TEST_MODE):
+        assert "of the package" not in text
+    first = " ".join(exploration.__doc__.split("\n\n")[0].split())        # the module's first paragraph, as its own later one says
+    assert "package only" not in first and "in the aid also the documents of the manifest of the unseen cases" in first
+
+
+@pytest.mark.parametrize("value", EXPLORATION)
+def test_the_runner_refuses_a_missing_key_of_the_tab_without_making_the_store(tmp_path, made, monkeypatch, value):
+    """The final review's dm-6: the runner reads the key of the service chosen on the settings tab through a look that makes nothing
+    (KeyLook of aid/connections/secrets.py), as the page does, so that a PC that holds no key refuses the reader, by the key, without
+    making the store's folder and its files; a key that is there is read as before."""
+    from aid import runner
+    from aid.connections.secrets import SecretStore
+    for name in exploration.PLACES:                              # the Anthropic library reads Foundry's addresses as well
+        monkeypatch.delenv(name, raising=False)
+    folder = runner.default_secrets_dir()                        # the conftest's folder of the store of this PC
+    assert not folder.exists()
+    with pytest.raises(exploration.SettingsRefused) as refused:
+        runner.build_deps(chosen(tmp_path, value), {})
+    assert (refused.value.kind, refused.value.settings) == ("key", (SECRET[value],)) and not folder.exists() and made == []
+    SecretStore(folder).set(SECRET[value], KEY)
+    deps = runner.build_deps(chosen(tmp_path, value), {})
+    assert isinstance(deps.decider, stand_in.MadeUpDecider) and [client._api_key for client in made] == [KEY]

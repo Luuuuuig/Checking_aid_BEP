@@ -67,8 +67,8 @@ whether the key is stored; "settings_ai_service_switched" answers a choice of a 
 sentence "service_why:<kind>" that names the field of the tab, and "settings_service_failed" a service that did not answer the test,
 with "service_hint:<kind>"; "settings_key_refused", "settings_key_refused_git" and "settings_key_refused_kind" say why the store of the
 keys is refused, as the three of the sign-in do; "settings_ai_key_removed" and "settings_ai_key_removed_reader" answer "Sleutel
-verwijderen", and "settings_ai_key_kept" a removal that removed nothing, as the parser could not be written in the place of the
-service that reads.
+verwijderen", "settings_ai_key_kept" a removal that removed nothing, as the parser could not be written in the place of the
+service that reads, and "settings_ai_key_still_stored" stands before the failure of a removal after the parser was written.
 "settings_section:<section>"
 labels a section of that tab ("Uw regels", "Leveranciers", "Stand van de assistent"; "Postvak en AI" is "settings_connections" and
 "Koppeling met Exact" "exact_title"), and the keys that begin with "assistant" are the strings of its section "Stand van de assistent":
@@ -847,8 +847,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "settings_ai_field:key": "Sleutel",
         "settings_ai_save:azure_openai": "Azure OpenAI opslaan",
         "settings_ai_save:foundry": "Foundry opslaan",
-        "settings_ai_service_help": ("Alleen voor de verzonnen documenten van het pakket en in de proefstand; de sleutel blijft in de "
-                                     "beveiligde opslag van deze pc en staat nooit op deze pagina."),
+        "settings_ai_service_help": ("Alleen voor verzonnen documenten, in de proefstand (wat er precies wordt verstuurd: handleiding, "
+                                     "3.15, The guard); de sleutel blijft in de beveiligde opslag van deze pc en staat nooit op deze "
+                                     "pagina."),
         "settings_ai_key:stored": "Er is een sleutel opgeslagen in de beveiligde opslag van deze pc.",
         "settings_ai_key:none": "Er is geen sleutel opgeslagen.",
         "settings_ai_key_remove": "Sleutel verwijderen",
@@ -866,6 +867,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "settings_ai_key_removed_reader": "Sleutel verwijderd. De assistent las met deze dienst en leest vanaf de volgende ronde zonder AI.",
         "settings_ai_key_kept": ("Er is niets verwijderd: {service} leest nog met deze sleutel, en de instellingen konden niet worden "
                                  "gewijzigd. {why}"),
+        "settings_ai_key_still_stored": ("De assistent leest vanaf de volgende ronde zonder AI, maar de sleutel staat nog in de "
+                                         "beveiligde opslag van deze pc."),
         "settings_ai_service_switched": ("Opgeslagen. {service} antwoordde op de test; de assistent leest documenten vanaf de volgende "
                                          "ronde met {service}, binnen een minuut."),
         "settings_service_refused": "Niet opgeslagen: {why}",
@@ -2047,8 +2050,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "settings_ai_field:key": "Key",
         "settings_ai_save:azure_openai": "Save Azure OpenAI",
         "settings_ai_save:foundry": "Save Foundry",
-        "settings_ai_service_help": ("For the made-up documents of the package only, in the test mode; the key stays in the protected "
-                                     "store of this PC and never stands on this page."),
+        "settings_ai_service_help": ("For made-up documents only, in the test mode (what exactly goes out: manual, 3.15, The guard); the "
+                                     "key stays in the protected store of this PC and never stands on this page."),
         "settings_ai_key:stored": "A key is stored in the protected store of this PC.",
         "settings_ai_key:none": "No key is stored.",
         "settings_ai_key_remove": "Remove the key",
@@ -2063,6 +2066,8 @@ STRINGS: dict[str, dict[str, str]] = {
                                  "letters, digits and punctuation without accents: type it again and press {save}."),
         "settings_ai_key_removed_reader": "Key removed. The assistant read with this service; from its next pass it reads without AI.",
         "settings_ai_key_kept": "Nothing was removed: {service} still reads with this key, and the settings could not be changed. {why}",
+        "settings_ai_key_still_stored": ("The assistant reads without AI from its next pass, but the key is still in the protected "
+                                         "store of this PC."),
         "settings_ai_service_switched": ("Saved. {service} answered the test; from its next pass, within a minute, the assistant reads "
                                          "documents with {service}."),
         "settings_service_refused": "Not saved: {why}",

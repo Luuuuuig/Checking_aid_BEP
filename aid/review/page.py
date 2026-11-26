@@ -602,9 +602,9 @@ the owner's test): a refusal writes nothing, keeps the reader of the file and sa
 no licence or a personal account; 401: sign in for Copilot first; 403: a permission or a consent missing), never by Copilot's own
 words. It is the one choice of the page that sends something to Microsoft, at the buyer's own press, and never when the page loads or
 its language changes. Azure OpenAI and Foundry (the owner's decision of 26 November) are written likewise only once the service answered
-the same test message, sent through the reader the runner builds of the saved settings and of the key in the secrets store of this PC
-(settings_client of aid/readers/exploration.py, behind its guard, which sends no document but the made-up files of the package, and
-the test no document at all): a
+the same test message, sent through settings_client of aid/readers/exploration.py as the runner calls it, of the saved settings and
+of the key in the secrets store of this PC, but without the unseen cases: the page's guard holds the made-up files of the package
+only, the runner's also the manifest of the unseen cases, and the test sends no document at all: a
 refusal writes nothing and says why by the field of the tab, in the page's language (the test mode by its switch, a field or the key
 missing, an address in another form, both Foundry addresses, and Foundry's address beside the other one in the environment of the
 window the aid was started from, by that variable; a mailbox in the settings is no refusal), a store of the keys that the PC refuses with
@@ -620,7 +620,7 @@ a second field, never both, and the deployment), filled from the settings file w
 key, is never filled and asks the browser not to remember it (autocomplete "new-password", which the page's load script sets,
 PAGE_JS of aid/review/look.py, as the page library does not); the line that says only whether the secrets store of this PC (the store of the Microsoft sign-in in
 default_secrets_dir(), aid/connections/secrets.py) holds the key, read without making the store, which a save of a key alone
-makes (_Look); and two buttons that answer on the line under them. Its named save,
+makes (KeyLook of aid/connections/secrets.py); and two buttons that answer on the line under them. Its named save,
 "Azure OpenAI opslaan" or "Foundry opslaan" (no save of the tab reads "Opslaan" alone, finding 7 of the owner's test), refuses an
 address in another form, both Foundry addresses, or a key with a space or a character that is no printable ASCII, by the field;
 while the settings file names that service as the reader, it first sends the test message through the reader of the new fields
@@ -674,7 +674,7 @@ from msal.oauth2cli.oauth2 import BrowserInteractionTimeoutError
 
 from aid.case import TEMPORARY, WORK, Case, load_case, names_a_folder, sha256_file, work_copy_folder
 from aid.connections.microsoft import COPILOT_SCOPES, MicrosoftAccount, SignInFailed, SignInNeeded, mail_scopes
-from aid.connections.secrets import SECRETS, LazySecretStore, SecretStore, StoreRefused, default_secrets_dir, work_tree_refusal
+from aid.connections.secrets import KeyLook, LazySecretStore, SecretStore, StoreRefused, default_secrets_dir, work_tree_refusal
 from aid.execution import exact_route
 from aid.execution.by_hand import (ARTICLE_KIND, FIELDS, FOLDER, KINDS, Change, ListUnread, changes, mark, open_changes, place_of,
                                    reopen)
@@ -5372,8 +5372,9 @@ def _ai_section(gr, app, language, tab: _Tab, tenant, client, mailbox, account_s
         the client are saved, and only once it answered the test message, sent with the saved tenant and client (copilot_refusal),
         so that a Copilot this account cannot use is never chosen (finding 6 of the owner's test): a refusal writes nothing and
         keeps the reader the file holds. This is the one choice of the page that sends something to Microsoft, at the buyer's own
-        press. Azure OpenAI or Foundry, for the made-up documents only, likewise only once the service answered the same test
-        message through the reader the runner builds of the saved settings and the key in the secrets store (service_refusal), and
+        press. Azure OpenAI or Foundry, for made-up documents only, likewise only once the service answered the same test message
+        through settings_client as the runner calls it, of the saved settings and the key in the secrets store, but without the
+        unseen cases, as the test sends no document (service_refusal), and
         only while the file, read again inside the lock of the write, still has the test mode on (the review's guard-miss-1): the
         test mode switched off while the test was out refuses the choice with the tab's own sentence and writes nothing. Nothing is
         written into a file that cannot be read: the note is then the line that says so."""
@@ -5403,9 +5404,10 @@ def _ai_section(gr, app, language, tab: _Tab, tenant, client, mailbox, account_s
 
     def service_refusal(value: str, settings: Settings, strings: dict[str, str]) -> str | None:
         """None once the service of `value` ("azure_openai" or "foundry") answered the one test message of "Copilot testen"
-        (COPILOT_TEST, nothing of a document), sent through the reader that the runner builds of the settings and of the key in the
-        secrets store of this PC (settings_client of aid/readers/exploration.py, behind its guard); else why it did not, by the field
-        of the tab, never by a value or the key (_service_text)."""
+        (COPILOT_TEST, nothing of a document), sent through settings_client of aid/readers/exploration.py as the runner calls it, of
+        the settings and of the key in the secrets store of this PC, behind its guard but without the unseen cases, which only the
+        runner's reader takes (unseen_cases); else why it did not, by the field of the tab, never by a value or the key
+        (_service_text)."""
         try:
             exploration.settings_client(value, settings, _keys(made_only=True), test_text=COPILOT_TEST).ask(COPILOT_TEST)
         except Exception as error:
@@ -5462,8 +5464,9 @@ def _ai_section(gr, app, language, tab: _Tab, tenant, client, mailbox, account_s
             fields or a key that did not answer (the review's keys-1):
             a. the form, with no network: an address in another form than the reader takes, both Foundry addresses, or a key with a
                space, a line end or a character that is no printable ASCII is refused by its field (_service_form);
-            b. while the settings file names this service as the reader, the one test message of "Copilot testen" goes out through the
-               reader that the runner would build of the new fields and of the key typed, or else the key stored (settings_client); the
+            b. while the settings file names this service as the reader, the one test message of "Copilot testen" goes out through
+               settings_client as the runner calls it, of the new fields and of the key typed, or else the key stored, but without the
+               unseen cases, as the test sends no document; the
                key typed is given to it beside the store and kept nowhere, and a refusal or a failure is said in the sentences of the
                choice (_service_text);
             c. the key typed goes into the secrets store of this PC, never into the settings file: a store the PC refuses is said with
@@ -5536,7 +5539,9 @@ def _ai_section(gr, app, language, tab: _Tab, tenant, client, mailbox, account_s
             first, which the runner takes at its next pass, and the key is removed only once that write succeeded, so that the
             file never names a service whose key is gone (the review's keys-miss-1); the note says so, and the answer of the choice
             under the reader, which may still say that the service was chosen, is emptied (the review's page-8). A write that is
-            refused removes nothing, and the note says that plainly, with why. A store the PC refuses is said with its folders."""
+            refused removes nothing, and the note says that plainly, with why. A removal that fails after the parser was written
+            says first that the assistant reads without AI from its next pass and that the key is still stored (the review's
+            p2-3). A store the PC refuses is said with its folders."""
             strings = STRINGS[language_now]
             try:
                 if not exploration.key_stored(value, _keys(made_only=True)):
@@ -5558,12 +5563,13 @@ def _ai_section(gr, app, language, tab: _Tab, tenant, client, mailbox, account_s
                     return (gr.update(), strings["settings_ai_key_kept"].format(service=strings[f"settings_reader:{value}"], why=why),
                             gr.update(), gr.update(), gr.update())
             shown = ("parser", reader_shown(language_now), "") if switched else (gr.update(), gr.update(), gr.update())
+            written = f"{strings['settings_ai_key_still_stored']} " if switched else ""     # the parser written, the key kept (p2-3)
             try:
                 _keys().delete(exploration.KEYS[value])
             except StoreRefused as error:
-                return (gr.update(), _refusal_text(error, strings, "settings_key_refused"), *shown)
+                return (gr.update(), written + _refusal_text(error, strings, "settings_key_refused"), *shown)
             except Exception as error:                   # the store's file cannot be written
-                return (gr.update(), strings["settings_failed"].format(code=type(error).__name__), *shown)
+                return (gr.update(), written + strings["settings_failed"].format(code=type(error).__name__), *shown)
             return (_key_line(value, strings), strings["settings_ai_key_removed_reader" if switched else "settings_ai_key_removed"], *shown)
         removed.__name__ = removed.__qualname__ = f"remove_{value}_key"
         return removed
@@ -5601,7 +5607,8 @@ class _Reader(NamedTuple):
     note: object                                 # the answer line of the choice, which the language switch empties
     choice: object                               # the radio "Documenten lezen met"
     line: object                                 # the line of what reads now
-    refreshed: Callable[[str], tuple]            # (the reader of the file, the line) for the two, after a save elsewhere
+    refreshed: Callable[[str], tuple]            # (the reader of the file, the line, the answer emptied) for the choice, the
+                                                 # line and the note, after a save elsewhere (reader_refreshed)
 
 
 class _ServiceBlock(NamedTuple):
@@ -5733,28 +5740,14 @@ def _keys(made_only: bool = False):
     """The secrets store of this PC that keeps the keys of the two exploration services (exploration.KEYS): the store of the
     Microsoft sign-in in default_secrets_dir(), from which the runner reads them too, made at its first use, so that a store the PC
     refuses is said where it is used (_refusal_text) and nothing is made before. With made_only, a look at it that makes no folder
-    and no file (_Look), so that the page loading, the language switch, a removal and a choice make no store: the store is made by
-    a save of a key alone (the review's page-miss-1)."""
-    return _Look() if made_only else LazySecretStore(default_secrets_dir())
-
-
-class _Look:
-    """A look at the secrets store of this PC that makes nothing (_keys): get raises the refusal of a store inside a git work tree,
-    which work_tree_refusal tells without making anything, gives None while the store holds no file of secrets (SECRETS), and only
-    then reads the store, which may refuse a store of another kind."""
-
-    def get(self, name: str) -> str | None:
-        directory = default_secrets_dir()
-        if (refused := work_tree_refusal(directory)) is not None:
-            raise refused
-        if not (directory / SECRETS).exists():
-            return None
-        return LazySecretStore(directory).get(name)
+    and no file (KeyLook of aid/connections/secrets.py, through which the runner reads a key too), so that the page loading, the
+    language switch, a removal and a choice make no store: the store is made by a save of a key alone (the review's page-miss-1)."""
+    return KeyLook(default_secrets_dir()) if made_only else LazySecretStore(default_secrets_dir())
 
 
 def _key_line(value: str, strings: dict[str, str]) -> str:
     """Whether the secrets store of this PC holds the key of the service of `value`, in words, never the key, without making the
-    store (_Look): a store the PC refuses by its folders (_refusal_text), no key while the store holds no file of secrets, and a
+    store (KeyLook): a store the PC refuses by its folders (_refusal_text), no key while the store holds no file of secrets, and a
     file that cannot be read by the class of its error."""
     try:
         stored = exploration.key_stored(value, _keys(made_only=True))      # a bool: the page never holds a key

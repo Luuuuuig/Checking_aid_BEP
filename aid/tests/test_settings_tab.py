@@ -1730,6 +1730,20 @@ def answering(monkeypatch, failure: Exception | None = None) -> list[Answering]:
     return made
 
 
+def guards(monkeypatch) -> list[tuple[str, str | None, bool]]:
+    """Each guard of a service that is built from here on, as (the service, the test text, unseen_cases), through the real guarded
+    of aid/readers/exploration.py: the page's test of a choice or a save gives its test message and no unseen cases (the review's
+    p2-1), the runner's reader no test text and the unseen cases."""
+    from aid.readers import exploration
+    built, real = [], exploration.guarded
+
+    def recorded(value, client, test_text=None, *, unseen_cases=False):
+        built.append((value, test_text, unseen_cases))
+        return real(value, client, test_text, unseen_cases=unseen_cases)
+    monkeypatch.setattr(exploration, "guarded", recorded)
+    return built
+
+
 def keep_key(tmp_path, value: str, key: str = SERVICE_KEY) -> SecretStore:
     """The key of the service kept in the secrets store of the PC (default_secrets_dir, the conftest's folder), as the tab keeps it."""
     store = SecretStore(tmp_path / "default-secrets")
@@ -1741,14 +1755,16 @@ def keep_key(tmp_path, value: str, key: str = SERVICE_KEY) -> SecretStore:
 @pytest.mark.parametrize("mailbox", [{}, SIX], ids=["without-a-mailbox", "with-a-mailbox"])
 def test_choosing_a_service_writes_the_reader_once_it_answered_its_test(tmp_path, madeup_out, key_log, monkeypatch, caplog, value, mailbox):
     """Choosing Azure OpenAI or Foundry under "Documenten lezen met" works as choosing Copilot does: the tab first sends the one test
-    message of "Copilot testen" through the reader the runner would build of the saved settings and the key in the secrets store
-    (settings_client), and writes the reader only once the service answered; the key is nowhere but in the store. In the test mode
-    a mailbox in the settings is no refusal (the owner's decision of 26 November)."""
+    message of "Copilot testen" through settings_client as the runner calls it, of the saved settings and the key in the secrets
+    store, but without the unseen cases, and writes the reader only once the service answered; the key is nowhere but in the store.
+    In the test mode a mailbox in the settings is no refusal (the owner's decision of 26 November)."""
     made = answering(monkeypatch)
+    built = guards(monkeypatch)
     path, page, accounts = tab(tmp_path, madeup_out, test_mode=True, **SERVICE_FIELDS[value] | mailbox)
     keep_key(tmp_path, value)
     before, nl = held(path), STRINGS["nl"]
     choice, note = handler(page, "save_reader")(value, "nl")
+    assert built == [(value, "Answer with the word OK only.", False)]    # the page's test sends no document of the unseen cases
     service = nl[f"settings_reader:{value}"]
     assert (choice, note) == (value, nl["settings_ai_service_switched"].format(service=service))
     assert note == (f"Opgeslagen. {service} antwoordde op de test; de assistent leest documenten vanaf de volgende ronde met {service}, "
@@ -2120,6 +2136,42 @@ def test_removing_the_key_of_the_service_that_reads_writes_the_parser_first_and_
     assert deleted == [(SERVICE_SECRET[value], "parser")] and store == {} and held(path)["reader"] == "parser"    # written first
 
 
+@pytest.mark.parametrize("value", SERVICES)
+def test_a_key_that_cannot_be_removed_after_the_parser_was_written_is_said_with_the_parser(tmp_path, madeup_out, key_log, monkeypatch,
+                                                                                         value):
+    """The review's p2-3: while the service reads, "Sleutel verwijderen" writes the parser first; when the removal of the key then
+    fails, the note says before the failure that the assistant reads without AI from its next pass and that the key is still stored,
+    in both languages, and the choice, its line and its answer follow the parser written."""
+
+    from aid.connections.secrets import StoreRefused
+    from aid.review.page import _refusal_text
+    refusal = StoreRefused("made-up: the store lies inside a git work tree", directory=tmp_path / "store", work_tree=tmp_path)
+
+    class Stuck(FakeStore):
+        failure: Exception = PermissionError("made-up: the store's file is open in another program")
+
+        def delete(self, name: str) -> None:
+            raise self.failure
+    stuck = Stuck({SERVICE_SECRET[value]: OLD_KEY})
+    monkeypatch.setattr("aid.review.page._keys", lambda made_only=False: stuck)
+    for failure in (stuck.failure, refusal):                           # the file of the store held open; a store the PC refuses (F2)
+        stuck.failure = failure
+        for language in ("nl", "en"):
+            path, page, accounts = tab(tmp_path / f"{language}-{type(failure).__name__}", madeup_out, test_mode=True, reader=value,
+                                       **SERVICE_FIELDS[value])
+            words = STRINGS[language]
+            line, note, choice, reading, answer = handler(page, f"remove_{value}_key")(language)
+            said = (_refusal_text(failure, words, "settings_key_refused") if isinstance(failure, StoreRefused)
+                    else words["settings_failed"].format(code="PermissionError"))
+            assert note == words["settings_ai_key_still_stored"] + " " + said and note.startswith(words["settings_ai_key_still_stored"])
+            assert (line, choice, reading, answer) == (SAME, "parser", words["reader_state:parser"], "")
+            assert held(path)["reader"] == "parser" and stuck == {SERVICE_SECRET[value]: OLD_KEY}
+    assert STRINGS["nl"]["settings_ai_key_still_stored"] == ("De assistent leest vanaf de volgende ronde zonder AI, maar de sleutel staat "
+                                                             "nog in de beveiligde opslag van deze pc.")
+    assert STRINGS["en"]["settings_ai_key_still_stored"] == ("The assistant reads without AI from its next pass, but the key is still in "
+                                                             "the protected store of this PC.")
+
+
 def test_a_save_of_a_service_refuses_an_address_or_a_key_in_another_form_and_a_refused_store_and_keeps_nothing(tmp_path, madeup_out, key_log):
     """An address in another form than the reader takes, both Foundry addresses, and a key with a space, a line end or a character
     that is no printable ASCII (the review's keys-6) are refused at the save by the field and the form it needs, before anything is
@@ -2172,7 +2224,7 @@ def test_a_save_of_a_service_refuses_an_address_or_a_key_in_another_form_and_a_r
 
 class FakeStore(dict):
     """The secrets store of this PC in the tests of a save: its get, set and delete over a dict, which the page (_keys) and the
-    runner (LazySecretStore) share."""
+    runner (KeyLook) share."""
 
     def set(self, name: str, value: str) -> None:
         self[name] = value
@@ -2184,7 +2236,7 @@ class FakeStore(dict):
 def shared_store(monkeypatch, value: str | None = None, key: str | None = None) -> FakeStore:
     store = FakeStore({SERVICE_SECRET[value]: key} if value is not None and key is not None else {})
     monkeypatch.setattr("aid.review.page._keys", lambda made_only=False: store)
-    monkeypatch.setattr("aid.runner.LazySecretStore", lambda directory: store)
+    monkeypatch.setattr("aid.runner.KeyLook", lambda directory: store)
     return store
 
 
@@ -2192,11 +2244,13 @@ def shared_store(monkeypatch, value: str | None = None, key: str | None = None) 
 def test_a_key_only_save_while_the_service_reads_is_tested_and_taken_by_the_runner_at_its_next_pass(tmp_path, madeup_out, key_log, monkeypatch,
                                                                                                     value):
     """The review's keys-1: the runner takes a changed settings file at its next pass, but a key lives in the store, not in the file.
-    While the service reads, a save of its block works as its choice does: the test message goes out first, through the reader the
-    runner would build of the new fields and the key typed (the key is kept only once the service answered), and when only the key
+    While the service reads, a save of its block works as its choice does: the test message goes out first, through settings_client
+    as the runner calls it, of the new fields and the key typed, but without the unseen cases (the key is kept only once the service
+    answered), and when only the key
     changed, the settings file gets a new modification time, so that the runner builds its reader again, with the new key."""
     from aid.runner import _Loop, build_deps
     made = answering(monkeypatch)
+    built = guards(monkeypatch)
     store = shared_store(monkeypatch, value, OLD_KEY)
     path, page, accounts = tab(tmp_path, madeup_out, test_mode=True, reader=value, **SERVICE_FIELDS[value])
     (tmp_path / "cases").mkdir(exist_ok=True)
@@ -2214,6 +2268,8 @@ def test_a_key_only_save_while_the_service_reads_is_tested_and_taken_by_the_runn
     loop.reload()                                                   # the runner's next pass
     assert loop.deps is not deps and made[-1].given["api_key"] == NEW_KEY and len(made) == 3
     assert not (tmp_path / "cases" / "runner.log").exists()
+    # the review's p2-1: the save's test leaves the unseen cases out, and only the runner's reader takes them
+    assert built == [(value, None, True), (value, "Answer with the word OK only.", False), (value, None, True)]
 
 
 @pytest.mark.parametrize("value", SERVICES)
@@ -3496,6 +3552,10 @@ def test_the_documents_say_how_the_tab_reads_with_azure_openai_and_foundry():
                   "removes the Microsoft sign-in as well (section 3.16)"):
         assert words in tab_part, words
     assert "only \"Sleutel verwijderen\" does" not in tab_part
+    # the final review's dm-5: the two exceptions of a save (addendum code-miss-1 and code-4)
+    assert ("When that time cannot be moved (the settings file is held by another program), the save says so: the runner takes the new "
+            "key at the next start of the aid, or after choosing \"zonder AI (parser)\" and then the service again.") in tab_part
+    assert "When that fails too, the note says that the protected store now holds the key typed." in tab_part
     # the save takes the spaces and line ends around a key off and keeps it; only a space or line end inside it, or a character that
     # is not printable ASCII, is refused
     assert ("Spaces and line ends around a key are taken off, and the key is kept; a key with a space or a line end inside it, or with "
@@ -3602,6 +3662,45 @@ def test_the_documents_say_that_in_the_aid_both_paths_send_the_unseen_cases_and_
         assert "It is not used in the evaluation." not in text
     assert "the reader chosen on the settings tab, `azure_openai` or `foundry`, with the deployment of the settings" in manual
     assert "never a key, an endpoint or a resource" in manual
+
+
+def test_the_places_that_offer_the_tab_s_services_do_not_bind_them_to_the_files_of_the_package():
+    """The final review's dm-1: since the runner's reader of a service chosen on the tab also sends, in the aid, the documents of the
+    manifest of the unseen cases, no place that offers the two services says "of the package only" any more. The page's help under
+    the choice, the reader row of section 3.2, section 3.14, step 3 of section 3.15, the folder's packages in section 3.16 and the
+    README's reader paragraph say "made-up documents", as the labels of the choice do, and point to "The guard" of section 3.15,
+    which says exactly what is sent."""
+    manual = manual_sections()
+    readme = Path("aid/README.md").read_text(encoding="utf-8")
+    places = {
+        "help nl": STRINGS["nl"]["settings_ai_service_help"], "help en": STRINGS["en"]["settings_ai_service_help"],
+        "3.2": next(line for line in manual["3.2"].splitlines() if line.startswith("| `reader` |")),
+        "3.14": next(line for line in manual["3.14"].splitlines() if line.startswith("**Company mail stays in the company.**")),
+        "3.15 step 3": next(line for line in manual["3.15"].splitlines() if line.startswith("3. Under \"Documenten lezen met\"")),
+        "3.16": next(line for line in manual["3.16"].splitlines() if "the Anthropic library included (since 26 November)" in line),
+        "README": next(line for line in readme.splitlines() if line.startswith("`reader` says how the documents are read")),
+    }
+    assert "(wat er precies wordt verstuurd: handleiding, 3.15, The guard)" in places["help nl"]       # F4: a whole Dutch phrase
+    assert "(what exactly goes out: manual, 3.15, The guard)" in places["help en"]
+    for place, text in places.items():
+        assert "of the package" not in text and "van het pakket" not in text, place
+        assert "made-up documents" in text or "verzonnen documenten" in text, place
+        assert "The guard" in text, place
+
+
+def test_ending_the_exploration_removes_a_key_typed_on_the_tab():
+    """The final review's md-1 (the rest): ending the exploration covers a key typed on the settings tab as well as the window's
+    variables: step 8 and the end of "When the aid reads the variables and the test mode" say to press "Sleutel verwijderen", since
+    every folder of the aid of this Windows user can read with that key."""
+    ai = manual_sections()["3.15"]
+    step = next(line for line in ai.splitlines() if line.startswith("8. "))
+    assert step.index("\"Sleutel verwijderen\"") < step.index("end the exploration")     # the press while the page still runs (F1)
+    end = ai[ai.index("To end the exploration, "):]
+    end = end[:end.index("\n")]
+    assert end.startswith("To end the exploration, press \"Sleutel verwijderen\" in the block of each service whose key you typed on "
+                          "the settings tab (while that service reads, this also writes \"zonder AI (parser)\")")
+    assert "every folder of the aid of this Windows user can read with such a key" in end
+    assert end.index("\"Sleutel verwijderen\"") < end.index("press Ctrl+C")
 
 
 def test_the_documents_keep_the_resolution_of_the_merge():

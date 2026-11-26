@@ -25,6 +25,11 @@ LazySecretStore(directory) is the same store made at its first use, which the ru
 refuses, so that the runner starts and handles its folder, and a refusal comes with the first use of the sign-in, where the
 mailbox stage of the runner logs it.
 
+KeyLook(directory) only looks: its get gives the refusal of a store inside a git work tree first, None while the folder holds no
+file of secrets (SECRETS), and only then reads the store. The review page shows through it whether a key of Azure OpenAI or
+Foundry is stored, and the runner reads such a key through it, so that a key that is not there makes no store: the store is made
+by a save of a key, or by the Microsoft sign-in.
+
 default_secrets_dir() is the folder that the runner and the review page use: %LOCALAPPDATA%\\Inkoopassistent on Windows,
 ~/.config/inkoopassistent elsewhere. The settings name no folder for it.
 """
@@ -186,6 +191,23 @@ def _persistence(location: Path, plain: bool = False) -> tuple[object, str]:
             return _OwnerOnlyFile(str(location)), PLAIN
     name = type(persistence).__name__
     return persistence, _KINDS.get(name, name.lower())
+
+
+class KeyLook:
+    """A look at the store of a directory that makes nothing (see the module docstring), for a secret that may only be read."""
+
+    def __init__(self, directory: Path):
+        self.directory = Path(directory)
+
+    def __repr__(self) -> str:
+        return f"KeyLook({str(self.directory)!r})"
+
+    def get(self, name: str) -> str | None:
+        if (refused := work_tree_refusal(self.directory)) is not None:
+            raise refused
+        if not (self.directory / SECRETS).exists():
+            return None
+        return LazySecretStore(self.directory).get(name)
 
 
 def work_tree_refusal(directory: Path) -> StoreRefused | None:
