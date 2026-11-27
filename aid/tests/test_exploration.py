@@ -521,6 +521,74 @@ def test_a_foundry_address_that_is_no_https_address_is_refused_without_its_value
     assert exploration.exploration_client("foundry", rest | {"ANTHROPIC_FOUNDRY_BASE_URL": url})._base_url == url
 
 
+
+RESOURCE_FORM = ("ANTHROPIC_FOUNDRY_RESOURCE as the bare name of the resource, letters, digits and hyphens only, such as <resource> in "
+                 "https://<resource>.services.ai.azure.com")
+# Addresses that would send the key and the document to another host than Microsoft's for the service, or with a user name or a
+# password in them (the gate's K1, K2 and K3, and the checker's point on foundry_base_url).
+OTHER_ENDPOINTS = ["https://attacker.example.com", "https://made-up.openai.azure.com.example.com", "https://user:pw@made-up.openai.azure.com",
+                   "https://user@made-up.openai.azure.com", "https://made-up.openai.azure.com:8443", "https://a.b.openai.azure.com",
+                   "https://openai.azure.com", "https://made-up.cognitiveservices.example.org"]
+OTHER_BASE_URLS = ["https://elsewhere.example.com/anthropic", "https://user:pw@made-up.services.ai.azure.com/anthropic",
+                   "https://made-up.openai.azure.com/anthropic", "https://made-up.services.ai.azure.com.example.org/anthropic",
+                   "https://made-up.services.ai.azure.com:444/anthropic"]
+OTHER_RESOURCES = ["evil.example?", "evil.example#", "user@evil.example?x=", "made-up.resource", "-made-up", "made-up-", "made up",
+                   "made-up/", "a" * 65]
+
+
+@pytest.mark.parametrize("endpoint", OTHER_ENDPOINTS)
+def test_an_endpoint_on_another_host_than_microsoft_s_or_with_a_user_is_refused_without_its_value(made, endpoint):
+    with pytest.raises(ValueError) as refused:
+        exploration.exploration_client("azure_openai", SET["azure_openai"] | {"AZURE_OPENAI_ENDPOINT": endpoint})
+    assert str(refused.value) == exploration.NO_SETTING.format(service="Azure OpenAI", value="azure_openai", variable=ENDPOINT_FORM)
+    assert "made-up" not in str(refused.value) and made == []
+
+
+def test_the_endpoint_takes_the_two_hosts_microsoft_names_for_the_v1_route(made):
+    """Microsoft's page on the v1 API: its base_url "accepts both https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1/ and
+    https://YOUR-RESOURCE-NAME.services.ai.azure.com/openai/v1/"."""
+    for endpoint in ("https://made-up.openai.azure.com", "https://Made-Up-2.services.ai.azure.com/openai/v1"):
+        assert exploration.exploration_client("azure_openai", SET["azure_openai"] | {"AZURE_OPENAI_ENDPOINT": endpoint}).url.endswith(
+            "/openai/v1/responses")
+
+
+@pytest.mark.parametrize("base_url", OTHER_BASE_URLS)
+def test_a_foundry_address_on_another_host_or_with_a_user_is_refused_without_its_value(made, base_url):
+    rest = {name: text for name, text in SET["foundry"].items() if name not in exploration.PLACES}
+    with pytest.raises(ValueError) as refused:
+        exploration.exploration_client("foundry", rest | {"ANTHROPIC_FOUNDRY_BASE_URL": base_url})
+    assert str(refused.value) == exploration.NO_SETTING.format(service=exploration.SERVICES["foundry"], value="foundry", variable=BASE_URL_FORM)
+    assert "made-up" not in str(refused.value) and "elsewhere" not in str(refused.value) and made == []
+
+
+@pytest.mark.parametrize("resource", OTHER_RESOURCES)
+def test_a_foundry_resource_that_is_no_bare_name_is_refused_without_its_value(made, resource):
+    """anthropic builds the address as https://{resource}.services.ai.azure.com/anthropic/ (lib/foundry.py), so a "?", a "#", an "@"
+    or a dot in the name would send the key to another host."""
+    with pytest.raises(ValueError) as refused:
+        exploration.exploration_client("foundry", SET["foundry"] | {"ANTHROPIC_FOUNDRY_RESOURCE": resource})
+    assert str(refused.value) == exploration.NO_SETTING.format(service=exploration.SERVICES["foundry"], value="foundry", variable=RESOURCE_FORM)
+    assert "evil" not in str(refused.value) and "made-up" not in str(refused.value) and made == []
+    assert stand_in.setup_kind(str(refused.value)) == "missing_key"
+
+
+def test_a_settings_file_edited_by_hand_cannot_send_the_key_to_another_host(tmp_path, made):
+    """The settings file can be edited by hand: settings_client, which the runner and the settings tab both pass, refuses another
+    host, a user in the address and a resource that is no bare name, by the setting and never by its value."""
+    for value, setting, address, kind in (("azure_openai", "azure_openai_endpoint", "https://user:pw@attacker.example.com", "form"),
+                                          ("foundry", "foundry_base_url", "https://elsewhere.example.com/anthropic", "form"),
+                                          ("foundry", "foundry_resource", "evil.example?", "resource_form")):
+        place = {"foundry_resource": None} if setting == "foundry_base_url" else {}
+        settings = chosen(tmp_path, value, **{setting: address} | place)
+        with pytest.raises(exploration.SettingsRefused) as refused:
+            exploration.settings_client(value, settings, keyed(value), environ=NO_PLACE)
+        assert (refused.value.kind, refused.value.settings) == (kind, (setting,))
+        assert "attacker" not in str(refused.value) and "elsewhere" not in str(refused.value) and "evil" not in str(refused.value)
+        assert "pw" not in str(refused.value) and KEY not in str(refused.value)
+    assert str(refused.value) == exploration.READER_RESOURCE.format(service=exploration.SERVICES["foundry"])
+    assert made == []
+
+
 # --- the readers the settings tab chooses: reader "azure_openai" or "foundry", their settings, and their keys in the secrets store ---
 
 KEY = "made-up-key-0123456789"
@@ -859,9 +927,10 @@ def changed(path, **values) -> None:
 
 
 def test_the_runner_logs_a_refused_reader_of_the_settings_tab_by_its_kind_and_setting(tmp_path, made):
-    """A changed settings file whose reader the tab chose cannot be built (the test mode switched off by hand, a deployment emptied,
-    the key gone): the runner keeps the settings in use, and its log names the kind of the refusal and the setting, never a value;
-    every other error keeps its line of the class only (the review's guard-3)."""
+    """A changed settings file whose reader the tab chose cannot be built (a deployment emptied, the key gone): the runner keeps the
+    settings in use, and its log names the kind of the refusal and the setting, never a value; every other error keeps its line of
+    the class only (the review's guard-3). The test mode switched off by hand is the one refusal taken: the runner reads with the
+    parser from that pass (the gate's G2)."""
     from aid.connections.secrets import SecretStore
     from aid.runner import LOG_FILE, _Loop
     store = SecretStore(tmp_path / "default-secrets")
@@ -870,13 +939,23 @@ def test_the_runner_logs_a_refused_reader_of_the_settings_tab_by_its_kind_and_se
     (tmp_path / "cases").mkdir()
     deps = build_deps(settings, {})
     loop = _Loop(deps, path, lambda held: build_deps(held, {}))
-    for change, named in (({"test_mode": False}, "test_mode"),
-                          ({"test_mode": True, "azure_openai_deployment": ""}, "missing: azure_openai_deployment")):
-        changed(path, **change)
-        loop.reload()
-        assert loop.deps is deps
-        last = (tmp_path / "cases" / LOG_FILE).read_text(encoding="utf-8").splitlines()[-1]
-        assert last.endswith(f" settings: SettingsRefused ({named}): the changed settings cannot be used; the settings in use are kept")
+    changed(path, test_mode=False)
+    loop.reload()
+    assert loop.deps is not deps and loop.deps.reader.__name__ == "read_with_parser"
+    last = (tmp_path / "cases" / LOG_FILE).read_text(encoding="utf-8").splitlines()[-1]
+    assert last.endswith(" settings: SettingsRefused (test_mode): the test mode is off, so the runner reads without AI from this pass; "
+                         "tick the test mode on the settings tab again and the service reads from the next pass, or choose "
+                         "\"without AI (parser)\" there")
+    changed(path, test_mode=True)                          # the tick on the tab, as the log says: the service reads again
+    loop.reload()
+    assert loop.deps.reader.__name__ != "read_with_parser" and loop.deps.settings.reader == "azure_openai"
+    loop.deps = deps
+    changed(path, test_mode=True, azure_openai_deployment="")
+    loop.reload()
+    assert loop.deps is deps
+    last = (tmp_path / "cases" / LOG_FILE).read_text(encoding="utf-8").splitlines()[-1]
+    assert last.endswith(" settings: SettingsRefused (missing: azure_openai_deployment): the changed settings cannot be used; the "
+                         "settings in use are kept")
     changed(path, azure_openai_deployment="dep")
     store.delete(SECRET["azure_openai"])
     loop.reload()
@@ -924,3 +1003,214 @@ def test_the_runner_refuses_a_missing_key_of_the_tab_without_making_the_store(tm
     SecretStore(folder).set(SECRET[value], KEY)
     deps = runner.build_deps(chosen(tmp_path, value), {})
     assert isinstance(deps.decider, stand_in.MadeUpDecider) and [client._api_key for client in made] == [KEY]
+
+
+# --- a reading through Azure OpenAI or Foundry that fails (the gate's G1) ---
+
+class Failing:
+    """A client of Azure OpenAI or Foundry in the service's place that fails each request with the test's failure, and counts the
+    requests."""
+    failure: Exception | None = None
+    sent: list = []
+    value = "azure_openai"
+
+    def __init__(self, *, deployment, **given):
+        self.name = f"{Failing.value}:{deployment}"
+
+    def complete(self, req):
+        Failing.sent.append(req)
+        raise Failing.failure
+
+
+def failing_runner(tmp_path, monkeypatch, failure: Exception, value: str = "azure_openai"):
+    """The Deps of the runner with reader `value` (azure_openai or foundry), made by build_deps as the runner makes them, whose
+    client fails with `failure`, and a made-up document in the watched folder."""
+    import shutil
+    from aid import runner
+    Failing.failure, Failing.sent, Failing.value = failure, [], value
+    monkeypatch.setattr(exploration, "AzureOpenAIClient" if value == "azure_openai" else "FoundryClient", Failing)
+    monkeypatch.setattr(runner, "KeyLook", lambda directory: {SECRET[value]: "fake-key-for-test"})
+    for name in exploration.PLACES:
+        monkeypatch.delenv(name, raising=False)
+    settings = chosen(tmp_path, value)
+    (tmp_path / "inbox").mkdir(exist_ok=True)
+    shutil.copy(MADE_UP_PDF, tmp_path / "inbox" / MADE_UP_PDF.name)
+    return runner.build_deps(settings, {})
+
+
+def finished(tmp_path) -> list[dict]:
+    """The results of the cases of the made-up folder."""
+    return [json.loads(path.read_text(encoding="utf-8")) for path in (tmp_path / "cases").glob("*/steps/08_result.json")]
+
+
+def failure(kind: str) -> Exception:
+    from aid.readers import azure_client
+    return {"refused": azure_client.AzureRequestRefused("Azure OpenAI answered with status 400", 400),
+            "no reading": azure_client.AzureServiceError("Azure OpenAI answered with a body that is not JSON", 200),
+            "timeout": azure_client.AzureTimeout("Azure OpenAI did not answer within 600 seconds"),
+            "busy": azure_client.AzureLimit("Azure OpenAI answered with status 429", 429),
+            "server": azure_client.AzureServerError("Azure OpenAI answered with status 503", 503),
+            "key": azure_client.AzureKeyRefused("Azure OpenAI answered with status 401", 401),
+            "no connection": azure_client.AzureNoConnection("Azure OpenAI could not be reached: ConnectionError"),
+            "not found": azure_client.AzureNotFound("Azure OpenAI answered with status 404", 404),
+            "redirect": azure_client.AzureServiceError("Azure OpenAI answered with status 302", 302)}[kind]
+
+
+@pytest.mark.parametrize("kind", ["refused", "no reading"])
+def test_a_failure_that_waiting_does_not_mend_ends_the_case_at_once(tmp_path, monkeypatch, kind):
+    """A request the service refuses (a 400, such as a content filter or a document too large) or an answer that is no reading
+    ends the case at its first failure, as a document the service could not read, for the buyer to look at: it is not sent again."""
+    from aid import runner
+    deps = failing_runner(tmp_path, monkeypatch, failure(kind))
+    assert runner.run_loop(deps, tmp_path / "STOP", poll_seconds=0, max_passes=4) == 4
+    assert len(Failing.sent) == 1
+    [result] = finished(tmp_path)
+    assert result["status"] == "failed" and "Copilot could not read this document" in json.dumps(result)
+    state = json.loads((tmp_path / "cases" / "digest_state.json").read_text(encoding="utf-8"))
+    assert "copilot_cases" not in state
+    assert "finished as failed after 1 failure: " in (tmp_path / "cases" / "runner.log").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("kind", ["timeout", "server"])
+def test_a_failure_that_may_pass_is_tried_three_times_in_all_also_across_a_restart(tmp_path, monkeypatch, kind):
+    """No answer in time, or a failure of the service's servers, is tried again at later passes, at most three attempts in all for
+    the document, and then the case ends for the buyer to look at: the service may have read and billed it. The count is in the
+    state file, so a restart of the runner does not start it again."""
+    from aid import runner
+    deps = failing_runner(tmp_path, monkeypatch, failure(kind))
+    runner.run_loop(deps, tmp_path / "STOP", poll_seconds=0, max_passes=2)
+    assert len(Failing.sent) == 2 and finished(tmp_path) == []
+    state = json.loads((tmp_path / "cases" / "digest_state.json").read_text(encoding="utf-8"))
+    assert [record["failed"] for record in state["copilot_cases"].values()] == [2]
+    again = failing_runner(tmp_path, monkeypatch, failure(kind))       # the runner started again
+    runner.run_loop(again, tmp_path / "STOP", poll_seconds=0, max_passes=4)
+    assert len(Failing.sent) == 1                                      # the third attempt, and no more
+    [result] = finished(tmp_path)
+    assert result["status"] == "failed"
+    assert "finished as failed after 3 failures: " in (tmp_path / "cases" / "runner.log").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("kind", ["key", "no connection", "not found", "redirect"])
+def test_a_refused_key_or_no_connection_leaves_the_case_waiting_as_before(tmp_path, monkeypatch, kind):
+    """A key the service refuses, no connection, a deployment it does not find or a redirect, which the client does not follow, is
+    a failure of the service as a whole that reads nothing and costs nothing: the case waits for the service, as with Copilot, and
+    is not ended."""
+    from aid import runner
+    deps = failing_runner(tmp_path, monkeypatch, failure(kind))
+    runner.run_loop(deps, tmp_path / "STOP", poll_seconds=0, max_passes=4)
+    assert len(Failing.sent) == 4 and finished(tmp_path) == []
+
+
+def rate_limited(value: str) -> Exception:
+    """The answer that the rate limit is reached (status 429), with a Retry-After header, as the client of `value` raises it."""
+    if value == "azure_openai":
+        return failure("busy")
+    import httpx2
+    request = httpx2.Request("POST", "https://made-up-resource.services.ai.azure.com/anthropic/v1/messages")
+    response = httpx2.Response(429, headers={"retry-after": "60"}, request=request)
+    return llm_client.anthropic.RateLimitError("made-up rate limit", response=response, body=None)
+
+
+@pytest.mark.parametrize("value", EXPLORATION)
+def test_a_rate_limit_leaves_the_case_waiting_beyond_three_passes_also_across_a_restart(tmp_path, monkeypatch, value):
+    """An answer that the rate limit is reached comes before anything is read and costs nothing, and a limit of a small deployment
+    can take longer to clear than three passes: the case waits for the service, as with a refused key, and is tried again at each
+    later pass without counting toward the three attempts, also after the runner is started again."""
+    from aid import runner
+    deps = failing_runner(tmp_path, monkeypatch, rate_limited(value), value)
+    runner.run_loop(deps, tmp_path / "STOP", poll_seconds=0, max_passes=4)
+    assert len(Failing.sent) == 4 and finished(tmp_path) == []
+    state = json.loads((tmp_path / "cases" / "digest_state.json").read_text(encoding="utf-8"))
+    assert [record["failed"] for record in state.get("copilot_cases", {}).values()] in ([], [0])
+    again = failing_runner(tmp_path, monkeypatch, rate_limited(value), value)    # the runner started again
+    runner.run_loop(again, tmp_path / "STOP", poll_seconds=0, max_passes=4)
+    assert len(Failing.sent) == 4 and finished(tmp_path) == []
+    assert "finished as failed" not in (tmp_path / "cases" / "runner.log").read_text(encoding="utf-8")
+
+
+def test_the_failures_of_foundry_are_told_apart_by_the_anthropic_library_s_classes():
+    """The same rule for Foundry (and the stand-in) through the Anthropic library's errors: a refusal of the request or an answer
+    that is no reading ends the case, no answer in time or a failing service is tried again, and a refused key, a rate limit or no
+    connection is the service as a whole."""
+    import httpx2
+    sdk = llm_client.anthropic
+    request = httpx2.Request("POST", "https://made-up.services.ai.azure.com/anthropic/v1/messages")
+
+    def status(code: int):
+        return sdk.APIStatusError("made-up", response=httpx2.Response(code, request=request), body=None)
+    kinds = {code: stand_in.failure_kind(status(code)) for code in (400, 401, 403, 404, 408, 409, 413, 422, 429, 500, 503, 529, 307)}
+    assert kinds == {400: "final", 401: "service", 403: "service", 404: "service", 408: "again", 409: "again", 413: "final",
+                     422: "final", 429: "service", 500: "again", 503: "again", 529: "again", 307: "service"}
+    assert stand_in.failure_kind(rate_limited("foundry")) == "service"          # the library's own class for status 429
+    assert stand_in.failure_kind(rate_limited("azure_openai")) == "service"
+    assert stand_in.failure_kind(sdk.APITimeoutError(request=request)) == "again"
+    assert stand_in.failure_kind(sdk.APIConnectionError(request=request)) == "service"
+    assert stand_in.failure_kind(sdk.APIResponseValidationError(httpx2.Response(200, request=request), None)) == "final"
+    assert stand_in.failure_kind(RuntimeError("made-up")) == "again"
+
+
+def test_one_attempt_through_foundry_is_one_request(monkeypatch):
+    """The Anthropic library sends a request again on its own (two more times by default, for a timeout, a 408, 409, 429 or 5xx);
+    the client of Foundry turns that off, so that the rule of the runner counts each request. The client of Azure OpenAI sends each
+    request once (requests, no retry)."""
+    from aid.readers.foundry_client import FoundryClient
+    made = {}
+
+    class Sdk:
+        def __init__(self, **given):
+            made.update(given)
+    monkeypatch.setattr(llm_client, "anthropic", SimpleNamespace(AnthropicFoundry=Sdk, DefaultHttpxClient=lambda **given: given))
+    FoundryClient("dep", "fake-key-for-test", resource="made-up-resource")._client()
+    assert made["max_retries"] == 0
+
+
+# --- the settings file changed by hand while a service reads (the gate's G2 and A1) ---
+
+def test_the_test_mode_switched_off_by_hand_stops_the_service_at_the_next_pass(tmp_path, monkeypatch):
+    """The settings file edited by hand so that the test mode is off, while Azure OpenAI reads: the runner stops reading with the
+    service at its next pass and reads without AI (the parser), as when the switch on the settings tab is used, and runner.log
+    says so, by the setting and never by a value."""
+    import os
+    from aid import runner
+    deps = failing_runner(tmp_path, monkeypatch, failure("timeout"))
+    path = tmp_path / "settings.json"
+    runner.run_loop(deps, tmp_path / "STOP", poll_seconds=0, max_passes=1, settings_file=path,
+                    rebuild=lambda held: runner.build_deps(held, {}))
+    assert len(Failing.sent) == 1
+    data = json.loads(path.read_text(encoding="utf-8"))
+    path.write_text(json.dumps(data | {"test_mode": False}), encoding="utf-8")
+    os.utime(path, (1, 1))
+    loop = runner._Loop(deps, path, lambda held: runner.build_deps(held, {}))
+    loop.modified = None                                       # the file changed since the Deps were built
+    loop.reload()
+    assert loop.deps.reader is runner.read_with_parser and loop.deps.settings.reader == "parser"
+    assert loop.deps.settings.test_mode is False
+    log = (tmp_path / "cases" / "runner.log").read_text(encoding="utf-8")
+    assert "SettingsRefused (test_mode): the test mode is off, so the runner reads without AI from this pass" in log
+    runner.run_loop(loop.deps, tmp_path / "STOP", poll_seconds=0, max_passes=2)
+    assert len(Failing.sent) == 1                              # nothing more went to the service
+
+
+def test_a_changed_settings_file_whose_reader_cannot_be_made_is_logged_by_the_class_of_the_error_only(tmp_path, monkeypatch):
+    """The gate's A1: the reload of a settings file whose reader cannot be built for another reason than SettingsRefused (a store
+    the PC refuses, whose text names folders, or a library that is missing) logs the class of the error only, never its text, and
+    keeps the settings in use."""
+    import os
+    from aid import runner
+    from aid.connections.secrets import StoreRefused
+    deps = failing_runner(tmp_path, monkeypatch, failure("timeout"))
+    path = tmp_path / "settings.json"
+    marker = "made-up-marker-of-a-folder"
+
+    def refused(held):
+        raise StoreRefused(f"the secrets store in /{marker} may not be used", directory=tmp_path / marker)
+    (tmp_path / "cases").mkdir(exist_ok=True)
+    loop = runner._Loop(deps, path, refused)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    path.write_text(json.dumps(data | {"azure_openai_deployment": "dep2"}), encoding="utf-8")
+    os.utime(path, (1, 1))
+    loop.modified = None
+    loop.reload()
+    log = (tmp_path / "cases" / "runner.log").read_text(encoding="utf-8")
+    assert "StoreRefused: the changed settings cannot be used; the settings in use are kept" in log
+    assert marker not in log and loop.deps is deps

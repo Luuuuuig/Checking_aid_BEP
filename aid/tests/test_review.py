@@ -3694,8 +3694,10 @@ def test_cases_that_wait_while_a_service_reads_name_the_service_and_one_line_say
     on the tab "Bestanden" and the line of the orders in "Stand van de assistent". The strip and that section say in one problem line,
     by the number of the documents that wait, that reading does not work now and what to check, in both languages; the line of what
     reads says it too, and the strip's button opens "Postvak en AI", where the service is chosen."""
+    from aid.connections.secrets import SecretStore
     from aid.readers import exploration
     nl, en = STRINGS["nl"], STRINGS["en"]
+    SecretStore(tmp_path / "default-secrets").set(exploration.KEYS[value], "fake-key-for-test")    # a key is stored (the gate's P7)
     page, d, texts = waiting_page(tmp_path, madeup_out, value, test_mode=True)
     opened = {"nl": "Zaak geopend voor inkooporder {po}. Nu: {now}.", "en": "Case opened for purchase order {po}. Now: {now}."}
     for language in ("nl", "en"):
@@ -3707,7 +3709,8 @@ def test_cases_that_wait_while_a_service_reads_name_the_service_and_one_line_say
         assert calm["reader"] == words[f"reader_state:{value}"]
         for n in (1, 2):
             shown = texts(n, language)
-            problem = words[f"problem:service_wait_{'one' if n == 1 else 'many'}"].format(n=n, service=service)
+            problem = words[f"problem:service_wait_{'one' if n == 1 else 'many'}"].format(n=n, service=service,
+                                                                                       save=words[f"settings_ai_save:{value}"])
             assert words["chip:service_wait"].format(n=n, service=service) in shown["strip"] and problem in shown["strip"]
             assert "Copilot" not in shown["strip"] and words[f"strip_reader:{value}"] in shown["strip"]
             assert shown["action"] == {"__type__": "update", "value": words["act:connections"], "visible": True}
@@ -3724,9 +3727,12 @@ def test_cases_that_wait_while_a_service_reads_name_the_service_and_one_line_say
             assert shown["reader"] == problem                       # the line of what reads now, under "Postvak en AI", says it too
             assert not any("Copilot" in line for line in shown["lines"])
     assert nl["problem:service_wait_many"] == ("{n} documenten wachten op {service}: het lezen lukt nu niet. Controleer de sleutel en de "
-                                               "velden bij {service}, of kies de dienst opnieuw; runner.log zegt waarom.")
+                                               "velden bij {service} onder Postvak en AI en druk daar op {save}: de pagina test de dienst "
+                                               "dan opnieuw en zegt wat er niet klopt. Lukt het daarna nog niet, geef dit dan door aan de "
+                                               "onderzoeker.")
     assert en["problem:service_wait_many"] == ("{n} documents wait for {service}: reading does not work now. Check the key and the fields "
-                                               "of {service}, or choose the service again; runner.log says why.")
+                                               "of {service} under Mailbox and AI and press {save} there: the page then tests the service "
+                                               "again and says what is wrong. If it still does not work, pass this on to the researcher.")
     assert (nl["chip:service_wait"], nl["state:service_wait"], nl["files_now:service_wait"]) == (
         "Wacht op {service}: {n}", "Wacht op {service}", "wacht op {service}")
     lines = aid_status.case_lines(d.settings.cases_root, NOW)

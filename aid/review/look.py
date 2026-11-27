@@ -25,7 +25,10 @@ not know by name), its fonts are names of fonts the PC has, so that no font file
 script hold no address. The style rules name some class names of gradio 6.31.0 itself (aid/requirements.txt pins that version):
 where a later version renames one, that part keeps the page library's own look.
 """
+import json
 from typing import NamedTuple
+
+from aid.review.i18n import STRINGS
 
 GROUND = "#F5F5F7"           # daylight canvas on which workspace cards rest; INK 16.29:1, MUTED 6.55:1, CONTROL 4.44:1
 SURFACE = "#FFFFFF"          # cards, top chrome, fields, tables, document frames; INK 17.74:1
@@ -394,6 +397,11 @@ button.secondary:disabled {{ background: {SURFACE_2}; border-color: {LINE_STRONG
 # renders a password box with an empty autocomplete and does not apply the one of html_attributes (the review's code-1). It does so
 # at the load and again whenever the page renders anew.
 #
+# It gives the controls of the two service blocks of the settings tab that would otherwise share one name a name of their own for a
+# screen reader (named): each "Sleutel verwijderen" button, each "Deployment" field and each key box gets an aria-label that starts
+# with its visible text and names its service (screen_reader_names), in the language of the page, at the load, whenever the page
+# renders anew and at the language switch (the gate's P5). The page library sets no aria-label on a button itself.
+#
 # It also draws the copy buttons of the tab "In Exact invoeren" (copies). The tab gives them in a hidden element (hand-copy-data:
 # _copy_data of aid/review/page.py), by the value of each row's tick box, which the page library writes as the box's name. After
 # each tick box the script puts a holder with the row's buttons, as the next element and never inside the box's label, so that the
@@ -419,6 +427,14 @@ PAGE_JS = """
   const keys = () => document.querySelectorAll('#settings-azure_openai-key input, #settings-foundry-key input').forEach((box) => {
     if (box.getAttribute('autocomplete') !== 'new-password') box.setAttribute('autocomplete', 'new-password');
   });
+  const names = __NAMES__;
+  const named = () => {
+    const chosen = document.querySelector('.language-switch input:checked');
+    const words = names[chosen && chosen.value === 'en' ? 'en' : 'nl'];
+    Object.entries(words).forEach(([selector, name]) => document.querySelectorAll(selector).forEach((element) => {
+      if (element.getAttribute('aria-label') !== name) element.setAttribute('aria-label', name);
+    }));
+  };
   const copies = () => {
     const data = document.getElementById('hand-copy-data');
     const list = document.querySelector('#hand-rows [data-testid="checkbox-group"]');
@@ -489,9 +505,10 @@ PAGE_JS = """
   answers();
   copies();
   keys();
-  new MutationObserver(() => { language(); answers(); copies(); keys(); })
+  named();
+  new MutationObserver(() => { language(); answers(); copies(); keys(); named(); })
     .observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['name', 'data-rows'] });
-  document.addEventListener('change', language, true);
+  document.addEventListener('change', () => { language(); named(); }, true);
   document.addEventListener('click', (event) => {
     const button = event.target instanceof Element ? event.target.closest('.hand-copy button') : null;
     if (!button) return;
@@ -505,3 +522,25 @@ PAGE_JS = """
   });
 }
 """
+
+
+# The two exploration services by the name a screen reader says after a control of their block (named in PAGE_JS).
+SERVICE_NAMES = {"azure_openai": "Azure OpenAI", "foundry": "Foundry"}
+
+
+def screen_reader_names() -> dict[str, dict[str, str]]:
+    """For each language, the name for a screen reader of each control of the two service blocks that shares its visible text with
+    the other block, by the selector of the element that takes it: the button "Sleutel verwijderen", the field "Deployment" and the
+    key box (the gate's P5). Each name starts with the visible text, so that a user of speech input can say what is shown."""
+    names = {}
+    for language, words in STRINGS.items():
+        names[language] = {}
+        for value, service in SERVICE_NAMES.items():
+            names[language][f"#settings-{value}-remove"] = words["settings_ai_named:remove"].format(service=service)
+            names[language][f"#settings-{value}-key input"] = words["settings_ai_named:key"].format(service=service)
+            names[language][f"#settings-{value}_deployment input, #settings-{value}_deployment textarea"] = (
+                words["settings_ai_named:deployment"].format(service=service))
+    return names
+
+
+PAGE_JS = PAGE_JS.replace("__NAMES__", json.dumps(screen_reader_names(), ensure_ascii=False))

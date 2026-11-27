@@ -152,7 +152,10 @@ pass. When the time has changed, the file is read again with load_settings and t
 its settings (the command rebuilds them with build_deps), or with the Deps given and the new settings. A file that cannot be read
 or validated, or whose Deps cannot be built, leaves the settings in use as they are, with one line in the log that names the fields
 at fault, if any, and never a value: for a reader of the settings tab that is refused (exploration.SettingsRefused), the kind of
-the refusal and the setting it names, for any other error its class. So a save on the settings tab of the review page is taken over at the next pass.
+the refusal and the setting it names, for any other error its class. One refusal is taken instead: a file whose test mode was switched
+off by hand while Azure OpenAI or Foundry reads gives Deps with the parser as the reader, so that the service stops reading at that
+pass, as when the switch on the settings tab is used, and the log line says so. So a save on the settings tab of the review page is
+taken over at the next pass.
 
 What the next digest is to report is kept in <cases_root>/digest_state.json, so that it survives the end of a session: {"last_sent":
 the time of the last digest or null, "reported": the ids of the cases handled since then, "skipped": the [file, reason] pairs of the
@@ -378,8 +381,20 @@ class _Loop:
             deps = self.rebuild(settings) if self.rebuild is not None else self.deps.model_copy(update={"settings": settings})
         except exploration.SettingsRefused as exc:   # the reader of the settings tab: its kind and the setting it names, no value
             named = exc.kind if exc.settings == (exc.kind,) else f"{exc.kind}: {', '.join(exc.settings)}"
-            _log(root, now, SETTINGS, f"SettingsRefused ({named}): the changed settings cannot be used; the settings in use are kept")
-            return
+            if exc.kind != "test_mode":
+                _log(root, now, SETTINGS, f"SettingsRefused ({named}): the changed settings cannot be used; the settings in use are kept")
+                return
+            # The test mode switched off by hand (the gate's G2): the service stops reading at this pass, as when the switch on the
+            # settings tab is used, which writes the parser in its place.
+            settings = settings.model_copy(update={"reader": "parser"})
+            try:
+                deps = self.rebuild(settings)
+            except Exception as again:               # its text may quote a value of the settings
+                _log(root, now, SETTINGS, f"{type(again).__name__}: the changed settings cannot be used; the settings in use are kept")
+                return
+            _log(root, now, SETTINGS, f"SettingsRefused ({named}): the test mode is off, so the runner reads without AI from this pass; "
+                                      "tick the test mode on the settings tab again and the service reads from the next pass, or choose "
+                                      "\"without AI (parser)\" there")
         except Exception as exc:                 # its text may quote a value of the settings
             _log(root, now, SETTINGS, f"{type(exc).__name__}: the changed settings cannot be used; the settings in use are kept")
             return
@@ -504,7 +519,13 @@ def _run_cases(deps: Deps, root: Path, state: dict, now: datetime, failed: set[s
     failure. The other cases of the pass are then left for the next pass without asking the service again, and only the case that
     failed is logged. A case is finished as failed (_finish) when the service refused it as a document COPILOT_CAP times, or failed
     its chat COPILOT_CAP times in all once Copilot had read another case after its first failure; only failures of the chat count,
-    so an outage or a lapse never finishes a case. A case counts as read when the model answered in its run and the service did not
+    so an outage or a lapse never finishes a case. A failure of Azure OpenAI, Foundry or the stand-in that reads nothing and costs
+    nothing (a refused key, a rate limit reached, no connection: stand_in.failure_kind "service") is a plain CopilotError, a failure
+    of the service as a whole, so the case waits and the failure counts toward no attempt. A reading of Azure OpenAI, Foundry or the
+    stand-in that failed after its request was sent (stand_in.ServiceFailed, the gate's G1) ends the case at once when waiting does
+    not mend it (final: the request refused, or an answer that is no reading), and else after COPILOT_CAP attempts in all, whether
+    or not another case was read since, so that no document is sent again at every pass without end; the count is in the state
+    file, so a restart does not start it again. A case counts as read when the model answered in its run and the service did not
     fail it.
 
     The note on the service (COPILOT_DOWN, for the digest's line "Copilot werkt niet") is set by a failure of the service as a whole,
@@ -541,8 +562,10 @@ def _run_cases(deps: Deps, root: Path, state: dict, now: datetime, failed: set[s
             down, outage, whole, waiting = True, failure, True, waiting + 1
             continue
         record["refused" if refused else "failed"] += 1
-        if record["refused"] >= COPILOT_CAP or (record["refused"] + record["failed"] >= COPILOT_CAP and record["read_after"]):
-            _finish(deps, root, state, now, failed, case_id, failure)
+        own = isinstance(failure, stand_in.ServiceFailed)               # a reading of Azure OpenAI, Foundry or the stand-in
+        if (own and failure.final) or record["refused"] >= COPILOT_CAP or (
+                record["refused"] + record["failed"] >= COPILOT_CAP and (record["read_after"] or own)):
+            _finish(deps, root, state, now, failed, case_id, failure, record["refused"] + record["failed"])
             continue
         if refused or record["read_after"]:                              # the document's own failure: the pass goes on
             continue
@@ -561,7 +584,8 @@ def _run_cases(deps: Deps, root: Path, state: dict, now: datetime, failed: set[s
         _save_quietly(root, state, now, failed)
 
 
-def _finish(deps: Deps, root: Path, state: dict, now: datetime, failed: set[str], case_id: str, failure: Exception) -> None:
+def _finish(deps: Deps, root: Path, state: dict, now: datetime, failed: set[str], case_id: str, failure: Exception,
+            failures: int = COPILOT_CAP) -> None:
     """Finish a case the AI service could not read as failed: an ordinary failed result through run_case, whose reader raises
     ReaderError COULD_NOT_READ, reported and with its dispositions; one line in the log."""
     error = COULD_NOT_READ.format(error=" ".join(str(failure).split()))
@@ -573,7 +597,7 @@ def _finish(deps: Deps, root: Path, state: dict, now: datetime, failed: set[str]
     except Exception as exc:
         _log(root, now, case_id, exc)
         return
-    _log(root, now, case_id, f"finished as failed after {COPILOT_CAP} failures: {error}")
+    _log(root, now, case_id, f"finished as failed after {failures} failure{'' if failures == 1 else 's'}: {error}")
     failed.discard(case_id)
 
 

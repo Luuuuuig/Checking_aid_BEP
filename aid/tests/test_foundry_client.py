@@ -75,11 +75,11 @@ def sdk_log():
 def test_the_sdk_client_gets_the_key_the_resource_and_an_http_client_that_follows_no_redirect():
     FoundryClient("dep", "k", resource="res").complete(REQUEST)
     kwargs = dict(FakeFoundry.instances[-1].kwargs)
-    assert kwargs.pop("http_client").kwargs == {"follow_redirects": False} and kwargs == {"api_key": "k", "resource": "res"}
+    assert kwargs.pop("http_client").kwargs == {"follow_redirects": False} and kwargs == {"api_key": "k", "resource": "res", "max_retries": 0}
     url = "https://res.services.ai.azure.com/anthropic"
     FoundryClient("dep", "k", base_url=url).complete(REQUEST)
     kwargs = dict(FakeFoundry.instances[-1].kwargs)
-    assert kwargs.pop("http_client").kwargs == {"follow_redirects": False} and kwargs == {"api_key": "k", "base_url": url}
+    assert kwargs.pop("http_client").kwargs == {"follow_redirects": False} and kwargs == {"api_key": "k", "base_url": url, "max_retries": 0}
 
 
 def test_resource_and_base_url_are_one_or_the_other():

@@ -202,6 +202,14 @@ class KeyLook:
     def __repr__(self) -> str:
         return f"KeyLook({str(self.directory)!r})"
 
+    def plain(self) -> bool:
+        """Whether the folder records a store of plain files (PLAIN in its file BACKEND), read without making anything: such a store
+        is not encrypted, which the review page then says in plain words."""
+        try:
+            return (self.directory / BACKEND).read_text(encoding="utf-8").strip() == PLAIN
+        except (OSError, UnicodeDecodeError):
+            return False
+
     def get(self, name: str) -> str | None:
         if (refused := work_tree_refusal(self.directory)) is not None:
             raise refused

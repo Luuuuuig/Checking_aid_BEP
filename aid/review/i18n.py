@@ -27,7 +27,8 @@ reads (Azure OpenAI or Foundry), a case that waits for the AI service ("copilot_
 "service_wait" in place of those that end in "copilot_wait" ("chip:", "state:", "todo:", "files_now:", and
 "assistant_waiting_service" for "assistant_waiting_copilot"), which name the service by its label "settings_reader:<reader>", and
 the strip and the section "Stand van de assistent" name the problem "problem:service_wait", by the number of the documents that
-wait; while Copilot or the parser reads, the keys of Copilot stay. "review_pick" and
+wait, with the save of the service's block, which tests it again; "reader_state:no_key" follows the line of what reads while the
+service that reads has no key in the store; while Copilot or the parser reads, the keys of Copilot stay. "review_pick" and
 "review_pick_none" are the line under the field "Zaak" while no case is chosen, "review_open_oldest" its button, "review_open_next"
 the button beside the answer of a close that opens the oldest waiting case with "review_next_preview" naming that case, and "review_gone"
 the line of a case on screen that left the list ("review_gone_handled" for a failed case noted as handled meanwhile). A failed case
@@ -69,6 +70,8 @@ with "service_hint:<kind>"; "settings_key_refused", "settings_key_refused_git" a
 keys is refused, as the three of the sign-in do; "settings_ai_key_removed" and "settings_ai_key_removed_reader" answer "Sleutel
 verwijderen", "settings_ai_key_kept" a removal that removed nothing, as the parser could not be written in the place of the
 service that reads, and "settings_ai_key_still_stored" stands before the failure of a removal after the parser was written.
+"settings_ai_named:<control>" is the name for a screen reader of a control that both blocks show with the same text (PAGE_JS of
+aid/review/look.py).
 "settings_section:<section>"
 labels a section of that tab ("Uw regels", "Leveranciers", "Stand van de assistent"; "Postvak en AI" is "settings_connections" and
 "Koppeling met Exact" "exact_title"), and the keys that begin with "assistant" are the strings of its section "Stand van de assistent":
@@ -462,9 +465,11 @@ STRINGS: dict[str, dict[str, str]] = {
         "problem:copilot_down_one": "Copilot werkt niet sinds {since}: 1 zaak wacht",
         "problem:copilot_down_many": "Copilot werkt niet sinds {since}: {n} zaken wachten",
         "problem:service_wait_one": ("1 document wacht op {service}: het lezen lukt nu niet. Controleer de sleutel en de velden bij "
-                                     "{service}, of kies de dienst opnieuw; runner.log zegt waarom."),
+                                     "{service} onder Postvak en AI en druk daar op {save}: de pagina test de dienst dan opnieuw en "
+                                     "zegt wat er niet klopt. Lukt het daarna nog niet, geef dit dan door aan de onderzoeker."),
         "problem:service_wait_many": ("{n} documenten wachten op {service}: het lezen lukt nu niet. Controleer de sleutel en de velden "
-                                      "bij {service}, of kies de dienst opnieuw; runner.log zegt waarom."),
+                                      "bij {service} onder Postvak en AI en druk daar op {save}: de pagina test de dienst dan opnieuw "
+                                      "en zegt wat er niet klopt. Lukt het daarna nog niet, geef dit dan door aan de onderzoeker."),
         "problem:copilot_refused_one": "Copilot weigerde het document van 1 zaak",
         "problem:copilot_refused_many": "Copilot weigerde de documenten van {n} zaken",
         "act:assistant": "Stand van de assistent openen",
@@ -729,6 +734,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "reader_state:llm": "De assistent leest documenten nu met Copilot.",
         "reader_state:azure_openai": "De assistent leest documenten nu met Azure OpenAI (verzonnen documenten).",
         "reader_state:foundry": "De assistent leest documenten nu met Foundry (verzonnen documenten).",
+        "reader_state:no_key": ("Er is geen sleutel van {service} opgeslagen, en zonder sleutel kan de assistent er niet mee lezen. Typ "
+                                "de sleutel in het veld \"{field}\" en druk op {save}, of kies \"{parser}\" onder {choice}."),
         "reader_state:down": ("De assistent leest documenten nu met Copilot, maar Copilot werkt niet sinds {since} ({cause}); wachtende "
                               "zaken: {n}."),
         "reader_state:refused": ("De assistent leest documenten nu met Copilot, maar Copilot weigert documenten. Mislukt in de laatste 7 "
@@ -847,12 +854,21 @@ STRINGS: dict[str, dict[str, str]] = {
         "settings_ai_field:key": "Sleutel",
         "settings_ai_save:azure_openai": "Azure OpenAI opslaan",
         "settings_ai_save:foundry": "Foundry opslaan",
-        "settings_ai_service_help": ("Alleen voor verzonnen documenten, in de proefstand (wat er precies wordt verstuurd: handleiding, "
-                                     "3.15, The guard); de sleutel blijft in de beveiligde opslag van deze pc en staat nooit op deze "
-                                     "pagina."),
+        "settings_ai_service_help": ("Alleen voor verzonnen documenten, in de proefstand (wat er wordt verstuurd: Engelstalige "
+                                     "handleiding, paragraaf 3.15, \"The guard\"); de sleutel staat in de beveiligde opslag, nooit op "
+                                     "deze pagina."),
         "settings_ai_key:stored": "Er is een sleutel opgeslagen in de beveiligde opslag van deze pc.",
+        "settings_ai_key:stored_plain": ("Er is een sleutel opgeslagen op deze pc, maar niet versleuteld: deze pc heeft geen beveiligde "
+                                         "opslag, en wie als deze gebruiker inlogt, kan de sleutel lezen. Gebruik hier alleen een "
+                                         "sleutel voor de proef, of druk op Sleutel verwijderen."),
+        "settings_ai_key_new_address": ("Niet opgeslagen: het adres van {service} is gewijzigd, en de opgeslagen sleutel gaat niet "
+                                        "vanzelf naar een nieuw adres. Typ de sleutel voor dit adres in het veld \"{field}\" en druk "
+                                        "opnieuw op {save}."),
         "settings_ai_key:none": "Er is geen sleutel opgeslagen.",
         "settings_ai_key_remove": "Sleutel verwijderen",
+        "settings_ai_named:remove": "Sleutel verwijderen bij {service}",
+        "settings_ai_named:key": "Sleutel bij {service}",
+        "settings_ai_named:deployment": "Deployment bij {service}",
         "settings_ai_key_removed": "Sleutel verwijderd.",
         "settings_ai_key_retype": "De getypte sleutel is niet opgeslagen; typ hem opnieuw.",
         "settings_ai_key_not_undone": ("De opslag van de sleutel kon niet worden teruggedraaid: de beveiligde opslag van deze pc houdt "
@@ -877,13 +893,17 @@ STRINGS: dict[str, dict[str, str]] = {
         "service_why:missing": "vul bij {service} het veld \"{field}\" in en druk op {save}.",
         "service_why:missing_place": "vul bij {service} het veld \"{field}\" of het veld \"{other}\" in en druk op {save}.",
         "service_why:key": "typ bij {service} de sleutel in het veld \"{field}\" en druk op {save}.",
-        "service_why:endpoint_form": ("het veld \"{field}\" bij {service} moet alleen het adres van de resource zijn, met https en "
-                                      "zonder pad of vraag, zoals `{example}`: verbeter het en druk op {save}."),
-        "service_why:form": ("het veld \"{field}\" bij {service} moet een https-adres zijn, zoals `{example}`: verbeter het en druk op "
-                             "{save}."),
+        "service_why:endpoint_form": ("het veld \"{field}\" bij {service} neemt alleen het adres van de resource bij Microsoft, "
+                                      "`https://<resource>.openai.azure.com` of `https://<resource>.services.ai.azure.com`, zonder pad, "
+                                      "vraag, poort of gebruikersnaam. Toont Azure een adres op cognitiveservices.azure.com, typ dan "
+                                      "`https://<resource>.openai.azure.com` met dezelfde naam van de resource. Verbeter het veld en druk "
+                                      "op {save}."),
+        "service_why:form": ("het veld \"{field}\" bij {service} neemt alleen een https-adres op services.ai.azure.com, zonder poort of "
+                             "gebruikersnaam, zoals `{example}`: verbeter het en druk op {save}."),
         "service_why:both": "vul bij {service} het veld \"{field}\" of het veld \"{other}\" in, niet allebei, en druk op {save}.",
-        "service_why:resource_form": ("het veld \"{field}\" bij {service} neemt alleen de naam van de resource, zonder \"://\" of \"/\": zet "
-                                      "een volledig adres in het veld \"{other}\" en druk op {save}."),
+        "service_why:resource_form": ("het veld \"{field}\" bij {service} neemt alleen de naam van de resource, met letters, cijfers en "
+                                      "streepjes, zonder punt, \"/\" of ander teken: zet een volledig adres in het veld \"{other}\" en "
+                                      "druk op {save}."),
         "service_why:environment": ("het venster waaruit de assistent is gestart, heeft de variabele `{variable}`, die de "
                                     "Anthropic-bibliotheek naast het veld \"{field}\" leest: haal die variabele weg en start de assistent "
                                     "opnieuw, of vul bij {service} het veld \"{other}\" in, in plaats van \"{field}\"."),
@@ -1674,9 +1694,11 @@ STRINGS: dict[str, dict[str, str]] = {
         "problem:copilot_down_one": "Copilot is not working since {since}: 1 case waits",
         "problem:copilot_down_many": "Copilot is not working since {since}: {n} cases wait",
         "problem:service_wait_one": ("1 document waits for {service}: reading does not work now. Check the key and the fields of "
-                                     "{service}, or choose the service again; runner.log says why."),
+                                     "{service} under Mailbox and AI and press {save} there: the page then tests the service again "
+                                     "and says what is wrong. If it still does not work, pass this on to the researcher."),
         "problem:service_wait_many": ("{n} documents wait for {service}: reading does not work now. Check the key and the fields of "
-                                      "{service}, or choose the service again; runner.log says why."),
+                                      "{service} under Mailbox and AI and press {save} there: the page then tests the service again "
+                                      "and says what is wrong. If it still does not work, pass this on to the researcher."),
         "problem:copilot_refused_one": "Copilot refused the document of 1 case",
         "problem:copilot_refused_many": "Copilot refused the documents of {n} cases",
         "act:assistant": "Open the assistant's state",
@@ -1932,6 +1954,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "reader_state:llm": "The assistant now reads documents with Copilot.",
         "reader_state:azure_openai": "The assistant now reads documents with Azure OpenAI (made-up documents).",
         "reader_state:foundry": "The assistant now reads documents with Foundry (made-up documents).",
+        "reader_state:no_key": ("No key of {service} is stored, and without a key the assistant cannot read with it. Type the key into "
+                                "the field \"{field}\" and press {save}, or choose \"{parser}\" under {choice}."),
         "reader_state:down": ("The assistant now reads documents with Copilot, but Copilot is not working since {since} ({cause}); cases "
                               "waiting: {n}."),
         "reader_state:refused": ("The assistant now reads documents with Copilot, but Copilot refuses documents. Failed in the last 7 "
@@ -2050,11 +2074,20 @@ STRINGS: dict[str, dict[str, str]] = {
         "settings_ai_field:key": "Key",
         "settings_ai_save:azure_openai": "Save Azure OpenAI",
         "settings_ai_save:foundry": "Save Foundry",
-        "settings_ai_service_help": ("For made-up documents only, in the test mode (what exactly goes out: manual, 3.15, The guard); the "
+        "settings_ai_service_help": ("For made-up documents only, in the test mode (what exactly goes out: the manual, section 3.15, under \"The guard\"); the "
                                      "key stays in the protected store of this PC and never stands on this page."),
         "settings_ai_key:stored": "A key is stored in the protected store of this PC.",
+        "settings_ai_key:stored_plain": ("A key is stored on this PC, but not encrypted: this PC has no protected store, and anyone who "
+                                         "signs in as this user can read the key. Use only a key for the trial here, or press Remove "
+                                         "the key."),
+        "settings_ai_key_new_address": ("Not saved: the address of {service} has changed, and the stored key does not go to a new "
+                                        "address on its own. Type the key for this address into the field \"{field}\" and press "
+                                        "{save} again."),
         "settings_ai_key:none": "No key is stored.",
         "settings_ai_key_remove": "Remove the key",
+        "settings_ai_named:remove": "Remove the key of {service}",
+        "settings_ai_named:key": "Key of {service}",
+        "settings_ai_named:deployment": "Deployment of {service}",
         "settings_ai_key_removed": "Key removed.",
         "settings_ai_key_retype": "The key you typed was not saved; type it again.",
         "settings_ai_key_not_undone": "Keeping the key could not be undone: the protected store of this PC now holds the key typed.",
@@ -2075,12 +2108,17 @@ STRINGS: dict[str, dict[str, str]] = {
         "service_why:missing": "fill in the field \"{field}\" under {service} and press {save}.",
         "service_why:missing_place": "fill in the field \"{field}\" or the field \"{other}\" under {service} and press {save}.",
         "service_why:key": "type the key into the field \"{field}\" under {service} and press {save}.",
-        "service_why:endpoint_form": ("the field \"{field}\" under {service} needs only the address of the resource, with https and "
-                                      "without a path or a query, such as `{example}`: correct it and press {save}."),
-        "service_why:form": "the field \"{field}\" under {service} needs an https address, such as `{example}`: correct it and press {save}.",
+        "service_why:endpoint_form": ("the field \"{field}\" under {service} takes only the address of the resource at Microsoft, "
+                                      "`https://<resource>.openai.azure.com` or `https://<resource>.services.ai.azure.com`, without a "
+                                      "path, a query, a port or a user name. If Azure shows an address on cognitiveservices.azure.com, "
+                                      "type `https://<resource>.openai.azure.com` with the same name of the resource. Correct the field "
+                                      "and press {save}."),
+        "service_why:form": ("the field \"{field}\" under {service} takes only an https address on services.ai.azure.com, without a "
+                             "port or a user name, such as `{example}`: correct it and press {save}."),
         "service_why:both": "fill in the field \"{field}\" or the field \"{other}\" under {service}, not both, and press {save}.",
-        "service_why:resource_form": ("the field \"{field}\" under {service} takes the name of the resource only, without \"://\" or \"/\": "
-                                      "put a full address into the field \"{other}\" and press {save}."),
+        "service_why:resource_form": ("the field \"{field}\" under {service} takes the name of the resource only, with letters, digits "
+                                      "and hyphens, without a dot, \"/\" or any other sign: put a full address into the field "
+                                      "\"{other}\" and press {save}."),
         "service_why:environment": ("the window the assistant was started from has the variable `{variable}`, which the Anthropic library "
                                     "reads beside the field \"{field}\": remove that variable and start the assistant again, or fill in "
                                     "the field \"{other}\" under {service} instead of \"{field}\"."),

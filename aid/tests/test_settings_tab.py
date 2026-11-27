@@ -8,6 +8,7 @@ import re
 import shutil
 import socket
 import stat
+import sys
 from datetime import datetime, timedelta
 from decimal import Decimal
 from email import message_from_bytes, policy
@@ -1661,6 +1662,7 @@ def test_the_four_readers_on_the_tab_and_the_service_that_reads_in_the_line_the_
     assert [value for _, value in radio.choices] == ["llm", "azure_openai", "foundry", "parser"]
     shown = next(f.fn for f in page.fns.values() if getattr(f.fn, "__name__", "") == "reader_shown")
     for value, words in (("azure_openai", "Azure OpenAI (verzonnen documenten)"), ("foundry", "Foundry (verzonnen documenten)")):
+        keep_key(tmp_path, value)                                   # a key is stored, so the line is the reader's alone (the gate's P7)
         by_hand(path, reader=value)
         assert shown("nl") == nl[f"reader_state:{value}"] == f"De assistent leest documenten nu met {words}."
         assert shown("en") == en[f"reader_state:{value}"]
@@ -1966,11 +1968,11 @@ def test_a_foundry_resource_name_that_is_an_address_is_refused_at_the_save(tmp_p
             assert handler(page, "save_foundry")(resource, "", "dep", "", language) == ("", SAME, why)
     assert path.read_bytes() == before and not (tmp_path / "default-secrets").exists()
     assert STRINGS["nl"]["service_why:resource_form"] == (
-        "het veld \"{field}\" bij {service} neemt alleen de naam van de resource, zonder \"://\" of \"/\": zet een volledig adres in het veld "
-        "\"{other}\" en druk op {save}.")
+        "het veld \"{field}\" bij {service} neemt alleen de naam van de resource, met letters, cijfers en streepjes, zonder punt, "
+        "\"/\" of ander teken: zet een volledig adres in het veld \"{other}\" en druk op {save}.")
     assert STRINGS["en"]["service_why:resource_form"] == (
-        "the field \"{field}\" under {service} takes the name of the resource only, without \"://\" or \"/\": put a full address into the "
-        "field \"{other}\" and press {save}.")
+        "the field \"{field}\" under {service} takes the name of the resource only, with letters, digits and hyphens, without a dot, "
+        "\"/\" or any other sign: put a full address into the field \"{other}\" and press {save}.")
 
 
 def test_a_store_of_the_keys_that_the_pc_refuses_is_said_with_its_folders(tmp_path, madeup_out, key_log, monkeypatch):
@@ -1997,6 +1999,11 @@ def typed(value: str, **texts) -> list[str]:
     return [texts.get(field, SERVICE_FIELDS[value].get(field) or "") for field in SERVICE_BOXES[value]]
 
 
+def stored_line(strings: dict[str, str]) -> str:
+    """The line of a key that the real store of the tests holds: DPAPI on Windows, else plain files, as the conftest has no keyring."""
+    return strings["settings_ai_key:stored" if sys.platform.startswith("win") else "settings_ai_key:stored_plain"]
+
+
 @pytest.mark.parametrize("value", SERVICES)
 def test_the_key_is_typed_once_kept_in_the_store_and_never_shown_written_or_logged(tmp_path, madeup_out, key_log, caplog, value):
     """The owner's decision of 26 November: each service's key is typed once on the tab, in a box that does not show it. The block's
@@ -2013,20 +2020,20 @@ def test_the_key_is_typed_once_kept_in_the_store_and_never_shown_written_or_logg
     save, remove = handler(page, f"save_{value}"), handler(page, f"remove_{value}_key")
     store = SecretStore(tmp_path / "default-secrets")
     shown = [handler(page, "services_opened")("nl")]
-    lines = [nl["settings_ai_key:stored"] if service == value else nl["settings_ai_key:none"] for service in SERVICES]
+    lines = [stored_line(nl) if service == value else nl["settings_ai_key:none"] for service in SERVICES]
     assert shown[0] == ("", "", "", "", "", *lines)
     assert (nl["settings_ai_key:none"], nl["settings_ai_key:stored"]) == (
         "Er is geen sleutel opgeslagen.", "Er is een sleutel opgeslagen in de beveiligde opslag van deze pc.")
     before = held(path)
     shown.append(save(*typed(value), f" {second} \n", "nl"))
-    assert shown[-1] == ("", nl["settings_ai_key:stored"], nl["settings_ai_saved_untested"].format(choice=nl["settings_ai_reader"]))
+    assert shown[-1] == ("", stored_line(nl), nl["settings_ai_saved_untested"].format(choice=nl["settings_ai_reader"]))
     assert store.get(SERVICE_SECRET[value]) == second and held(path) == before | SERVICE_FIELDS[value]
     shown += [handler(page, "services_opened")("en"), handler(page, "ai_relabel")("en", None)]
-    assert en["settings_ai_key:stored"] in shown[-1] and en["settings_ai_key:stored"] in shown[-2]
+    assert stored_line(en) in shown[-1] and stored_line(en) in shown[-2]
     assert [shown[-2][index] for index, field in enumerate(SERVICE_BOXES["azure_openai"] + SERVICE_BOXES["foundry"])
             if field in SERVICE_FIELDS[value]] == list(SERVICE_FIELDS[value].values())
     shown.append(save(*typed(value), "", "en"))                   # the box empty: the key stays
-    assert shown[-1] == ("", en["settings_ai_key:stored"], en["settings_ai_saved_untested"].format(choice=en["settings_ai_reader"]))
+    assert shown[-1] == ("", stored_line(en), en["settings_ai_saved_untested"].format(choice=en["settings_ai_reader"]))
     assert store.get(SERVICE_SECRET[value]) == second
     config = json.dumps(page.get_config_file(), default=str)
     shown.append(remove("nl"))
@@ -2054,7 +2061,7 @@ def test_the_page_script_asks_the_browser_not_to_remember_a_key():
     boxes = "#settings-azure_openai-key input, #settings-foundry-key input"
     assert f"document.querySelectorAll('{boxes}')" in script
     assert "box.setAttribute('autocomplete', 'new-password')" in script
-    assert "\n  keys();\n" in script and "new MutationObserver(() => { language(); answers(); copies(); keys(); })" in script
+    assert "\n  keys();\n" in script and "new MutationObserver(() => { language(); answers(); copies(); keys(); named(); })" in script
     assert [f"settings-{value}-key" for value in SERVICES] == ["settings-azure_openai-key", "settings-foundry-key"]
 
 
@@ -2077,8 +2084,8 @@ def test_a_look_at_the_keys_makes_no_store_and_only_a_save_of_a_key_does(tmp_pat
     by_hand(path, reader=value)
     assert handler(page, f"save_{value}")(*typed(value), "", "nl")[0] == ""         # the service reads: its test, without a key
     assert not folder.exists()
-    assert handler(page, f"save_{value}")(*typed(value), SERVICE_KEY, "nl")[1] == nl["settings_ai_key:stored"]
-    assert folder.is_dir() and handler(page, "services_opened")("nl")[-2:].count(nl["settings_ai_key:stored"]) == 1
+    assert handler(page, f"save_{value}")(*typed(value), SERVICE_KEY, "nl")[1] == stored_line(nl)
+    assert folder.is_dir() and handler(page, "services_opened")("nl")[-2:].count(stored_line(nl)) == 1
 
 
 @pytest.mark.parametrize("value", SERVICES)
@@ -2194,14 +2201,18 @@ def test_a_save_of_a_service_refuses_an_address_or_a_key_in_another_form_and_a_r
     assert both == ("", SAME, said("foundry", "both", field=nl["settings_ai_field:foundry_resource"],
                                    other=nl["settings_ai_field:foundry_base_url"]) + retype)
     assert said("azure_openai", "endpoint_form", field=nl["settings_ai_field:azure_openai_endpoint"], example="https://<resource>.openai.azure.com") == (
-        "Niet opgeslagen: het veld \"Endpoint van de resource\" bij Azure OpenAI (verzonnen documenten) moet alleen het adres van de "
-        "resource zijn, met https en zonder pad of vraag, zoals `https://<resource>.openai.azure.com`: verbeter het en druk op Azure "
-        "OpenAI opslaan.")
+        "Niet opgeslagen: het veld \"Endpoint van de resource\" bij Azure OpenAI (verzonnen documenten) neemt alleen het adres van de "
+        "resource bij Microsoft, `https://<resource>.openai.azure.com` of `https://<resource>.services.ai.azure.com`, zonder pad, vraag, "
+        "poort of gebruikersnaam. Toont Azure een adres op cognitiveservices.azure.com, typ dan `https://<resource>.openai.azure.com` "
+        "met dezelfde naam van de resource. Verbeter het veld en druk op Azure OpenAI opslaan.")
     path_too = handler(page, "save_azure_openai")("https://made-up.openai.azure.com/openai/deployments/dep", "dep", "", "en")
     assert path_too[2] == said("azure_openai", "endpoint_form", strings=en, field=en["settings_ai_field:azure_openai_endpoint"],
                                example="https://<resource>.openai.azure.com")
-    assert en["service_why:endpoint_form"] == ("the field \"{field}\" under {service} needs only the address of the resource, with https "
-                                                "and without a path or a query, such as `{example}`: correct it and press {save}.")
+    assert en["service_why:endpoint_form"] == (
+        "the field \"{field}\" under {service} takes only the address of the resource at Microsoft, `https://<resource>.openai.azure.com` "
+        "or `https://<resource>.services.ai.azure.com`, without a path, a query, a port or a user name. If Azure shows an address on "
+        "cognitiveservices.azure.com, type `https://<resource>.openai.azure.com` with the same name of the resource. Correct the field "
+        "and press {save}.")
     address = handler(page, "save_foundry")("", "made-up.services.ai.azure.com/anthropic", "dep", "", "nl")
     assert address[2] == said("foundry", "form", field=nl["settings_ai_field:foundry_base_url"],
                               example="https://<resource>.services.ai.azure.com/anthropic")          # no key typed: nothing to type again
@@ -2437,6 +2448,111 @@ def test_a_save_while_the_service_does_not_read_sends_nothing_and_a_failed_write
                                                            "opslag van deze pc houdt nu de getypte sleutel.")
     assert STRINGS["en"]["settings_ai_key_not_undone"] == ("Keeping the key could not be undone: the protected store of this PC now "
                                                            "holds the key typed.")
+
+
+# Another address of each service than SERVICE_FIELDS gives, on Microsoft's host, for a save that changes the address.
+OTHER_ADDRESS = {"azure_openai": {"azure_openai_endpoint": "https://made-up-other.openai.azure.com"},
+                 "foundry": {"foundry_resource": "made-up-other"}}
+
+
+@pytest.mark.parametrize("value", SERVICES)
+@pytest.mark.parametrize("reading", [True, False], ids=["while-it-reads", "while-another-reads"])
+def test_a_save_with_a_new_address_and_no_key_typed_asks_for_the_key_and_sends_nothing(tmp_path, madeup_out, key_log, monkeypatch, value,
+                                                                                       reading):
+    """The gate's K2: a save that changes the address or the resource of a service while a key is stored, with the key box empty,
+    does not send the stored key to the new address. It sends nothing, keeps and writes nothing, and asks for the key to be typed
+    again, in a whole sentence that says why. With the key typed the save works as before, and a save that keeps the address takes
+    the stored key as before."""
+    made = answering(monkeypatch)
+    store = shared_store(monkeypatch, value, OLD_KEY)
+    path, page, accounts = tab(tmp_path, madeup_out, test_mode=True, reader=value if reading else "parser", **SERVICE_FIELDS[value])
+    before = path.read_bytes()
+    for language in ("nl", "en"):
+        words = STRINGS[language]
+        asked = handler(page, f"save_{value}")(*typed(value, **OTHER_ADDRESS[value]), "", language)
+        assert asked == ("", SAME, words["settings_ai_key_new_address"].format(
+            service=words[f"settings_reader:{value}"], field=words["settings_ai_field:key"], save=words[f"settings_ai_save:{value}"]))
+    assert made == [] and store == {SERVICE_SECRET[value]: OLD_KEY} and path.read_bytes() == before
+    assert STRINGS["nl"]["settings_ai_key_new_address"].format(service="Azure OpenAI (verzonnen documenten)", field="Sleutel",
+                                                               save="Azure OpenAI opslaan") == (
+        "Niet opgeslagen: het adres van Azure OpenAI (verzonnen documenten) is gewijzigd, en de opgeslagen sleutel gaat niet vanzelf "
+        "naar een nieuw adres. Typ de sleutel voor dit adres in het veld \"Sleutel\" en druk opnieuw op Azure OpenAI opslaan.")
+    assert STRINGS["en"]["settings_ai_key_new_address"].format(service="Azure OpenAI (made-up documents)", field="Key",
+                                                               save="Save Azure OpenAI") == (
+        "Not saved: the address of Azure OpenAI (made-up documents) has changed, and the stored key does not go to a new address on "
+        "its own. Type the key for this address into the field \"Key\" and press Save Azure OpenAI again.")
+    kept = handler(page, f"save_{value}")(*typed(value, **{f"{value}_deployment": "dep2"}), "", "nl")      # the same address
+    assert kept[2] == STRINGS["nl"]["settings_ai_saved_tested" if reading else "settings_ai_saved_untested"].format(
+        choice=STRINGS["nl"]["settings_ai_reader"])
+    assert [client.given["api_key"] for client in made] == ([OLD_KEY] if reading else [])
+    retyped = handler(page, f"save_{value}")(*typed(value, **OTHER_ADDRESS[value]), NEW_KEY, "nl")
+    assert retyped[2] == STRINGS["nl"]["settings_ai_saved_tested" if reading else "settings_ai_saved_untested"].format(
+        choice=STRINGS["nl"]["settings_ai_reader"])
+    assert [client.given["api_key"] for client in made] == ([OLD_KEY, NEW_KEY] if reading else [])
+    assert store == {SERVICE_SECRET[value]: NEW_KEY} and all(held(path)[field] == text for field, text in OTHER_ADDRESS[value].items())
+
+
+@pytest.mark.parametrize("value, texts, kind, field", [
+    ("azure_openai", {"azure_openai_endpoint": "https://attacker.example.com"}, "endpoint_form", "azure_openai_endpoint"),
+    ("azure_openai", {"azure_openai_endpoint": "https://user:pw@made-up.openai.azure.com"}, "endpoint_form", "azure_openai_endpoint"),
+    ("foundry", {"foundry_resource": "", "foundry_base_url": "https://elsewhere.example.com/anthropic"}, "form", "foundry_base_url"),
+    ("foundry", {"foundry_resource": "", "foundry_base_url": "https://user:pw@made-up.services.ai.azure.com/anthropic"}, "form",
+     "foundry_base_url"),
+    ("foundry", {"foundry_resource": "evil.example?"}, "resource_form", "foundry_resource"),
+    ("foundry", {"foundry_resource": "user@evil.example?x="}, "resource_form", "foundry_resource"),
+])
+def test_a_save_of_an_address_on_another_host_or_with_a_user_is_refused_before_anything_is_sent(tmp_path, madeup_out, key_log, monkeypatch,
+                                                                                                 value, texts, kind, field):
+    """The gate's K1 and K2: an address of a service must be on Microsoft's own host of that service, with no user name or
+    password in it, and a Foundry resource is a bare name. Another one is refused at the save by its field, while the service
+    reads and while it does not, before anything is sent, kept or written."""
+    made = answering(monkeypatch)
+    store = shared_store(monkeypatch, value, OLD_KEY)
+    for reader in (value, "parser"):
+        path, page, accounts = tab(tmp_path / reader, madeup_out, test_mode=True, reader=reader, **SERVICE_FIELDS[value])
+        before, nl = path.read_bytes(), STRINGS["nl"]
+        refused = handler(page, f"save_{value}")(*typed(value, **texts), NEW_KEY, "nl")
+        more = {"other": nl["settings_ai_field:foundry_base_url"]} if kind == "resource_form" else {
+            "example": "https://<resource>.openai.azure.com" if value == "azure_openai" else "https://<resource>.services.ai.azure.com/anthropic"}
+        why = nl["service_why:" + kind].format(service=nl[f"settings_reader:{value}"], save=nl[f"settings_ai_save:{value}"],
+                                               field=nl[f"settings_ai_field:{field}"], **more)
+        assert refused == ("", SAME, nl["settings_service_refused"].format(why=why) + " " + nl["settings_ai_key_retype"])
+        assert made == [] and store == {SERVICE_SECRET[value]: OLD_KEY} and path.read_bytes() == before
+
+
+def test_the_handlers_that_send_or_remove_a_key_are_no_api_of_the_page(tmp_path, madeup_out):
+    """The gate's K2: the saves of the two services, the removals of their keys and the choice of the reader are marked private in
+    the way Gradio provides (api_visibility), so that they are not in the page's API and the Gradio client libraries do not call
+    them. The page itself still has them on its buttons and its choice."""
+    path, page, accounts = tab(tmp_path, madeup_out, test_mode=True)
+    names = {"save_azure_openai", "save_foundry", "remove_azure_openai_key", "remove_foundry_key", "save_reader"}
+    found = {f.fn.__name__: f for f in page.fns.values() if getattr(f.fn, "__name__", "") in names}
+    assert set(found) == names
+    assert {name: f.api_visibility for name, f in found.items()} == dict.fromkeys(names, "private")
+    assert all(f.targets for f in found.values())                  # still bound to the page's own button or choice
+    shown = page.get_api_info()["named_endpoints"]
+    assert not [endpoint for endpoint in shown if endpoint.strip("/") in names]
+
+
+@pytest.mark.skipif(sys.platform.startswith("win"), reason="on Windows the store is always DPAPI")
+def test_a_key_in_a_store_that_is_not_encrypted_is_said_so_in_plain_words(tmp_path, madeup_out, key_log):
+    """The gate's K4: on a PC without Windows data protection or a keyring, the store keeps the key in a plain file that only this
+    user can read. The line of the key then says so, and what to do, instead of "de beveiligde opslag"."""
+    store_folder = tmp_path / "default-secrets"
+    store_folder.mkdir(mode=0o700)
+    (store_folder / "backend").write_text("plain\n", encoding="utf-8")
+    SecretStore(store_folder).set(SERVICE_SECRET["azure_openai"], SERVICE_KEY)
+    path, page, accounts = tab(tmp_path, madeup_out, test_mode=True)
+    for language in ("nl", "en"):
+        lines = handler(page, "services_opened")(language)[-2:]
+        assert lines == (STRINGS[language]["settings_ai_key:stored_plain"], STRINGS[language]["settings_ai_key:none"])
+    assert STRINGS["nl"]["settings_ai_key:stored_plain"] == (
+        "Er is een sleutel opgeslagen op deze pc, maar niet versleuteld: deze pc heeft geen beveiligde opslag, en wie als deze "
+        "gebruiker inlogt, kan de sleutel lezen. Gebruik hier alleen een sleutel voor de proef, of druk op Sleutel verwijderen.")
+    assert STRINGS["en"]["settings_ai_key:stored_plain"] == (
+        "A key is stored on this PC, but not encrypted: this PC has no protected store, and anyone who signs in as this user can "
+        "read the key. Use only a key for the trial here, or press Remove the key.")
+    assert "beveiligde opslag van deze pc" not in STRINGS["nl"]["settings_ai_key:stored_plain"]
 
 
 @pytest.mark.parametrize("field, value, label", [("send_via", "pigeon-xyz", "settings_send_via"), ("mailbox", "no-address-xyz", "settings_mailbox"),
@@ -3680,8 +3796,8 @@ def test_the_places_that_offer_the_tab_s_services_do_not_bind_them_to_the_files_
         "3.16": next(line for line in manual["3.16"].splitlines() if "the Anthropic library included (since 26 November)" in line),
         "README": next(line for line in readme.splitlines() if line.startswith("`reader` says how the documents are read")),
     }
-    assert "(wat er precies wordt verstuurd: handleiding, 3.15, The guard)" in places["help nl"]       # F4: a whole Dutch phrase
-    assert "(what exactly goes out: manual, 3.15, The guard)" in places["help en"]
+    assert "(wat er wordt verstuurd: Engelstalige handleiding, paragraaf 3.15, \"The guard\")" in places["help nl"]
+    assert "(what exactly goes out: the manual, section 3.15, under \"The guard\")" in places["help en"]
     for place, text in places.items():
         assert "of the package" not in text and "van het pakket" not in text, place
         assert "made-up documents" in text or "verzonnen documenten" in text, place
@@ -3690,10 +3806,10 @@ def test_the_places_that_offer_the_tab_s_services_do_not_bind_them_to_the_files_
 
 def test_ending_the_exploration_removes_a_key_typed_on_the_tab():
     """The final review's md-1 (the rest): ending the exploration covers a key typed on the settings tab as well as the window's
-    variables: step 8 and the end of "When the aid reads the variables and the test mode" say to press "Sleutel verwijderen", since
-    every folder of the aid of this Windows user can read with that key."""
+    variables: step 4 (step 8 before the gate's P2 put the tab first) and the end of "When the aid reads the variables and the test
+    mode" say to press "Sleutel verwijderen", since every folder of the aid of this Windows user can read with that key."""
     ai = manual_sections()["3.15"]
-    step = next(line for line in ai.splitlines() if line.startswith("8. "))
+    step = next(line for line in ai.splitlines() if line.startswith("4. Press "))
     assert step.index("\"Sleutel verwijderen\"") < step.index("end the exploration")     # the press while the page still runs (F1)
     end = ai[ai.index("To end the exploration, "):]
     end = end[:end.index("\n")]
@@ -6399,3 +6515,182 @@ def test_item5_suppliers_and_assistant_primary_empty_state_and_answer(tmp_path, 
     assert dict(zip([id(b) for b in relabelled.outputs], relabelled.fn("en")))[id(asst_note)] == ""
 
 
+
+
+# --- the gate of the settings tab of 27 November: the page and the records (P1 to P7, E1 to E5) ---
+
+def test_the_waiting_line_names_the_save_that_tests_the_service_again_and_sends_the_buyer_to_the_researcher(tmp_path, madeup_out, key_log,
+                                                                                                            monkeypatch):
+    """The gate's P1 and P6. While documents wait for the service that reads, the line told the buyer to "choose the service
+    again", which does nothing while that service is the chosen option, and to read runner.log, which the page marks as the
+    researcher's. The line now names the block's own save, which tests the service again with the stored key while it reads and
+    says what is wrong, and says to pass the matter on to the researcher if that does not help."""
+    from aid.review import status as aid_status
+    from aid.review.page import _problem_text
+    for language in ("nl", "en"):
+        words = STRINGS[language]
+        for value in SERVICES:
+            service = words[f"settings_reader:{value}"]
+            for n in (1, 3):
+                text = _problem_text(aid_status.Problem("service_wait", n=n), words, service)
+                assert words[f"settings_ai_save:{value}"] in text and words["settings_connections"] in text
+                assert "runner.log" not in text and "opnieuw kiezen" not in text and "kies de dienst opnieuw" not in text
+                assert "choose the service again" not in text
+                assert ("onderzoeker" if language == "nl" else "researcher") in text
+    assert _problem_text(aid_status.Problem("service_wait", n=1), STRINGS["nl"], "Azure OpenAI (verzonnen documenten)") == (
+        "1 document wacht op Azure OpenAI (verzonnen documenten): het lezen lukt nu niet. Controleer de sleutel en de velden bij Azure "
+        "OpenAI (verzonnen documenten) onder Postvak en AI en druk daar op Azure OpenAI opslaan: de pagina test de dienst dan opnieuw en "
+        "zegt wat er niet klopt. Lukt het daarna nog niet, geef dit dan door aan de onderzoeker.")
+    assert _problem_text(aid_status.Problem("service_wait", n=2), STRINGS["en"], "Foundry (made-up documents)") == (
+        "2 documents wait for Foundry (made-up documents): reading does not work now. Check the key and the fields of Foundry (made-up "
+        "documents) under Mailbox and AI and press Save Foundry there: the page then tests the service again and says what is wrong. If "
+        "it still does not work, pass this on to the researcher.")
+    # the step the line names does what it says: while the service reads, its save with the box empty tests it with the stored key
+    for value in SERVICES:
+        made = answering(monkeypatch)
+        shared_store(monkeypatch, value, OLD_KEY)
+        path, page, accounts = tab(tmp_path / value, madeup_out, test_mode=True, reader=value, **SERVICE_FIELDS[value])
+        saved = handler(page, f"save_{value}")(*typed(value), "", "nl")
+        assert saved[2] == STRINGS["nl"]["settings_ai_saved_tested"]
+        assert [client.given["api_key"] for client in made] == [OLD_KEY] and len(made[0].requests) == 1
+
+
+def test_the_dutch_help_of_a_service_says_where_the_english_manual_tells_what_is_sent():
+    """The gate's P3: the Dutch help under each block pointed to "3.15, The guard", an English heading of a manual that is in
+    English only. It now says in Dutch that the manual is in English, and where in it to look."""
+    nl, en = STRINGS["nl"]["settings_ai_service_help"], STRINGS["en"]["settings_ai_service_help"]
+    assert "(wat er wordt verstuurd: Engelstalige handleiding, paragraaf 3.15, \"The guard\")" in nl
+    assert ", 3.15, The guard)" not in nl
+    assert "(what exactly goes out: the manual, section 3.15, under \"The guard\")" in en
+
+
+def test_each_button_and_shared_field_of_the_two_blocks_has_a_name_of_its_own_for_a_screen_reader(tmp_path, madeup_out):
+    """The gate's P5: the two buttons "Sleutel verwijderen", the two fields "Deployment" and the two key boxes had the same name for a
+    screen reader. The page library sets no aria-label on a button, so the page's load script names each by its service, in the
+    language of the page, with the visible text at the start of the name (WCAG 2.5.3), at the load and whenever the page renders
+    anew or the language changes."""
+    import json as json_module
+    from aid.review import look
+    gr = import_gradio()
+    path, page, accounts = tab(tmp_path, madeup_out, test_mode=True)
+    removes = [block for block in page.blocks.values() if isinstance(block, gr.Button) and block.value == STRINGS["nl"]["settings_ai_key_remove"]]
+    assert sorted(block.elem_id for block in removes) == ["settings-azure_openai-remove", "settings-foundry-remove"]
+    names = look.screen_reader_names()
+    assert set(names) == {"nl", "en"}
+    for language, named in names.items():
+        words = STRINGS[language]
+        assert len(set(named.values())) == len(named) == 6                      # six names, each its own
+        for value, service in (("azure_openai", "Azure OpenAI"), ("foundry", "Foundry")):
+            remove = named[f"#settings-{value}-remove"]
+            assert remove.startswith(words["settings_ai_key_remove"]) and service in remove
+            assert named[f"#settings-{value}-key input"].startswith(words["settings_ai_field:key"])
+            assert named[f"#settings-{value}_deployment input, #settings-{value}_deployment textarea"].startswith(
+                words[f"settings_ai_field:{value}_deployment"])
+    assert names["nl"]["#settings-azure_openai-remove"] == "Sleutel verwijderen bij Azure OpenAI"
+    assert names["en"]["#settings-foundry-remove"] == "Remove the key of Foundry"
+    script = look.PAGE_JS
+    assert json_module.dumps(names, ensure_ascii=False) in script and "__NAMES__" not in script
+    assert "element.setAttribute('aria-label', name)" in script
+    assert "new MutationObserver(() => { language(); answers(); copies(); keys(); named(); })" in script
+    assert "document.addEventListener('change', () => { language(); named(); }, true);" in script
+
+
+@pytest.mark.parametrize("value", SERVICES)
+def test_the_reader_line_says_when_the_service_that_reads_has_no_key_and_what_to_do(tmp_path, madeup_out, key_log, monkeypatch, value):
+    """The gate's P7: with the store emptied by hand, the line said that the service reads while the key line under it said that
+    no key is stored. The line now adds, while the service that reads has no key, that the assistant cannot read with it without
+    a key, and what to do: type the key and press the block's save, or choose the parser. With a key it is the line as before."""
+    store = shared_store(monkeypatch)
+    path, page, accounts = tab(tmp_path, madeup_out, test_mode=True, reader=value, **SERVICE_FIELDS[value])
+    shown = next(f.fn for f in page.fns.values() if getattr(f.fn, "__name__", "") == "reader_shown")
+    for language in ("nl", "en"):
+        words = STRINGS[language]
+        service = words[f"settings_reader:{value}"]
+        missing = words["reader_state:no_key"].format(service=service, field=words["settings_ai_field:key"],
+                                                      save=words[f"settings_ai_save:{value}"], parser=words["settings_reader:parser"],
+                                                      choice=words["settings_ai_reader"])
+        assert shown(language) == f"{words[f'reader_state:{value}']}\n\n{missing}"          # a paragraph of its own
+    assert STRINGS["nl"]["reader_state:no_key"].format(service="Azure OpenAI (verzonnen documenten)", field="Sleutel",
+                                                        save="Azure OpenAI opslaan", parser="zonder AI (parser)",
+                                                        choice="Documenten lezen met") == (
+        "Er is geen sleutel van Azure OpenAI (verzonnen documenten) opgeslagen, en zonder sleutel kan de assistent er niet mee lezen. "
+        "Typ de sleutel in het veld \"Sleutel\" en druk op Azure OpenAI opslaan, of kies \"zonder AI (parser)\" onder Documenten lezen met.")
+    store.set(SERVICE_SECRET[value], OLD_KEY)
+    assert shown("nl") == STRINGS["nl"][f"reader_state:{value}"]
+    by_hand(path, reader="parser")
+    store.delete(SERVICE_SECRET[value])
+    assert shown("nl") == STRINGS["nl"]["reader_state:parser"]                 # no key is needed while the parser reads
+
+
+def test_the_refusals_of_an_address_name_microsoft_s_hosts_and_what_to_do():
+    """The first builder's new refusals (the gate's K1 and K2): an endpoint or a full address that is not on Microsoft's own host of
+    the service, or that holds a user name, a password or a port, is refused at the save. The sentence says which forms are taken,
+    and for an endpoint that Azure shows on cognitiveservices.azure.com, what to type instead."""
+    for language in ("nl", "en"):
+        words = STRINGS[language]
+        endpoint = words["service_why:endpoint_form"]
+        assert "https://<resource>.openai.azure.com" in endpoint and "https://<resource>.services.ai.azure.com" in endpoint
+        assert "cognitiveservices.azure.com" in endpoint and "{save}" in endpoint and "{field}" in endpoint
+        assert ("poort" in endpoint and "gebruikersnaam" in endpoint) if language == "nl" else ("port" in endpoint and "user name" in endpoint)
+        full = words["service_why:form"]
+        assert "services.ai.azure.com" in full and "{example}" in full and "{save}" in full
+        assert ("poort" in full and "gebruikersnaam" in full) if language == "nl" else ("port" in full and "user name" in full)
+
+
+def test_the_manual_starts_the_two_services_on_the_settings_tab_and_marks_the_window_s_steps_as_the_researcher_s():
+    """The gate's P2: the owner decided on 26 November that the services are chosen and their keys typed on the settings tab. The
+    manual's order of the work now starts with the tab, and the steps in a PowerShell window, for which no page step exists, follow
+    under a heading that marks them as the researcher's, not the buyer's. "Your own Azure account" sends each value to the tab's
+    fields first."""
+    part = manual_sections()["3.15"]
+    order = part[part.index("The work goes in this order"):]
+    order = order[:order.index("**On the settings tab.**")]
+    tab_step, window = order.index("on the settings tab (\"On the settings tab\")"), order.index("For the researcher only")
+    assert tab_step < window and "needs none of the steps below" in order
+    for step in ("(\"On your own PC, in a second copy\")", "(\"The variables, for this window only\")", "(\"The one-document check\")",
+                 "(\"The bake-off\")"):
+        assert order.index(step) > window, step
+    assert "PowerShell" not in order[:window]
+    account = part[part.index("**Your own Azure account.**"):]
+    account = account[:account.index("**What it costs.**")]
+    assert "each key only through `Read-Host`" not in account
+    assert "into the fields of its block on the settings tab and the key into \"Sleutel\"" in account
+
+
+def test_the_manual_names_each_refusal_and_limit_of_the_tab_with_what_to_do():
+    """The first builder's new refusals and limits, as the page says them, stand in section 3.15 word for word in Dutch: the new
+    address that asks for the key again, the forms of an address and of a resource, the key in a store that is not encrypted, the
+    waiting documents and what to press, and the service that reads without a key."""
+    nl, part = STRINGS["nl"], manual_sections()["3.15"]
+    service = nl["settings_reader:azure_openai"]
+    filled = {"service": service, "field": nl["settings_ai_field:key"], "save": nl["settings_ai_save:azure_openai"]}
+    endpoint = {"service": service, "field": nl["settings_ai_field:azure_openai_endpoint"], "save": nl["settings_ai_save:azure_openai"],
+                "example": "https://<resource>.openai.azure.com"}
+    for sentence in (nl["settings_ai_key_new_address"].format(**filled), nl["settings_ai_key:stored_plain"],
+                     nl["service_why:endpoint_form"].format(**endpoint),
+                     nl["problem:service_wait_one"].format(n=1, **filled),
+                     nl["reader_state:no_key"].format(parser=nl["settings_reader:parser"], choice=nl["settings_ai_reader"], **filled)):
+        assert sentence in part, sentence
+    assert "the test mode is off, so the runner reads without AI from this pass; tick the test mode on the settings tab" in part
+
+
+def test_the_records_for_the_thesis_and_for_it_say_what_the_tab_now_offers():
+    """The gate's E1, E2, E3 and E5. The thesis attention points say, as dated corrections, that the evaluation run reads through
+    Azure OpenAI chosen on the settings tab and that a choice of AI service on the settings tab is built. The functional
+    description for IT names the API keys among what stays outside the folder, and the technical description says which readers
+    refuse a scan."""
+    points = Path("docs/Thesis_Attention_Points.md").read_text(encoding="utf-8")
+    assert points.count("Corrected on 27 November 2026:") == 2
+    assert "was no part of the evaluation." not in points and "a choice of AI service in the settings," not in points
+    assert "the timed evaluation run reads the unseen made-up cases through Azure OpenAI" in points
+    assert "a choice of AI service on the settings tab is built" in points
+    # Copilot and the parser are no made-up-only readers: only Azure OpenAI and Foundry read made-up documents in the test mode only
+    assert "(Copilot, Azure OpenAI and Foundry for made-up documents in the test mode only" not in points
+    assert ("(Copilot or the parser without AI, and Azure OpenAI and Foundry for made-up documents in the test mode only)"
+            in points)
+    functional = Path("Remy/Functionele_Beschrijving_Inkoopassistent_2026-11-26.md").read_text(encoding="utf-8")
+    assert ("de API-sleutels van Azure OpenAI en Foundry die op het tabblad Instellingen zijn opgeslagen (versleuteld per "
+            "Windows-gebruiker)") in functional
+    technical = Path("Remy/Technische_Beschrijving_Inkoopassistent_2026-11-26.md").read_text(encoding="utf-8")
+    assert "Een scan wordt geweigerd door de parser en door Copilot; de testlezers lezen hem wel." in technical
+    assert "<br>Een scan wordt geweigerd. |" not in technical

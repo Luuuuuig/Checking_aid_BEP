@@ -90,5 +90,8 @@ class FoundryClient(AnthropicClient):
             hide_key(self._api_key)                  # before the first request, whose options the SDK may log
             # The SDK's own http client follows redirects, with the key headers and the body: this one follows none.
             http_client = sdk.DefaultHttpxClient(follow_redirects=False)
-            self._sdk = sdk.AnthropicFoundry(api_key=self._api_key, http_client=http_client, **where)
+            # One attempt is one request: the SDK would send it again on its own after a timeout, a 408, 409, 429 or 5xx (two more
+            # times by default), which the runner's count of the attempts (aid/runner.py, _run_cases) would not see.
+            # The SDK reads a Retry-After header only to time those retries, so with none it waits for nothing.
+            self._sdk = sdk.AnthropicFoundry(api_key=self._api_key, http_client=http_client, max_retries=0, **where)
         return self._sdk

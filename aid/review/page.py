@@ -1020,7 +1020,11 @@ def _problem_text(problem: aid_status.Problem, strings: dict[str, str], service:
         return strings["problem:no_pass"].format(time=_moment(problem.since))
     if problem.kind in ("copilot_down", "copilot_refused", "service_wait"):
         since = _moment(problem.since) if problem.since is not None else ""
-        return strings[f"problem:{problem.kind}_{'one' if problem.n == 1 else 'many'}"].format(since=since, n=problem.n, service=service)
+        # the save of the service's block, which tests the service again while it reads (the gate's P1)
+        save = next((strings[f"settings_ai_save:{value}"] for value in aid_status.SERVICE_READERS
+                     if strings[f"settings_reader:{value}"] == service), "")
+        return strings[f"problem:{problem.kind}_{'one' if problem.n == 1 else 'many'}"].format(since=since, n=problem.n, service=service,
+                                                                                            save=save)
     return strings[f"problem:{problem.kind}"]
 
 
@@ -5428,7 +5432,13 @@ def _ai_section(gr, app, language, tab: _Tab, tenant, client, mailbox, account_s
             lines = aid_status.case_lines(settings.cases_root, now)
         except OSError:
             return gr.update()
-        return _reader_text(state, lines, now, strings)
+        text = _reader_text(state, lines, now, strings)
+        if settings.reader in exploration.SERVICES and not _key_known(settings.reader):     # the store emptied by hand (the gate's P7)
+            text += "\n\n" + strings["reader_state:no_key"].format(
+                service=strings[f"settings_reader:{settings.reader}"], field=strings["settings_ai_field:key"],
+                save=strings[f"settings_ai_save:{settings.reader}"], parser=strings["settings_reader:parser"],
+                choice=strings["settings_ai_reader"])
+        return text
 
     def reader_refreshed(language_now: str) -> tuple:
         """(the reader of the settings file, the line of what reads now, the answer of the choice emptied), for the choice and its
@@ -5463,7 +5473,9 @@ def _ai_section(gr, app, language, tab: _Tab, tenant, client, mailbox, account_s
             """Save the block: (the key box emptied, the line of the key, a note), in this order, so that a runner never reads with
             fields or a key that did not answer (the review's keys-1):
             a. the form, with no network: an address in another form than the reader takes, both Foundry addresses, or a key with a
-               space, a line end or a character that is no printable ASCII is refused by its field (_service_form);
+               space, a line end or a character that is no printable ASCII is refused by its field (_service_form); and a new
+               address or resource with the key box empty while a key is stored asks for the key to be typed again, so that the
+               stored key never goes to a new address by a save alone (the gate's K2, _new_address);
             b. while the settings file names this service as the reader, the one test message of "Copilot testen" goes out through
                settings_client as the runner calls it, of the new fields and of the key typed, or else the key stored, but without the
                unseen cases, as the test sends no document; the
@@ -5490,6 +5502,15 @@ def _ai_section(gr, app, language, tab: _Tab, tenant, client, mailbox, account_s
             settings, line = read(strings)
             if line is not None:
                 return "", gr.update(), line + again
+            if not key and _new_address(value, settings, values):
+                try:
+                    stored = exploration.key_stored(value, _keys(made_only=True))
+                except Exception:                        # a store that cannot be read: the save of the key says why
+                    stored = False
+                if stored:                               # the stored key never goes to a new address by a save alone (K2)
+                    return "", gr.update(), strings["settings_ai_key_new_address"].format(
+                        service=strings[f"settings_reader:{value}"], field=strings["settings_ai_field:key"],
+                        save=strings[f"settings_ai_save:{value}"])
             reading = settings.reader == value
             if reading:
                 candidate = settings.model_copy(update=values)
@@ -5588,13 +5609,17 @@ def _ai_section(gr, app, language, tab: _Tab, tenant, client, mailbox, account_s
     app.load(ai_opened, inputs=language, outputs=reader)
     app.load(services_opened, inputs=language, outputs=[*(box for block in blocks for box in block.fields), *(block.line for block in blocks)])
     for value, block in zip(exploration.SERVICES, blocks):
-        block.save.click(service_save(value), inputs=[*block.fields, block.key, language], outputs=[block.key, block.line, block.answer])
-        block.remove.click(key_remove(value), inputs=language, outputs=[block.line, block.answer, reader, reader_state, reader_note])
+        # not in the page's API (the gate's K2): only the page's own buttons call them
+        block.save.click(service_save(value), inputs=[*block.fields, block.key, language], outputs=[block.key, block.line, block.answer],
+                         api_visibility="private")
+        block.remove.click(key_remove(value), inputs=language, outputs=[block.line, block.answer, reader, reader_state, reader_note],
+                           api_visibility="private")
     copilot_button.click(sign_in_copilot, inputs=[tenant, client, mailbox, language], outputs=[account_shown, note])
     copilot_test_button.click(test_copilot, inputs=[tenant, client, language], outputs=note)
     gr.on(triggers=[app.load, opened, language.change], fn=reader_shown, inputs=language, outputs=reader_state, show_progress="hidden")
     # a choice of the user, not the value the tab loads; its test of Copilot takes a few seconds, the line follows the choice
-    reader.input(save_reader, inputs=[reader, language], outputs=[reader, reader_note], show_progress="minimal").then(
+    reader.input(save_reader, inputs=[reader, language], outputs=[reader, reader_note], show_progress="minimal",
+                 api_visibility="private").then(
         reader_shown, inputs=language, outputs=reader_state, show_progress="hidden")
     language.change(ai_relabel, inputs=[language, reader], outputs=[title, needs, copilot_button, copilot_test_button, reader, note, *(
         shown for block in blocks for shown in (block.heading, block.help, *block.fields, block.key, block.line, block.save, block.remove,
@@ -5641,7 +5666,8 @@ def _service_block(gr, value: str, strings: dict[str, str]) -> _ServiceBlock:
     line = gr.Markdown("", elem_id=f"settings-{value}-key-line")
     with gr.Row():
         save = gr.Button(strings[f"settings_ai_save:{value}"])
-        remove = gr.Button(strings["settings_ai_key_remove"])
+        # its name for a screen reader names the service (PAGE_JS of aid/review/look.py, the gate's P5)
+        remove = gr.Button(strings["settings_ai_key_remove"], elem_id=f"settings-{value}-remove")
     answer = gr.Markdown("", elem_id=f"settings-{value}-note", elem_classes=["answer"])
     return _ServiceBlock(heading, help_line, fields, key, line, save, remove, answer)
 
@@ -5747,37 +5773,59 @@ def _keys(made_only: bool = False):
 
 def _key_line(value: str, strings: dict[str, str]) -> str:
     """Whether the secrets store of this PC holds the key of the service of `value`, in words, never the key, without making the
-    store (KeyLook): a store the PC refuses by its folders (_refusal_text), no key while the store holds no file of secrets, and a
-    file that cannot be read by the class of its error."""
+    store (KeyLook): a store the PC refuses by its folders (_refusal_text), no key while the store holds no file of secrets, a key
+    in a store of plain files, which is not encrypted, in words that say so, and a file that cannot be read by the class of its
+    error."""
     try:
-        stored = exploration.key_stored(value, _keys(made_only=True))      # a bool: the page never holds a key
+        look = _keys(made_only=True)
+        stored = exploration.key_stored(value, look)      # a bool: the page never holds a key
     except StoreRefused as error:
         return _refusal_text(error, strings, "settings_key_refused")
     except Exception as error:
         return strings["settings_failed"].format(code=type(error).__name__)
+    if stored and getattr(look, "plain", lambda: False)():         # no DPAPI and no keyring: said in plain words (the gate's K4)
+        return strings["settings_ai_key:stored_plain"]
     return strings["settings_ai_key:stored" if stored else "settings_ai_key:none"]
+
+
+def _key_known(value: str) -> bool:
+    """Whether the secrets store of this PC holds the key of the service of `value`, without making the store; a store that cannot
+    be read counts as holding it, since the line of the key then says why (_key_line)."""
+    try:
+        return bool(exploration.key_stored(value, _keys(made_only=True)))
+    except Exception:
+        return True
 
 
 def _service_form(value: str, values: Mapping[str, str | None], key: str, strings: dict[str, str]) -> str | None:
     """Why the fields and the key typed of a service's block cannot be saved as they are, before anything is sent, kept or written:
-    an address in another form than the reader needs (aid/readers/exploration.py), both Foundry addresses, a name of Foundry's
-    resource that holds "://" or "/", an address that belongs in the field of the full address (the review's page-4), or a key with
+    an address in another form than the reader needs (aid/readers/exploration.py: on Microsoft's own host of the service, without a
+    user name or a password), both Foundry addresses, a name of Foundry's resource that is no bare name (the gate's K1), such as an
+    address that belongs in the field of the full address (the review's page-4), or a key with
     a space, a line end or a character that is no printable ASCII (the review's keys-6); None when they can. A field left empty is
     no refusal here: the choice of the service names it. A refusal of a field says that the key typed, if any, must be typed
     again."""
     again = f" {strings['settings_ai_key_retype']}" if key else ""
-    for field, valid in (("azure_openai_endpoint", exploration.endpoint_address), ("foundry_base_url", exploration.https_address)):
+    for field, valid in (("azure_openai_endpoint", exploration.endpoint_address),
+                         ("foundry_base_url", lambda address: exploration.service_address(address, exploration.BASE_URL_HOSTS))):
         if values.get(field) and not valid(values[field]):
             return _why(value, _form_kind(field), strings, field=strings[FIELD_LABELS[field]], example=exploration.EXAMPLES[field]) + again
     if values.get("foundry_resource") and values.get("foundry_base_url"):
         return _why(value, "both", strings, field=strings[FIELD_LABELS["foundry_resource"]],
                     other=strings[FIELD_LABELS["foundry_base_url"]]) + again
-    if values.get("foundry_resource") and ("://" in values["foundry_resource"] or "/" in values["foundry_resource"]):
+    if values.get("foundry_resource") and not exploration.resource_name(values["foundry_resource"]):
         return _why(value, "resource_form", strings, field=strings[FIELD_LABELS["foundry_resource"]],
                     other=strings[FIELD_LABELS["foundry_base_url"]]) + again
     if key and not (key.isascii() and key.isprintable() and not any(sign.isspace() for sign in key)):
         return _why(value, "key_form", strings, field=strings["settings_ai_field:key"])
     return None
+
+
+def _new_address(value: str, settings: Settings, values: Mapping[str, str | None]) -> bool:
+    """Whether the save of the block of `value` gives an address or a resource of the service (the endpoint of Azure OpenAI, the
+    resource or the full address of Foundry) that the settings file does not hold."""
+    places = ("azure_openai_endpoint",) if value == "azure_openai" else exploration.PLACE_SETTINGS
+    return any(values.get(name) is not None and values[name] != getattr(settings, name) for name in places)
 
 
 def _form_kind(setting: str) -> str:
@@ -5832,7 +5880,7 @@ def _service_text(value: str, settings: Settings, error: Exception, strings: dic
         return _why_text(_refusal_text(error, strings, "settings_key_refused"), strings)
     if isinstance(error, exploration.SettingsRefused):
         labels = [_service_label(name, strings) for name in error.settings]
-        if error.kind == "environment":                 # the other address, which the settings tab offers instead
+        if error.kind in ("environment", "resource_form"):      # the other address, which the settings tab offers instead
             labels.append(_service_label(next(name for name in exploration.PLACE_SETTINGS if name != error.settings[0]), strings))
         kind = "missing_place" if error.kind == "missing" and len(labels) == 2 else error.kind
         kind = _form_kind(error.settings[0]) if kind == "form" else kind

@@ -48,7 +48,8 @@ class AzureNotFound(AzureServiceError):
 
 
 class AzureLimit(AzureServiceError):
-    """Status 429: a limit of the service."""
+    """Status 429: a rate limit of the service, reached before anything is read. The client reads no Retry-After header and does
+    not wait: in the aid the case waits for a later pass (stand_in.failure_kind)."""
 
 
 class AzureRequestRefused(AzureServiceError):

@@ -12,9 +12,13 @@ ANTHROPIC_FOUNDRY_BASE_URL, never both, since the SDK reads both from the enviro
 spaces and line ends around it, a variable that is empty or holds spaces only counts as unset, and a variable that is missing is
 named, never the value of another. Only for "never both" does a Foundry address that is there at all count, even empty, as the
 SDK takes it.
-The addresses are https addresses with a host, so that the key never leaves over plain http: AZURE_OPENAI_ENDPOINT is the endpoint
-of the resource, with no query and no path but /openai/v1, the forms azure_client.responses_url takes, and ANTHROPIC_FOUNDRY_BASE_URL
-any https address. Another form is refused, by the variable and the form it needs, and never repaired. Neither client follows a
+The addresses are https addresses on Microsoft's own host of the service, <resource> and an ending of ENDPOINT_HOSTS or
+BASE_URL_HOSTS, with no user name, password or port in them, so that the key and the documents go to that service only and never
+over plain http: AZURE_OPENAI_ENDPOINT is the endpoint of the resource, with no query and no path but /openai/v1, the forms
+azure_client.responses_url takes, and ANTHROPIC_FOUNDRY_BASE_URL an address of the resource on services.ai.azure.com. The
+resource of Foundry is its bare name (RESOURCE), from which the library builds the address. Another form is refused, by the
+variable and the form it needs, and never repaired. The check is here, in exploration_client, which the window's variables, the
+settings tab and the runner all pass, also for a settings file edited by hand. Neither client follows a
 redirect (azure_client.py, foundry_client.py), so the key and the document go to that address only, and a redirect, also one to
 plain http, is a failure of the service.
 
@@ -47,9 +51,11 @@ The one-document check (explore.py) and the bake-off leave the manifest out, sin
 scores it, and nobody may see a case before the run; so does the settings tab's test, which sends no document. A refusal begins as
 the runner's COULD_NOT_READ does and names the service. A
 failure of the service is a CopilotError that names the service and the class of the error (for Azure OpenAI a class named by
-the cause, aid/readers/azure_client.py), so that the case is read again at a later pass.
+the cause, aid/readers/azure_client.py); by stand_in.failure_kind the case then waits for a later pass, ends at once, or is tried
+again at most three times in all (the gate's G1).
 """
 import os
+import re
 from collections.abc import Mapping
 from decimal import Decimal
 from urllib.parse import urlsplit
@@ -74,6 +80,18 @@ SERVICE_FAILED = "the exploration reader for {service} failed at its service: {k
 # The {variable} of NO_SETTING for an address in another form: the variable and the form it needs, never the value.
 ENDPOINT_FORM = "AZURE_OPENAI_ENDPOINT as an https address such as https://<resource>.openai.azure.com"
 BASE_URL_FORM = "ANTHROPIC_FOUNDRY_BASE_URL as an https address such as https://<resource>.services.ai.azure.com/anthropic"
+RESOURCE_FORM = ("ANTHROPIC_FOUNDRY_RESOURCE as the bare name of the resource, letters, digits and hyphens only, such as <resource> in "
+                 "https://<resource>.services.ai.azure.com")
+# The name of a resource: letters, digits and hyphens, at most 64, with a letter or a digit at each end. anthropic builds the address
+# of a Foundry resource as https://{resource}.services.ai.azure.com/anthropic/ (lib/foundry.py), so any other sign could change the
+# host that gets the key.
+RESOURCE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,62}[A-Za-z0-9])?")
+# The hosts of each address, <resource> and the ending, by Microsoft's own forms: the v1 route of Azure OpenAI "accepts both
+# https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1/ and https://YOUR-RESOURCE-NAME.services.ai.azure.com/openai/v1/" (the page
+# "Azure OpenAI in Microsoft Foundry Models v1 API" on learn.microsoft.com), and the Anthropic library's address of a Foundry
+# resource is on services.ai.azure.com.
+ENDPOINT_HOSTS = (".openai.azure.com", ".services.ai.azure.com")
+BASE_URL_HOSTS = (".services.ai.azure.com",)
 
 # The readers that the settings tab chooses (settings_client): the name of each service's key in the secrets store of this PC, and
 # the setting of each variable, the key by that name.
@@ -92,6 +110,8 @@ READER_SETTING = 'the reader "{value}" ({service}) needs {setting}: fill it in o
 READER_KEY = ('the reader "{value}" ({service}) needs its key in the secrets store of this PC ({setting}): type it on the settings '
               'tab, never in a file')
 READER_FORM = 'the reader "{value}" ({service}) needs {setting} as an https address such as {example}'
+READER_RESOURCE = ('the reader "foundry" ({service}) needs foundry_resource as the bare name of the resource, letters, digits and '
+                   'hyphens only, such as <resource> in https://<resource>.services.ai.azure.com')
 READER_BOTH = 'the reader "foundry" ({service}) takes foundry_resource or foundry_base_url, not both'
 READER_ENVIRONMENT = ('the reader "foundry" ({service}) cannot take {setting} while this process has the environment variable '
                       '{variable}, which the Anthropic library reads as well: remove that variable before the aid starts, or give '
@@ -101,7 +121,8 @@ READER_ENVIRONMENT = ('the reader "foundry" ({service}) cannot take {setting} wh
 class SettingsRefused(ValueError):
     """A reader that the settings tab chose that the settings and the secrets store cannot give (settings_client). Its text names
     the reader and the setting, or the key by its name in the store, and never a value. Beside it, what the settings tab names in its
-    own words: `kind`, what is wrong ("test_mode", "missing" for a setting, "key", "form" for an address in another form, "both" for
+    own words: `kind`, what is wrong ("test_mode", "missing" for a setting, "key", "form" for an address in another form,
+    "resource_form" for a Foundry resource that is no bare name, "both" for
     both Foundry addresses, "environment" for an address beside the other one in the process environment); `settings`, the
     settings it names (test_mode, the setting, or the key by its name in KEYS); and `variable`, the environment variable of
     "environment", else None."""
@@ -120,8 +141,8 @@ def exploration_client(value: str, environ: Mapping[str, str], deployment: str |
     or holds spaces only counts as unset. Raises ValueError (NO_SETTING) that names the first variable missing and never a value,
     or for foundry the two addresses when both ANTHROPIC_FOUNDRY_RESOURCE and ANTHROPIC_FOUNDRY_BASE_URL are in `environ`, even
     empty or blank ("not both": the SDK reads them from the environment as well, takes one that is there as set, and would refuse
-    the pair at every request), or an address in another form than endpoint_address and https_address take (ENDPOINT_FORM,
-    BASE_URL_FORM); and for foundry ValueError (NO_FOUNDRY_LIBRARY) when this Python's anthropic library has no client for Foundry."""
+    the pair at every request), an address in another form than endpoint_address and service_address take (ENDPOINT_FORM,
+    BASE_URL_FORM), or a Foundry resource that is no bare name (RESOURCE_FORM); and for foundry ValueError (NO_FOUNDRY_LIBRARY) when this Python's anthropic library has no client for Foundry."""
     names = VARIABLES[value]
     given = {name: environ.get(name, "").strip() for name in names}
     if deployment is not None and deployment.strip():
@@ -140,8 +161,10 @@ def exploration_client(value: str, environ: Mapping[str, str], deployment: str |
         raise ValueError(NO_SETTING.format(service=SERVICES[value], value=value, variable=either))
     if all(name in environ for name in PLACES):  # even empty: the SDK reads both too, and would refuse them at every request
         raise ValueError(NO_SETTING.format(service=SERVICES[value], value=value, variable=f"{either}, not both"))
-    if base_url and not https_address(base_url):
+    if base_url and not service_address(base_url, BASE_URL_HOSTS):
         raise ValueError(NO_SETTING.format(service=SERVICES[value], value=value, variable=BASE_URL_FORM))
+    if resource and not resource_name(resource):
+        raise ValueError(NO_SETTING.format(service=SERVICES[value], value=value, variable=RESOURCE_FORM))
     if llm_client.anthropic is None or not hasattr(llm_client.anthropic, "AnthropicFoundry"):
         raise ValueError(NO_FOUNDRY_LIBRARY)
     return FoundryClient(deployment=chosen, api_key=key, resource=resource or None, base_url=base_url or None, effort=effort,
@@ -157,10 +180,27 @@ def https_address(address: str) -> bool:
     return parts.scheme == "https" and bool(parts.hostname)
 
 
+def resource_name(name: str) -> bool:
+    """Whether the name is the bare name of a resource (RESOURCE): no dot, no slash, no "?", "#" or "@", nothing but the name."""
+    return bool(RESOURCE.fullmatch(name))
+
+
+def service_address(address: str, endings: tuple[str, ...]) -> bool:
+    """Whether the address is an https address whose host is <resource> and one of the endings, Microsoft's host of the service
+    (ENDPOINT_HOSTS, BASE_URL_HOSTS), with no user name, no password and no port in it, so that the key and the documents go to
+    Microsoft's service of that resource only."""
+    if not https_address(address):
+        return False
+    parts = urlsplit(address)
+    host = parts.hostname or ""
+    return parts.netloc.lower() == host and any(host.endswith(ending) and resource_name(host[:-len(ending)]) for ending in endings)
+
+
 def endpoint_address(address: str) -> bool:
     """Whether the address is the endpoint of an Azure OpenAI resource in a form that azure_client.responses_url takes: an https
-    address with a host, no query and no fragment, and no path but /openai/v1, in any case, with or without a slash after it."""
-    return (https_address(address) and "?" not in address and "#" not in address
+    address on Microsoft's host of the service (service_address with ENDPOINT_HOSTS), no query and no fragment, and no path but
+    /openai/v1, in any case, with or without a slash after it."""
+    return (service_address(address, ENDPOINT_HOSTS) and "?" not in address and "#" not in address
             and urlsplit(address).path.rstrip("/").lower() in ("", "/openai/v1"))
 
 
@@ -242,11 +282,11 @@ def _refused(value: str, error: ValueError) -> ValueError:
         named[ENDPOINT_FORM] = ("form", ("azure_openai_endpoint",))
     else:
         named |= {either: ("missing", PLACE_SETTINGS), f"{either}, not both": ("both", PLACE_SETTINGS),
-                  BASE_URL_FORM: ("form", ("foundry_base_url",))}
+                  BASE_URL_FORM: ("form", ("foundry_base_url",)), RESOURCE_FORM: ("resource_form", ("foundry_resource",))}
     for variable, (kind, settings) in named.items():
         if str(error) == NO_SETTING.format(service=service, value=value, variable=variable):
             setting = " or ".join(settings)
-            text = {"missing": READER_SETTING, "key": READER_KEY, "both": READER_BOTH,
-                    "form": READER_FORM}[kind].format(value=value, service=service, setting=setting, example=EXAMPLES.get(setting))
+            text = {"missing": READER_SETTING, "key": READER_KEY, "both": READER_BOTH, "form": READER_FORM,
+                    "resource_form": READER_RESOURCE}[kind].format(value=value, service=service, setting=setting, example=EXAMPLES.get(setting))
             return SettingsRefused(text, kind, settings)
     return error

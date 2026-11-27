@@ -16,9 +16,13 @@ evaluation/unseen_cases, one sha256 per line) goes out as well; an empty or miss
 empty file is never accepted, even where a manifest holds it. The refusal's text begins as the runner's COULD_NOT_READ does, so that the review page shows such a case,
 which fails at the pass that reads it, as one whose document Copilot could not read. A request without a document goes out only as
 the one test message of the settings tab (StandIn.ask). A try-out confirmation that the settings tab makes is no file of the set
-either, since it is made from a purchase order the aid knows: it is refused too. A failure of the service itself (no connection, an
-overload, a limit, a key it refuses) is a CopilotError, which the runner counts as a failure of the AI service: the case is left
-without a result and read again at a later pass, as with Copilot, so that the made-up document is not used up.
+either, since it is made from a purchase order the aid knows: it is refused too. A failure of the service is a CopilotError, which
+the runner counts as a failure of the AI service: the case is left without a result, so that the made-up document is not used up.
+How it goes on depends on the failure (failure_kind, the gate's G1): a key it refuses, a rate limit reached or no connection reads
+nothing and costs nothing, and the case waits for a later pass, as with Copilot; a refused request or an answer that is no reading
+(ServiceFailed, final) ends the case at once, as a document the service could not read; no answer in time, an overload or a
+failure of the servers (ServiceFailed) is tried again at later passes, at most three attempts in all for the document (COPILOT_CAP
+of aid/runner.py).
 
 No model is asked for a decision (MadeUpDecider): its question holds the values of a case, which the stand-in cannot tell from a
 company case's, so a case that needs a decision goes to the buyer, as with the parser. The one question it answers is the class of a
@@ -80,6 +84,52 @@ SERVICE_FAILED = "the stand-in for Copilot could not reach its service: {kind}" 
 DOCUMENT_TYPE = "document_type"                  # the one kind of decision MadeUpDecider answers
 CLASS_OF = ((re.compile(r"_conf\.pdf$"), "confirmation"), (re.compile(r"_po_v\d+\.pdf$"), "po_pdf"))    # a made-up file's name, its class
 COPY = re.compile(r"_\d+(?=\.[^.]+$)")           # the _2 that the tab Bestanden puts before the suffix of a second copy
+FINAL, AGAIN, SERVICE = "final", "again", "service"    # the kinds of a failure of the service (failure_kind)
+
+
+class ServiceFailed(CopilotError):
+    """A reading that failed at the service after its request was sent (failure_kind "final" or "again"): a failure of the chat
+    that carries the document, as the runner counts one of Copilot. `final` is True for a failure that waiting does not mend (the
+    service refused the request, or answered with no reading): the runner then ends the case at once, for the buyer to look at.
+    Without it (no answer in time, the service overloaded or failing) the runner tries the document again at later passes, at most
+    COPILOT_CAP attempts in all (aid/runner.py). A rate limit reached is no ServiceFailed: it is the service as a whole."""
+
+    def __init__(self, message: str, final: bool):
+        super().__init__(message, case_only=final, chat=True)
+        self.final = final
+
+
+def failure_kind(error: Exception) -> str:
+    """What a failure of the client of a service calls for (the gate's G1): FINAL for one that waiting does not mend, a refusal of
+    the request (Azure OpenAI's AzureRequestRefused, the Anthropic library's status 400, 413, 422 and any other 4xx but those below)
+    or an answer that is no reading (a status 200 whose body cannot be read, the library's APIResponseValidationError); SERVICE for a
+    failure of the service as a whole that reads nothing and costs nothing (a key refused, 401 or 403, a deployment not found, 404, a
+    rate limit reached, 429, which is Azure OpenAI's AzureLimit and the library's RateLimitError, a redirect, no connection), which
+    leaves the case waiting as with Copilot and counts toward no attempt, however long the limit takes to clear; AGAIN for one that
+    may pass (no answer in time, 408, 409, a 5xx) and for anything else, which may have been read and billed and is therefore tried
+    at most COPILOT_CAP times. The clients of Azure OpenAI and Foundry wait for no Retry-After header: the runner's next pass is the
+    wait (the stand-in's own client keeps the library's two retries, which do wait for it)."""
+    from aid.readers import azure_client       # here: azure_client needs nothing of this module, but keeps the import light
+    if isinstance(error, (azure_client.AzureKeyRefused, azure_client.AzureNotFound, azure_client.AzureLimit,
+                          azure_client.AzureNoConnection)):
+        return SERVICE
+    if isinstance(error, azure_client.AzureRequestRefused):
+        return FINAL
+    if isinstance(error, azure_client.AzureServiceError) and type(error.status_code) is int and error.status_code < 400:
+        return FINAL if 200 <= error.status_code <= 299 else SERVICE
+    sdk = llm_client.anthropic
+    if sdk is not None and isinstance(error, sdk.APIStatusError):
+        status = error.status_code
+        if status in (401, 403, 404, 429) or 300 <= status <= 399:     # 429: the library's RateLimitError
+            return SERVICE
+        return AGAIN if status in (408, 409) or status >= 500 else FINAL
+    if sdk is not None and isinstance(error, sdk.APITimeoutError):
+        return AGAIN
+    if sdk is not None and isinstance(error, sdk.APIConnectionError):
+        return SERVICE
+    if sdk is not None and isinstance(error, sdk.APIResponseValidationError):
+        return FINAL
+    return AGAIN
 
 
 def value(environ: Mapping[str, str] | None = None) -> str:
@@ -138,7 +188,8 @@ class StandIn:
     def _sent(self, send, req: LlmRequest):
         """What `send`, the client's complete or count_tokens, gives for the request: a ReaderError (not_made_up) before anything
         is sent unless the request carries a document and each of its documents is a file of the set, and a CopilotError
-        (service_failed, with the class of the error and never its text) when the service fails. The client's ReaderError stays."""
+        (service_failed, with the class of the error and never its text) when the service fails: a ServiceFailed for a failure
+        after the request was sent, else a plain CopilotError (failure_kind). The client's ReaderError stays."""
         documents = ([] if req.pdf is None else [req.pdf]) + list(req.images)
         if not documents or any(not data or hashlib.sha256(data).hexdigest() not in self.allowed for data in documents):
             raise ReaderError(self.not_made_up)
@@ -146,8 +197,11 @@ class StandIn:
             return send(req)
         except ReaderError:
             raise
-        except Exception as error:               # the service failed, not the document: the case waits for a later pass
-            raise CopilotError(self.service_failed.format(kind=type(error).__name__)) from error
+        except Exception as error:               # the service failed: by failure_kind, the case waits, ends or is tried again
+            kind, text = failure_kind(error), self.service_failed.format(kind=type(error).__name__)
+            if kind == SERVICE:
+                raise CopilotError(text) from error
+            raise ServiceFailed(text, final=kind == FINAL) from error
 
     def ask(self, text: str, context: list[dict] | None = None) -> LlmResponse:
         """The answer to the settings tab's one test message, in Copilot's form (the text of the answer); a ReaderError before
